@@ -1,6 +1,7 @@
 #include "three_native.h"
 #include "runtime_internal.hpp"
 
+#include "threepp/math/Matrix4.hpp"
 #include "threepp/objects/Bone.hpp"
 #include "threepp/objects/ObjectWithMaterials.hpp"
 #include "threepp/objects/SkinnedMesh.hpp"
@@ -52,6 +53,35 @@ uint32_t tn_skeleton_create(const uint32_t* bones, int count) {
             slot.kind = Kind::Skeleton;
             slot.skeleton = skeleton;
             return insert(std::move(slot));
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+}
+
+int tn_skeleton_set_inverses(uint32_t skeleton, const float* inverses, int inverseCount) {
+    try {
+        std::vector<float> inv;
+        if (inverses && inverseCount > 0) {
+            inv.assign(inverses, inverses + inverseCount);
+        }
+        return onWorker([skeleton, inv] {
+            Slot* slot = getSlot(skeleton);
+            if (!slot || slot->kind != Kind::Skeleton || !slot->skeleton) {
+                setError("skeleton set inverses needs a skeleton");
+                return 0;
+            }
+            auto& dst = slot->skeleton->boneInverses;
+            if (inv.size() != dst.size() * 16) {
+                setError("skeleton inverse count does not match bones");
+                return 0;
+            }
+            for (size_t i = 0; i < dst.size(); i++) {
+                dst[i].fromArray(inv, i * 16);
+            }
+            markDirty();
+            return 1;
         });
     } catch (const std::exception& ex) {
         setError(ex.what());

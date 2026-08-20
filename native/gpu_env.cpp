@@ -569,7 +569,6 @@ void tn_cube_rt_update(
             cam.position.set(x, y, z);
             cam.updateMatrixWorld();
             cam.update(*gl, *scene);
-            markDirty();
         });
     } catch (const std::exception& ex) {
         setError(ex.what());

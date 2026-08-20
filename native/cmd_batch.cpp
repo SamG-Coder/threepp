@@ -751,7 +751,6 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             Object3D* object = findObject(ru32(p));
             if (!object) return;
             object->visible = ru32(p + 4) != 0;
-            markDirty();
             return;
         }
         case tn::cmd::OP_LIGHT_AMBIENT: {

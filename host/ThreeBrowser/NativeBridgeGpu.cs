@@ -34,6 +34,12 @@ public partial class NativeBridge
         return (int)Native.tn_skeleton_create(bones, bones.Length);
     }
 
+    public int SkeletonSetInverses(int skeleton, string inversesB64)
+    {
+        var inverses = DecodeBase64Floats(inversesB64);
+        return Native.tn_skeleton_set_inverses((uint)skeleton, inverses, inverses.Length);
+    }
+
     public int SkinnedMeshCreate(int geometry, int material) =>
         (int)Native.tn_skinned_mesh_create((uint)geometry, (uint)material);
 

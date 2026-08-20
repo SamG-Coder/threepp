@@ -35,6 +35,52 @@
     return material._h || 0;
   }
 
+  function packInversesForNative(bones, boneInverses) {
+    const out = [];
+    for (let i = 0; i < bones.length; i++) {
+      if (!(bones[i] && bones[i]._h)) continue;
+      const e = boneInverses[i] && boneInverses[i].elements;
+      if (e && e.length >= 16) {
+        for (let j = 0; j < 16; j++) out.push(e[j]);
+      } else {
+        out.push(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1);
+      }
+    }
+    return new Float32Array(out);
+  }
+
+  function packedInversesAreIdentity(floats) {
+    if (!floats || floats.length < 16) return true;
+    for (let o = 0; o < floats.length; o += 16) {
+      for (let j = 0; j < 16; j++) {
+        const expect = j % 5 === 0 ? 1 : 0;
+        if (Math.abs(floats[o + j] - expect) > 1e-5) return false;
+      }
+    }
+    return true;
+  }
+
+  function applySkeletonInverses(skeleton) {
+    if (!skeleton || !skeleton._h || skeleton._nativeInversesApplied) return;
+    const packed = packInversesForNative(skeleton.bones, skeleton.boneInverses);
+    if (packedInversesAreIdentity(packed)) return;
+    const n = native();
+    if (!TN.hostHas?.(n, "SkeletonSetInverses")) return;
+    if (TN.cmd && typeof TN.cmd.submit === "function") {
+      try {
+        TN.cmd.submit();
+      } catch {
+        /* bind must land before inverses */
+      }
+    }
+    try {
+      n.SkeletonSetInverses(skeleton._h, f32ToB64(packed));
+      skeleton._nativeInversesApplied = true;
+    } catch {
+      /* keep calculateInverses from bind */
+    }
+  }
+
   function syncNativeMaterial(obj, material) {
     if (!obj?._h) return;
     const mh = materialHandle(material);
@@ -1178,6 +1224,7 @@
             }
           }
         }
+        applySkeletonInverses(skeleton);
       }
     }
     pose() {

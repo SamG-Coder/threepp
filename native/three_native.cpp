@@ -792,7 +792,6 @@ int tn_object_set_visible(uint32_t objectHandle, int visible) {
         Object3D* object = asObject(objectHandle);
         if (object) {
             object->visible = visible != 0;
-            markDirty();
         }
     });
     return 1;

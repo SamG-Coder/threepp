@@ -109,6 +109,7 @@ TN_API uint32_t tn_sprite_material_create(uint32_t color);
 
 TN_API uint32_t tn_bone_create(void);
 TN_API uint32_t tn_skeleton_create(const uint32_t* bones, int count);
+TN_API int tn_skeleton_set_inverses(uint32_t skeleton, const float* inverses, int inverse_count);
 TN_API uint32_t tn_skinned_mesh_create(uint32_t geometry, uint32_t material);
 TN_API int tn_skinned_bind(uint32_t mesh, uint32_t skeleton);
 TN_API int tn_mesh_set_material(uint32_t mesh, uint32_t material);
