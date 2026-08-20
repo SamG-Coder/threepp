@@ -12,6 +12,12 @@ internal static partial class Native
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern IntPtr tn_backend_name();
 
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int tn_runtime_has_vulkan();
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tn_runtime_set_backend(int vulkan);
+
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
     public static extern int tn_runtime_start(int width, int height, string title);
 
@@ -23,6 +29,10 @@ internal static partial class Native
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     public static extern void tn_runtime_set_vsync(int enabled);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tn_runtime_stats(
+        out int fps, out int frameUs, out int width, out int height, out int vsync, out ulong presents);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     public static extern int tn_runtime_render(uint scene, uint camera);
@@ -211,5 +221,21 @@ internal static partial class Native
     {
         var p = tn_backend_name();
         return p == IntPtr.Zero ? "" : Marshal.PtrToStringAnsi(p) ?? "";
+    }
+
+    public static bool HasVulkan()
+    {
+        try
+        {
+            return tn_runtime_has_vulkan() != 0;
+        }
+        catch (DllNotFoundException)
+        {
+            return false;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return false;
+        }
     }
 }

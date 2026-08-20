@@ -1043,6 +1043,9 @@ if (THREEPP_WITH_VULKAN)
     elseif (Vulkan_INCLUDE_DIR AND EXISTS "${Vulkan_INCLUDE_DIR}/vma/vk_mem_alloc.h")
         target_include_directories(threepp PRIVATE "${Vulkan_INCLUDE_DIR}/vma")
         message(STATUS "VMA (Vulkan_INCLUDE_DIR): ${Vulkan_INCLUDE_DIR}/vma")
+    elseif (EXISTS "${PROJECT_SOURCE_DIR}/src/external/vma/vk_mem_alloc.h")
+        target_include_directories(threepp PRIVATE "${PROJECT_SOURCE_DIR}/src/external/vma")
+        message(STATUS "VMA (bundled): ${PROJECT_SOURCE_DIR}/src/external/vma")
     else ()
         # Fall back to expecting <vk_mem_alloc.h> on the default include path
         # (vcpkg's vulkan-memory-allocator). find_path verifies it.

@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Drawing.Drawing2D;
+using System.Drawing.Text;
 
 namespace ThreeBrowser;
 
@@ -66,6 +67,98 @@ internal sealed class FlatAddress : TextBox
     private static extern int SetWindowTheme(IntPtr hWnd, string pszSubAppName, string pszSubIdList);
 }
 
+internal sealed class BackendMenu : ToolStripDropDown
+{
+    public BackendMenu(bool vulkanOn, bool vulkanOk, Action<bool> choose)
+    {
+        AutoSize = false;
+        Padding = new Padding(6);
+        BackColor = Color.White;
+        DropShadowEnabled = true;
+        var panel = new Panel
+        {
+            Size = new Size(172, 84),
+            BackColor = Color.White,
+        };
+        panel.Paint += (_, e) =>
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            using var pen = new Pen(BrowserChrome.Line);
+            var r = panel.ClientRectangle;
+            r.Width -= 1;
+            r.Height -= 1;
+            e.Graphics.DrawRectangle(pen, r);
+        };
+        panel.Controls.Add(MakeRow("OpenGL", !vulkanOn, true, () =>
+        {
+            Close();
+            choose(false);
+        }, 6));
+        panel.Controls.Add(MakeRow("Vulkan", vulkanOn, vulkanOk, () =>
+        {
+            Close();
+            if (vulkanOk)
+            {
+                choose(true);
+            }
+        }, 44));
+        Items.Add(new ToolStripControlHost(panel)
+        {
+            Margin = Padding.Empty,
+            Padding = Padding.Empty,
+        });
+        Size = new Size(184, 96);
+    }
+
+    private static Control MakeRow(string title, bool selected, bool enabled, Action click, int y)
+    {
+        var row = new Panel
+        {
+            Location = new Point(6, y),
+            Size = new Size(160, 36),
+            Cursor = enabled ? Cursors.Hand : Cursors.Default,
+            BackColor = Color.White,
+        };
+        row.Paint += (_, e) =>
+        {
+            var g = e.Graphics;
+            g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+            var hot = enabled && row.ClientRectangle.Contains(row.PointToClient(Cursor.Position));
+            if (hot)
+            {
+                using var fill = new SolidBrush(BrowserChrome.Hover);
+                g.FillRectangle(fill, row.ClientRectangle);
+            }
+            if (selected)
+            {
+                using var font = new Font("Segoe MDL2 Assets", 9f);
+                TextRenderer.DrawText(
+                    g, "\uE73E", font,
+                    new Rectangle(8, 0, 22, row.Height),
+                    BrowserChrome.Accent,
+                    TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+            }
+            using var label = new Font("Segoe UI Semibold", 10f);
+            var ink = enabled ? BrowserChrome.Ink : BrowserChrome.Mute;
+            TextRenderer.DrawText(
+                g, title, label,
+                new Rectangle(34, 0, row.Width - 40, row.Height),
+                ink,
+                TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+        };
+        row.MouseEnter += (_, _) => row.Invalidate();
+        row.MouseLeave += (_, _) => row.Invalidate();
+        row.Click += (_, _) =>
+        {
+            if (enabled)
+            {
+                click();
+            }
+        };
+        return row;
+    }
+}
+
 internal sealed class BrowserChrome : Panel
 {
     internal static readonly Color Bar = Color.FromArgb(241, 243, 244);
@@ -83,6 +176,7 @@ internal sealed class BrowserChrome : Panel
     internal readonly ChromeButton ForwardButton = MakeIcon('\uE72A', "Forward (Alt+Right)");
     internal readonly ChromeButton ReloadButton = MakeIcon('\uE72C', "Reload (Ctrl+R)");
     internal readonly ChromeButton HomeButton = MakeIcon('\uE80F', "Home");
+    internal readonly ChromeButton DebugBtn = MakeIcon('\uE9F9', "Debug (FPS)");
     internal readonly ChromeButton VsyncBtn = MakeIcon('\uE895', "Vsync on/off");
     internal readonly ChromeButton NativeBtn = MakeIcon('\uE964', "Native THREE (Ctrl+Shift+N)");
     internal readonly ChromeButton WebGlBtn = MakeIcon('\uE774', "Stock WebGL (Ctrl+Shift+N)");
@@ -93,7 +187,10 @@ internal sealed class BrowserChrome : Panel
     private readonly TableLayoutPanel _bar;
     private bool _injectOn = true;
     private bool _vsyncOn;
+    private bool _debugOn;
+    private bool _vulkan;
     private bool _loading;
+    private BackendMenu? _backendMenu;
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     [Browsable(false)]
@@ -113,10 +210,20 @@ internal sealed class BrowserChrome : Panel
 
     internal event EventHandler? InjectToggled;
     internal event EventHandler? VsyncToggled;
+    internal event EventHandler? DebugToggled;
+    internal event EventHandler? BackendChanged;
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    [Browsable(false)]
+    internal bool VulkanEnabled => _vulkan;
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     [Browsable(false)]
     internal bool VsyncEnabled => _vsyncOn;
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    [Browsable(false)]
+    internal bool DebugEnabled => _debugOn;
 
     internal bool IsLoading => _loading;
 
@@ -131,7 +238,7 @@ internal sealed class BrowserChrome : Panel
         _bar = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 8,
+            ColumnCount = 9,
             RowCount = 1,
             Padding = new Padding(6, 0, 6, 0),
             Margin = new Padding(0),
@@ -146,14 +253,17 @@ internal sealed class BrowserChrome : Panel
         _bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
         _bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
         _bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
+        _bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
 
         Place(_bar, BackButton, 0);
         Place(_bar, ForwardButton, 1);
         Place(_bar, ReloadButton, 2);
         Place(_bar, HomeButton, 3);
-        Place(_bar, VsyncBtn, 5);
-        Place(_bar, NativeBtn, 6);
-        Place(_bar, WebGlBtn, 7);
+        Place(_bar, DebugBtn, 5);
+        Place(_bar, VsyncBtn, 6);
+        Place(_bar, NativeBtn, 7);
+        Place(_bar, WebGlBtn, 8);
+        DebugBtn.Click += (_, _) => ToggleDebug();
         VsyncBtn.Click += (_, _) => ToggleVsync();
         NativeBtn.Click += (_, _) => SetMode(true);
         WebGlBtn.Click += (_, _) => SetMode(false);
@@ -170,12 +280,14 @@ internal sealed class BrowserChrome : Panel
         _omnibox.Padding = new Padding(0);
 
         Badge.AutoSize = false;
-        Badge.TextAlign = ContentAlignment.MiddleCenter;
-        Badge.Font = new Font("Segoe UI Semibold", 8f);
+        Badge.TextAlign = ContentAlignment.MiddleLeft;
+        Badge.Font = new Font("Segoe UI Semibold", 8.5f);
         Badge.ForeColor = NativeInk;
         Badge.BackColor = Omnibox;
-        Badge.Text = "Native";
-        Badge.Size = new Size(58, 20);
+        Badge.Text = "Native  \u25BE";
+        Badge.Size = new Size(78, 20);
+        Badge.Cursor = Cursors.Hand;
+        Badge.Click += (_, _) => ShowBackendMenu();
 
         Address.Font = new Font("Segoe UI", 11f);
         Address.ForeColor = Ink;
@@ -191,9 +303,23 @@ internal sealed class BrowserChrome : Panel
 
     internal void SetBadge(bool native)
     {
-        Badge.Text = native ? "Native" : "WebGL";
+        Badge.Text = native ? "Native  \u25BE" : "WebGL";
         Badge.ForeColor = native ? NativeInk : Mute;
+        Badge.Cursor = native ? Cursors.Hand : Cursors.Default;
         _omnibox.Invalidate();
+        if (IsHandleCreated)
+        {
+            BeginInvoke(LayoutOmnibox);
+        }
+    }
+
+    internal void SetVulkan(bool vulkan)
+    {
+        if (_vulkan == vulkan)
+        {
+            return;
+        }
+        _vulkan = vulkan;
     }
 
     internal void SetNav(bool canBack, bool canForward)
@@ -237,7 +363,8 @@ internal sealed class BrowserChrome : Panel
         var inner = Rectangle.Inflate(r, -12, -2);
         var textH = Address.Font.Height;
         var y = inner.Y + Math.Max(0, (inner.Height - textH) / 2);
-        Badge.SetBounds(inner.X, y, 54, textH);
+        var chipW = _injectOn ? 78 : 52;
+        Badge.SetBounds(inner.X, y, chipW, textH);
         Address.SetBounds(Badge.Right + 6, y, Math.Max(20, inner.Right - (Badge.Right + 10)), textH);
         _omnibox.Invalidate();
     }
@@ -264,17 +391,55 @@ internal sealed class BrowserChrome : Panel
         VsyncToggled?.Invoke(this, EventArgs.Empty);
     }
 
+    private void ShowBackendMenu()
+    {
+        if (!_injectOn)
+        {
+            return;
+        }
+        _backendMenu?.Close();
+        var vulkanOk = Native.HasVulkan();
+        _backendMenu = new BackendMenu(_vulkan, vulkanOk, SetBackendFromMenu);
+        var origin = Badge.PointToScreen(new Point(-4, Badge.Height + 8));
+        _backendMenu.Show(origin);
+    }
+
+    private void SetBackendFromMenu(bool vulkan)
+    {
+        if (_vulkan == vulkan)
+        {
+            return;
+        }
+        _vulkan = vulkan;
+        BackendChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void ToggleDebug()
+    {
+        if (!_injectOn)
+        {
+            return;
+        }
+        _debugOn = !_debugOn;
+        PaintInject();
+        DebugToggled?.Invoke(this, EventArgs.Empty);
+    }
+
     private void PaintInject()
     {
+        DebugBtn.Visible = _injectOn;
         VsyncBtn.Visible = _injectOn;
-        if (_bar.ColumnStyles.Count > 5)
+        if (_bar.ColumnStyles.Count > 6)
         {
             _bar.ColumnStyles[5].Width = _injectOn ? 36 : 0;
+            _bar.ColumnStyles[6].Width = _injectOn ? 36 : 0;
         }
+        StyleMode(DebugBtn, _debugOn);
         StyleMode(VsyncBtn, _vsyncOn);
         StyleMode(NativeBtn, _injectOn);
         StyleMode(WebGlBtn, !_injectOn);
         SetBadge(_injectOn);
+        DebugBtn.AccessibleName = _debugOn ? "Debug on" : "Debug off";
         VsyncBtn.AccessibleName = _vsyncOn ? "Vsync on" : "Vsync off";
     }
 

@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Windows.Forms;
 
 namespace ThreeBrowser;
 
@@ -23,7 +24,11 @@ public partial class NativeBridge
         if (ok != 0)
         {
             _form.ApplyNativeVsync();
-            _form.BeginInvoke(_form.EmbedNativeSurface);
+            _form.BeginInvoke((MethodInvoker)(() =>
+            {
+                _form.SyncBackendFromNative();
+                _form.EmbedNativeSurface();
+            }));
         }
         return ok;
     }

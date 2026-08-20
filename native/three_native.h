@@ -18,11 +18,14 @@ extern "C" {
 
 TN_API const char* tn_last_error(void);
 TN_API const char* tn_backend_name(void);
+TN_API int tn_runtime_has_vulkan(void);
+TN_API void tn_runtime_set_backend(int vulkan);
 
 TN_API int tn_runtime_start(int width, int height, const char* title);
 TN_API int tn_runtime_is_open(void);
 TN_API void tn_runtime_set_size(int width, int height);
 TN_API void tn_runtime_set_vsync(int enabled);
+TN_API void tn_runtime_stats(int* fps, int* frame_us, int* width, int* height, int* vsync, uint64_t* presents);
 TN_API int tn_runtime_render(uint32_t scene, uint32_t camera);
 TN_API void tn_runtime_shutdown(void);
 TN_API void tn_runtime_reset(void);

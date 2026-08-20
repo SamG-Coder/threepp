@@ -5,6 +5,9 @@
 #include "threepp/geometries/TorusKnotGeometry.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
+#ifdef THREEPP_WITH_VULKAN
+#include "threepp/renderers/VulkanRenderer.hpp"
+#endif
 
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
@@ -39,6 +42,26 @@
 
 using namespace threepp;
 using tn::g;
+
+namespace tn {
+
+void destroySurface() {
+    if (g.canvas) {
+        if (auto* glfwWindow = static_cast<GLFWwindow*>(g.canvas->windowPtr())) {
+            if (HWND child = glfwGetWin32Window(glfwWindow)) {
+                ShowWindow(child, SW_HIDE);
+                SetParent(child, nullptr);
+            }
+        }
+    }
+    g.nativeHwnd.store(nullptr);
+    g.renderer.reset();
+    g.canvas.reset();
+}
+
+}// namespace tn
+
+using tn::destroySurface;
 using tn::Kind;
 using tn::Slot;
 using tn::asObject;
@@ -75,7 +98,22 @@ static void renderPendingFrame() {
     if (!g.sceneDirty.exchange(false, std::memory_order_acq_rel)) {
         return;
     }
+    const auto t0 = std::chrono::steady_clock::now();
     g.canvas->animateOnce([&] { g.renderer->render(*scene, *camera); });
+    const auto t1 = std::chrono::steady_clock::now();
+    g.statsFrameUs.store(
+            static_cast<int>(std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count()),
+            std::memory_order_relaxed);
+    g.statsPresents.fetch_add(1, std::memory_order_relaxed);
+    static thread_local auto windowStart = t1;
+    static thread_local int windowFrames = 0;
+    windowFrames++;
+    const double elapsed = std::chrono::duration<double>(t1 - windowStart).count();
+    if (elapsed >= 0.5) {
+        g.statsFps.store(static_cast<int>(std::lround(windowFrames / elapsed)), std::memory_order_relaxed);
+        windowFrames = 0;
+        windowStart = t1;
+    }
 }
 
 void tn::workerMain() {
@@ -120,17 +158,7 @@ void tn::workerMain() {
             break;
         }
     }
-    if (g.canvas) {
-        if (auto* glfwWindow = static_cast<GLFWwindow*>(g.canvas->windowPtr())) {
-            if (HWND child = glfwGetWin32Window(glfwWindow)) {
-                ShowWindow(child, SW_HIDE);
-                SetParent(child, nullptr);
-            }
-        }
-    }
-    g.nativeHwnd.store(nullptr);
-    g.renderer.reset();
-    g.canvas.reset();
+    destroySurface();
     g.slots.clear();
     logLine("worker stopped");
 }
@@ -142,6 +170,13 @@ int impl_runtime_start(int width, int height, const char* title) {
     if (g.canvas) {
         return 1;
     }
+    const bool wantVulkan = g.backend.load(std::memory_order_relaxed) != 0;
+#ifndef THREEPP_WITH_VULKAN
+    if (wantVulkan) {
+        setError("Vulkan is not available in this build");
+        g.backend.store(0, std::memory_order_relaxed);
+    }
+#endif
     Canvas::Parameters params;
     params.title(title ? title : "ThreeBrowser")
             .size(width > 0 ? width : 800, height > 0 ? height : 600)
@@ -150,7 +185,22 @@ int impl_runtime_start(int width, int height, const char* title) {
             .headless(true)
             .exitOnKeyEscape(false);
     g.canvas = std::make_unique<Canvas>(params);
-    g.renderer = std::make_unique<GLRenderer>(*g.canvas);
+#ifdef THREEPP_WITH_VULKAN
+    if (wantVulkan) {
+        try {
+            g.renderer = std::make_unique<VulkanRenderer>(*g.canvas);
+        } catch (const std::exception& ex) {
+            destroySurface();
+            setError(ex.what());
+            g.backend.store(0, std::memory_order_relaxed);
+            g.canvas = std::make_unique<Canvas>(params);
+            g.renderer = std::make_unique<GLRenderer>(*g.canvas);
+        }
+    } else
+#endif
+    {
+        g.renderer = std::make_unique<GLRenderer>(*g.canvas);
+    }
     g.renderer->sortObjects = false;
     g.renderer->checkShaderErrors = false;
     g.renderer->toneMapping = ToneMapping::None;
@@ -159,6 +209,10 @@ int impl_runtime_start(int width, int height, const char* title) {
     if (auto* glfwWindow = static_cast<GLFWwindow*>(g.canvas->windowPtr())) {
         g.nativeHwnd.store(glfwGetWin32Window(glfwWindow));
     }
+    const int w = width > 0 ? width : 800;
+    const int h = height > 0 ? height : 600;
+    g.statsW.store(w, std::memory_order_relaxed);
+    g.statsH.store(h, std::memory_order_relaxed);
     logLine("runtime started");
     return 1;
 }
@@ -175,7 +229,50 @@ const char* tn_last_error(void) {
 }
 
 const char* tn_backend_name(void) {
-    return "OpenGL";
+    return g.backend.load(std::memory_order_relaxed) != 0 ? "Vulkan" : "OpenGL";
+}
+
+int tn_runtime_has_vulkan(void) {
+#ifdef THREEPP_WITH_VULKAN
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+void tn_runtime_set_backend(int vulkan) {
+#ifdef THREEPP_WITH_VULKAN
+    const int want = vulkan != 0 ? 1 : 0;
+#else
+    if (vulkan != 0) {
+        setError("Vulkan is not available in this build");
+        return;
+    }
+    const int want = 0;
+#endif
+    g.backend.store(want, std::memory_order_relaxed);
+    try {
+        onWorker([want] {
+            if (!g.canvas) {
+                return 0;
+            }
+            const bool isVk = g.canvas->graphicsApi() == GraphicsAPI::Vulkan;
+            if (isVk == (want != 0)) {
+                return 0;
+            }
+            destroySurface();
+            g.slots.clear();
+            g.pendingEnvironment.clear();
+            g.envHemi.reset();
+            g.envSun.reset();
+            g.drawScene.store(0);
+            g.drawCamera.store(0);
+            g.next = 1;
+            return 0;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+    }
 }
 
 int tn_runtime_start(int width, int height, const char* title) {
@@ -202,6 +299,8 @@ void tn_runtime_set_size(int width, int height) {
     try {
         width = std::max(1, width);
         height = std::max(1, height);
+        g.statsW.store(width, std::memory_order_relaxed);
+        g.statsH.store(height, std::memory_order_relaxed);
         onWorkerAsync([width, height] {
             if (!g.canvas || !g.renderer) {
                 return;
@@ -214,12 +313,36 @@ void tn_runtime_set_size(int width, int height) {
     }
 }
 
+void tn_runtime_stats(int* fps, int* frameUs, int* width, int* height, int* vsync, uint64_t* presents) {
+    if (fps) {
+        *fps = g.statsFps.load(std::memory_order_relaxed);
+    }
+    if (frameUs) {
+        *frameUs = g.statsFrameUs.load(std::memory_order_relaxed);
+    }
+    if (width) {
+        *width = g.statsW.load(std::memory_order_relaxed);
+    }
+    if (height) {
+        *height = g.statsH.load(std::memory_order_relaxed);
+    }
+    if (vsync) {
+        *vsync = g.vsync.load(std::memory_order_relaxed) ? 1 : 0;
+    }
+    if (presents) {
+        *presents = g.statsPresents.load(std::memory_order_relaxed);
+    }
+}
+
 void tn_runtime_set_vsync(int enabled) {
     try {
         const bool on = enabled != 0;
         g.vsync.store(on, std::memory_order_relaxed);
         onWorkerAsync([on] {
             if (!g.canvas) {
+                return;
+            }
+            if (g.canvas->graphicsApi() != GraphicsAPI::OpenGL) {
                 return;
             }
             auto* glfwWindow = static_cast<GLFWwindow*>(g.canvas->windowPtr());
@@ -273,6 +396,8 @@ int tn_runtime_attach_host(void* parentHwnd, int x, int y, int width, int height
         }
         width = std::max(1, width);
         height = std::max(1, height);
+        g.statsW.store(width, std::memory_order_relaxed);
+        g.statsH.store(height, std::memory_order_relaxed);
         // GLFW created the window on this worker. All hwnd ops stay here —
         // SetParent from the UI thread deadlocks against glfwPollEvents.
         onWorkerAsync([parentHwnd, x, y, width, height] {

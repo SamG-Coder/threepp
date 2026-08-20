@@ -13,6 +13,8 @@ public sealed class MainForm : Form
 
     private readonly BrowserChrome _chrome = new();
     private readonly WebView2 _web = new();
+    private readonly System.Windows.Forms.Timer _debugTimer = new();
+    private string _lastDebugOverlay = "";
     private NativeBridge? _bridge;
     private string _webRoot = "";
     private bool _nativeStopping;
@@ -71,18 +73,31 @@ public sealed class MainForm : Form
             ReleasePointer();
             NavigateTo(HomeUrl);
         };
-        _chrome.InjectToggled += (_, _) => _ = SetInjectorAsync(_chrome.InjectEnabled);
+        _chrome.InjectToggled += (_, _) =>
+        {
+            SyncDebugHud();
+            _ = SetInjectorAsync(_chrome.InjectEnabled);
+        };
         _chrome.VsyncToggled += (_, _) => ApplyNativeVsync();
+        _chrome.DebugToggled += (_, _) => SyncDebugHud();
+        _chrome.BackendChanged += (_, _) => _ = ApplyBackendAsync();
 
         _web.Dock = DockStyle.Fill;
         _web.DefaultBackgroundColor = Color.Transparent;
+
+        _debugTimer.Interval = 200;
+        _debugTimer.Tick += (_, _) => RefreshDebugHud();
 
         Controls.Add(_web);
         Controls.Add(_chrome);
 
         Load += (_, _) => _ = InitAsync();
         Resize += (_, _) => EmbedNativeSurface();
-        FormClosing += (_, _) => ShutdownNative();
+        FormClosing += (_, _) =>
+        {
+            _debugTimer.Stop();
+            ShutdownNative();
+        };
         KeyDown += OnBrowserKey;
     }
 
@@ -140,6 +155,130 @@ public sealed class MainForm : Form
         catch (DllNotFoundException)
         {
         }
+    }
+
+    public void SyncBackendFromNative()
+    {
+        try
+        {
+            _chrome.SetVulkan(string.Equals(Native.BackendName(), "Vulkan", StringComparison.OrdinalIgnoreCase));
+        }
+        catch (DllNotFoundException)
+        {
+        }
+        catch (EntryPointNotFoundException)
+        {
+        }
+    }
+
+    private async Task ApplyBackendAsync()
+    {
+        try
+        {
+            Native.tn_runtime_set_backend(_chrome.VulkanEnabled ? 1 : 0);
+        }
+        catch (DllNotFoundException)
+        {
+        }
+        catch (EntryPointNotFoundException)
+        {
+        }
+        if (!_chrome.InjectEnabled)
+        {
+            return;
+        }
+        ReleasePointer();
+        await ReloadIgnoringCacheAsync();
+    }
+
+    private void SyncDebugHud()
+    {
+        var on = _chrome.InjectEnabled && _chrome.DebugEnabled;
+        _debugTimer.Enabled = on;
+        if (on)
+        {
+            RefreshDebugHud();
+        }
+        else
+        {
+            _lastDebugOverlay = "";
+            HideDebugOverlay();
+        }
+    }
+
+    private void RefreshDebugHud()
+    {
+        if (!_chrome.InjectEnabled || !_chrome.DebugEnabled)
+        {
+            return;
+        }
+        string overlay;
+        try
+        {
+            Native.tn_runtime_stats(out var fps, out var frameUs, out var w, out var h, out var vsync, out _);
+            var ms = frameUs / 1000.0;
+            var backend = Native.BackendName();
+            if (string.IsNullOrEmpty(backend))
+            {
+                backend = "OpenGL";
+            }
+            overlay =
+                $"{fps} fps\n" +
+                $"{ms:0.0} ms\n" +
+                $"{Math.Max(w, 0)} × {Math.Max(h, 0)}\n" +
+                $"{backend} · vsync {(vsync != 0 ? "on" : "off")}";
+        }
+        catch (Exception)
+        {
+            overlay = "native stats unavailable";
+        }
+        PushDebugOverlay(overlay);
+    }
+
+    private void PushDebugOverlay(string text)
+    {
+        var core = _web.CoreWebView2;
+        if (core == null || text == _lastDebugOverlay)
+        {
+            return;
+        }
+        _lastDebugOverlay = text;
+        var payload = JsString(text ?? "");
+        _ = core.ExecuteScriptAsync(
+            "(function(t){" +
+            "var id='__tb_debug_hud';" +
+            "var el=document.getElementById(id);" +
+            "if(!el){" +
+            "el=document.createElement('div');" +
+            "el.id=id;" +
+            "el.style.cssText='position:fixed;right:8px;top:8px;z-index:2147483647;pointer-events:none;" +
+            "font:12px/1.35 Consolas,ui-monospace,monospace;color:#e8f0fe;" +
+            "background:rgba(32,33,36,.86);padding:8px 10px;border-radius:8px;" +
+            "white-space:pre;letter-spacing:.02em;box-shadow:0 1px 6px rgba(0,0,0,.28)';" +
+            "(document.body||document.documentElement).appendChild(el);" +
+            "}" +
+            "el.textContent=t;" +
+            "})(" + payload + ")");
+    }
+
+    private void HideDebugOverlay()
+    {
+        var core = _web.CoreWebView2;
+        if (core == null)
+        {
+            return;
+        }
+        _ = core.ExecuteScriptAsync(
+            "var e=document.getElementById('__tb_debug_hud');if(e)e.remove();");
+    }
+
+    private static string JsString(string value)
+    {
+        return "\"" + value
+            .Replace("\\", "\\\\")
+            .Replace("\"", "\\\"")
+            .Replace("\r", "")
+            .Replace("\n", "\\n") + "\"";
     }
 
     public void EmbedNativeSurface()
@@ -282,6 +421,10 @@ public sealed class MainForm : Form
                 if (!_chrome.Address.Focused)
                 {
                     SyncAddressFromWeb();
+                }
+                if (_chrome.DebugEnabled)
+                {
+                    RefreshDebugHud();
                 }
             };
             _web.CoreWebView2.HistoryChanged += (_, _) => SyncNav();

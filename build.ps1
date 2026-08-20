@@ -7,6 +7,14 @@ $compiler = Join-Path $toolRoot 'g++.exe'
 if (-not (Test-Path -LiteralPath $cmake)) { throw 'MSYS2 UCRT64 CMake is missing.' }
 if (-not (Test-Path -LiteralPath $compiler)) { throw 'MSYS2 UCRT64 g++ is missing.' }
 $env:Path = "$toolRoot;$env:Path"
+if (-not $env:VULKAN_SDK) {
+    $sdkRoot = 'C:\VulkanSDK'
+    if (Test-Path -LiteralPath $sdkRoot) {
+        $latest = Get-ChildItem -LiteralPath $sdkRoot -Directory | Sort-Object Name -Descending | Select-Object -First 1
+        if ($latest) { $env:VULKAN_SDK = $latest.FullName }
+    }
+}
+if ($env:VULKAN_SDK) { $env:Path = "$($env:VULKAN_SDK)\Bin;$env:Path" }
 
 Write-Host 'Configuring threepp + three_native.dll (examples/tests/editor off)'
 & $cmake -S $repo -B (Join-Path $repo 'build') -G Ninja `
@@ -18,7 +26,8 @@ Write-Host 'Configuring threepp + three_native.dll (examples/tests/editor off)'
     -DTHREEPP_BUILD_EDITOR=OFF `
     -DTHREEPP_WITH_AUDIO=OFF `
     -DTHREEPP_WITH_PYTHON=OFF `
-    -DTHREEPP_WITH_JS_HOST=ON
+    -DTHREEPP_WITH_JS_HOST=ON `
+    -DTHREEPP_WITH_VULKAN=ON
 if ($LASTEXITCODE -ne 0) { throw 'CMake configuration failed.' }
 
 Write-Host 'Building three_native + cubes command-ring test'

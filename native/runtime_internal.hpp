@@ -48,7 +48,8 @@ struct Slot {
 
 struct Runtime {
     std::unique_ptr<Canvas> canvas;
-    std::unique_ptr<GLRenderer> renderer;
+    std::unique_ptr<Renderer> renderer;
+    std::atomic<int> backend{0}; // 0 OpenGL, 1 Vulkan
     std::unordered_map<uint32_t, Slot> slots;
     uint32_t next{1};
 
@@ -64,6 +65,11 @@ struct Runtime {
     std::atomic<bool> sceneDirty{false};
     std::atomic<bool> vsync{false};
     std::atomic<void*> nativeHwnd{nullptr};
+    std::atomic<int> statsFps{0};
+    std::atomic<int> statsFrameUs{0};
+    std::atomic<int> statsW{0};
+    std::atomic<int> statsH{0};
+    std::atomic<uint64_t> statsPresents{0};
 
     std::mutex frameMu;
     std::vector<unsigned char> frameRgba;

@@ -18,6 +18,9 @@ target_include_directories(three_native PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
                 "${CMAKE_SOURCE_DIR}/src")
 target_link_libraries(three_native PRIVATE threepp::threepp)
 target_compile_definitions(three_native PRIVATE THREE_NATIVE_EXPORT)
+if (THREEPP_WITH_VULKAN)
+    target_compile_definitions(three_native PRIVATE THREEPP_WITH_VULKAN=1)
+endif ()
 set_target_properties(three_native PROPERTIES
         PREFIX ""
         OUTPUT_NAME "three_native"
