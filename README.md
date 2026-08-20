@@ -176,6 +176,7 @@ the GPU is a threepp `GLRenderer` HWND behind the WebView.
 ```shell
 .\build.ps1    # MSYS2 Ninja native DLL + dotnet host
 .\run.ps1      # ThreeBrowser.exe
+.\publish.ps1  # self-contained win-x64 folder + zip in publish\
 ```
 
 Then open a top-level example, for example

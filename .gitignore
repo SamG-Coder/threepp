@@ -21,6 +21,9 @@ CMakeUserPresets.json
 # Python packaging / wheel-build artifacts (scikit-build-core)
 dist/
 wheelhouse/
+
+# ThreeBrowser self-contained win-x64 output (.\publish.ps1)
+publish/
 *.egg-info/
 __pycache__/
 

@@ -32,6 +32,23 @@ public sealed class MainForm : Form
         BackColor = BrowserChrome.Bar;
         Font = new Font("Segoe UI", 9f);
         KeyPreview = true;
+        ShowIcon = true;
+        try
+        {
+            var exe = Environment.ProcessPath;
+            if (!string.IsNullOrEmpty(exe))
+            {
+                using var extracted = Icon.ExtractAssociatedIcon(exe);
+                if (extracted != null)
+                {
+                    Icon = (Icon)extracted.Clone();
+                }
+            }
+        }
+        catch
+        {
+            /* keep the WinForms default */
+        }
 
         _chrome.Address.Text = HomeUrl;
         _chrome.Address.GotFocus += (_, _) =>
