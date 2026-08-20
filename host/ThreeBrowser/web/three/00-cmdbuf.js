@@ -108,25 +108,47 @@
     return (n + 7) & ~7;
   }
 
+  function bytesToB64(u8src) {
+    let s = "";
+    const n = 0x8000;
+    for (let i = 0; i < u8src.length; i += n) {
+      s += String.fromCharCode.apply(null, u8src.subarray(i, i + n));
+    }
+    return btoa(s);
+  }
+
   function submitNow() {
     if (off <= 0) return;
     const n = host();
+    const used = off;
+    // SharedBuffer may arrive after the page's first fromScene/Sky mesh.
+    // COM CmdSubmit reads the C# mapping, not this JS heap — copy the
+    // pending bytes so geometry/mesh exist before PMREM captures them.
+    if (!shared) {
+      if (TN.hostHas(n, "CmdSubmitB64")) {
+        try {
+          n.CmdSubmitB64(bytesToB64(u8.subarray(0, used)));
+          off = 0;
+          pendingSubmit = false;
+          return;
+        } catch (err) {
+          console.warn("ThreeBrowser cmd submit copy failed", err);
+        }
+      }
+      pendingSubmit = true;
+      if (TN.hostHas?.(n, "EnsureCmdBuffer")) {
+        try {
+          n.EnsureCmdBuffer();
+        } catch {
+          /* sharedbufferreceived is async */
+        }
+      }
+      return;
+    }
     if (!TN.hostHas(n, "CmdSubmit")) {
       off = 0;
       return;
     }
-    if (!shared && TN.hostHas?.(n, "EnsureCmdBuffer")) {
-      try {
-        n.EnsureCmdBuffer();
-      } catch {
-        /* event is async */
-      }
-    }
-    if (!shared) {
-      pendingSubmit = true;
-      return;
-    }
-    const used = off;
     off = 0;
     pendingSubmit = false;
     n.CmdSubmit(used);

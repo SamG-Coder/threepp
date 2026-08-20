@@ -351,7 +351,9 @@
       } catch {
         handle = 0;
       }
-    } else if (mat._nativeKind === "shader" && TN.hostHas?.(n, "ShaderMaterialCreate")) {
+    } else if (mat._nativeKind === "shader") {
+      // Never substitute MeshStandard / another built-in: this is the page's
+      // ShaderMaterial (Sky.js, etc.). Missing native support must stay unbound.
       try {
         if (TN.cmd && typeof TN.cmd.submit === "function") {
           try {
@@ -360,12 +362,15 @@
             /* cmd ring may not be attached yet */
           }
         }
-        handle = n.ShaderMaterialCreate(
-          expandShaderChunks(mat.vertexShader || ""),
-          expandShaderChunks(mat.fragmentShader || "")
-        );
-        absorbNativeId(handle);
-      } catch {
+        if (TN.hostHas?.(n, "ShaderMaterialCreate")) {
+          handle = n.ShaderMaterialCreate(
+            expandShaderChunks(mat.vertexShader || ""),
+            expandShaderChunks(mat.fragmentShader || "")
+          );
+          absorbNativeId(handle);
+        }
+      } catch (err) {
+        console.warn("ThreeBrowser ShaderMaterialCreate failed", err);
         handle = 0;
       }
       mat.__h = handle || 0;
@@ -380,6 +385,8 @@
           /* ignore */
         }
         bindShaderUniforms(mat);
+      } else {
+        console.warn("ThreeBrowser: ShaderMaterial has no native program; not substituting a default shader");
       }
       return;
     } else if (n.MeshStandardMaterialCreate) {
@@ -825,6 +832,21 @@
   const DEFAULT_FRAGMENT =
     "void main() {\n\tgl_FragColor = vec4( 1.0, 0.0, 0.0, 1.0 );\n}";
 
+  function pushShaderSource(mat) {
+    if (!mat || !mat.__h) return;
+    const n = native();
+    if (!TN.hostHas?.(n, "ShaderMaterialSetSource")) return;
+    try {
+      n.ShaderMaterialSetSource(
+        mat.__h,
+        expandShaderChunks(mat._vertexShader || ""),
+        expandShaderChunks(mat._fragmentShader || "")
+      );
+    } catch (err) {
+      console.warn("ThreeBrowser ShaderMaterialSetSource failed", err);
+    }
+  }
+
   class ShaderMaterial extends Material {
     constructor(params) {
       super();
@@ -834,8 +856,30 @@
       this.defines = {};
       this.uniforms = {};
       this.uniformsGroups = [];
-      this.vertexShader = DEFAULT_VERTEX;
-      this.fragmentShader = DEFAULT_FRAGMENT;
+      this._vertexShader = DEFAULT_VERTEX;
+      this._fragmentShader = DEFAULT_FRAGMENT;
+      Object.defineProperty(this, "vertexShader", {
+        configurable: true,
+        enumerable: true,
+        get() {
+          return this._vertexShader;
+        },
+        set(value) {
+          this._vertexShader = value == null ? "" : String(value);
+          pushShaderSource(this);
+        },
+      });
+      Object.defineProperty(this, "fragmentShader", {
+        configurable: true,
+        enumerable: true,
+        get() {
+          return this._fragmentShader;
+        },
+        set(value) {
+          this._fragmentShader = value == null ? "" : String(value);
+          pushShaderSource(this);
+        },
+      });
       this.linewidth = 1;
       addWireframe(this);
       this.fog = false;

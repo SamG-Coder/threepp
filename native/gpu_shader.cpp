@@ -34,13 +34,27 @@ uint32_t tn_shader_material_create(const char* vertex_src, const char* fragment_
         std::string vertex = vertex_src ? vertex_src : "";
         std::string fragment = fragment_src ? fragment_src : "";
         return onWorker([vertex, fragment] {
+            auto logIncludes = [](const char* stage, const std::string& src) {
+                size_t pos = 0;
+                while ((pos = src.find("#include", pos)) != std::string::npos) {
+                    const size_t end = src.find('\n', pos);
+                    const std::string line = src.substr(
+                            pos, end == std::string::npos ? 96 : end - pos);
+                    logLine((std::string("shader ") + stage + " leftover " + line).c_str());
+                    pos += 8;
+                }
+            };
+            logIncludes("vertex", vertex);
+            logIncludes("fragment", fragment);
+            std::string head = "ShaderMaterialCreate vs=" + std::to_string(vertex.size()) +
+                    " fs=" + std::to_string(fragment.size()) + " fs0=";
+            head += fragment.substr(0, fragment.size() < 80 ? fragment.size() : 80);
+            logLine(head.c_str());
             auto mat = ShaderMaterial::create();
-            if (!vertex.empty()) {
-                mat->vertexShader = vertex;
-            }
-            if (!fragment.empty()) {
-                mat->fragmentShader = fragment;
-            }
+            // Always take the JS source. Empty strings mean the page passed
+            // empty, not "keep threepp default_vertex/default_fragment".
+            mat->vertexShader = vertex;
+            mat->fragmentShader = fragment;
             Slot slot;
             slot.kind = Kind::Material;
             slot.material = mat;
@@ -49,6 +63,29 @@ uint32_t tn_shader_material_create(const char* vertex_src, const char* fragment_
     } catch (const std::exception& ex) {
         setError(ex.what());
         return 0;
+    }
+}
+
+void tn_shader_material_set_source(uint32_t material, const char* vertex_src, const char* fragment_src) {
+    try {
+        std::string vertex = vertex_src ? vertex_src : "";
+        std::string fragment = fragment_src ? fragment_src : "";
+        onWorker([material, vertex = std::move(vertex), fragment = std::move(fragment)] {
+            Slot* slot = getSlot(material);
+            if (!slot || !slot->material) {
+                return;
+            }
+            auto* sm = slot->material->as<ShaderMaterial>();
+            if (!sm) {
+                return;
+            }
+            sm->vertexShader = vertex;
+            sm->fragmentShader = fragment;
+            sm->needsUpdate();
+            markDirty();
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
     }
 }
 

@@ -95,6 +95,9 @@ public partial class NativeBridge
     public int ShaderMaterialCreate(string vertexSrc, string fragmentSrc) =>
         (int)Native.tn_shader_material_create(vertexSrc ?? "", fragmentSrc ?? "");
 
+    public void ShaderMaterialSetSource(int material, string vertexSrc, string fragmentSrc) =>
+        Native.tn_shader_material_set_source((uint)material, vertexSrc ?? "", fragmentSrc ?? "");
+
     public void MaterialSetMapSlot(int material, int slot, int texture) =>
         Native.tn_material_set_map_slot((uint)material, slot, (uint)texture);
 

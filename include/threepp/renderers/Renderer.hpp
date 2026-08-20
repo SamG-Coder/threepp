@@ -15,8 +15,10 @@
 #include "threepp/core/misc.hpp"
 
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace threepp {
@@ -61,6 +63,7 @@ namespace threepp {
         float toneMappingExposure = 1.0f;
 
         bool checkShaderErrors = false;
+        std::function<void(const std::string&)> onShaderError;
 
         // --- Core rendering ---
 

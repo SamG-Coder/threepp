@@ -133,6 +133,7 @@ TN_API int tn_lod_add_level(uint32_t lod, uint32_t object, float distance);
 TN_API void tn_lod_update(uint32_t lod, uint32_t camera);
 
 TN_API uint32_t tn_shader_material_create(const char* vertex_src, const char* fragment_src);
+TN_API void tn_shader_material_set_source(uint32_t material, const char* vertex_src, const char* fragment_src);
 TN_API void tn_shader_uniform_float(uint32_t material, const char* name, float v);
 TN_API void tn_shader_uniform_vec2(uint32_t material, const char* name, float x, float y);
 TN_API void tn_shader_uniform_vec3(uint32_t material, const char* name, float x, float y, float z);

@@ -13,6 +13,7 @@
 #include <cmath>
 #include <iostream>
 #include <list>
+#include <sstream>
 #include <vector>
 
 #ifndef __EMSCRIPTEN__
@@ -34,6 +35,49 @@ namespace {
         glCompileShader(shader);
 
         return shader;
+    }
+
+    std::string numberedSource(const std::string& src) {
+        std::ostringstream out;
+        int line = 1;
+        out << line << " | ";
+        for (char c : src) {
+            out << c;
+            if (c == '\n') {
+                ++line;
+                out << line << " | ";
+            }
+        }
+        return out.str();
+    }
+
+    std::string fetchGlLog(GLuint object, bool isShader) {
+        int length = 0;
+        if (isShader) {
+            glGetShaderiv(object, GL_INFO_LOG_LENGTH, &length);
+        } else {
+            glGetProgramiv(object, GL_INFO_LOG_LENGTH, &length);
+        }
+        if (length <= 1) {
+            return {};
+        }
+        std::string msg(static_cast<size_t>(length), '\0');
+        if (isShader) {
+            glGetShaderInfoLog(object, length, nullptr, msg.data());
+        } else {
+            glGetProgramInfoLog(object, length, nullptr, msg.data());
+        }
+        while (!msg.empty() && (msg.back() == '\0' || msg.back() == '\n' || msg.back() == '\r')) {
+            msg.pop_back();
+        }
+        return msg;
+    }
+
+    void emitShaderLog(const GLRenderer* renderer, const std::string& msg) {
+        std::cerr << msg << std::endl;
+        if (renderer && renderer->onShaderError) {
+            renderer->onShaderError(msg);
+        }
     }
 
     std::pair<std::string, std::string> getEncodingComponents(ColorSpace encoding) {
@@ -662,11 +706,22 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
         }
     }
 
-    vertexShader = resolveIncludes(vertexShader);
+    auto resolveLogged = [&](const char* stage, std::string src) {
+        try {
+            return resolveIncludes(src);
+        } catch (const std::exception& ex) {
+            std::ostringstream ss;
+            ss << "[Shader include error] " << parameters->shaderName << " " << stage << ": " << ex.what();
+            emitShaderLog(renderer, ss.str());
+            throw;
+        }
+    };
+
+    vertexShader = resolveLogged("vertex", vertexShader);
     replaceLightNums(vertexShader, parameters);
     replaceClippingPlaneNums(vertexShader, parameters);
 
-    fragmentShader = resolveIncludes(fragmentShader);
+    fragmentShader = resolveLogged("fragment", fragmentShader);
     replaceLightNums(fragmentShader, parameters);
     replaceClippingPlaneNums(fragmentShader, parameters);
 
@@ -720,8 +775,26 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
     std::string vertexGlsl = prefixVertex + vertexShader;
     std::string fragmentGlsl = prefixFragment + fragmentShader;
 
-    const auto glVertexShader = createShader(GL_VERTEX_SHADER, vertexGlsl.c_str());
-    const auto glFragmentShader = createShader(GL_FRAGMENT_SHADER, fragmentGlsl.c_str());
+    auto compileChecked = [&](GLenum type, const std::string& src) {
+        const auto shader = createShader(type, src.c_str());
+        if (!renderer->checkShaderErrors) {
+            return shader;
+        }
+        int ok = 0;
+        glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+        if (!ok) {
+            const char* stage = type == GL_VERTEX_SHADER ? "vertex" : "fragment";
+            std::ostringstream ss;
+            ss << "[Shader compile error] " << parameters->shaderName << " " << stage << "\n"
+               << fetchGlLog(shader, true) << "\n----- " << stage << " source -----\n"
+               << numberedSource(src);
+            emitShaderLog(renderer, ss.str());
+        }
+        return shader;
+    };
+
+    const auto glVertexShader = compileChecked(GL_VERTEX_SHADER, vertexGlsl);
+    const auto glFragmentShader = compileChecked(GL_FRAGMENT_SHADER, fragmentGlsl);
 
     glAttachShader(program, glVertexShader);
     glAttachShader(program, glFragmentShader);
@@ -739,17 +812,13 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
     glLinkProgram(program);
 
     if (renderer->checkShaderErrors) {
-
-        int length;
-        glGetProgramiv(program, GL_INFO_LOG_LENGTH, &length);
-
-        if (length != 0) {
-
-            std::string msg;
-            msg.resize(length);
-            glGetProgramInfoLog(program, length, nullptr, &msg.front());
-
-            std::cerr << "[Shader error] " << msg << std::endl;
+        int ok = 0;
+        glGetProgramiv(program, GL_LINK_STATUS, &ok);
+        if (!ok) {
+            std::ostringstream ss;
+            ss << "[Shader link error] " << parameters->shaderName << "\n"
+               << fetchGlLog(program, false);
+            emitShaderLog(renderer, ss.str());
         }
     }
 

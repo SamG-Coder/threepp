@@ -216,7 +216,8 @@ int impl_runtime_start(int width, int height, const char* title) {
         g.renderer = std::make_unique<GLRenderer>(*g.canvas);
     }
     g.renderer->sortObjects = false;
-    g.renderer->checkShaderErrors = false;
+    g.renderer->checkShaderErrors = true;
+    g.renderer->onShaderError = [](const std::string& msg) { logLine(msg.c_str()); };
     g.renderer->toneMapping = ToneMapping::None;
     g.renderer->toneMappingExposure = 1.f;
     g.renderer->setClearColor(Color(0x000000));

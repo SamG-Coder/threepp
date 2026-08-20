@@ -120,14 +120,14 @@
   function nativePmremFromTexture(kind, source) {
     const n = native();
     const name = kind === "cube" ? "PmremFromCubemap" : "PmremFromEquirect";
-    if (!TN.hostHas?.(n, name)) return nativePmremFromSky(extractSky(null));
+    if (!TN.hostHas?.(n, name)) return 0;
     const id = allocHandle();
     const srcH = source && source._h ? source._h : 0;
     try {
       if (TN.cmd && typeof TN.cmd.submit === "function") TN.cmd.submit();
-      return n[name](id, srcH) || nativePmremFromSky(extractSky(null));
+      return n[name](id, srcH) || 0;
     } catch {
-      return nativePmremFromSky(extractSky(null));
+      return 0;
     }
   }
 
@@ -154,19 +154,32 @@
       void sigma;
       void near;
       void far;
+      if (scene && typeof scene.updateMatrixWorld === "function") {
+        scene.updateMatrixWorld(true);
+      }
+      if (scene && !scene._h && typeof scene.flushSelf === "function") {
+        scene.flushSelf();
+      }
       const n = native();
+      try {
+        if (TN.cmd && typeof TN.cmd.submit === "function") TN.cmd.submit();
+      } catch {
+        /* cmd ring may not be attached yet */
+      }
       const objH = scene && scene._h ? scene._h : 0;
       if (objH && TN.hostHas?.(n, "PmremFromObject")) {
         const id = allocHandle();
         try {
-          if (TN.cmd && typeof TN.cmd.submit === "function") TN.cmd.submit();
           const handle = n.PmremFromObject(id, objH);
           if (handle) return makeTarget(handle);
-        } catch {
-          /* fall back */
+        } catch (err) {
+          console.warn("ThreeBrowser PMREMGenerator.fromScene", err);
         }
       }
-      return makeTarget(nativePmremFromSky(extractSky(scene)));
+      console.warn(
+        "ThreeBrowser: fromScene captures the live object shader; not substituting a default sky"
+      );
+      return makeTarget(0);
     }
     fromEquirectangular(texture) {
       return makeTarget(nativePmremFromTexture("equirect", texture));

@@ -89,6 +89,9 @@ internal static partial class Native
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
     public static extern uint tn_shader_material_create(string vertexSrc, string fragmentSrc);
 
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+    public static extern void tn_shader_material_set_source(uint material, string vertexSrc, string fragmentSrc);
+
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     public static extern void tn_scene_set_environment(uint scene, uint texture);
 

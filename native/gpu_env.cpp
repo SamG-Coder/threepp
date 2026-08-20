@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -411,13 +412,7 @@ void tn::applyPendingEnvironment() {
         // scene.environment. Assign the CubeUV (or Vulkan equirect) here —
         // never extra hemi/sun on top of a real env (that would double-light).
         scene->environment = env;
-        if (env) {
-            clearSkyLights(scene);
-        } else if (it->second != 0) {
-            applySkyLights(scene);
-        } else {
-            clearSkyLights(scene);
-        }
+        clearSkyLights(scene);
         it = g.pendingEnvironment.erase(it);
         markDirty();
     }
@@ -463,7 +458,8 @@ uint32_t tn_pmrem_from_equirect(uint32_t id, uint32_t textureHandle) {
                 }
             }
             if (!source) {
-                source = makeEquirect(SkyParams{});
+                logLine("pmrem from equirect: no source texture");
+                return 0u;
             }
             return pmremFromTexture(id, std::move(source));
         });
@@ -482,20 +478,29 @@ uint32_t tn_pmrem_from_object(uint32_t id, uint32_t objectHandle) {
         return onWorker([=] {
             Object3D* object = findObject(objectHandle);
             auto* gl = dynamic_cast<GLRenderer*>(g.renderer.get());
-            if (!object || !gl) {
-                return pmremFromTexture(id, makeEquirect(lastSky));
+            if (!object) {
+                logLine(("pmrem from object: missing object id=" +
+                         std::to_string(objectHandle))
+                                .c_str());
+                return 0u;
+            }
+            if (!gl) {
+                logLine("pmrem from object: renderer is not OpenGL");
+                return 0u;
             }
             try {
                 auto captured = captureObjectEquirect(*gl, *object);
                 if (captured && captured->texture) {
                     return pmremFromTexture(id, captured->texture);
                 }
+                logLine("pmrem from object: capture returned no texture");
             } catch (const std::exception& ex) {
-                setError(ex.what());
+                std::string msg = std::string("pmrem from object: shader/capture failed: ") + ex.what();
+                setError(msg.c_str());
             } catch (...) {
                 setError("pmrem from object failed");
             }
-            return pmremFromTexture(id, makeEquirect(lastSky));
+            return 0u;
         });
     } catch (const std::exception& ex) {
         setError(ex.what());
