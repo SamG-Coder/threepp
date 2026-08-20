@@ -29,6 +29,7 @@ constexpr uint32_t OP_CAM_UPD_PROJ = 24;
 constexpr uint32_t OP_BUF_GEO = 30;
 constexpr uint32_t OP_BOX_GEO = 31;
 constexpr uint32_t OP_BUF_ATTR = 32;
+constexpr uint32_t OP_TEX_RGBA = 33;
 
 constexpr uint32_t OP_MAT_BASIC = 40;
 constexpr uint32_t OP_MAT_LAMBERT = 41;
@@ -41,6 +42,7 @@ constexpr uint32_t OP_MAT_MAP = 47;
 constexpr uint32_t OP_MAT_PBR = 48;
 constexpr uint32_t OP_MAT_EMISSIVE = 49;
 constexpr uint32_t OP_MAT_MAP_SLOT = 50;
+constexpr uint32_t OP_MAT_NORMAL = 51;
 
 constexpr uint32_t OP_MESH = 60;
 constexpr uint32_t OP_GROUP = 61;

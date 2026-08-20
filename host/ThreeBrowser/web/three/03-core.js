@@ -1632,6 +1632,10 @@
 
       bindOnChange(position, () => {
         scope._posDirty = true;
+        // three.js stores orientation in the quaternion. A later translate
+        // (helper.lookAt(normal) then helper.position.copy(hit)) must keep
+        // that rotation — not re-aim via lookFrom(newPos, oldTarget).
+        scope._look = null;
         TN.cmd && TN.cmd.markPose(scope);
       });
       bindOnChange(rotation, onRotationChange);
@@ -2705,6 +2709,7 @@
       this.ray.set(origin, direction);
     }
     setFromCamera(coords, camera) {
+      if (typeof camera.updateMatrixWorld === 'function') camera.updateMatrixWorld();
       if (camera.isPerspectiveCamera) {
         setFromMatrixPosition(this.ray.origin, camera.matrixWorld);
         this.ray.direction.set(coords.x, coords.y, 0.5);

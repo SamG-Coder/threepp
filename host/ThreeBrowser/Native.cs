@@ -68,6 +68,9 @@ internal static partial class Native
     public static extern uint tn_mesh_basic_material_create(uint color);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    public static extern uint tn_mesh_normal_material_create();
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     public static extern uint tn_mesh_create(uint geometry, uint material);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]

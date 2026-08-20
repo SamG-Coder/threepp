@@ -73,6 +73,9 @@ public partial class NativeBridge
     public int MeshBasicMaterialCreate(int color) =>
         (int)Native.tn_mesh_basic_material_create((uint)color);
 
+    public int MeshNormalMaterialCreate() =>
+        (int)Native.tn_mesh_normal_material_create();
+
     public int MeshCreate(int geometry, int material) =>
         (int)Native.tn_mesh_create((uint)geometry, (uint)material);
 

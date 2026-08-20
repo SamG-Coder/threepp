@@ -3825,6 +3825,29 @@
       target.addScaledVector(v3, _triV3.z);
       return target;
     }
+    static getInterpolatedAttribute(attr, i1, i2, i3, barycoord, target) {
+      const size = attr.itemSize || (target && target.isVector2 ? 2 : 3);
+      const ax = attr.getX(i1);
+      const ay = attr.getY(i1);
+      const az = size > 2 && attr.getZ ? attr.getZ(i1) : 0;
+      const bx = attr.getX(i2);
+      const by = attr.getY(i2);
+      const bz = size > 2 && attr.getZ ? attr.getZ(i2) : 0;
+      const cx = attr.getX(i3);
+      const cy = attr.getY(i3);
+      const cz = size > 2 && attr.getZ ? attr.getZ(i3) : 0;
+      const x = ax * barycoord.x + bx * barycoord.y + cx * barycoord.z;
+      const y = ay * barycoord.x + by * barycoord.y + cy * barycoord.z;
+      const z = az * barycoord.x + bz * barycoord.y + cz * barycoord.z;
+      if (target && typeof target.set === 'function') {
+        if (target.isVector2) return target.set(x, y);
+        return target.set(x, y, z);
+      }
+      target.x = x;
+      target.y = y;
+      if ('z' in target) target.z = z;
+      return target;
+    }
     static isFrontFacing(a, b, c, direction) {
       _triV0.subVectors(c, b);
       _triV1.subVectors(a, b);

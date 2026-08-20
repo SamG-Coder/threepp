@@ -19,6 +19,7 @@
     BUF_GEO: 30,
     BOX_GEO: 31,
     BUF_ATTR: 32,
+    TEX_RGBA: 33,
     MAT_BASIC: 40,
     MAT_LAMBERT: 41,
     MAT_STANDARD: 42,
@@ -30,6 +31,7 @@
     MAT_PBR: 48,
     MAT_EMISSIVE: 49,
     MAT_MAP_SLOT: 50,
+    MAT_NORMAL: 51,
     MESH: 60,
     GROUP: 61,
     INSTANCED: 62,
@@ -364,6 +366,19 @@
       wf32(d);
       end(s);
     },
+    // OP_TEX_RGBA payload after 8-byte header:
+    //   u32 id, u32 width, u32 height, u32 pad, u8 rgba[width*height*4]
+    texRgba(id, width, height, pixels) {
+      const n = (width | 0) * (height | 0) * 4;
+      const payload = 16 + Math.max(0, n);
+      const s = begin(OP.TEX_RGBA, payload);
+      wu32(id);
+      wu32(width);
+      wu32(height);
+      wu32(0);
+      if (n) copyBytes(pixels);
+      end(s);
+    },
     matBasic(id, hex) {
       const s = begin(OP.MAT_BASIC, 8);
       wu32(id);
@@ -404,6 +419,12 @@
       const s = begin(OP.MAT_SPRITE, 8);
       wu32(id);
       wu32(hex);
+      end(s);
+    },
+    matNormal(id) {
+      const s = begin(OP.MAT_NORMAL, 8);
+      wu32(id);
+      wu32(0);
       end(s);
     },
     matSide(id, side) {

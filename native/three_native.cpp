@@ -1031,6 +1031,20 @@ uint32_t tn_mesh_lambert_material_create(uint32_t color) {
     }
 }
 
+uint32_t tn_mesh_normal_material_create(void) {
+    try {
+        return onWorker([] {
+            Slot slot;
+            slot.kind = Kind::Material;
+            slot.material = MeshNormalMaterial::create();
+            return insert(std::move(slot));
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+}
+
 void tn_material_set_side(uint32_t materialHandle, int side) {
     try {
         onWorker([materialHandle, side] {

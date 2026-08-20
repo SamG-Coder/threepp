@@ -84,6 +84,7 @@ TN_API uint32_t tn_buffer_geometry_create(
 TN_API void tn_buffer_geometry_set_attr(
     uint32_t geometry, const char* name, int item_size, const float* data, int float_count);
 TN_API uint32_t tn_mesh_lambert_material_create(uint32_t color);
+TN_API uint32_t tn_mesh_normal_material_create(void);
 TN_API void tn_material_set_side(uint32_t material, int side);
 TN_API void tn_material_set_map(uint32_t material, uint32_t texture);
 TN_API void tn_material_set_map_slot(uint32_t material, int slot, uint32_t texture);

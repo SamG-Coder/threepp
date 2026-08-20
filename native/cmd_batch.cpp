@@ -6,6 +6,7 @@
 #include "threepp/objects/LineLoop.hpp"
 #include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/SkinnedMesh.hpp"
+#include "threepp/textures/Texture.hpp"
 
 #include <algorithm>
 #include <array>
@@ -247,6 +248,33 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             insertAt(id, std::move(slot));
             return;
         }
+        case tn::cmd::OP_TEX_RGBA: {
+            if (!has(p, end, 16)) return;
+            const uint32_t id = ru32(p);
+            const uint32_t width = ru32(p + 4);
+            const uint32_t height = ru32(p + 8);
+            const uint8_t* cur = p + 16;
+            const size_t need = static_cast<size_t>(width) * static_cast<size_t>(height) * 4u;
+            if (!width || !height || !has(cur, end, need)) {
+                setError("texture needs rgba pixels");
+                return;
+            }
+            std::vector<unsigned char> pixels(cur, cur + need);
+            Image image(std::move(pixels), width, height);
+            auto tex = Texture::create(image);
+            tex->format = Format::RGBA;
+            tex->colorSpace = ColorSpace::sRGB;
+            tex->magFilter = Filter::Linear;
+            tex->minFilter = Filter::LinearMipmapLinear;
+            tex->generateMipmaps = true;
+            tex->needsUpdate();
+            Slot slot;
+            slot.kind = Kind::Texture;
+            slot.texture = std::move(tex);
+            insertAt(id, std::move(slot));
+            markDirty();
+            return;
+        }
         case tn::cmd::OP_BUF_ATTR: {
             if (!has(p, end, 32)) return;
             const uint32_t id = ru32(p);
@@ -324,6 +352,11 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             if (!has(p, end, 8)) return;
             insertMaterial(ru32(p), SpriteMaterial::create(
                     SpriteMaterial::Params{}.color(Color(ru32(p + 4)))));
+            return;
+        }
+        case tn::cmd::OP_MAT_NORMAL: {
+            if (!has(p, end, 4)) return;
+            insertMaterial(ru32(p), MeshNormalMaterial::create());
             return;
         }
         case tn::cmd::OP_MAT_SIDE: {

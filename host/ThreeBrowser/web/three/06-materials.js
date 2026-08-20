@@ -285,6 +285,7 @@
       handle = TN.cmd.alloc();
       if (mat._nativeKind === "basic") TN.cmd.matBasic(handle, color);
       else if (mat._nativeKind === "lambert") TN.cmd.matLambert(handle, color);
+      else if (mat._nativeKind === "normal") TN.cmd.matNormal(handle);
       else if (mat._nativeKind === "line") TN.cmd.matLine(handle, color, mat.linewidth ?? 1);
       else if (mat._nativeKind === "points") TN.cmd.matPoints(handle, color, mat.size ?? 1);
       else if (mat._nativeKind === "sprite") TN.cmd.matSprite(handle, color);
@@ -305,6 +306,12 @@
     if (!n) return;
     if (mat._nativeKind === "basic" && n.MeshBasicMaterialCreate) {
       handle = n.MeshBasicMaterialCreate(color);
+    } else if (mat._nativeKind === "normal") {
+      try {
+        if (TN.hostHas?.(n, "MeshNormalMaterialCreate")) handle = n.MeshNormalMaterialCreate();
+      } catch {
+        handle = 0;
+      }
     } else if (mat._nativeKind === "lambert" && n.MeshLambertMaterialCreate) {
       handle = n.MeshLambertMaterialCreate(color);
     } else if (mat._nativeKind === "line" && typeof n.LineBasicMaterialCreate === "function") {
@@ -703,9 +710,7 @@
       super();
       this.isMeshNormalMaterial = true;
       this.type = "MeshNormalMaterial";
-      this._nativeKind = "standard";
-      this._nativePbr = { metalness: 0.2, roughness: 0.5 };
-      this.color = makeColor(0x8888ff);
+      this._nativeKind = "normal";
       addNormalMaps(this);
       addWireframe(this);
       this.flatShading = false;

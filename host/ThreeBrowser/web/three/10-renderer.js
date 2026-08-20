@@ -517,6 +517,10 @@
 
     render(scene, camera) {
       this.info.render.frame++;
+      if (scene && typeof scene.updateMatrixWorld === "function") scene.updateMatrixWorld();
+      if (camera && camera.parent === null && typeof camera.updateMatrixWorld === "function") {
+        camera.updateMatrixWorld();
+      }
       if (TN.cmd) {
         TN.cmd.flushPoses();
         TN.cmd.render(scene?._h || 0, camera?._h || 0);

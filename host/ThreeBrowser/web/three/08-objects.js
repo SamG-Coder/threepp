@@ -302,6 +302,181 @@
     console.warn(message);
   }
 
+  const FrontSide = TN.FrontSide ?? 0;
+  const BackSide = TN.BackSide ?? 1;
+  const Vector2 = TN.Vector2;
+  const Vector3 = TN.Vector3;
+  const Matrix4 = TN.Matrix4;
+  const Ray = TN.Ray;
+  const Sphere = TN.Sphere;
+  const Triangle = TN.Triangle;
+  const _inverseMatrix = Matrix4 ? new Matrix4() : null;
+  const _ray = Ray ? new Ray() : null;
+  const _sphere = Sphere ? new Sphere() : null;
+  const _sphereHitAt = Vector3 ? new Vector3() : null;
+  const _vA = Vector3 ? new Vector3() : null;
+  const _vB = Vector3 ? new Vector3() : null;
+  const _vC = Vector3 ? new Vector3() : null;
+  const _intersectionPoint = Vector3 ? new Vector3() : null;
+  const _intersectionPointWorld = Vector3 ? new Vector3() : null;
+  const _barycoord = Vector3 ? new Vector3() : null;
+  const _uv = Vector2 ? new Vector2() : null;
+  const _uv1 = Vector2 ? new Vector2() : null;
+  const _hitNormal = Vector3 ? new Vector3() : null;
+  const _faceNormal = Vector3 ? new Vector3() : null;
+
+  function checkIntersection(object, material, raycaster, ray, pA, pB, pC, point) {
+    let intersect;
+    const side = material && material.side;
+    if (side === BackSide) {
+      intersect = ray.intersectTriangle(pC, pB, pA, true, point);
+    } else {
+      intersect = ray.intersectTriangle(pA, pB, pC, side === FrontSide, point);
+    }
+    if (intersect === null) return null;
+    _intersectionPointWorld.copy(point);
+    _intersectionPointWorld.applyMatrix4(object.matrixWorld);
+    const distance = raycaster.ray.origin.distanceTo(_intersectionPointWorld);
+    if (distance < raycaster.near || distance > raycaster.far) return null;
+    return {
+      distance,
+      point: _intersectionPointWorld.clone(),
+      object,
+    };
+  }
+
+  function checkGeometryIntersection(object, material, raycaster, ray, uv, uv1, normal, a, b, c) {
+    object.getVertexPosition(a, _vA);
+    object.getVertexPosition(b, _vB);
+    object.getVertexPosition(c, _vC);
+    const intersection = checkIntersection(object, material, raycaster, ray, _vA, _vB, _vC, _intersectionPoint);
+    if (!intersection) return null;
+    if (Triangle && typeof Triangle.getBarycoord === "function") {
+      Triangle.getBarycoord(_intersectionPoint, _vA, _vB, _vC, _barycoord);
+      intersection.barycoord = _barycoord.clone();
+      if (uv && _uv && typeof Triangle.getInterpolatedAttribute === "function") {
+        intersection.uv = Triangle.getInterpolatedAttribute(uv, a, b, c, _barycoord, _uv).clone();
+      }
+      if (uv1 && _uv1 && typeof Triangle.getInterpolatedAttribute === "function") {
+        intersection.uv1 = Triangle.getInterpolatedAttribute(uv1, a, b, c, _barycoord, _uv1).clone();
+      }
+      if (normal && _hitNormal && typeof Triangle.getInterpolatedAttribute === "function") {
+        intersection.normal = Triangle.getInterpolatedAttribute(normal, a, b, c, _barycoord, _hitNormal).clone();
+        if (intersection.normal.dot(ray.direction) > 0) intersection.normal.multiplyScalar(-1);
+      }
+    }
+    const face = {
+      a,
+      b,
+      c,
+      normal: _faceNormal ? _faceNormal.clone() : new Vector3(),
+      materialIndex: 0,
+    };
+    if (Triangle && typeof Triangle.getNormal === "function") {
+      Triangle.getNormal(_vA, _vB, _vC, face.normal);
+    }
+    intersection.face = face;
+    return intersection;
+  }
+
+  function meshRaycast(raycaster, intersects) {
+    const geometry = this.geometry;
+    const material = this.material;
+    if (material === undefined || !geometry || !_ray || !_sphere || !_inverseMatrix) return;
+    if (typeof this.updateWorldMatrix === "function") this.updateWorldMatrix(true, false);
+    if (geometry.boundingSphere === null && typeof geometry.computeBoundingSphere === "function") {
+      geometry.computeBoundingSphere();
+    }
+    if (geometry.boundingSphere) {
+      _sphere.copy(geometry.boundingSphere);
+      _sphere.applyMatrix4(this.matrixWorld);
+      _ray.copy(raycaster.ray).recast(raycaster.near);
+      if (_sphere.containsPoint(_ray.origin) === false) {
+        if (_ray.intersectSphere(_sphere, _sphereHitAt) === null) return;
+        if (_ray.origin.distanceToSquared(_sphereHitAt) > (raycaster.far - raycaster.near) ** 2) return;
+      }
+    }
+    _inverseMatrix.copy(this.matrixWorld).invert();
+    _ray.copy(raycaster.ray).applyMatrix4(_inverseMatrix);
+    if (geometry.boundingBox !== null && _ray.intersectsBox(geometry.boundingBox) === false) return;
+
+    const index = geometry.index;
+    const position = geometry.attributes && geometry.attributes.position;
+    const uv = geometry.attributes && geometry.attributes.uv;
+    const uv1 = geometry.attributes && (geometry.attributes.uv1 || geometry.attributes.uv2);
+    const normal = geometry.attributes && geometry.attributes.normal;
+    const groups = geometry.groups || [];
+    const drawRange = geometry.drawRange || { start: 0, count: Infinity };
+    const materials = Array.isArray(material) ? material : null;
+
+    function pushHit(intersection, faceIndex, materialIndex) {
+      if (!intersection) return;
+      intersection.faceIndex = faceIndex;
+      if (intersection.face) intersection.face.materialIndex = materialIndex || 0;
+      intersects.push(intersection);
+    }
+
+    if (index !== null && index !== undefined) {
+      if (materials) {
+        for (let i = 0, il = groups.length; i < il; i++) {
+          const group = groups[i];
+          const groupMaterial = materials[group.materialIndex];
+          const start = Math.max(group.start, drawRange.start);
+          const end = Math.min(index.count, Math.min(group.start + group.count, drawRange.start + drawRange.count));
+          for (let j = start; j < end; j += 3) {
+            const a = index.getX(j);
+            const b = index.getX(j + 1);
+            const c = index.getX(j + 2);
+            pushHit(
+              checkGeometryIntersection(this, groupMaterial, raycaster, _ray, uv, uv1, normal, a, b, c),
+              Math.floor(j / 3),
+              group.materialIndex
+            );
+          }
+        }
+      } else {
+        const start = Math.max(0, drawRange.start);
+        const end = Math.min(index.count, drawRange.start + drawRange.count);
+        for (let i = start; i < end; i += 3) {
+          const a = index.getX(i);
+          const b = index.getX(i + 1);
+          const c = index.getX(i + 2);
+          pushHit(
+            checkGeometryIntersection(this, material, raycaster, _ray, uv, uv1, normal, a, b, c),
+            Math.floor(i / 3),
+            0
+          );
+        }
+      }
+    } else if (position) {
+      if (materials) {
+        for (let i = 0, il = groups.length; i < il; i++) {
+          const group = groups[i];
+          const groupMaterial = materials[group.materialIndex];
+          const start = Math.max(group.start, drawRange.start);
+          const end = Math.min(position.count, Math.min(group.start + group.count, drawRange.start + drawRange.count));
+          for (let j = start; j < end; j += 3) {
+            pushHit(
+              checkGeometryIntersection(this, groupMaterial, raycaster, _ray, uv, uv1, normal, j, j + 1, j + 2),
+              Math.floor(j / 3),
+              group.materialIndex
+            );
+          }
+        }
+      } else {
+        const start = Math.max(0, drawRange.start);
+        const end = Math.min(position.count, drawRange.start + drawRange.count);
+        for (let i = start; i < end; i += 3) {
+          pushHit(
+            checkGeometryIntersection(this, material, raycaster, _ray, uv, uv1, normal, i, i + 1, i + 2),
+            Math.floor(i / 3),
+            0
+          );
+        }
+      }
+    }
+  }
+
   class Mesh extends TN.Object3D {
     // Third arg is an already-created native handle (InstancedMesh / BatchedMesh).
     constructor(geometry, material, nativeHandle) {
@@ -342,7 +517,9 @@
       if (typeof super.flushSelf === "function") return super.flushSelf();
       return this;
     }
-    raycast() {}
+    raycast(raycaster, intersects) {
+      meshRaycast.call(this, raycaster, intersects);
+    }
     getVertexPosition(index, target) {
       const position = this.geometry?.attributes?.position;
       if (!position || !target) return target;

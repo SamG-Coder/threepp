@@ -1006,6 +1006,15 @@
     });
   }
 
+  function absorbNativeId(handle) {
+    if (!handle || !TN.cmd || typeof TN.cmd.alloc !== "function") return;
+    let guard = 0;
+    while (guard++ < 1000000) {
+      const id = TN.cmd.alloc();
+      if (id >= handle) break;
+    }
+  }
+
   function uploadTextureNative(texture) {
     if (!texture) return;
     const raster = rasterizeToRgba(texture);
@@ -1019,17 +1028,32 @@
       }
       pixels = flipped;
     }
+    if (TN.cmd && typeof TN.cmd.texRgba === "function") {
+      const id = TN.cmd.alloc();
+      TN.cmd.texRgba(id, raster.width, raster.height, pixels);
+      texture._h = id;
+      bindWaitingMaterials(texture);
+      return;
+    }
     const host = native();
-    if (!host || typeof host.TextureFromRgba !== "function") return;
+    if (!TN.hostHas?.(host, "TextureFromRgba")) return;
     try {
+      if (TN.cmd && typeof TN.cmd.submit === "function") {
+        try {
+          TN.cmd.submit();
+        } catch {
+          /* cmd ring may not be attached yet */
+        }
+      }
       texture._h = host.TextureFromRgba(raster.width, raster.height, bytesToB64(pixels));
+      absorbNativeId(texture._h);
     } catch {
       texture._h = 0;
       return;
     }
     if (!texture._h) return;
     try {
-      if (typeof host.TextureSetFilter === "function") {
+      if (TN.hostHas(host, "TextureSetFilter")) {
         host.TextureSetFilter(texture._h, texture.magFilter, texture.minFilter);
       }
     } catch {
