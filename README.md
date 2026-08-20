@@ -182,6 +182,10 @@ Then open a top-level example, for example
 [webgl_interactive_cubes](https://threejs.org/examples/webgl_interactive_cubes.html).
 Iframe galleries (`#viewer`) are not composited.
 
+The toolbar is a Chrome-style omnibox with Back / Forward / Reload / Home.
+**Native THREE** on the right is a one-click injector toggle (`Ctrl+Shift+N`):
+off reloads the page with stock three.js WebGL and hides the native surface.
+
 The 2000-cube scene is packed as an 8-byte-aligned command stream (no per-object
 COM, no base64). Command-ring round-trip test:
 

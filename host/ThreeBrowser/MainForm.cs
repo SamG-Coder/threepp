@@ -11,10 +11,7 @@ public sealed class MainForm : Form
     private const uint SwpNoActivate = 0x0010;
     private const string HomeUrl = ThreeInject.HomeUrl;
 
-    private readonly Panel _chrome = new();
-    private readonly TextBox _address = new();
-    private readonly Button _go = new();
-    private readonly Button _home = new();
+    private readonly BrowserChrome _chrome = new();
     private readonly WebView2 _web = new();
     private NativeBridge? _bridge;
     private string _webRoot = "";
@@ -27,59 +24,54 @@ public sealed class MainForm : Form
     public MainForm()
     {
         Text = "ThreeBrowser";
-        Width = 1100;
-        Height = 760;
-        MinimumSize = new Size(640, 480);
-        BackColor = Color.Black;
+        Width = 1280;
+        Height = 840;
+        MinimumSize = new Size(720, 520);
+        BackColor = BrowserChrome.Bar;
+        Font = new Font("Segoe UI", 9f);
+        KeyPreview = true;
 
-        _chrome.Dock = DockStyle.Top;
-        _chrome.Height = 36;
-        _chrome.BackColor = Color.FromArgb(28, 28, 30);
-        _chrome.Padding = new Padding(6, 6, 6, 6);
-
-        _home.Text = "Home";
-        _home.Dock = DockStyle.Left;
-        _home.Width = 64;
-        _home.FlatStyle = FlatStyle.Flat;
-        _home.ForeColor = Color.White;
-        _home.BackColor = Color.FromArgb(48, 48, 52);
-        _home.Click += (_, _) =>
+        _chrome.Address.Text = HomeUrl;
+        _chrome.Address.GotFocus += (_, _) =>
         {
             ReleasePointer();
-            NavigateTo(HomeUrl);
+            _chrome.Invalidate(true);
+            BeginInvoke(_chrome.Address.SelectAll);
         };
-
-        _go.Text = "Go";
-        _go.Dock = DockStyle.Right;
-        _go.Width = 56;
-        _go.FlatStyle = FlatStyle.Flat;
-        _go.ForeColor = Color.White;
-        _go.BackColor = Color.FromArgb(48, 48, 52);
-        _go.Click += (_, _) =>
-        {
-            ReleasePointer();
-            NavigateTo(_address.Text);
-        };
-
-        _address.Dock = DockStyle.Fill;
-        _address.BorderStyle = BorderStyle.FixedSingle;
-        _address.BackColor = Color.FromArgb(20, 20, 22);
-        _address.ForeColor = Color.White;
-        _address.Text = HomeUrl;
-        _address.GotFocus += (_, _) => ReleasePointer();
-        _address.KeyDown += (_, e) =>
+        _chrome.Address.LostFocus += (_, _) => _chrome.Invalidate(true);
+        _chrome.Address.KeyDown += (_, e) =>
         {
             if (e.KeyCode == Keys.Enter)
             {
                 e.SuppressKeyPress = true;
                 ReleasePointer();
-                NavigateTo(_address.Text);
+                NavigateTo(_chrome.Address.Text);
+            }
+            else if (e.KeyCode == Keys.Escape)
+            {
+                SyncAddressFromWeb();
+                _web.Focus();
             }
         };
-
-        _chrome.Controls.Add(_address);
-        _chrome.Controls.Add(_go);
-        _chrome.Controls.Add(_home);
+        _chrome.BackButton.Click += (_, _) => TryNav(() => _web.CoreWebView2?.GoBack());
+        _chrome.ForwardButton.Click += (_, _) => TryNav(() => _web.CoreWebView2?.GoForward());
+        _chrome.ReloadButton.Click += (_, _) =>
+        {
+            if (_chrome.IsLoading)
+            {
+                _web.CoreWebView2?.Stop();
+            }
+            else
+            {
+                Reload();
+            }
+        };
+        _chrome.HomeButton.Click += (_, _) =>
+        {
+            ReleasePointer();
+            NavigateTo(HomeUrl);
+        };
+        _chrome.InjectToggled += (_, _) => _ = SetInjectorAsync(_chrome.InjectEnabled);
 
         _web.Dock = DockStyle.Fill;
         _web.DefaultBackgroundColor = Color.Transparent;
@@ -90,6 +82,7 @@ public sealed class MainForm : Form
         Load += (_, _) => _ = InitAsync();
         Resize += (_, _) => EmbedNativeSurface();
         FormClosing += (_, _) => ShutdownNative();
+        KeyDown += OnBrowserKey;
     }
 
     public void ResetNative()
@@ -139,7 +132,7 @@ public sealed class MainForm : Form
 
     public void EmbedNativeSurface()
     {
-        if (IsDisposed || !IsHandleCreated)
+        if (IsDisposed || !IsHandleCreated || !_chrome.InjectEnabled)
         {
             return;
         }
@@ -149,8 +142,11 @@ public sealed class MainForm : Form
             {
                 return;
             }
-            var r = _web.Bounds;
-            Native.tn_runtime_attach_host(Handle, r.X, r.Y, r.Width, r.Height);
+            var r = _web.ClientRectangle;
+            var origin = _web.PointToScreen(r.Location);
+            var local = PointToClient(origin);
+            Native.tn_runtime_attach_host(Handle, local.X, local.Y, r.Width, r.Height);
+            Native.tn_runtime_set_size(r.Width, r.Height);
             SetWindowPos(_web.Handle, HWND_TOP, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpNoActivate);
         }
         catch (DllNotFoundException)
@@ -169,11 +165,33 @@ public sealed class MainForm : Form
         {
             url = HomeUrl;
         }
+        else if (!LooksLikeUrl(url))
+        {
+            url = "https://www.google.com/search?q=" + Uri.EscapeDataString(url);
+        }
         else if (!url.Contains("://", StringComparison.Ordinal))
         {
             url = "https://" + url;
         }
         _web.CoreWebView2.Navigate(url);
+    }
+
+    private static bool LooksLikeUrl(string s)
+    {
+        if (s.Contains("://", StringComparison.Ordinal))
+        {
+            return true;
+        }
+        if (s.StartsWith("localhost", StringComparison.OrdinalIgnoreCase) ||
+            s.StartsWith("threebrowser.local", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        if (s.Contains(' ') || !s.Contains('.'))
+        {
+            return false;
+        }
+        return true;
     }
 
     private async Task InitAsync()
@@ -190,6 +208,7 @@ public sealed class MainForm : Form
             _bridge = new NativeBridge(this);
             _web.CoreWebView2.Settings.AreHostObjectsAllowed = true;
             _web.CoreWebView2.Settings.IsWebMessageEnabled = true;
+            await SetNetworkCacheDisabledAsync(_chrome.InjectEnabled);
             _web.CoreWebView2.AddHostObjectToScript("native", _bridge);
 
             _web.CoreWebView2.SetVirtualHostNameToFolderMapping(
@@ -220,14 +239,42 @@ public sealed class MainForm : Form
                 {
                     return;
                 }
+                _chrome.SetLoading(true);
                 ReleasePointer();
-                ResetNative();
+                if (_chrome.InjectEnabled)
+                {
+                    ResetNative();
+                }
             };
-            _web.CoreWebView2.ContentLoading += (_, _) => PostCmdBuffer();
-            _web.CoreWebView2.NavigationCompleted += (_, _) => PostCmdBuffer();
+            _web.CoreWebView2.ContentLoading += (_, _) =>
+            {
+                if (_chrome.InjectEnabled)
+                {
+                    PostCmdBuffer();
+                }
+            };
+            _web.CoreWebView2.NavigationCompleted += (_, _) =>
+            {
+                _chrome.SetLoading(false);
+                if (_chrome.InjectEnabled)
+                {
+                    PostCmdBuffer();
+                }
+                SyncNav();
+                SyncTitle();
+                if (!_chrome.Address.Focused)
+                {
+                    SyncAddressFromWeb();
+                }
+            };
+            _web.CoreWebView2.HistoryChanged += (_, _) => SyncNav();
+            _web.CoreWebView2.DocumentTitleChanged += (_, _) => SyncTitle();
             _web.CoreWebView2.SourceChanged += (_, _) =>
             {
-                _address.Text = _web.Source?.ToString() ?? "";
+                if (!_chrome.Address.Focused)
+                {
+                    SyncAddressFromWeb();
+                }
             };
             _web.CoreWebView2.NewWindowRequested += (_, e) =>
             {
@@ -280,6 +327,10 @@ public sealed class MainForm : Form
 
     private void OnWebResourceRequested(object? sender, CoreWebView2WebResourceRequestedEventArgs e)
     {
+        if (!_chrome.InjectEnabled)
+        {
+            return;
+        }
         var uri = e.Request?.Uri;
         if (!ThreeInject.IsThreeCoreLibrary(uri))
         {
@@ -321,6 +372,124 @@ public sealed class MainForm : Form
 
         throw new DirectoryNotFoundException(
             "Could not find web/three-native.js next to ThreeBrowser.exe.");
+    }
+
+    private async Task SetInjectorAsync(bool enabled)
+    {
+        _chrome.InjectEnabled = enabled;
+        _web.DefaultBackgroundColor = enabled ? Color.Transparent : Color.White;
+        ReleasePointer();
+        ResetNative();
+        await SetNetworkCacheDisabledAsync(enabled);
+        await ReloadIgnoringCacheAsync();
+    }
+
+    private void Reload()
+    {
+        _ = ReloadIgnoringCacheAsync();
+    }
+
+    private async Task ReloadIgnoringCacheAsync()
+    {
+        var core = _web.CoreWebView2;
+        if (core == null)
+        {
+            return;
+        }
+        ReleasePointer();
+        if (_chrome.InjectEnabled)
+        {
+            ResetNative();
+        }
+        try
+        {
+            await core.CallDevToolsProtocolMethodAsync("Network.clearBrowserCache", "{}");
+            await core.CallDevToolsProtocolMethodAsync("Page.reload", "{\"ignoreCache\":true}");
+        }
+        catch
+        {
+            core.Reload();
+        }
+    }
+
+    private async Task SetNetworkCacheDisabledAsync(bool disabled)
+    {
+        var core = _web.CoreWebView2;
+        if (core == null)
+        {
+            return;
+        }
+        try
+        {
+            var json = disabled ? "{\"cacheDisabled\":true}" : "{\"cacheDisabled\":false}";
+            await core.CallDevToolsProtocolMethodAsync("Network.setCacheDisabled", json);
+        }
+        catch
+        {
+        }
+    }
+
+    private void TryNav(Action? action)
+    {
+        ReleasePointer();
+        action?.Invoke();
+    }
+
+    private void SyncNav()
+    {
+        var core = _web.CoreWebView2;
+        _chrome.SetNav(core?.CanGoBack == true, core?.CanGoForward == true);
+    }
+
+    private void SyncTitle()
+    {
+        var title = _web.CoreWebView2?.DocumentTitle;
+        Text = string.IsNullOrWhiteSpace(title) || title == "ThreeBrowser"
+            ? "ThreeBrowser"
+            : title + " – ThreeBrowser";
+    }
+
+    private void SyncAddressFromWeb()
+    {
+        var url = _web.Source?.ToString() ?? "";
+        if (url.Length > 0)
+        {
+            _chrome.Address.Text = url;
+        }
+    }
+
+    private void OnBrowserKey(object? sender, KeyEventArgs e)
+    {
+        if (e.Control && e.Shift && e.KeyCode == Keys.N)
+        {
+            e.Handled = true;
+            _ = SetInjectorAsync(!_chrome.InjectEnabled);
+            return;
+        }
+        if (e.Control && e.KeyCode == Keys.L)
+        {
+            e.Handled = true;
+            _chrome.Address.Focus();
+            _chrome.Address.SelectAll();
+            return;
+        }
+        if ((e.Control && e.KeyCode == Keys.R) || e.KeyCode == Keys.F5)
+        {
+            e.Handled = true;
+            Reload();
+            return;
+        }
+        if (e.Alt && e.KeyCode == Keys.Left)
+        {
+            e.Handled = true;
+            TryNav(() => _web.CoreWebView2?.GoBack());
+            return;
+        }
+        if (e.Alt && e.KeyCode == Keys.Right)
+        {
+            e.Handled = true;
+            TryNav(() => _web.CoreWebView2?.GoForward());
+        }
     }
 
     internal void PostCmdBuffer()

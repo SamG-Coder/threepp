@@ -1,0 +1,325 @@
+using System.ComponentModel;
+using System.Drawing.Drawing2D;
+
+namespace ThreeBrowser;
+
+internal sealed class ChromeButton : Button
+{
+    public ChromeButton()
+    {
+        FlatStyle = FlatStyle.Flat;
+        FlatAppearance.BorderSize = 0;
+        FlatAppearance.MouseOverBackColor = BrowserChrome.Hover;
+        FlatAppearance.MouseDownBackColor = BrowserChrome.Press;
+        BackColor = Color.Transparent;
+        ForeColor = BrowserChrome.Ink;
+        Size = new Size(32, 32);
+        Margin = new Padding(0);
+        Padding = new Padding(0);
+        Cursor = Cursors.Hand;
+        TabStop = false;
+        UseVisualStyleBackColor = false;
+        Anchor = AnchorStyles.None;
+        TextAlign = ContentAlignment.MiddleCenter;
+    }
+}
+
+internal sealed class FlatAddress : TextBox
+{
+    public FlatAddress()
+    {
+        BorderStyle = BorderStyle.None;
+        AutoSize = false;
+        Margin = new Padding(0);
+        Padding = new Padding(0);
+    }
+
+    protected override CreateParams CreateParams
+    {
+        get
+        {
+            var cp = base.CreateParams;
+            cp.Style &= ~0x00800000;   // WS_BORDER
+            cp.ExStyle &= ~0x00000200; // WS_EX_CLIENTEDGE
+            return cp;
+        }
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        TryClearTheme();
+    }
+
+    private void TryClearTheme()
+    {
+        try
+        {
+            SetWindowTheme(Handle, "", "");
+        }
+        catch (EntryPointNotFoundException)
+        {
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("uxtheme.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern int SetWindowTheme(IntPtr hWnd, string pszSubAppName, string pszSubIdList);
+}
+
+internal sealed class BrowserChrome : Panel
+{
+    internal static readonly Color Bar = Color.FromArgb(241, 243, 244);
+    internal static readonly Color Ink = Color.FromArgb(32, 33, 36);
+    internal static readonly Color Mute = Color.FromArgb(95, 99, 104);
+    internal static readonly Color Hover = Color.FromArgb(232, 234, 237);
+    internal static readonly Color Press = Color.FromArgb(218, 220, 224);
+    internal static readonly Color Omnibox = Color.White;
+    internal static readonly Color Line = Color.FromArgb(218, 220, 224);
+    internal static readonly Color Accent = Color.FromArgb(26, 115, 232);
+    internal static readonly Color NativeFill = Color.FromArgb(232, 240, 254);
+    internal static readonly Color NativeInk = Color.FromArgb(24, 90, 188);
+
+    internal readonly ChromeButton BackButton = MakeIcon('\uE72B', "Back (Alt+Left)");
+    internal readonly ChromeButton ForwardButton = MakeIcon('\uE72A', "Forward (Alt+Right)");
+    internal readonly ChromeButton ReloadButton = MakeIcon('\uE72C', "Reload (Ctrl+R)");
+    internal readonly ChromeButton HomeButton = MakeIcon('\uE80F', "Home");
+    internal readonly ChromeButton NativeBtn = MakeIcon('\uE964', "Native THREE (Ctrl+Shift+N)");
+    internal readonly ChromeButton WebGlBtn = MakeIcon('\uE774', "Stock WebGL (Ctrl+Shift+N)");
+    internal readonly FlatAddress Address = new();
+    internal readonly Label Badge = new();
+
+    private readonly Panel _omnibox = new();
+    private bool _injectOn = true;
+    private bool _loading;
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    [Browsable(false)]
+    internal bool InjectEnabled
+    {
+        get => _injectOn;
+        set
+        {
+            if (_injectOn == value)
+            {
+                return;
+            }
+            _injectOn = value;
+            PaintInject();
+        }
+    }
+
+    internal event EventHandler? InjectToggled;
+
+    internal bool IsLoading => _loading;
+
+    public BrowserChrome()
+    {
+        DoubleBuffered = true;
+        Dock = DockStyle.Top;
+        Height = 52;
+        BackColor = Bar;
+        Padding = new Padding(0);
+
+        var table = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 7,
+            RowCount = 1,
+            Padding = new Padding(6, 0, 6, 0),
+            Margin = new Padding(0),
+            BackColor = Bar,
+        };
+        table.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
+
+        Place(table, BackButton, 0);
+        Place(table, ForwardButton, 1);
+        Place(table, ReloadButton, 2);
+        Place(table, HomeButton, 3);
+        Place(table, NativeBtn, 5);
+        Place(table, WebGlBtn, 6);
+        NativeBtn.Click += (_, _) => SetMode(true);
+        WebGlBtn.Click += (_, _) => SetMode(false);
+        PaintInject();
+
+        _omnibox.Dock = DockStyle.Fill;
+        _omnibox.Margin = new Padding(6, 10, 6, 10);
+        _omnibox.BackColor = Color.Transparent;
+        typeof(Panel).GetProperty("DoubleBuffered",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?.SetValue(_omnibox, true, null);
+        _omnibox.Paint += OnOmniboxPaint;
+        _omnibox.Resize += (_, _) => LayoutOmnibox();
+        _omnibox.Padding = new Padding(0);
+
+        Badge.AutoSize = false;
+        Badge.TextAlign = ContentAlignment.MiddleCenter;
+        Badge.Font = new Font("Segoe UI Semibold", 8f);
+        Badge.ForeColor = NativeInk;
+        Badge.BackColor = Omnibox;
+        Badge.Text = "Native";
+        Badge.Size = new Size(58, 20);
+
+        Address.Font = new Font("Segoe UI", 11f);
+        Address.ForeColor = Ink;
+        Address.BackColor = Omnibox;
+        Address.PlaceholderText = "Search Google or type a URL";
+
+        _omnibox.Controls.Add(Address);
+        _omnibox.Controls.Add(Badge);
+        table.Controls.Add(_omnibox, 4, 0);
+
+        Controls.Add(table);
+    }
+
+    internal void SetBadge(bool native)
+    {
+        Badge.Text = native ? "Native" : "WebGL";
+        Badge.ForeColor = native ? NativeInk : Mute;
+        _omnibox.Invalidate();
+    }
+
+    internal void SetNav(bool canBack, bool canForward)
+    {
+        BackButton.Enabled = canBack;
+        ForwardButton.Enabled = canForward;
+        BackButton.ForeColor = canBack ? Ink : Mute;
+        ForwardButton.ForeColor = canForward ? Ink : Mute;
+    }
+
+    internal void SetLoading(bool loading)
+    {
+        _loading = loading;
+        ReloadButton.Text = loading ? "\uE711" : "\uE72C";
+        ReloadButton.AccessibleName = loading ? "Stop" : "Reload (Ctrl+R)";
+        Cursor = loading ? Cursors.AppStarting : Cursors.Default;
+        Invalidate();
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        using var pen = new Pen(_loading ? Accent : Line, _loading ? 2f : 1f);
+        var y = Height - (int)Math.Ceiling(pen.Width);
+        e.Graphics.DrawLine(pen, 0, y, Width, y);
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        BeginInvoke(LayoutOmnibox);
+    }
+
+    private void LayoutOmnibox()
+    {
+        var r = _omnibox.ClientRectangle;
+        if (r.Width < 40 || r.Height < 8)
+        {
+            return;
+        }
+        var inner = Rectangle.Inflate(r, -12, -2);
+        var textH = Address.Font.Height;
+        var y = inner.Y + Math.Max(0, (inner.Height - textH) / 2);
+        Badge.SetBounds(inner.X, y, 54, textH);
+        Address.SetBounds(Badge.Right + 6, y, Math.Max(20, inner.Right - (Badge.Right + 10)), textH);
+        _omnibox.Invalidate();
+    }
+
+    private void SetMode(bool native)
+    {
+        if (_injectOn == native)
+        {
+            return;
+        }
+        _injectOn = native;
+        PaintInject();
+        InjectToggled?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void PaintInject()
+    {
+        StyleMode(NativeBtn, _injectOn);
+        StyleMode(WebGlBtn, !_injectOn);
+        SetBadge(_injectOn);
+    }
+
+    private static void StyleMode(Button btn, bool on)
+    {
+        btn.BackColor = Color.Transparent;
+        btn.ForeColor = on ? Accent : Ink;
+        btn.FlatAppearance.BorderSize = 0;
+        btn.FlatAppearance.MouseOverBackColor = Hover;
+        btn.FlatAppearance.MouseDownBackColor = Press;
+    }
+
+    private void OnOmniboxPaint(object? sender, PaintEventArgs e)
+    {
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        e.Graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+        var r = _omnibox.ClientRectangle;
+        var stroke = Address.Focused ? 2f : 1f;
+        var inset = (int)Math.Ceiling(stroke);
+        r.X += inset;
+        r.Y += inset;
+        r.Width -= inset * 2 + 1;
+        r.Height -= inset * 2 + 1;
+        if (r.Width < 8 || r.Height < 8)
+        {
+            return;
+        }
+        using var path = Round(r, r.Height / 2);
+        using var fill = new SolidBrush(Omnibox);
+        using var pen = new Pen(Address.Focused ? Accent : Line, stroke);
+        e.Graphics.FillPath(fill, path);
+        e.Graphics.DrawPath(pen, path);
+    }
+
+    private static void Place(TableLayoutPanel table, Control c, int col)
+    {
+        table.Controls.Add(c, col, 0);
+    }
+
+    private static GraphicsPath Round(Rectangle r, int radius)
+    {
+        radius = Math.Max(1, Math.Min(radius, Math.Min(r.Width, r.Height) / 2));
+        var d = radius * 2;
+        var p = new GraphicsPath();
+        p.AddArc(r.X, r.Y, d, d, 180, 90);
+        p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+        p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+        p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+        p.CloseFigure();
+        return p;
+    }
+
+    private static ChromeButton MakeIcon(char glyph, string tip)
+    {
+        var b = new ChromeButton
+        {
+            Text = glyph.ToString(),
+            Font = IconFont(),
+            AccessibleName = tip,
+        };
+        var t = new ToolTip();
+        t.SetToolTip(b, tip);
+        return b;
+    }
+
+    private static Font IconFont()
+    {
+        try
+        {
+            return new Font("Segoe MDL2 Assets", 10f);
+        }
+        catch (ArgumentException)
+        {
+            return new Font("Segoe UI Symbol", 10f);
+        }
+    }
+}
