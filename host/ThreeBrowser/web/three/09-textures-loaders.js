@@ -1002,12 +1002,17 @@
     _pendingUpload.add(texture);
     queueMicrotask(function () {
       _pendingUpload.delete(texture);
-      uploadTextureNative(texture);
+      try {
+        uploadTextureNative(texture);
+      } catch (err) {
+        console.warn("ThreeBrowser texture upload failed", err);
+      }
     });
   }
 
   function absorbNativeId(handle) {
-    if (!handle || !TN.cmd || typeof TN.cmd.alloc !== "function") return;
+    handle = handle >>> 0;
+    if (!handle || handle >= 0x80000000 || !TN.cmd || typeof TN.cmd.alloc !== "function") return;
     let guard = 0;
     while (guard++ < 1000000) {
       const id = TN.cmd.alloc();
@@ -1028,12 +1033,17 @@
       }
       pixels = flipped;
     }
-    if (TN.cmd && typeof TN.cmd.texRgba === "function") {
-      const id = TN.cmd.alloc();
-      TN.cmd.texRgba(id, raster.width, raster.height, pixels);
-      texture._h = id;
-      bindWaitingMaterials(texture);
-      return;
+    if (TN.cmd && typeof TN.cmd.uploadRgba === "function") {
+      try {
+        const id = TN.cmd.alloc();
+        if (TN.cmd.uploadRgba(id, raster.width, raster.height, pixels)) {
+          texture._h = id;
+          bindWaitingMaterials(texture);
+          return;
+        }
+      } catch {
+        /* fall through to COM */
+      }
     }
     const host = native();
     if (!TN.hostHas?.(host, "TextureFromRgba")) return;

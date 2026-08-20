@@ -30,6 +30,8 @@ constexpr uint32_t OP_BUF_GEO = 30;
 constexpr uint32_t OP_BOX_GEO = 31;
 constexpr uint32_t OP_BUF_ATTR = 32;
 constexpr uint32_t OP_TEX_RGBA = 33;
+constexpr uint32_t OP_TEX_BEGIN = 34;
+constexpr uint32_t OP_TEX_ROWS = 35;
 
 constexpr uint32_t OP_MAT_BASIC = 40;
 constexpr uint32_t OP_MAT_LAMBERT = 41;

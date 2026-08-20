@@ -3,9 +3,12 @@
 
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/lights/HemisphereLight.hpp"
+#include "threepp/renderers/GLRenderer.hpp"
+#include "threepp/renderers/gl/GLPMREM.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 #include <vector>
 
 using namespace tn;
@@ -185,19 +188,35 @@ std::shared_ptr<Texture> asIblEquirect(const std::shared_ptr<Texture>& source) {
     return clone;
 }
 
-uint32_t storeEnvTexture(uint32_t id, std::shared_ptr<Texture> texture, std::unique_ptr<RenderTarget> target) {
-    if (!texture) {
-        setError("pmrem produced no texture");
-        return 0;
+// Bake CubeUV on the GL worker so GLRenderer::getPMREM never GGX-filters on
+// present (that used to freeze the UI). Vulkan prefilters the equirect itself.
+bool bakeCubeUv(Slot& slot) {
+    if (!slot.texture) {
+        return false;
     }
-    Slot slot;
-    slot.kind = Kind::Texture;
-    slot.texture = std::move(texture);
-    slot.renderTarget = std::move(target);
-    if (id != 0) {
-        return insertAt(id, std::move(slot));
+    if (slot.texture->mapping == Mapping::CubeUVReflection) {
+        return true;
     }
-    return insert(std::move(slot));
+    auto* gl = dynamic_cast<GLRenderer*>(g.renderer.get());
+    if (!gl) {
+        return true;
+    }
+    try {
+        gl::GLPMREM generator(*gl);
+        auto target = generator.fromEquirectangular(*slot.texture);
+        if (!target || !target->texture) {
+            return false;
+        }
+        slot.texture = target->texture;
+        slot.renderTarget = std::move(target);
+        return true;
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return false;
+    } catch (...) {
+        setError("pmrem cubeuv bake failed");
+        return false;
+    }
 }
 
 uint32_t pmremFromTexture(uint32_t id, std::shared_ptr<Texture> equirect) {
@@ -205,7 +224,14 @@ uint32_t pmremFromTexture(uint32_t id, std::shared_ptr<Texture> equirect) {
         setError("pmrem needs an equirect texture");
         return 0;
     }
-    return storeEnvTexture(id, std::move(equirect), nullptr);
+    Slot slot;
+    slot.kind = Kind::Texture;
+    slot.texture = std::move(equirect);
+    bakeCubeUv(slot);
+    if (id != 0) {
+        return insertAt(id, std::move(slot));
+    }
+    return insert(std::move(slot));
 }
 
 SkyParams lastSky{};
@@ -258,8 +284,8 @@ SkyParams defaultsFromArgs(
     if (p.sunPosition.lengthSq() < 1e-10f) {
         p.sunPosition.set(1.f, 0.45f, 0.25f);
     }
-    p.turbidity = turbidity > 0.f ? turbidity : 2.f;
-    p.rayleigh = rayleigh > 0.f ? rayleigh : 1.f;
+    p.turbidity = turbidity >= 0.f ? turbidity : 2.f;
+    p.rayleigh = rayleigh >= 0.f ? rayleigh : 1.f;
     p.mieCoefficient = mieCoefficient > 0.f ? mieCoefficient : 0.005f;
     p.mieDirectionalG = mieDirectionalG > 0.f ? mieDirectionalG : 0.8f;
     return p;
@@ -280,15 +306,24 @@ void tn::applyPendingEnvironment() {
             ++it;
             continue;
         }
-        // Do not assign an equirect to scene.environment: GLRenderer would
-        // GLPMREM-filter it on the presenter thread (seconds of GGX) and the
-        // UI would freeze. WebGL does that bake on the page's own context
-        // before the animation loop; we approximate IBL with sky lights.
-        scene->environment = nullptr;
-        if (it->second == 0) {
+        std::shared_ptr<Texture> env;
+        if (it->second != 0) {
+            auto texIt = g.slots.find(it->second);
+            if (texIt != g.slots.end() && texIt->second.kind == Kind::Texture && texIt->second.texture) {
+                bakeCubeUv(texIt->second);
+                env = texIt->second.texture;
+            }
+        }
+        // Stock examples (keyframes) light MeshStandard materials only via
+        // scene.environment. Assign the CubeUV (or Vulkan equirect) here —
+        // never extra hemi/sun on top of a real env (that would double-light).
+        scene->environment = env;
+        if (env) {
             clearSkyLights(scene);
-        } else {
+        } else if (it->second != 0) {
             applySkyLights(scene);
+        } else {
+            clearSkyLights(scene);
         }
         it = g.pendingEnvironment.erase(it);
         markDirty();

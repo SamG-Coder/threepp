@@ -41,6 +41,11 @@ namespace threepp {
     public:
         explicit VulkanRenderer(Canvas& canvas);
 
+        // preferHeadlessSurface: EXT_headless swapchain (no window present).
+        // ThreeBrowser parents the GLFW HWND and needs a window surface so
+        // vsync and the embedded view both work — pass false there.
+        VulkanRenderer(Canvas& canvas, bool preferHeadlessSurface);
+
         ~VulkanRenderer() override;
 
         VulkanRenderer(const VulkanRenderer&) = delete;
@@ -50,6 +55,9 @@ namespace threepp {
 
         [[nodiscard]] WindowSize size() const override;
         void setSize(const std::pair<int, int>& size) override;
+
+        void setVsync(bool enabled);
+        [[nodiscard]] bool vsync() const;
 
         // The actual surface (swapchain) size in PIXELS (differs from size() when
         // OS display scaling is not 100%). Use it for pixel-space math on

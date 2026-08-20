@@ -20,6 +20,8 @@
     BOX_GEO: 31,
     BUF_ATTR: 32,
     TEX_RGBA: 33,
+    TEX_BEGIN: 34,
+    TEX_ROWS: 35,
     MAT_BASIC: 40,
     MAT_LAMBERT: 41,
     MAT_STANDARD: 42,
@@ -126,6 +128,18 @@
     off = 0;
     pendingSubmit = false;
     n.CmdSubmit(used);
+  }
+
+  function cmdBytes(payload) {
+    return align8(8 + payload);
+  }
+
+  function canFit(payload) {
+    const size = cmdBytes(payload);
+    if (size > ab.byteLength) return false;
+    if (off + size <= ab.byteLength) return true;
+    submitNow();
+    return off + size <= ab.byteLength;
   }
 
   function need(bytes) {
@@ -368,9 +382,12 @@
     },
     // OP_TEX_RGBA payload after 8-byte header:
     //   u32 id, u32 width, u32 height, u32 pad, u8 rgba[width*height*4]
+    // Returns false when the pixels cannot fit the ring even after a flush
+    // (caller should use TEX_BEGIN/ROWS or COM).
     texRgba(id, width, height, pixels) {
       const n = (width | 0) * (height | 0) * 4;
       const payload = 16 + Math.max(0, n);
+      if (!canFit(payload)) return false;
       const s = begin(OP.TEX_RGBA, payload);
       wu32(id);
       wu32(width);
@@ -378,6 +395,55 @@
       wu32(0);
       if (n) copyBytes(pixels);
       end(s);
+      return true;
+    },
+    // OP_TEX_BEGIN: u32 id, u32 width, u32 height, u32 pad
+    texBegin(id, width, height) {
+      const payload = 16;
+      if (!canFit(payload)) return false;
+      const s = begin(OP.TEX_BEGIN, payload);
+      wu32(id);
+      wu32(width);
+      wu32(height);
+      wu32(0);
+      end(s);
+      return true;
+    },
+    // OP_TEX_ROWS: u32 id, u32 y, u32 rows, u32 pad, u8 rgba[width*rows*4]
+    texRows(id, y, rows, pixels) {
+      const n = pixels && pixels.length ? pixels.length : 0;
+      const payload = 16 + n;
+      if (!canFit(payload)) return false;
+      const s = begin(OP.TEX_ROWS, payload);
+      wu32(id);
+      wu32(y);
+      wu32(rows);
+      wu32(0);
+      if (n) copyBytes(pixels);
+      end(s);
+      return true;
+    },
+    uploadRgba(id, width, height, pixels) {
+      if (this.texRgba(id, width, height, pixels)) return true;
+      const w = width | 0;
+      const h = height | 0;
+      if (w <= 0 || h <= 0) return false;
+      const src =
+        pixels instanceof Uint8Array
+          ? pixels
+          : new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
+      const stride = w * 4;
+      if (!this.texBegin(id, w, h)) return false;
+      const maxPayload = ab.byteLength - 64;
+      const maxRows = Math.max(1, Math.floor((maxPayload - 16) / stride) | 0);
+      let y = 0;
+      while (y < h) {
+        const rows = Math.min(maxRows, h - y);
+        const slice = src.subarray(y * stride, (y + rows) * stride);
+        if (!this.texRows(id, y, rows, slice)) return false;
+        y += rows;
+      }
+      return true;
     },
     matBasic(id, hex) {
       const s = begin(OP.MAT_BASIC, 8);

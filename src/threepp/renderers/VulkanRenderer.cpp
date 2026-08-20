@@ -372,9 +372,12 @@ namespace threepp {
         }
     }
 
-    VulkanRenderer::VulkanRenderer(Canvas& canvas) {
+    VulkanRenderer::VulkanRenderer(Canvas& canvas)
+        : VulkanRenderer(canvas, canvas.headless()) {}
+
+    VulkanRenderer::VulkanRenderer(Canvas& canvas, bool preferHeadlessSurface) {
         canvas.initWindow(GraphicsAPI::Vulkan);
-        pimpl_ = std::make_unique<Impl>(canvas);
+        pimpl_ = std::make_unique<Impl>(canvas, preferHeadlessSurface);
         // The user's animate lambda may call render()
         // multiple times in one iteration (e.g. main scene + HUD overlay
         // via threepp::HUD). Each render() opens or extends the in-flight
@@ -387,6 +390,16 @@ namespace threepp {
     }
 
     VulkanRenderer::~VulkanRenderer() = default;
+
+    void VulkanRenderer::setVsync(bool enabled) {
+        if (pimpl_ && pimpl_->ctx) {
+            pimpl_->ctx->setVsync(enabled);
+        }
+    }
+
+    bool VulkanRenderer::vsync() const {
+        return pimpl_ && pimpl_->ctx ? pimpl_->ctx->vsync() : true;
+    }
 
     void VulkanRenderer::render(Object3D& scene, Camera& camera) {
         const auto frameStart = std::chrono::high_resolution_clock::now();

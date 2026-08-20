@@ -921,6 +921,22 @@ namespace threepp::vulkan {
         swapchainImages_.clear();
     }
 
+    void VulkanContext::setVsync(bool enabled) {
+        if (vsync_ == enabled) {
+            return;
+        }
+        vsync_ = enabled;
+        if (device_ == VK_NULL_HANDLE || window_ == nullptr) {
+            return;
+        }
+        int w = 0, h = 0;
+        glfwGetFramebufferSize(window_, &w, &h);
+        if (w <= 0 || h <= 0) {
+            return;
+        }
+        recreateSwapchain();
+    }
+
     void VulkanContext::recreateSwapchain() {
         // Spin while minimised.
         int w = 0, h = 0;

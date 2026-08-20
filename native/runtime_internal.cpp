@@ -1,5 +1,6 @@
 #include "runtime_internal.hpp"
 
+#include <cstring>
 #include <fstream>
 
 namespace tn {
@@ -16,7 +17,9 @@ void logLine(const char* message) {
 void setError(const char* message) {
     std::lock_guard<std::mutex> lock(g.errMu);
     g.lastError = message ? message : "";
-    if (message && message[0]) {
+    if (message && message[0] &&
+        std::strcmp(message, "invalid handle") != 0 &&
+        std::strcmp(message, "handle is not a scene object") != 0) {
         logLine(message);
     }
 }
@@ -51,8 +54,19 @@ void onWorkerAsync(std::function<void()> fn) {
     g.cv.notify_one();
 }
 
+void resetIds() {
+    g.next = 1;
+    g.comNext = Runtime::comIdBase;
+}
+
 uint32_t insert(Slot slot) {
-    const uint32_t id = g.next++;
+    if (g.comNext < Runtime::comIdBase) {
+        g.comNext = Runtime::comIdBase;
+    }
+    while (g.slots.find(g.comNext) != g.slots.end()) {
+        ++g.comNext;
+    }
+    const uint32_t id = g.comNext++;
     g.slots[id] = std::move(slot);
     return id;
 }
@@ -63,28 +77,44 @@ uint32_t insertAt(uint32_t id, Slot slot) {
         return 0;
     }
     g.slots[id] = std::move(slot);
-    if (id >= g.next) {
+    if (id < Runtime::comIdBase && id >= g.next) {
         g.next = id + 1;
     }
     return id;
 }
 
-Slot* getSlot(uint32_t id) {
+Slot* findSlot(uint32_t id) {
     auto it = g.slots.find(id);
     if (it == g.slots.end()) {
-        setError("invalid handle");
         return nullptr;
     }
     return &it->second;
 }
 
-Object3D* asObject(uint32_t id) {
-    Slot* slot = getSlot(id);
+Slot* getSlot(uint32_t id) {
+    Slot* slot = findSlot(id);
+    if (!slot) {
+        setError("invalid handle");
+        return nullptr;
+    }
+    return slot;
+}
+
+Object3D* findObject(uint32_t id) {
+    Slot* slot = findSlot(id);
     if (!slot || !slot->object) {
-        setError("handle is not a scene object");
         return nullptr;
     }
     return slot->object.get();
+}
+
+Object3D* asObject(uint32_t id) {
+    Object3D* object = findObject(id);
+    if (!object) {
+        setError("handle is not a scene object");
+        return nullptr;
+    }
+    return object;
 }
 
 }// namespace tn

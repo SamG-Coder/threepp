@@ -12,6 +12,7 @@
 #include <array>
 #include <cstring>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 using namespace tn;
@@ -46,6 +47,31 @@ void insertMaterial(uint32_t id, std::shared_ptr<Material> material) {
     slot.kind = Kind::Material;
     slot.material = std::move(material);
     insertAt(id, std::move(slot));
+}
+
+struct PendingTex {
+    int width{0};
+    int height{0};
+    int rows{0};
+    std::vector<unsigned char> pixels;
+};
+
+std::unordered_map<uint32_t, PendingTex> pendingTex;
+
+void finishRgbaTexture(uint32_t id, int width, int height, std::vector<unsigned char> pixels) {
+    Image image(std::move(pixels), static_cast<unsigned>(width), static_cast<unsigned>(height));
+    auto tex = Texture::create(image);
+    tex->format = Format::RGBA;
+    tex->colorSpace = ColorSpace::sRGB;
+    tex->magFilter = Filter::Linear;
+    tex->minFilter = Filter::LinearMipmapLinear;
+    tex->generateMipmaps = true;
+    tex->needsUpdate();
+    Slot slot;
+    slot.kind = Kind::Texture;
+    slot.texture = std::move(tex);
+    insertAt(id, std::move(slot));
+    markDirty();
 }
 
 void applyMaterialMapSlot(Material* material, const std::shared_ptr<Texture>& texture, uint32_t slot) {
@@ -260,19 +286,54 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
                 return;
             }
             std::vector<unsigned char> pixels(cur, cur + need);
-            Image image(std::move(pixels), width, height);
-            auto tex = Texture::create(image);
-            tex->format = Format::RGBA;
-            tex->colorSpace = ColorSpace::sRGB;
-            tex->magFilter = Filter::Linear;
-            tex->minFilter = Filter::LinearMipmapLinear;
-            tex->generateMipmaps = true;
-            tex->needsUpdate();
-            Slot slot;
-            slot.kind = Kind::Texture;
-            slot.texture = std::move(tex);
-            insertAt(id, std::move(slot));
-            markDirty();
+            finishRgbaTexture(id, static_cast<int>(width), static_cast<int>(height), std::move(pixels));
+            return;
+        }
+        case tn::cmd::OP_TEX_BEGIN: {
+            if (!has(p, end, 12)) return;
+            const uint32_t id = ru32(p);
+            const uint32_t width = ru32(p + 4);
+            const uint32_t height = ru32(p + 8);
+            if (!width || !height || width > 16384 || height > 16384) {
+                setError("texture begin needs valid size");
+                return;
+            }
+            PendingTex tex;
+            tex.width = static_cast<int>(width);
+            tex.height = static_cast<int>(height);
+            tex.pixels.assign(static_cast<size_t>(width) * static_cast<size_t>(height) * 4u, 0);
+            pendingTex[id] = std::move(tex);
+            return;
+        }
+        case tn::cmd::OP_TEX_ROWS: {
+            if (!has(p, end, 16)) return;
+            const uint32_t id = ru32(p);
+            const uint32_t y = ru32(p + 4);
+            const uint32_t rows = ru32(p + 8);
+            auto it = pendingTex.find(id);
+            if (it == pendingTex.end() || rows == 0) {
+                setError("texture rows need begin");
+                return;
+            }
+            PendingTex& tex = it->second;
+            const size_t stride = static_cast<size_t>(tex.width) * 4u;
+            const size_t need = stride * static_cast<size_t>(rows);
+            const uint8_t* cur = p + 16;
+            if (y >= static_cast<uint32_t>(tex.height) ||
+                y + rows > static_cast<uint32_t>(tex.height) ||
+                !has(cur, end, need)) {
+                setError("texture rows out of range");
+                return;
+            }
+            std::memcpy(tex.pixels.data() + static_cast<size_t>(y) * stride, cur, need);
+            tex.rows = std::max(tex.rows, static_cast<int>(y + rows));
+            if (tex.rows >= tex.height) {
+                const int w = tex.width;
+                const int h = tex.height;
+                auto pixels = std::move(tex.pixels);
+                pendingTex.erase(it);
+                finishRgbaTexture(id, w, h, std::move(pixels));
+            }
             return;
         }
         case tn::cmd::OP_BUF_ATTR: {
@@ -487,7 +548,7 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
         }
         case tn::cmd::OP_SET_POSE: {
             if (!has(p, end, 40)) return;
-            Object3D* object = asObject(ru32(p));
+            Object3D* object = findObject(ru32(p));
             if (!object) return;
             object->position.set(rf32(p + 4), rf32(p + 8), rf32(p + 12));
             object->rotation.set(rf32(p + 16), rf32(p + 20), rf32(p + 24));
@@ -496,13 +557,13 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
         }
         case tn::cmd::OP_LOOK_AT: {
             if (!has(p, end, 16)) return;
-            Object3D* object = asObject(ru32(p));
+            Object3D* object = findObject(ru32(p));
             if (object) object->lookAt(rf32(p + 4), rf32(p + 8), rf32(p + 12));
             return;
         }
         case tn::cmd::OP_LOOK_FROM: {
             if (!has(p, end, 28)) return;
-            Object3D* object = asObject(ru32(p));
+            Object3D* object = findObject(ru32(p));
             if (!object) return;
             object->position.set(rf32(p + 4), rf32(p + 8), rf32(p + 12));
             object->lookAt(rf32(p + 16), rf32(p + 20), rf32(p + 24));

@@ -1584,10 +1584,28 @@
 
   let _object3DId = 0;
 
+  function allocNativeGroup() {
+    if (TN.cmd && typeof TN.cmd.group === "function") {
+      const id = TN.cmd.alloc();
+      TN.cmd.group(id);
+      return id;
+    }
+    const n = native();
+    if (!TN.hostHas?.(n, "GroupCreate")) return 0;
+    try {
+      return n.GroupCreate() || 0;
+    } catch {
+      return 0;
+    }
+  }
+
   class Object3D extends EventDispatcher {
-    constructor(handle = 0) {
+    // GLTFLoader (and other addons) create empty nodes with `new Object3D()`.
+    // Those must have a native Group or the whole subtree never reaches GL.
+    constructor(handle) {
       super();
       this.isObject3D = true;
+      if (arguments.length === 0) handle = allocNativeGroup();
       this._h = handle || 0;
       Object.defineProperty(this, 'id', { value: _object3DId++ });
       this.uuid = generateUUID();
@@ -1801,6 +1819,7 @@
         _childaddedEvent.child = object;
         this.dispatchEvent(_childaddedEvent);
         _childaddedEvent.child = null;
+        if (!object._h && typeof object.flushSelf === "function") object.flushSelf();
         if (TN.cmd && this._h && object._h) {
           TN.cmd.add(this._h, object._h);
         } else {

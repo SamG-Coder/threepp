@@ -3326,7 +3326,7 @@ namespace threepp {
         // so it reuses the exact same idle-gate as renderScale.
         uint32_t gbufMsaaSamples_        = 1;
 
-        explicit Impl(Canvas& c) : canvas(c), size(c.size()) {
+        explicit Impl(Canvas& c, bool preferHeadlessSurface) : canvas(c), size(c.size()) {
             // The PRIMARY view. Created before anything else touches a
             // per-view resource, because view() dereferences curView_
             // unconditionally — every createXxx below allocates into it.
@@ -3337,7 +3337,7 @@ namespace threepp {
                     static_cast<GLFWwindow*>(canvas.windowPtr()),
                     /*enableRayTracing*/ true,
                     /*vsync*/ canvas.vsync(),
-                    /*preferHeadlessSurface*/ canvas.headless());
+                    preferHeadlessSurface);
 
             // The scene-dependent AS build runs lazily on the first render()
             // call. Everything below is scene-independent and safe at ctor time.

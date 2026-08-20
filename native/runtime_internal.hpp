@@ -51,7 +51,14 @@ struct Runtime {
     std::unique_ptr<Renderer> renderer;
     std::atomic<int> backend{0}; // 0 OpenGL, 1 Vulkan
     std::unordered_map<uint32_t, Slot> slots;
+    // Cmd-ring ids are allocated in JS (1 .. comIdBase-1) and claimed with
+    // insertAt. COM insert() must not pick those numbers — GLTF parse queues
+    // hundreds of Object3D groups before submit, then BoneCreate/TextureFromRgba
+    // used to steal the same ids. Mixer SET_POSE then hit Texture/Geometry
+    // slots every frame and drowned the GL thread in native.log writes.
     uint32_t next{1};
+    uint32_t comNext{0x80000000u};
+    static constexpr uint32_t comIdBase{0x80000000u};
 
     std::mutex mu;
     std::condition_variable cv;
@@ -96,7 +103,10 @@ void ensureWorker();
 uint32_t insert(Slot slot);
 uint32_t insertAt(uint32_t id, Slot slot);
 Slot* getSlot(uint32_t id);
+Slot* findSlot(uint32_t id);
 Object3D* asObject(uint32_t id);
+Object3D* findObject(uint32_t id);
+void resetIds();
 void onWorkerAsync(std::function<void()> fn);
 void applyPendingEnvironment();
 

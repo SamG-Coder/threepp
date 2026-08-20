@@ -85,7 +85,7 @@
     const rt = typeof RT === "function" ? new RT(width, height) : { texture: { isTexture: true } };
     const tex = rt.texture || (rt.texture = { isTexture: true });
     tex._h = handle || 0;
-    tex.mapping = TN.EquirectangularReflectionMapping ?? 303;
+    tex.mapping = TN.CubeUVReflectionMapping ?? 306;
     tex.colorSpace = TN.LinearSRGBColorSpace ?? "srgb-linear";
     tex.type = TN.FloatType ?? 1015;
     tex.generateMipmaps = true;
@@ -98,9 +98,10 @@
 
   function nativePmremFromSky(params) {
     const n = native();
-    if (!n || typeof n.PmremFromSky !== "function") return 0;
+    if (!TN.hostHas?.(n, "PmremFromSky")) return 0;
     const id = allocHandle();
     try {
+      if (TN.cmd && typeof TN.cmd.submit === "function") TN.cmd.submit();
       return n.PmremFromSky(
         id,
         params.sunX,
@@ -118,12 +119,13 @@
 
   function nativePmremFromTexture(kind, source) {
     const n = native();
-    const method = kind === "cube" ? n && n.PmremFromCubemap : n && n.PmremFromEquirect;
-    if (typeof method !== "function") return nativePmremFromSky(extractSky(null));
+    const name = kind === "cube" ? "PmremFromCubemap" : "PmremFromEquirect";
+    if (!TN.hostHas?.(n, name)) return nativePmremFromSky(extractSky(null));
     const id = allocHandle();
     const srcH = source && source._h ? source._h : 0;
     try {
-      return method.call(n, id, srcH) || nativePmremFromSky(extractSky(null));
+      if (TN.cmd && typeof TN.cmd.submit === "function") TN.cmd.submit();
+      return n[name](id, srcH) || nativePmremFromSky(extractSky(null));
     } catch {
       return nativePmremFromSky(extractSky(null));
     }
@@ -136,7 +138,7 @@
     try {
       if (TN.cmd && typeof TN.cmd.submit === "function") TN.cmd.submit();
       const n = native();
-      if (n && typeof n.SceneSetEnvironment === "function") {
+      if (TN.hostHas?.(n, "SceneSetEnvironment")) {
         n.SceneSetEnvironment(sceneH, texH);
       }
     } catch {

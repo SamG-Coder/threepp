@@ -39,6 +39,12 @@ namespace threepp::vulkan {
         // Idle-waits on the device first; safe to call any time.
         void recreateSwapchain();
 
+        // FIFO (monitor refresh) when true, MAILBOX/IMMEDIATE when false.
+        // Recreates the swapchain if the device is already up. No-op if the
+        // window has no framebuffer yet (the next recreate picks it up).
+        void setVsync(bool enabled);
+        [[nodiscard]] bool vsync() const { return vsync_; }
+
         // Accessors --------------------------------------------------------
         VkInstance       instance() const { return instance_; }
         VkPhysicalDevice physicalDevice() const { return physicalDevice_; }

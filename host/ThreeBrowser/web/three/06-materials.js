@@ -268,7 +268,8 @@
   // Flush queued cmd ops first so g.next is past them, then burn JS ids
   // up through the COM handle so a later mesh alloc cannot collide.
   function absorbNativeId(handle) {
-    if (!handle || !TN.cmd || typeof TN.cmd.alloc !== "function") return;
+    handle = handle >>> 0;
+    if (!handle || handle >= 0x80000000 || !TN.cmd || typeof TN.cmd.alloc !== "function") return;
     let guard = 0;
     while (guard++ < 1000000) {
       const id = TN.cmd.alloc();
@@ -332,7 +333,7 @@
       } catch {
         handle = 0;
       }
-    } else if (mat._nativeKind === "shader" && typeof n.ShaderMaterialCreate === "function") {
+    } else if (mat._nativeKind === "shader" && TN.hostHas?.(n, "ShaderMaterialCreate")) {
       try {
         if (TN.cmd && typeof TN.cmd.submit === "function") {
           try {

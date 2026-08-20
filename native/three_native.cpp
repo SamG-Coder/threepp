@@ -188,7 +188,21 @@ int impl_runtime_start(int width, int height, const char* title) {
 #ifdef THREEPP_WITH_VULKAN
     if (wantVulkan) {
         try {
-            g.renderer = std::make_unique<VulkanRenderer>(*g.canvas);
+            // Window surface (not EXT_headless): the HWND is parented into the
+            // host, so present must hit that window or vsync/display are no-ops.
+            auto vk = std::make_unique<VulkanRenderer>(*g.canvas, false);
+            vk->setProbeGI(false);
+            vk->setRestirDIEnabled(false);
+            vk->setDeferredAO(false);
+            vk->setDenoise(false);
+            vk->setBloomIntensity(0.f);
+            vk->setAutoExposure(false);
+            vk->setAutoLod(false);
+            vk->setMotionBlur(0.f);
+            vk->setDepthOfField(false);
+            vk->setClouds(std::nullopt);
+            vk->setVsync(g.vsync.load(std::memory_order_relaxed));
+            g.renderer = std::move(vk);
         } catch (const std::exception& ex) {
             destroySurface();
             setError(ex.what());
@@ -267,7 +281,7 @@ void tn_runtime_set_backend(int vulkan) {
             g.envSun.reset();
             g.drawScene.store(0);
             g.drawCamera.store(0);
-            g.next = 1;
+            tn::resetIds();
             return 0;
         });
     } catch (const std::exception& ex) {
@@ -342,6 +356,12 @@ void tn_runtime_set_vsync(int enabled) {
             if (!g.canvas) {
                 return;
             }
+#ifdef THREEPP_WITH_VULKAN
+            if (auto* vk = dynamic_cast<VulkanRenderer*>(g.renderer.get())) {
+                vk->setVsync(on);
+                return;
+            }
+#endif
             if (g.canvas->graphicsApi() != GraphicsAPI::OpenGL) {
                 return;
             }
@@ -461,7 +481,7 @@ void tn_runtime_shutdown(void) {
     }
     std::lock_guard<std::mutex> lock(g.mu);
     g.workerStarted = false;
-    g.next = 1;
+    tn::resetIds();
 }
 
 void tn_runtime_reset(void) {
@@ -479,7 +499,7 @@ void tn_runtime_reset(void) {
             g.pendingEnvironment.clear();
             g.envHemi.reset();
             g.envSun.reset();
-            g.next = 1;
+            tn::resetIds();
             if (g.renderer) {
                 g.renderer->toneMapping = ToneMapping::None;
                 g.renderer->toneMappingExposure = 1.f;
