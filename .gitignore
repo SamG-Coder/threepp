@@ -4,6 +4,12 @@
 
 build
 build-asan
+host/**/bin/
+host/**/obj/
+host/**/.vs/
+host/**/*.csproj.user
+host/native.log
+host/*.png
 cmake-build-*
 compile_commands.json
 

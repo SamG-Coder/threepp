@@ -15,6 +15,7 @@ option(THREEPP_WITH_USD "Build with USDLoader (tinyusdz)" OFF)
 option(THREEPP_WITH_RLTOOLS "Fetch RLtools (header-only deep RL) for the reinforcement-learning example" OFF)
 
 option(THREEPP_WITH_PYTHON "Build the pybind11 Python bindings (threepp module)" OFF)
+option(THREEPP_WITH_JS_HOST "Build the C ABI used by the C# WebView2 host (window.THREE)" ON)
 
 option(THREEPP_TREAT_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
 option(THREEPP_WITH_VULKAN "Build with Vulkan backend (requires Vulkan SDK)" OFF)
@@ -130,6 +131,10 @@ include(cmake/ConvexDecomposition.cmake)
 # pybind11 via FetchContent and produces the `threepp` Python extension module.
 if (THREEPP_WITH_PYTHON)
     add_subdirectory(python)
+endif ()
+
+if (THREEPP_WITH_JS_HOST)
+    add_subdirectory(native)
 endif ()
 
 # Example/test assets live in a separate

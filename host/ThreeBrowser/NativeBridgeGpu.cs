@@ -1,0 +1,124 @@
+namespace ThreeBrowser;
+
+public partial class NativeBridge
+{
+    public int LineCreate(int geometry, int material) =>
+        (int)Native.tn_line_create((uint)geometry, (uint)material);
+
+    public int LineSegmentsCreate(int geometry, int material) =>
+        (int)Native.tn_line_segments_create((uint)geometry, (uint)material);
+
+    public int LineLoopCreate(int geometry, int material) =>
+        (int)Native.tn_line_loop_create((uint)geometry, (uint)material);
+
+    public int LineBasicMaterialCreate(int color, double linewidth) =>
+        (int)Native.tn_line_basic_material_create((uint)color, (float)linewidth);
+
+    public int PointsCreate(int geometry, int material) =>
+        (int)Native.tn_points_create((uint)geometry, (uint)material);
+
+    public int PointsMaterialCreate(int color, double size) =>
+        (int)Native.tn_points_material_create((uint)color, (float)size);
+
+    public int SpriteCreate(int material) =>
+        (int)Native.tn_sprite_create((uint)material);
+
+    public int SpriteMaterialCreate(int color) =>
+        (int)Native.tn_sprite_material_create((uint)color);
+
+    public int BoneCreate() => (int)Native.tn_bone_create();
+
+    public int SkeletonCreate(string boneCsv)
+    {
+        var bones = ParseBoneCsv(boneCsv);
+        return (int)Native.tn_skeleton_create(bones, bones.Length);
+    }
+
+    public int SkinnedMeshCreate(int geometry, int material) =>
+        (int)Native.tn_skinned_mesh_create((uint)geometry, (uint)material);
+
+    public int SkinnedBind(int mesh, int skeleton) =>
+        Native.tn_skinned_bind((uint)mesh, (uint)skeleton);
+
+    public int AxesHelperCreate(double size) =>
+        (int)Native.tn_axes_helper_create((float)size);
+
+    public int GridHelperCreate(double size, int divisions, int color1, int color2) =>
+        (int)Native.tn_grid_helper_create((float)size, divisions, (uint)color1, (uint)color2);
+
+    public int BoxHelperCreate(int obj) =>
+        (int)Native.tn_box_helper_create((uint)obj);
+
+    public int ArrowHelperCreate(double dx, double dy, double dz, double length, int color) =>
+        (int)Native.tn_arrow_helper_create((float)dx, (float)dy, (float)dz, (float)length, (uint)color);
+
+    public int OrthographicCameraCreate(
+        double left, double right, double top, double bottom, double nearPlane, double farPlane) =>
+        (int)Native.tn_orthographic_camera_create(
+            (float)left, (float)right, (float)top, (float)bottom, (float)nearPlane, (float)farPlane);
+
+    public void OrthographicCameraUpdate(
+        int camera, double left, double right, double top, double bottom,
+        double nearPlane, double farPlane, double zoom) =>
+        Native.tn_orthographic_camera_update(
+            (uint)camera, (float)left, (float)right, (float)top, (float)bottom,
+            (float)nearPlane, (float)farPlane, (float)zoom);
+
+    public int SpotLightCreate(
+        int color, double intensity, double distance, double angle, double penumbra, double decay) =>
+        (int)Native.tn_spot_light_create(
+            (uint)color, (float)intensity, (float)distance, (float)angle, (float)penumbra, (float)decay);
+
+    public void SceneSetFog(int scene, int color, double nearPlane, double farPlane) =>
+        Native.tn_scene_set_fog((uint)scene, (uint)color, (float)nearPlane, (float)farPlane);
+
+    public void SceneSetFogExp2(int scene, int color, double density) =>
+        Native.tn_scene_set_fog_exp2((uint)scene, (uint)color, (float)density);
+
+    public int InstancedSetMatrixAt(int mesh, int index, string elementsB64)
+    {
+        var elements = DecodeBase64Floats(elementsB64);
+        return Native.tn_instanced_set_matrix_at((uint)mesh, index, elements);
+    }
+
+    public int InstancedSetColorAt(int mesh, int index, int hex) =>
+        Native.tn_instanced_set_color_at((uint)mesh, index, (uint)hex);
+
+    public int LodCreate() => (int)Native.tn_lod_create();
+
+    public int LodAddLevel(int lod, int obj, double distance) =>
+        Native.tn_lod_add_level((uint)lod, (uint)obj, (float)distance);
+
+    public void LodUpdate(int lod, int camera) =>
+        Native.tn_lod_update((uint)lod, (uint)camera);
+
+    public int ShaderMaterialCreate(string vertexSrc, string fragmentSrc) =>
+        (int)Native.tn_shader_material_create(vertexSrc ?? "", fragmentSrc ?? "");
+
+    private static float[] DecodeBase64Floats(string? b64)
+    {
+        if (string.IsNullOrEmpty(b64))
+        {
+            return [];
+        }
+        var bytes = Convert.FromBase64String(b64);
+        var floats = new float[bytes.Length / 4];
+        Buffer.BlockCopy(bytes, 0, floats, 0, floats.Length * 4);
+        return floats;
+    }
+
+    private static uint[] ParseBoneCsv(string? boneCsv)
+    {
+        if (string.IsNullOrWhiteSpace(boneCsv))
+        {
+            return [];
+        }
+        var parts = boneCsv.Split(',');
+        var bones = new uint[parts.Length];
+        for (var i = 0; i < parts.Length; i++)
+        {
+            bones[i] = uint.TryParse(parts[i].Trim(), out var id) ? id : 0;
+        }
+        return bones;
+    }
+}

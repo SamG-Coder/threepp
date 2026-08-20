@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>ThreeBrowser</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+        color: #fff;
+        font: 13px/1.45 ui-sans-serif, system-ui, sans-serif;
+      }
+      #viewport {
+        display: block;
+        width: 100%;
+        height: 100%;
+        background: transparent;
+      }
+      #info {
+        position: absolute;
+        top: 12px;
+        left: 0;
+        right: 0;
+        text-align: center;
+        pointer-events: none;
+        text-shadow: 0 1px 2px #000;
+      }
+      #info a {
+        color: #9cf;
+        pointer-events: auto;
+      }
+      #status {
+        position: absolute;
+        left: 12px;
+        bottom: 12px;
+        color: #9fe7b0;
+        text-shadow: 0 1px 2px #000;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="viewport"></canvas>
+    <div id="info">
+      native THREE — paste a top-level three.js page in the address bar<br />
+      e.g. <a href="https://threejs.org/examples/webgl_geometry_cube.html">threejs.org/examples/webgl_geometry_cube.html</a>
+    </div>
+    <div id="status">Loading native THREE…</div>
+    <script src="/three/01-constants.js"></script>
+    <script src="/three/02-math.js"></script>
+    <script src="/three/03-core.js"></script>
+    <script src="/three/04-cameras.js"></script>
+    <script src="/three/05-geometries.js"></script>
+    <script src="/three/06-materials.js"></script>
+    <script src="/three/07-lights.js"></script>
+    <script src="/three/08-objects.js"></script>
+    <script src="/three/09-textures-loaders.js"></script>
+    <script src="/three/10-renderer.js"></script>
+    <script src="/three/99-boot.js"></script>
+    <script src="/batch-lod.js"></script>
+  </body>
+</html>
