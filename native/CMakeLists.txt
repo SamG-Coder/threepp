@@ -31,6 +31,17 @@ target_link_libraries(three_native_smoke PRIVATE three_native)
 set_target_properties(three_native_smoke PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
+
+add_executable(three_native_cubes cmd_interactive_cubes_test.cpp)
+target_link_libraries(three_native_cubes PRIVATE three_native)
+set_target_properties(three_native_cubes PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+if (THREEPP_BUILD_TESTS)
+    add_test(NAME three_native_cubes COMMAND three_native_cubes)
+endif ()
+
 if (MINGW)
     target_link_options(three_native_smoke PRIVATE -static -static-libgcc -static-libstdc++)
+    target_link_options(three_native_cubes PRIVATE -static -static-libgcc -static-libstdc++)
 endif ()

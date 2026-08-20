@@ -21,9 +21,16 @@ Write-Host 'Configuring threepp + three_native.dll (examples/tests/editor off)'
     -DTHREEPP_WITH_JS_HOST=ON
 if ($LASTEXITCODE -ne 0) { throw 'CMake configuration failed.' }
 
-Write-Host 'Building three_native'
-& $cmake --build (Join-Path $repo 'build') --target three_native --parallel
+Write-Host 'Building three_native + cubes command-ring test'
+& $cmake --build (Join-Path $repo 'build') --target three_native three_native_cubes --parallel
 if ($LASTEXITCODE -ne 0) { throw 'Native build failed.' }
+
+$cubes = Join-Path $repo 'build\bin\three_native_cubes.exe'
+if (Test-Path -LiteralPath $cubes) {
+    Write-Host 'Running three_native_cubes'
+    & $cubes
+    if ($LASTEXITCODE -ne 0) { throw 'three_native_cubes failed.' }
+}
 
 $dll = Join-Path $repo 'build\bin\three_native.dll'
 if (-not (Test-Path -LiteralPath $dll)) { throw "Missing $dll" }

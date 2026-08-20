@@ -7,6 +7,10 @@
 A cross-platform C++20 3D library with the high-level API of [three.js](https://github.com/mrdoob/three.js/) —
 and modern backends: portable OpenGL, and a deferred Vulkan renderer with ray-traced accents.
 
+This fork adds **ThreeBrowser**: a Windows WebView2 host that injects native
+`window.THREE` so stock three.js pages draw with threepp instead of WebGL.
+See [ThreeBrowser](#threebrowser) and [doc/threebrowser_parity.md](doc/threebrowser_parity.md).
+
 On top of that: a scene editor, PhysX-backed robot simulation, and ground-truth
 sensor output for synthetic-data generation.
 
@@ -64,6 +68,8 @@ lights, the frame loop, loaders and the two backends.
   so an authored scene runs in an ordinary threepp program with no editor present.
 * **Python bindings** — the scene graph, headless render-to-NumPy, PhysX, and
   `threepp.rl` (a GPU-vectorized RL stack).
+* **ThreeBrowser (this fork, Windows)** — WebView2 host that injects native
+  `THREE` into stock three.js pages. [Parity report](doc/threebrowser_parity.md).
 * Built-in loaders — models [STL (binary & ASCII), OBJ/MTL, glTF/GLB incl. meshopt compression,
   COLLADA, SVG, URDF/xacro], images [PNG/JPEG, DDS, WebP, Radiance HDR, OpenEXR] and
   Gaussian-splat scans. `USDLoader` and `FBXLoader` are opt-in.
@@ -160,6 +166,32 @@ top-level GLFW build):
   independent episodes, sensor CSV recording, and a nonzero exit if any script raised or
   the document would not play. It registers the same play sessions the editor does, in the
   same order, so a scene that runs under Play runs in CI. See [doc/player.md](doc/player.md).
+
+## ThreeBrowser
+
+Windows-only WebView2 shell (`host/ThreeBrowser`) that intercepts `three.js` /
+`three.module.js` and talks to `three_native.dll`. Page JS keeps the three.js API;
+the GPU is a threepp `GLRenderer` HWND behind the WebView.
+
+```shell
+.\build.ps1    # MSYS2 Ninja native DLL + dotnet host
+.\run.ps1      # ThreeBrowser.exe
+```
+
+Then open a top-level example, for example
+[webgl_interactive_cubes](https://threejs.org/examples/webgl_interactive_cubes.html).
+Iframe galleries (`#viewer`) are not composited.
+
+The 2000-cube scene is packed as an 8-byte-aligned command stream (no per-object
+COM, no base64). Command-ring round-trip test:
+
+```shell
+cmake --build build --target three_native_cubes
+build/bin/three_native_cubes
+```
+
+What matches three.js, what does not (picking, addons, vsync), and why Stats can
+read ~2× Chrome on that example: [doc/threebrowser_parity.md](doc/threebrowser_parity.md).
 
 ## But, but why?
 
