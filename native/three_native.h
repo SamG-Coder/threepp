@@ -80,9 +80,12 @@ TN_API uint32_t tn_buffer_geometry_create(
     const float* nrm, int nrm_floats,
     const float* uv, int uv_floats,
     const uint32_t* idx, int idx_count);
+TN_API void tn_buffer_geometry_set_attr(
+    uint32_t geometry, const char* name, int item_size, const float* data, int float_count);
 TN_API uint32_t tn_mesh_lambert_material_create(uint32_t color);
 TN_API void tn_material_set_side(uint32_t material, int side);
 TN_API void tn_material_set_map(uint32_t material, uint32_t texture);
+TN_API void tn_material_set_map_slot(uint32_t material, int slot, uint32_t texture);
 TN_API uint32_t tn_texture_from_rgba(int width, int height, const uint8_t* rgba, int nbytes);
 TN_API void tn_texture_set_filter(uint32_t texture, int mag, int min);
 
@@ -125,6 +128,20 @@ TN_API int tn_lod_add_level(uint32_t lod, uint32_t object, float distance);
 TN_API void tn_lod_update(uint32_t lod, uint32_t camera);
 
 TN_API uint32_t tn_shader_material_create(const char* vertex_src, const char* fragment_src);
+TN_API void tn_shader_uniform_float(uint32_t material, const char* name, float v);
+TN_API void tn_shader_uniform_vec2(uint32_t material, const char* name, float x, float y);
+TN_API void tn_shader_uniform_vec3(uint32_t material, const char* name, float x, float y, float z);
+TN_API void tn_shader_uniform_vec4(uint32_t material, const char* name, float x, float y, float z, float w);
+TN_API void tn_shader_set_flags(uint32_t material, int side, int depth_write);
+
+TN_API void tn_scene_set_environment(uint32_t scene, uint32_t texture);
+TN_API uint32_t tn_pmrem_from_sky(
+    uint32_t id,
+    float sun_x, float sun_y, float sun_z,
+    float turbidity, float rayleigh,
+    float mie_coefficient, float mie_directional_g);
+TN_API uint32_t tn_pmrem_from_equirect(uint32_t id, uint32_t texture);
+TN_API uint32_t tn_pmrem_from_cubemap(uint32_t id, uint32_t texture);
 
 #ifdef __cplusplus
 }

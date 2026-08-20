@@ -676,6 +676,7 @@
     }
     set image(value) {
       this.source.data = value;
+      if (this.version > 0) scheduleTextureUpload(this);
     }
     updateMatrix() {
       applyUvTransform(
@@ -766,6 +767,7 @@
       if (value === true) {
         this.version++;
         this.source.needsUpdate = true;
+        scheduleTextureUpload(this);
       }
     }
     set needsPMREMUpdate(value) {
@@ -949,35 +951,91 @@
     }
   }
 
-  function uploadTextureNative(texture, img) {
-    const host = native();
-    if (!host || !img) return;
-    const width = img.width;
-    const height = img.height;
-    if (!width || !height) return;
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    ctx.drawImage(img, 0, 0);
-    let pixels = ctx.getImageData(0, 0, width, height).data;
+  function rasterizeToRgba(texture) {
+    const img = texture && texture.image;
+    if (!img) return null;
+    if (typeof HTMLVideoElement !== "undefined" && img instanceof HTMLVideoElement) return null;
+    if (typeof ImageData !== "undefined" && img instanceof ImageData) {
+      return { width: img.width, height: img.height, pixels: img.data };
+    }
+    if (img.data && img.width > 0 && img.height > 0 && typeof img.data.length === "number") {
+      const data = img.data;
+      if (
+        data.length >= img.width * img.height * 4 &&
+        (data instanceof Uint8Array || data instanceof Uint8ClampedArray)
+      ) {
+        return { width: img.width, height: img.height, pixels: data };
+      }
+    }
+    const width = img.width || img.naturalWidth || 0;
+    const height = img.height || img.naturalHeight || 0;
+    if (!width || !height || typeof document === "undefined") return null;
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return null;
+      ctx.drawImage(img, 0, 0);
+      return { width, height, pixels: ctx.getImageData(0, 0, width, height).data };
+    } catch {
+      return null;
+    }
+  }
+
+  function bindWaitingMaterials(texture) {
+    const materials = texture._materials || [];
+    for (let i = 0; i < materials.length; i++) {
+      const mat = materials[i];
+      if (!mat) continue;
+      if (typeof TN._bindMaterialMaps === "function") TN._bindMaterialMaps(mat);
+      else {
+        const host = native();
+        if (host && mat._h && texture._h) host.MaterialSetMap(mat._h, texture._h);
+      }
+    }
+  }
+
+  const _pendingUpload = new Set();
+  function scheduleTextureUpload(texture) {
+    if (!texture || _pendingUpload.has(texture)) return;
+    _pendingUpload.add(texture);
+    queueMicrotask(function () {
+      _pendingUpload.delete(texture);
+      uploadTextureNative(texture);
+    });
+  }
+
+  function uploadTextureNative(texture) {
+    if (!texture) return;
+    const raster = rasterizeToRgba(texture);
+    if (!raster || !raster.width || !raster.height || !raster.pixels) return;
+    let pixels = raster.pixels;
     if (texture.flipY) {
-      const stride = width * 4;
+      const stride = raster.width * 4;
       const flipped = new Uint8ClampedArray(pixels.length);
-      for (let y = 0; y < height; y++) {
-        flipped.set(pixels.subarray(y * stride, (y + 1) * stride), (height - 1 - y) * stride);
+      for (let y = 0; y < raster.height; y++) {
+        flipped.set(pixels.subarray(y * stride, (y + 1) * stride), (raster.height - 1 - y) * stride);
       }
       pixels = flipped;
     }
-    texture._h = host.TextureFromRgba(width, height, bytesToB64(pixels));
-    if (texture._h) {
-      host.TextureSetFilter(texture._h, texture.magFilter, texture.minFilter);
-      const materials = texture._materials || [];
-      for (let i = 0; i < materials.length; i++) {
-        const mat = materials[i];
-        if (mat && mat._h) host.MaterialSetMap(mat._h, texture._h);
-      }
+    const host = native();
+    if (!host || typeof host.TextureFromRgba !== "function") return;
+    try {
+      texture._h = host.TextureFromRgba(raster.width, raster.height, bytesToB64(pixels));
+    } catch {
+      texture._h = 0;
+      return;
     }
+    if (!texture._h) return;
+    try {
+      if (typeof host.TextureSetFilter === "function") {
+        host.TextureSetFilter(texture._h, texture.magFilter, texture.minFilter);
+      }
+    } catch {
+      /* filter is optional */
+    }
+    bindWaitingMaterials(texture);
   }
 
   class TextureLoader extends Loader {
@@ -999,7 +1057,6 @@
           try {
             texture.image = img;
             texture.needsUpdate = true;
-            uploadTextureNative(texture, img);
             if (onLoad) onLoad(texture);
             scope.manager.itemEnd(url);
           } catch (err) {

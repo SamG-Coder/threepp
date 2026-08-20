@@ -5,10 +5,12 @@
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/LineLoop.hpp"
 #include "threepp/objects/LineSegments.hpp"
+#include "threepp/objects/SkinnedMesh.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <string>
 #include <vector>
 
 using namespace tn;
@@ -43,6 +45,46 @@ void insertMaterial(uint32_t id, std::shared_ptr<Material> material) {
     slot.kind = Kind::Material;
     slot.material = std::move(material);
     insertAt(id, std::move(slot));
+}
+
+void applyMaterialMapSlot(Material* material, const std::shared_ptr<Texture>& texture, uint32_t slot) {
+    if (!material || !texture) {
+        return;
+    }
+    switch (slot) {
+        case tn::cmd::MAP_SLOT_NORMAL:
+            if (auto* m = dynamic_cast<MaterialWithNormalMap*>(material)) {
+                m->normalMap = texture;
+            }
+            break;
+        case tn::cmd::MAP_SLOT_ROUGHNESS:
+            if (auto* m = dynamic_cast<MaterialWithRoughness*>(material)) {
+                m->roughnessMap = texture;
+            }
+            break;
+        case tn::cmd::MAP_SLOT_METALNESS:
+            if (auto* m = dynamic_cast<MaterialWithMetalness*>(material)) {
+                m->metalnessMap = texture;
+            }
+            break;
+        case tn::cmd::MAP_SLOT_AO:
+            if (auto* m = dynamic_cast<MaterialWithAoMap*>(material)) {
+                m->aoMap = texture;
+            }
+            break;
+        case tn::cmd::MAP_SLOT_EMISSIVE:
+            if (auto* m = dynamic_cast<MaterialWithEmissive*>(material)) {
+                m->emissiveMap = texture;
+            }
+            break;
+        default:
+            if (auto* m = dynamic_cast<MaterialWithMap*>(material)) {
+                m->map = texture;
+            }
+            break;
+    }
+    material->needsUpdate();
+    markDirty();
 }
 
 void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
@@ -205,6 +247,38 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             insertAt(id, std::move(slot));
             return;
         }
+        case tn::cmd::OP_BUF_ATTR: {
+            if (!has(p, end, 32)) return;
+            const uint32_t id = ru32(p);
+            const uint32_t itemSize = ru32(p + 4);
+            const uint32_t floatCount = ru32(p + 8);
+            char nameBuf[17];
+            std::memcpy(nameBuf, p + 16, 16);
+            nameBuf[16] = '\0';
+            const uint8_t* cur = p + 32;
+            const size_t need = static_cast<size_t>(floatCount) * 4u;
+            if (itemSize == 0 || floatCount < itemSize || !nameBuf[0] || !has(cur, end, need)) {
+                setError("buffer attr needs name, itemSize and floats");
+                return;
+            }
+            if ((floatCount % itemSize) != 0) {
+                setError("buffer attr length is not a multiple of itemSize");
+                return;
+            }
+            Slot* slot = getSlot(id);
+            if (!slot || slot->kind != Kind::Geometry || !slot->geometry) {
+                setError("buffer attr needs a geometry");
+                return;
+            }
+            std::vector<float> data(floatCount);
+            std::memcpy(data.data(), cur, need);
+            slot->geometry->setAttribute(
+                    std::string(nameBuf),
+                    std::shared_ptr<BufferAttribute>(
+                            FloatBufferAttribute::create(std::move(data), static_cast<int>(itemSize))));
+            markDirty();
+            return;
+        }
         case tn::cmd::OP_BOX_GEO: {
             if (!has(p, end, 16)) return;
             Slot slot;
@@ -266,10 +340,15 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             Slot* matSlot = getSlot(ru32(p));
             Slot* texSlot = getSlot(ru32(p + 4));
             if (!matSlot || !matSlot->material || !texSlot || !texSlot->texture) return;
-            if (auto withMap = dynamic_cast<MaterialWithMap*>(matSlot->material.get())) {
-                withMap->map = texSlot->texture;
-                matSlot->material->needsUpdate();
-            }
+            applyMaterialMapSlot(matSlot->material.get(), texSlot->texture, tn::cmd::MAP_SLOT_ALBEDO);
+            return;
+        }
+        case tn::cmd::OP_MAT_MAP_SLOT: {
+            if (!has(p, end, 12)) return;
+            Slot* matSlot = getSlot(ru32(p));
+            Slot* texSlot = getSlot(ru32(p + 8));
+            if (!matSlot || !matSlot->material || !texSlot || !texSlot->texture) return;
+            applyMaterialMapSlot(matSlot->material.get(), texSlot->texture, ru32(p + 4));
             return;
         }
         case tn::cmd::OP_MAT_PBR: {
@@ -344,6 +423,25 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             auto spriteMat = std::dynamic_pointer_cast<SpriteMaterial>(mat->material);
             if (!spriteMat) return;
             insertObject(ru32(p), Kind::Object, Sprite::create(spriteMat));
+            return;
+        }
+        case tn::cmd::OP_SKINNED: {
+            if (!has(p, end, 12)) return;
+            Slot* geo = getSlot(ru32(p + 4));
+            Slot* mat = getSlot(ru32(p + 8));
+            if (!geo || !geo->geometry || !mat || !mat->material) return;
+            insertObject(ru32(p), Kind::Object, SkinnedMesh::create(geo->geometry, mat->material));
+            return;
+        }
+        case tn::cmd::OP_SKINNED_BIND: {
+            if (!has(p, end, 8)) return;
+            Slot* meshSlot = getSlot(ru32(p));
+            Slot* skelSlot = getSlot(ru32(p + 4));
+            if (!meshSlot || !meshSlot->object || !skelSlot || !skelSlot->skeleton) return;
+            auto skinned = std::dynamic_pointer_cast<SkinnedMesh>(meshSlot->object);
+            if (!skinned) return;
+            skinned->bind(skelSlot->skeleton);
+            markDirty();
             return;
         }
         case tn::cmd::OP_OBJECT_ADD: {

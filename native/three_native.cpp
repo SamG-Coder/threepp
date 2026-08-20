@@ -52,6 +52,7 @@ using tn::onWorkerAsync;
 using tn::setError;
 
 static void renderPendingFrame() {
+    tn::applyPendingEnvironment();
     if (!g.canvas || !g.renderer) {
         return;
     }
@@ -324,6 +325,7 @@ void tn_runtime_reset(void) {
             g.drawScene.store(0);
             g.drawCamera.store(0);
             g.slots.clear();
+            g.pendingEnvironment.clear();
             g.next = 1;
             if (g.renderer) {
                 g.renderer->toneMapping = ToneMapping::None;
@@ -957,6 +959,34 @@ uint32_t tn_buffer_geometry_create(
     }
 }
 
+void tn_buffer_geometry_set_attr(
+        uint32_t geometryHandle, const char* name, int itemSize, const float* data, int floatCount) {
+    try {
+        if (!name || !name[0] || itemSize <= 0 || !data || floatCount < itemSize) {
+            setError("buffer attr needs name, itemSize and floats");
+            return;
+        }
+        std::string attrName(name);
+        std::vector<float> copy(data, data + floatCount);
+        onWorker([geometryHandle, attrName = std::move(attrName), itemSize, copy = std::move(copy)]() mutable {
+            Slot* slot = getSlot(geometryHandle);
+            if (!slot || slot->kind != Kind::Geometry || !slot->geometry) {
+                setError("buffer attr needs a geometry");
+                return;
+            }
+            if (copy.size() % static_cast<size_t>(itemSize) != 0) {
+                setError("buffer attr length is not a multiple of itemSize");
+                return;
+            }
+            slot->geometry->setAttribute(
+                    attrName, std::shared_ptr<BufferAttribute>(FloatBufferAttribute::create(std::move(copy), itemSize)));
+            markDirty();
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+    }
+}
+
 uint32_t tn_mesh_lambert_material_create(uint32_t color) {
     try {
         return onWorker([color] {
@@ -989,20 +1019,64 @@ void tn_material_set_side(uint32_t materialHandle, int side) {
     }
 }
 
+namespace {
+
+void applyMaterialMapSlot(Material* material, const std::shared_ptr<Texture>& texture, int slot) {
+    if (!material || !texture) {
+        return;
+    }
+    switch (slot) {
+        case 1:
+            if (auto* m = dynamic_cast<MaterialWithNormalMap*>(material)) {
+                m->normalMap = texture;
+            }
+            break;
+        case 2:
+            if (auto* m = dynamic_cast<MaterialWithRoughness*>(material)) {
+                m->roughnessMap = texture;
+            }
+            break;
+        case 3:
+            if (auto* m = dynamic_cast<MaterialWithMetalness*>(material)) {
+                m->metalnessMap = texture;
+            }
+            break;
+        case 4:
+            if (auto* m = dynamic_cast<MaterialWithAoMap*>(material)) {
+                m->aoMap = texture;
+            }
+            break;
+        case 5:
+            if (auto* m = dynamic_cast<MaterialWithEmissive*>(material)) {
+                m->emissiveMap = texture;
+            }
+            break;
+        default:
+            if (auto* m = dynamic_cast<MaterialWithMap*>(material)) {
+                m->map = texture;
+            }
+            break;
+    }
+    material->needsUpdate();
+    markDirty();
+}
+
+}// namespace
+
 void tn_material_set_map(uint32_t materialHandle, uint32_t textureHandle) {
+    tn_material_set_map_slot(materialHandle, 0, textureHandle);
+}
+
+void tn_material_set_map_slot(uint32_t materialHandle, int slot, uint32_t textureHandle) {
     try {
-        onWorker([materialHandle, textureHandle] {
+        onWorker([materialHandle, slot, textureHandle] {
             Slot* matSlot = getSlot(materialHandle);
             Slot* texSlot = getSlot(textureHandle);
             if (!matSlot || !matSlot->material || !texSlot || !texSlot->texture) {
                 setError("material set map needs material and texture");
                 return;
             }
-            if (auto withMap = dynamic_cast<MaterialWithMap*>(matSlot->material.get())) {
-                withMap->map = texSlot->texture;
-                matSlot->material->needsUpdate();
-                markDirty();
-            }
+            applyMaterialMapSlot(matSlot->material.get(), texSlot->texture, slot);
         });
     } catch (const std::exception& ex) {
         setError(ex.what());

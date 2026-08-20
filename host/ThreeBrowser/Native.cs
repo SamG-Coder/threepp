@@ -172,10 +172,28 @@ internal static partial class Native
     public static extern void tn_material_set_map(uint material, uint texture);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tn_material_set_map_slot(uint material, int slot, uint texture);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     public static extern uint tn_texture_from_rgba(int width, int height, byte[] rgba, int nbytes);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     public static extern void tn_texture_set_filter(uint texture, int mag, int min);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+    public static extern void tn_shader_uniform_float(uint material, string name, float v);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+    public static extern void tn_shader_uniform_vec2(uint material, string name, float x, float y);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+    public static extern void tn_shader_uniform_vec3(uint material, string name, float x, float y, float z);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+    public static extern void tn_shader_uniform_vec4(uint material, string name, float x, float y, float z, float w);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tn_shader_set_flags(uint material, int side, int depthWrite);
 
     public static string LastError()
     {

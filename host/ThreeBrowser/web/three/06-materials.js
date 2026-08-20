@@ -88,17 +88,42 @@
     return 0xffffff;
   }
 
-  function bindMap(mat, texture) {
+  const MAP_SLOTS = {
+    map: 0,
+    normalMap: 1,
+    roughnessMap: 2,
+    metalnessMap: 3,
+    aoMap: 4,
+    emissiveMap: 5,
+  };
+
+  function applyMapSlot(matId, slot, texId) {
+    if (!matId || !texId) return;
+    if (TN.cmd && typeof TN.cmd.matMapSlot === "function") TN.cmd.matMapSlot(matId, slot, texId);
+    else {
+      const n = native();
+      if (n && typeof n.MaterialSetMapSlot === "function") n.MaterialSetMapSlot(matId, slot, texId);
+      else if (n && slot === 0) n.MaterialSetMap(matId, texId);
+    }
+  }
+
+  function bindMap(mat, texture, slot) {
     if (!texture || typeof texture !== "object") return;
     if (!texture._materials) texture._materials = [];
     if (texture._materials.indexOf(mat) < 0) texture._materials.push(mat);
-    if (!mat.__h || !texture._h) return;
-    if (TN.cmd) TN.cmd.matMap(mat.__h, texture._h);
-    else {
-      const n = native();
-      if (n) n.MaterialSetMap(mat.__h, texture._h);
+    const matId = mat.__h || 0;
+    if (!matId || !texture._h) return;
+    applyMapSlot(matId, slot == null ? 0 : slot, texture._h);
+  }
+
+  function bindAllMaps(mat) {
+    if (!mat) return;
+    for (const key in MAP_SLOTS) {
+      bindMap(mat, mat[key], MAP_SLOTS[key]);
     }
   }
+
+  TN._bindMaterialMaps = bindAllMaps;
 
   function bindEmissive(mat) {
     const col = mat.emissive;
@@ -108,6 +133,147 @@
       if (typeof prev === "function") prev.call(col);
       if (TN.cmd && mat.__h) TN.cmd.matEmissive(mat.__h, hex(col));
     });
+  }
+
+  // r129 ShaderChunk has encodings_fragment, not colorspace_fragment. Expand
+  // the modern Sky includes to GLSL that the native GL prefix already supports
+  // (toneMapping() / linearToOutputTexel()).
+  function expandShaderChunks(src) {
+    if (!src || typeof src !== "string") return "";
+    return src
+      .replace(
+        /#include\s+<tonemapping_fragment>/g,
+        "#if defined( TONE_MAPPING )\n\tgl_FragColor.rgb = toneMapping( gl_FragColor.rgb );\n#endif"
+      )
+      .replace(
+        /#include\s+<colorspace_fragment>/g,
+        "gl_FragColor = linearToOutputTexel( gl_FragColor );"
+      )
+      .replace(
+        /#include\s+<encodings_fragment>/g,
+        "gl_FragColor = linearToOutputTexel( gl_FragColor );"
+      )
+      .replace(/#include\s+<colorspace_pars_fragment>/g, "");
+  }
+
+  function uniformRawValue(entry) {
+    if (entry == null) return undefined;
+    if (typeof entry === "object" && "value" in entry) return entry.value;
+    return entry;
+  }
+
+  function pushShaderUniform(n, handle, name, value) {
+    if (!n || !handle || !name || value == null) return;
+    try {
+      if (typeof value === "boolean") {
+        if (n.ShaderUniformFloat) n.ShaderUniformFloat(handle, name, value ? 1 : 0);
+        return;
+      }
+      if (typeof value === "number") {
+        if (Number.isFinite(value) && n.ShaderUniformFloat) {
+          n.ShaderUniformFloat(handle, name, value);
+        }
+        return;
+      }
+      if (typeof value !== "object") return;
+      if (value.isTexture || value.isCubeTexture) return;
+      if (
+        value.isColor ||
+        (typeof value.r === "number" &&
+          typeof value.g === "number" &&
+          typeof value.b === "number" &&
+          !value.isVector3)
+      ) {
+        if (n.ShaderUniformVec3) n.ShaderUniformVec3(handle, name, value.r, value.g, value.b);
+        return;
+      }
+      if (value.isVector4 || typeof value.w === "number") {
+        if (n.ShaderUniformVec4) {
+          n.ShaderUniformVec4(handle, name, value.x, value.y, value.z, value.w);
+        } else if (n.ShaderUniformVec3) {
+          n.ShaderUniformVec3(handle, name, value.x, value.y, value.z);
+        }
+        return;
+      }
+      if (value.isVector3 || typeof value.z === "number") {
+        if (n.ShaderUniformVec3) n.ShaderUniformVec3(handle, name, value.x, value.y, value.z);
+        return;
+      }
+      if (value.isVector2 || typeof value.x === "number") {
+        if (n.ShaderUniformVec2) n.ShaderUniformVec2(handle, name, value.x, value.y);
+        else if (n.ShaderUniformVec3) n.ShaderUniformVec3(handle, name, value.x, value.y, 0);
+      }
+    } catch {
+      /* COM may reject an unknown uniform type */
+    }
+  }
+
+  function flushShaderUniforms(mat) {
+    const n = native();
+    if (!n || !mat.__h || !mat.uniforms) return;
+    for (const name in mat.uniforms) {
+      if (!Object.prototype.hasOwnProperty.call(mat.uniforms, name)) continue;
+      pushShaderUniform(n, mat.__h, name, uniformRawValue(mat.uniforms[name]));
+    }
+  }
+
+  function hookUniformLive(mat, name, entry) {
+    if (!entry || typeof entry !== "object" || entry.__nativeHooked) return;
+    entry.__nativeHooked = true;
+
+    function push() {
+      if (!mat.__h) return;
+      const n = native();
+      if (!n) return;
+      pushShaderUniform(n, mat.__h, name, uniformRawValue(entry));
+    }
+
+    function hookVec(v) {
+      if (!v || typeof v._onChange !== "function" || v.__shaderHooked) return;
+      v.__shaderHooked = true;
+      const prev = v._onChangeCallback;
+      v._onChange(function () {
+        if (typeof prev === "function") prev.call(v);
+        push();
+      });
+    }
+
+    hookVec(entry.value);
+    let current = entry.value;
+    Object.defineProperty(entry, "value", {
+      configurable: true,
+      enumerable: true,
+      get() {
+        return current;
+      },
+      set(v) {
+        current = v;
+        hookVec(v);
+        push();
+      },
+    });
+  }
+
+  function bindShaderUniforms(mat) {
+    const uniforms = mat.uniforms;
+    if (!uniforms) return;
+    for (const name in uniforms) {
+      if (!Object.prototype.hasOwnProperty.call(uniforms, name)) continue;
+      hookUniformLive(mat, name, uniforms[name]);
+    }
+    flushShaderUniforms(mat);
+  }
+
+  // COM insert() shares the native slot map with cmd.alloc()/insertAt.
+  // Flush queued cmd ops first so g.next is past them, then burn JS ids
+  // up through the COM handle so a later mesh alloc cannot collide.
+  function absorbNativeId(handle) {
+    if (!handle || !TN.cmd || typeof TN.cmd.alloc !== "function") return;
+    let guard = 0;
+    while (guard++ < 1000000) {
+      const id = TN.cmd.alloc();
+      if (id >= handle) break;
+    }
   }
 
   function bindNative(mat) {
@@ -130,7 +296,7 @@
       if (handle) {
         if (mat.side != null) TN.cmd.matSide(handle, mat.side);
         mat.__h = handle;
-        bindMap(mat, mat.map);
+        bindAllMaps(mat);
         bindEmissive(mat);
       }
       return;
@@ -161,10 +327,35 @@
       }
     } else if (mat._nativeKind === "shader" && typeof n.ShaderMaterialCreate === "function") {
       try {
-        handle = n.ShaderMaterialCreate(mat.vertexShader || "", mat.fragmentShader || "");
+        if (TN.cmd && typeof TN.cmd.submit === "function") {
+          try {
+            TN.cmd.submit();
+          } catch {
+            /* cmd ring may not be attached yet */
+          }
+        }
+        handle = n.ShaderMaterialCreate(
+          expandShaderChunks(mat.vertexShader || ""),
+          expandShaderChunks(mat.fragmentShader || "")
+        );
+        absorbNativeId(handle);
       } catch {
         handle = 0;
       }
+      mat.__h = handle || 0;
+      if (mat.__h) {
+        try {
+          if (typeof n.ShaderSetFlags === "function") {
+            n.ShaderSetFlags(mat.__h, mat.side ?? FrontSide, mat.depthWrite ? 1 : 0);
+          } else if (n.MaterialSetSide) {
+            n.MaterialSetSide(mat.__h, mat.side ?? FrontSide);
+          }
+        } catch {
+          /* ignore */
+        }
+        bindShaderUniforms(mat);
+      }
+      return;
     } else if (n.MeshStandardMaterialCreate) {
       handle = n.MeshStandardMaterialCreate(color);
       const metal = mat._nativePbr ? mat._nativePbr.metalness : mat.metalness ?? 0;
@@ -175,7 +366,8 @@
     }
     mat.__h = handle || 0;
     if (mat.__h && n.MaterialSetSide) n.MaterialSetSide(mat.__h, mat.side ?? FrontSide);
-    bindMap(mat, mat.map);
+    bindAllMaps(mat);
+    bindEmissive(mat);
   }
 
   function addLightMaps(mat) {
@@ -297,17 +489,31 @@
         } else {
           this[key] = newValue;
         }
-        if (key === "map") bindMap(this, this.map);
-        if (this.__h) {
+        if (MAP_SLOTS[key] != null) bindMap(this, this[key], MAP_SLOTS[key]);
+        if (!this.__h) continue;
+        if (
+          this._nativeKind === "shader" &&
+          (key === "side" || key === "depthWrite")
+        ) {
           const n = native();
-          if (!n) continue;
-          if (key === "side" && n.MaterialSetSide) n.MaterialSetSide(this.__h, this.side);
-          if (
-            (key === "metalness" || key === "roughness") &&
-            n.MaterialSetPbr &&
-            (this.metalness != null || this.roughness != null)
-          ) {
-            n.MaterialSetPbr(this.__h, this.metalness ?? 0, this.roughness ?? 1);
+          if (n && n.ShaderSetFlags) {
+            n.ShaderSetFlags(this.__h, this.side ?? FrontSide, this.depthWrite ? 1 : 0);
+          }
+        }
+        if (key === "side") {
+          if (TN.cmd) TN.cmd.matSide(this.__h, this.side);
+          else {
+            const n = native();
+            if (n && n.MaterialSetSide) n.MaterialSetSide(this.__h, this.side);
+          }
+        }
+        if (key === "metalness" || key === "roughness") {
+          const metal = this.metalness ?? 0;
+          const rough = this.roughness ?? 1;
+          if (TN.cmd) TN.cmd.matPbr(this.__h, metal, rough);
+          else {
+            const n = native();
+            if (n && n.MaterialSetPbr) n.MaterialSetPbr(this.__h, metal, rough);
           }
         }
       }
@@ -334,7 +540,7 @@
           this[key] = value;
         }
       }
-      bindMap(this, this.map);
+      bindAllMaps(this);
       return this;
     }
 
@@ -350,6 +556,10 @@
 
     set needsUpdate(value) {
       if (value === true) this.version++;
+    }
+
+    flushNative() {
+      if (this._nativeKind === "shader") flushShaderUniforms(this);
     }
   }
 
@@ -599,8 +809,19 @@
         uv1: [0, 0],
       };
       this.index0AttributeName = undefined;
-      this.uniformsNeedUpdate = false;
       this.glslVersion = null;
+      let uniformsNeedUpdate = false;
+      Object.defineProperty(this, "uniformsNeedUpdate", {
+        configurable: true,
+        enumerable: true,
+        get() {
+          return uniformsNeedUpdate;
+        },
+        set(v) {
+          uniformsNeedUpdate = !!v;
+          if (uniformsNeedUpdate) this.flushNative();
+        },
+      });
       this.setValues(params);
     }
 

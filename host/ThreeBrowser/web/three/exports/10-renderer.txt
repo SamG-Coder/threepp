@@ -20,6 +20,11 @@ QuaternionKeyframeTrack
 ColorKeyframeTrack
 BooleanKeyframeTrack
 StringKeyframeTrack
+Interpolant
+LinearInterpolant
+DiscreteInterpolant
+CubicInterpolant
+QuaternionLinearInterpolant
 PropertyBinding
 PropertyMixer
 AnimationObjectGroup

@@ -10,10 +10,12 @@ add_library(three_native SHARED
         gpu_instance.cpp
         gpu_lod.cpp
         gpu_shader.cpp
+        gpu_env.cpp
         cmd_batch.cpp
 )
 target_include_directories(three_native PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
-        PRIVATE "${CMAKE_SOURCE_DIR}/src/external/glfw/include")
+        PRIVATE "${CMAKE_SOURCE_DIR}/src/external/glfw/include"
+                "${CMAKE_SOURCE_DIR}/src")
 target_link_libraries(three_native PRIVATE threepp::threepp)
 target_compile_definitions(three_native PRIVATE THREE_NATIVE_EXPORT)
 set_target_properties(three_native PROPERTIES

@@ -639,21 +639,289 @@
     },
   };
 
+  class Interpolant {
+    constructor(parameterPositions, sampleValues, sampleSize, resultBuffer) {
+      this.parameterPositions = parameterPositions;
+      this._cachedIndex = 0;
+      this.resultBuffer = resultBuffer !== undefined
+        ? resultBuffer
+        : new sampleValues.constructor(sampleSize);
+      this.sampleValues = sampleValues;
+      this.valueSize = sampleSize;
+      this.settings = null;
+      this.DefaultSettings_ = {};
+    }
+    evaluate(t) {
+      const pp = this.parameterPositions;
+      let i1 = this._cachedIndex;
+      let t1 = pp[i1];
+      let t0 = pp[i1 - 1];
+
+      validate_interval: {
+        seek: {
+          let right;
+
+          linear_scan: {
+            forward_scan: if (!(t < t1)) {
+              for (let giveUpAt = i1 + 2; ; ) {
+                if (t1 === undefined) {
+                  if (t < t0) break forward_scan;
+                  i1 = pp.length;
+                  this._cachedIndex = i1;
+                  return this.copySampleValue_(i1 - 1);
+                }
+                if (i1 === giveUpAt) break;
+                t0 = t1;
+                t1 = pp[++i1];
+                if (t < t1) break seek;
+              }
+              right = pp.length;
+              break linear_scan;
+            }
+
+            if (!(t >= t0)) {
+              const t1global = pp[1];
+              if (t < t1global) {
+                i1 = 2;
+                t0 = t1global;
+              }
+              for (let giveUpAt = i1 - 2; ; ) {
+                if (t0 === undefined) {
+                  this._cachedIndex = 0;
+                  return this.copySampleValue_(0);
+                }
+                if (i1 === giveUpAt) break;
+                t1 = t0;
+                t0 = pp[--i1 - 1];
+                if (t >= t0) break seek;
+              }
+              right = i1;
+              i1 = 0;
+              break linear_scan;
+            }
+
+            break validate_interval;
+          }
+
+          while (i1 < right) {
+            const mid = (i1 + right) >>> 1;
+            if (t < pp[mid]) right = mid;
+            else i1 = mid + 1;
+          }
+
+          t1 = pp[i1];
+          t0 = pp[i1 - 1];
+
+          if (t0 === undefined) {
+            this._cachedIndex = 0;
+            return this.copySampleValue_(0);
+          }
+          if (t1 === undefined) {
+            i1 = pp.length;
+            this._cachedIndex = i1;
+            return this.copySampleValue_(i1 - 1);
+          }
+        }
+
+        this._cachedIndex = i1;
+        this.intervalChanged_(i1, t0, t1);
+      }
+
+      return this.interpolate_(i1, t0, t, t1);
+    }
+    getSettings_() {
+      return this.settings || this.DefaultSettings_;
+    }
+    copySampleValue_(index) {
+      const result = this.resultBuffer;
+      const values = this.sampleValues;
+      const stride = this.valueSize;
+      const offset = index * stride;
+      for (let i = 0; i !== stride; ++i) result[i] = values[offset + i];
+      return result;
+    }
+    interpolate_(/* i1, t0, t, t1 */) {
+      throw new Error("THREE.Interpolant: Call to abstract method.");
+    }
+    intervalChanged_(/* i1, t0, t1 */) {}
+  }
+
+  class LinearInterpolant extends Interpolant {
+    interpolate_(i1, t0, t, t1) {
+      const result = this.resultBuffer;
+      const values = this.sampleValues;
+      const stride = this.valueSize;
+      const offset1 = i1 * stride;
+      const offset0 = offset1 - stride;
+      const weight1 = (t - t0) / (t1 - t0);
+      const weight0 = 1 - weight1;
+      for (let i = 0; i !== stride; ++i) {
+        result[i] = values[offset0 + i] * weight0 + values[offset1 + i] * weight1;
+      }
+      return result;
+    }
+  }
+
+  class DiscreteInterpolant extends Interpolant {
+    interpolate_(i1) {
+      return this.copySampleValue_(i1 - 1);
+    }
+  }
+
+  class CubicInterpolant extends Interpolant {
+    constructor(parameterPositions, sampleValues, sampleSize, resultBuffer) {
+      super(parameterPositions, sampleValues, sampleSize, resultBuffer);
+      this._weightPrev = -0;
+      this._offsetPrev = -0;
+      this._weightNext = -0;
+      this._offsetNext = -0;
+      this.DefaultSettings_ = {
+        endingStart: TN.ZeroCurvatureEnding ?? 2400,
+        endingEnd: TN.ZeroCurvatureEnding ?? 2400,
+      };
+    }
+    intervalChanged_(i1, t0, t1) {
+      const pp = this.parameterPositions;
+      let iPrev = i1 - 2;
+      let iNext = i1 + 1;
+      let tPrev = pp[iPrev];
+      let tNext = pp[iNext];
+
+      if (tPrev === undefined) {
+        switch (this.getSettings_().endingStart) {
+          case TN.ZeroSlopeEnding ?? 2401:
+            iPrev = i1;
+            tPrev = 2 * t0 - t1;
+            break;
+          case TN.WrapAroundEnding ?? 2402:
+            iPrev = pp.length - 2;
+            tPrev = t0 + pp[iPrev] - pp[iPrev + 1];
+            break;
+          default:
+            iPrev = i1;
+            tPrev = t1;
+        }
+      }
+
+      if (tNext === undefined) {
+        switch (this.getSettings_().endingEnd) {
+          case TN.ZeroSlopeEnding ?? 2401:
+            iNext = i1;
+            tNext = 2 * t1 - t0;
+            break;
+          case TN.WrapAroundEnding ?? 2402:
+            iNext = 1;
+            tNext = t1 + pp[1] - pp[0];
+            break;
+          default:
+            iNext = i1 - 1;
+            tNext = t0;
+        }
+      }
+
+      const halfDt = (t1 - t0) * 0.5;
+      const stride = this.valueSize;
+      this._weightPrev = halfDt / (t0 - tPrev);
+      this._weightNext = halfDt / (tNext - t1);
+      this._offsetPrev = iPrev * stride;
+      this._offsetNext = iNext * stride;
+    }
+    interpolate_(i1, t0, t, t1) {
+      const result = this.resultBuffer;
+      const values = this.sampleValues;
+      const stride = this.valueSize;
+      const o1 = i1 * stride;
+      const o0 = o1 - stride;
+      const oP = this._offsetPrev;
+      const oN = this._offsetNext;
+      const wP = this._weightPrev;
+      const wN = this._weightNext;
+      const p = (t - t0) / (t1 - t0);
+      const pp = p * p;
+      const ppp = pp * p;
+      const sP = -wP * ppp + 2 * wP * pp - wP * p;
+      const s0 = (1 + wP) * ppp + (-1.5 - 2 * wP) * pp + (-0.5 + wP) * p + 1;
+      const s1 = (-1 - wN) * ppp + (1.5 + wN) * pp + 0.5 * p;
+      const sN = wN * ppp - wN * pp;
+      for (let i = 0; i !== stride; ++i) {
+        result[i] =
+          sP * values[oP + i] +
+          s0 * values[o0 + i] +
+          s1 * values[o1 + i] +
+          sN * values[oN + i];
+      }
+      return result;
+    }
+  }
+
+  class QuaternionLinearInterpolant extends Interpolant {
+    interpolate_(i1, t0, t, t1) {
+      const result = this.resultBuffer;
+      const values = this.sampleValues;
+      const stride = this.valueSize;
+      const alpha = (t - t0) / (t1 - t0);
+      let offset = i1 * stride;
+      for (let end = offset + stride; offset !== end; offset += 4) {
+        TN.Quaternion.slerpFlat(result, 0, values, offset - stride, values, offset, alpha);
+      }
+      return result;
+    }
+  }
+
   class KeyframeTrack {
     constructor(name = "", times = [], values = [], interpolation) {
       this.name = name;
-      this.times = times;
-      this.values = values;
-      this.ValueTypeName = "mixed";
-      this.setInterpolation(interpolation);
+      this.times = AnimationUtils.convertArray(times, this.TimeBufferType);
+      this.values = AnimationUtils.convertArray(values, this.ValueBufferType);
+      this.setInterpolation(interpolation || this.DefaultInterpolation);
+    }
+    InterpolantFactoryMethodDiscrete(result) {
+      return new DiscreteInterpolant(this.times, this.values, this.getValueSize(), result);
+    }
+    InterpolantFactoryMethodLinear(result) {
+      return new LinearInterpolant(this.times, this.values, this.getValueSize(), result);
+    }
+    InterpolantFactoryMethodSmooth(result) {
+      return new CubicInterpolant(this.times, this.values, this.getValueSize(), result);
     }
     setInterpolation(interpolation) {
-      this.getInterpolation = () => interpolation;
+      let factoryMethod;
+      switch (interpolation) {
+        case TN.InterpolateDiscrete ?? 2300:
+          factoryMethod = this.InterpolantFactoryMethodDiscrete;
+          break;
+        case TN.InterpolateLinear ?? 2301:
+          factoryMethod = this.InterpolantFactoryMethodLinear;
+          break;
+        case TN.InterpolateSmooth ?? 2302:
+          factoryMethod = this.InterpolantFactoryMethodSmooth;
+          break;
+      }
+      if (factoryMethod === undefined) {
+        if (this.createInterpolant === undefined) {
+          if (interpolation !== this.DefaultInterpolation) {
+            this.setInterpolation(this.DefaultInterpolation);
+          }
+        }
+        return this;
+      }
+      this.createInterpolant = factoryMethod;
       return this;
+    }
+    getInterpolation() {
+      switch (this.createInterpolant) {
+        case this.InterpolantFactoryMethodDiscrete:
+          return TN.InterpolateDiscrete ?? 2300;
+        case this.InterpolantFactoryMethodLinear:
+          return TN.InterpolateLinear ?? 2301;
+        case this.InterpolantFactoryMethodSmooth:
+          return TN.InterpolateSmooth ?? 2302;
+      }
+      return this.DefaultInterpolation;
     }
     getValueSize() {
       const n = this.times?.length || 0;
-      return n ? Math.floor((this.values?.length || 0) / n) : 0;
+      return n ? (this.values?.length || 0) / n : 0;
     }
     shift(timeOffset) {
       if (!timeOffset) return this;
@@ -675,53 +943,59 @@
       return this;
     }
     clone() {
-      return new this.constructor(
-        this.name,
-        this.times.slice?.() || this.times,
-        this.values.slice?.() || this.values
-      );
+      const times = this.times.slice?.() || this.times;
+      const values = this.values.slice?.() || this.values;
+      const track = new this.constructor(this.name, times, values);
+      track.createInterpolant = this.createInterpolant;
+      return track;
     }
     static parse(json) {
       return new KeyframeTrack(json.name, json.times, json.values, json.interpolation);
     }
   }
+  KeyframeTrack.prototype.TimeBufferType = Float32Array;
+  KeyframeTrack.prototype.ValueBufferType = Float32Array;
+  KeyframeTrack.prototype.DefaultInterpolation = TN.InterpolateLinear ?? 2301;
+  KeyframeTrack.prototype.ValueTypeName = "mixed";
 
-  class NumberKeyframeTrack extends KeyframeTrack {
-    constructor(name, times, values, interpolation) {
-      super(name, times, values, interpolation);
-      this.ValueTypeName = "number";
-    }
-  }
-  class VectorKeyframeTrack extends KeyframeTrack {
-    constructor(name, times, values, interpolation) {
-      super(name, times, values, interpolation);
-      this.ValueTypeName = "vector";
-    }
-  }
+  class NumberKeyframeTrack extends KeyframeTrack {}
+  NumberKeyframeTrack.prototype.ValueTypeName = "number";
+
+  class VectorKeyframeTrack extends KeyframeTrack {}
+  VectorKeyframeTrack.prototype.ValueTypeName = "vector";
+
   class QuaternionKeyframeTrack extends KeyframeTrack {
-    constructor(name, times, values, interpolation) {
-      super(name, times, values, interpolation);
-      this.ValueTypeName = "quaternion";
+    InterpolantFactoryMethodLinear(result) {
+      return new QuaternionLinearInterpolant(this.times, this.values, this.getValueSize(), result);
     }
   }
-  class ColorKeyframeTrack extends KeyframeTrack {
-    constructor(name, times, values, interpolation) {
-      super(name, times, values, interpolation);
-      this.ValueTypeName = "color";
-    }
-  }
+  QuaternionKeyframeTrack.prototype.ValueTypeName = "quaternion";
+  QuaternionKeyframeTrack.prototype.InterpolantFactoryMethodSmooth = undefined;
+
+  class ColorKeyframeTrack extends KeyframeTrack {}
+  ColorKeyframeTrack.prototype.ValueTypeName = "color";
+
   class BooleanKeyframeTrack extends KeyframeTrack {
-    constructor(name, times, values, interpolation) {
-      super(name, times, values, interpolation);
-      this.ValueTypeName = "bool";
+    constructor(name, times, values) {
+      super(name, times, values);
     }
   }
+  BooleanKeyframeTrack.prototype.ValueTypeName = "bool";
+  BooleanKeyframeTrack.prototype.ValueBufferType = Array;
+  BooleanKeyframeTrack.prototype.DefaultInterpolation = TN.InterpolateDiscrete ?? 2300;
+  BooleanKeyframeTrack.prototype.InterpolantFactoryMethodLinear = undefined;
+  BooleanKeyframeTrack.prototype.InterpolantFactoryMethodSmooth = undefined;
+
   class StringKeyframeTrack extends KeyframeTrack {
-    constructor(name, times, values, interpolation) {
-      super(name, times, values, interpolation);
-      this.ValueTypeName = "string";
+    constructor(name, times, values) {
+      super(name, times, values);
     }
   }
+  StringKeyframeTrack.prototype.ValueTypeName = "string";
+  StringKeyframeTrack.prototype.ValueBufferType = Array;
+  StringKeyframeTrack.prototype.DefaultInterpolation = TN.InterpolateDiscrete ?? 2300;
+  StringKeyframeTrack.prototype.InterpolantFactoryMethodLinear = undefined;
+  StringKeyframeTrack.prototype.InterpolantFactoryMethodSmooth = undefined;
 
   const trackTypes = {
     number: NumberKeyframeTrack,
@@ -811,25 +1085,46 @@
     constructor(mixer, clip, localRoot, blendMode) {
       this._mixer = mixer;
       this._clip = clip;
-      this._localRoot = localRoot || mixer?._root;
+      this._localRoot = localRoot || null;
       this.blendMode = blendMode ?? clip?.blendMode ?? TN.NormalAnimationBlendMode ?? 2500;
-      this.enabled = true;
-      this.paused = false;
+      const tracks = clip?.tracks || [];
+      const nTracks = tracks.length;
+      const interpolants = new Array(nTracks);
+      const interpolantSettings = {
+        endingStart: TN.ZeroCurvatureEnding ?? 2400,
+        endingEnd: TN.ZeroCurvatureEnding ?? 2400,
+      };
+      for (let i = 0; i !== nTracks; ++i) {
+        const interpolant = tracks[i].createInterpolant(null);
+        interpolants[i] = interpolant;
+        interpolant.settings = interpolantSettings;
+      }
+      this._interpolantSettings = interpolantSettings;
+      this._interpolants = interpolants;
+      this._propertyBindings = new Array(nTracks);
+      this._cacheIndex = null;
+      this._byClipCacheIndex = null;
+      this._timeScaleInterpolant = null;
+      this._restoreTimeScale = null;
+      this._weightInterpolant = null;
+      this.loop = TN.LoopRepeat ?? 2201;
+      this._loopCount = -1;
+      this._startTime = null;
       this.time = 0;
       this.timeScale = 1;
+      this._effectiveTimeScale = 1;
       this.weight = 1;
-      this.loop = TN.LoopRepeat ?? 2201;
+      this._effectiveWeight = 1;
       this.repetitions = Infinity;
+      this.paused = false;
+      this.enabled = true;
       this.clampWhenFinished = false;
       this.zeroSlopeAtStart = true;
       this.zeroSlopeAtEnd = true;
-      this.interpolantSettings = null;
       this._clipIndex = 0;
-      this._isRunning = false;
     }
     play() {
-      this._isRunning = true;
-      this.paused = false;
+      this._mixer._activateAction(this);
       const mixer = this._mixer;
       const n = mixer?._native;
       if (n && mixer._h && typeof n.MixerPlay === "function") {
@@ -838,23 +1133,26 @@
       return this;
     }
     stop() {
-      this._isRunning = false;
-      return this;
+      this._mixer._deactivateAction(this);
+      return this.reset();
     }
     reset() {
       this.paused = false;
       this.enabled = true;
       this.time = 0;
-      this._isRunning = false;
-      return this;
+      this._loopCount = -1;
+      this._startTime = null;
+      return this.stopFading().stopWarping();
     }
     isRunning() {
-      return this._isRunning && !this.paused && this.enabled && this.timeScale !== 0;
+      return this.enabled && !this.paused && this.timeScale !== 0 &&
+        this._startTime === null && this._mixer._isActiveAction(this);
     }
     isScheduled() {
-      return this._isRunning;
+      return this._mixer._isActiveAction(this);
     }
-    startAt() {
+    startAt(time) {
+      this._startTime = time;
       return this;
     }
     setLoop(mode, repetitions) {
@@ -864,48 +1162,88 @@
     }
     setEffectiveWeight(weight) {
       this.weight = weight;
-      return this;
+      this._effectiveWeight = this.enabled ? weight : 0;
+      return this.stopFading();
     }
     getEffectiveWeight() {
-      return this.weight;
+      return this._effectiveWeight;
     }
-    fadeIn() {
+    fadeIn(duration) {
+      return this._scheduleFading(duration, 0, 1);
+    }
+    fadeOut(duration) {
+      return this._scheduleFading(duration, 1, 0);
+    }
+    crossFadeFrom(fadeOutAction, duration, warp = false) {
+      fadeOutAction.fadeOut(duration);
+      this.fadeIn(duration);
+      if (warp === true) {
+        const fadeInDuration = this._clip.duration;
+        const fadeOutDuration = fadeOutAction._clip.duration;
+        const startEndRatio = fadeOutDuration / fadeInDuration;
+        const endStartRatio = fadeInDuration / fadeOutDuration;
+        fadeOutAction._restoreTimeScale = fadeOutAction.timeScale;
+        this._restoreTimeScale = this.timeScale;
+        fadeOutAction.warp(1.0, startEndRatio, duration);
+        this.warp(endStartRatio, 1.0, duration);
+      }
       return this;
     }
-    fadeOut() {
-      return this;
-    }
-    crossFadeFrom() {
-      return this;
-    }
-    crossFadeTo() {
-      return this;
+    crossFadeTo(fadeInAction, duration, warp = false) {
+      return fadeInAction.crossFadeFrom(this, duration, warp);
     }
     stopFading() {
+      const weightInterpolant = this._weightInterpolant;
+      if (weightInterpolant !== null) {
+        this._weightInterpolant = null;
+        this._mixer._takeBackControlInterpolant(weightInterpolant);
+      }
       return this;
     }
     setEffectiveTimeScale(timeScale) {
       this.timeScale = timeScale;
-      return this;
+      this._effectiveTimeScale = this.paused ? 0 : timeScale;
+      return this.stopWarping();
     }
     getEffectiveTimeScale() {
-      return this.timeScale;
+      return this._effectiveTimeScale;
     }
     setDuration(duration) {
-      if (this._clip && this._clip.duration) this.timeScale = this._clip.duration / duration;
-      return this;
+      this.timeScale = this._clip.duration / duration;
+      return this.stopWarping();
     }
-    syncWith() {
-      return this;
+    syncWith(action) {
+      this.time = action.time;
+      this.timeScale = action.timeScale;
+      return this.stopWarping();
     }
-    halt() {
-      this.timeScale = 0;
-      return this;
+    halt(duration) {
+      return this.warp(this._effectiveTimeScale, 0, duration);
     }
-    warp() {
+    warp(startTimeScale, endTimeScale, duration) {
+      const mixer = this._mixer;
+      const now = mixer.time;
+      const timeScale = this.timeScale;
+      let interpolant = this._timeScaleInterpolant;
+      if (interpolant === null) {
+        interpolant = mixer._lendControlInterpolant();
+        this._timeScaleInterpolant = interpolant;
+      }
+      const times = interpolant.parameterPositions;
+      const values = interpolant.sampleValues;
+      times[0] = now;
+      times[1] = now + duration;
+      values[0] = startTimeScale / timeScale;
+      values[1] = endTimeScale / timeScale;
       return this;
     }
     stopWarping() {
+      const timeScaleInterpolant = this._timeScaleInterpolant;
+      if (timeScaleInterpolant !== null) {
+        this._timeScaleInterpolant = null;
+        this._mixer._takeBackControlInterpolant(timeScaleInterpolant);
+      }
+      this._restoreTimeScale = null;
       return this;
     }
     getMixer() {
@@ -915,75 +1253,607 @@
       return this._clip;
     }
     getRoot() {
-      return this._localRoot;
+      return this._localRoot || this._mixer._root;
+    }
+    _update(time, deltaTime, timeDirection, accuIndex) {
+      if (!this.enabled) {
+        this._updateWeight(time);
+        return;
+      }
+      const startTime = this._startTime;
+      if (startTime !== null) {
+        const timeRunning = (time - startTime) * timeDirection;
+        if (timeRunning < 0 || timeDirection === 0) {
+          deltaTime = 0;
+        } else {
+          this._startTime = null;
+          deltaTime = timeDirection * timeRunning;
+        }
+      }
+      deltaTime *= this._updateTimeScale(time);
+      const clipTime = this._updateTime(deltaTime);
+      const weight = this._updateWeight(time);
+      if (weight > 0) {
+        const interpolants = this._interpolants;
+        const propertyMixers = this._propertyBindings;
+        if (this.blendMode === (TN.AdditiveAnimationBlendMode ?? 2501)) {
+          for (let j = 0, m = interpolants.length; j !== m; ++j) {
+            interpolants[j].evaluate(clipTime);
+            propertyMixers[j].accumulateAdditive(weight);
+          }
+        } else {
+          for (let j = 0, m = interpolants.length; j !== m; ++j) {
+            interpolants[j].evaluate(clipTime);
+            propertyMixers[j].accumulate(accuIndex, weight);
+          }
+        }
+      }
+    }
+    _updateWeight(time) {
+      let weight = 0;
+      if (this.enabled) {
+        weight = this.weight;
+        const interpolant = this._weightInterpolant;
+        if (interpolant !== null) {
+          const interpolantValue = interpolant.evaluate(time)[0];
+          weight *= interpolantValue;
+          if (time > interpolant.parameterPositions[1]) {
+            this.stopFading();
+            if (interpolantValue === 0) this.enabled = false;
+          }
+        }
+      }
+      this._effectiveWeight = weight;
+      return weight;
+    }
+    _updateTimeScale(time) {
+      let timeScale = 0;
+      if (!this.paused) {
+        timeScale = this.timeScale;
+        const interpolant = this._timeScaleInterpolant;
+        if (interpolant !== null) {
+          const interpolantValue = interpolant.evaluate(time)[0];
+          timeScale *= interpolantValue;
+          if (time > interpolant.parameterPositions[1]) {
+            if (timeScale === 0) {
+              this.paused = true;
+            } else {
+              if (this._restoreTimeScale !== null) timeScale = this._restoreTimeScale;
+              this.timeScale = timeScale;
+            }
+            this.stopWarping();
+          }
+        }
+      }
+      this._effectiveTimeScale = timeScale;
+      return timeScale;
+    }
+    _updateTime(deltaTime) {
+      const duration = this._clip.duration;
+      const loop = this.loop;
+      let time = this.time + deltaTime;
+      let loopCount = this._loopCount;
+      const pingPong = loop === (TN.LoopPingPong ?? 2202);
+      if (deltaTime === 0) {
+        if (loopCount === -1) return time;
+        return pingPong && (loopCount & 1) === 1 ? duration - time : time;
+      }
+      if (loop === (TN.LoopOnce ?? 2200)) {
+        if (loopCount === -1) {
+          this._loopCount = 0;
+          this._setEndings(true, true, false);
+        }
+        handle_stop: {
+          if (time >= duration) time = duration;
+          else if (time < 0) time = 0;
+          else {
+            this.time = time;
+            break handle_stop;
+          }
+          if (this.clampWhenFinished) this.paused = true;
+          else this.enabled = false;
+          this.time = time;
+          this._mixer.dispatchEvent({
+            type: "finished",
+            action: this,
+            direction: deltaTime < 0 ? -1 : 1,
+          });
+        }
+      } else {
+        if (loopCount === -1) {
+          if (deltaTime >= 0) {
+            loopCount = 0;
+            this._setEndings(true, this.repetitions === 0, pingPong);
+          } else {
+            this._setEndings(this.repetitions === 0, true, pingPong);
+          }
+        }
+        if (time >= duration || time < 0) {
+          const loopDelta = Math.floor(time / duration);
+          time -= duration * loopDelta;
+          loopCount += Math.abs(loopDelta);
+          const pending = this.repetitions - loopCount;
+          if (pending <= 0) {
+            if (this.clampWhenFinished) this.paused = true;
+            else this.enabled = false;
+            time = deltaTime > 0 ? duration : 0;
+            this.time = time;
+            this._mixer.dispatchEvent({
+              type: "finished",
+              action: this,
+              direction: deltaTime > 0 ? 1 : -1,
+            });
+          } else {
+            if (pending === 1) {
+              const atStart = deltaTime < 0;
+              this._setEndings(atStart, !atStart, pingPong);
+            } else {
+              this._setEndings(false, false, pingPong);
+            }
+            this._loopCount = loopCount;
+            this.time = time;
+            this._mixer.dispatchEvent({
+              type: "loop",
+              action: this,
+              loopDelta,
+            });
+          }
+        } else {
+          this._loopCount = loopCount;
+          this.time = time;
+        }
+        if (pingPong && (loopCount & 1) === 1) return duration - time;
+      }
+      return time;
+    }
+    _setEndings(atStart, atEnd, pingPong) {
+      const settings = this._interpolantSettings;
+      if (pingPong) {
+        settings.endingStart = TN.ZeroSlopeEnding ?? 2401;
+        settings.endingEnd = TN.ZeroSlopeEnding ?? 2401;
+      } else {
+        if (atStart) {
+          settings.endingStart = this.zeroSlopeAtStart
+            ? TN.ZeroSlopeEnding ?? 2401
+            : TN.ZeroCurvatureEnding ?? 2400;
+        } else {
+          settings.endingStart = TN.WrapAroundEnding ?? 2402;
+        }
+        if (atEnd) {
+          settings.endingEnd = this.zeroSlopeAtEnd
+            ? TN.ZeroSlopeEnding ?? 2401
+            : TN.ZeroCurvatureEnding ?? 2400;
+        } else {
+          settings.endingEnd = TN.WrapAroundEnding ?? 2402;
+        }
+      }
+    }
+    _scheduleFading(duration, weightNow, weightThen) {
+      const mixer = this._mixer;
+      const now = mixer.time;
+      let interpolant = this._weightInterpolant;
+      if (interpolant === null) {
+        interpolant = mixer._lendControlInterpolant();
+        this._weightInterpolant = interpolant;
+      }
+      const times = interpolant.parameterPositions;
+      const values = interpolant.sampleValues;
+      times[0] = now;
+      values[0] = weightNow;
+      times[1] = now + duration;
+      values[1] = weightThen;
+      return this;
     }
   }
+
+  const _controlInterpolantsResultBuffer = new Float32Array(1);
 
   class AnimationMixer extends DispatcherBase {
     constructor(root) {
       super();
       this._root = root;
-      this._actions = [];
-      this._actionsByClip = new Map();
+      this._initMemoryManager();
+      this._accuIndex = 0;
       this.time = 0;
       this.timeScale = 1;
       this._h = 0;
       this._native = null;
       const n = native();
       if (n && typeof n.MixerCreate === "function" && root && root._h) {
-        this._h = n.MixerCreate(root._h);
-        this._native = n;
+        try {
+          this._h = n.MixerCreate(root._h);
+          this._native = n;
+        } catch {
+          this._h = 0;
+        }
       }
+    }
+    _bindAction(action, prototypeAction) {
+      const root = action._localRoot || this._root;
+      const tracks = action._clip.tracks;
+      const nTracks = tracks.length;
+      const bindings = action._propertyBindings;
+      const interpolants = action._interpolants;
+      const rootUuid = root.uuid;
+      const bindingsByRoot = this._bindingsByRootAndName;
+      let bindingsByName = bindingsByRoot[rootUuid];
+      if (bindingsByName === undefined) {
+        bindingsByName = {};
+        bindingsByRoot[rootUuid] = bindingsByName;
+      }
+      for (let i = 0; i !== nTracks; ++i) {
+        const track = tracks[i];
+        const trackName = track.name;
+        let binding = bindingsByName[trackName];
+        if (binding !== undefined) {
+          ++binding.referenceCount;
+          bindings[i] = binding;
+        } else {
+          binding = bindings[i];
+          if (binding !== undefined) {
+            if (binding._cacheIndex === null) {
+              ++binding.referenceCount;
+              this._addInactiveBinding(binding, rootUuid, trackName);
+            }
+            continue;
+          }
+          const path = prototypeAction && prototypeAction._propertyBindings[i].binding.parsedPath;
+          binding = new PropertyMixer(
+            PropertyBinding.create(root, trackName, path),
+            track.ValueTypeName,
+            track.getValueSize()
+          );
+          ++binding.referenceCount;
+          this._addInactiveBinding(binding, rootUuid, trackName);
+          bindings[i] = binding;
+        }
+        interpolants[i].resultBuffer = binding.buffer;
+      }
+    }
+    _activateAction(action) {
+      if (!this._isActiveAction(action)) {
+        if (action._cacheIndex === null) {
+          const rootUuid = (action._localRoot || this._root).uuid;
+          const clipUuid = action._clip.uuid;
+          const actionsForClip = this._actionsByClip[clipUuid];
+          this._bindAction(action, actionsForClip && actionsForClip.knownActions[0]);
+          this._addInactiveAction(action, clipUuid, rootUuid);
+        }
+        const bindings = action._propertyBindings;
+        for (let i = 0, n = bindings.length; i !== n; ++i) {
+          const binding = bindings[i];
+          if (binding.useCount++ === 0) {
+            this._lendBinding(binding);
+            binding.saveOriginalState();
+          }
+        }
+        this._lendAction(action);
+      }
+    }
+    _deactivateAction(action) {
+      if (this._isActiveAction(action)) {
+        const bindings = action._propertyBindings;
+        for (let i = 0, n = bindings.length; i !== n; ++i) {
+          const binding = bindings[i];
+          if (--binding.useCount === 0) {
+            binding.restoreOriginalState();
+            this._takeBackBinding(binding);
+          }
+        }
+        this._takeBackAction(action);
+      }
+    }
+    _initMemoryManager() {
+      this._actions = [];
+      this._nActiveActions = 0;
+      this._actionsByClip = {};
+      this._bindings = [];
+      this._nActiveBindings = 0;
+      this._bindingsByRootAndName = {};
+      this._controlInterpolants = [];
+      this._nActiveControlInterpolants = 0;
+      const scope = this;
+      this.stats = {
+        actions: {
+          get total() {
+            return scope._actions.length;
+          },
+          get inUse() {
+            return scope._nActiveActions;
+          },
+        },
+        bindings: {
+          get total() {
+            return scope._bindings.length;
+          },
+          get inUse() {
+            return scope._nActiveBindings;
+          },
+        },
+        controlInterpolants: {
+          get total() {
+            return scope._controlInterpolants.length;
+          },
+          get inUse() {
+            return scope._nActiveControlInterpolants;
+          },
+        },
+      };
+    }
+    _isActiveAction(action) {
+      const index = action._cacheIndex;
+      return index !== null && index < this._nActiveActions;
+    }
+    _addInactiveAction(action, clipUuid, rootUuid) {
+      const actions = this._actions;
+      const actionsByClip = this._actionsByClip;
+      let actionsForClip = actionsByClip[clipUuid];
+      if (actionsForClip === undefined) {
+        actionsForClip = {
+          knownActions: [action],
+          actionByRoot: {},
+        };
+        action._byClipCacheIndex = 0;
+        actionsByClip[clipUuid] = actionsForClip;
+      } else {
+        const knownActions = actionsForClip.knownActions;
+        action._byClipCacheIndex = knownActions.length;
+        knownActions.push(action);
+      }
+      action._cacheIndex = actions.length;
+      actions.push(action);
+      actionsForClip.actionByRoot[rootUuid] = action;
+    }
+    _removeInactiveAction(action) {
+      const actions = this._actions;
+      const lastInactiveAction = actions[actions.length - 1];
+      const cacheIndex = action._cacheIndex;
+      lastInactiveAction._cacheIndex = cacheIndex;
+      actions[cacheIndex] = lastInactiveAction;
+      actions.pop();
+      action._cacheIndex = null;
+      const clipUuid = action._clip.uuid;
+      const actionsByClip = this._actionsByClip;
+      const actionsForClip = actionsByClip[clipUuid];
+      const knownActionsForClip = actionsForClip.knownActions;
+      const lastKnownAction = knownActionsForClip[knownActionsForClip.length - 1];
+      const byClipCacheIndex = action._byClipCacheIndex;
+      lastKnownAction._byClipCacheIndex = byClipCacheIndex;
+      knownActionsForClip[byClipCacheIndex] = lastKnownAction;
+      knownActionsForClip.pop();
+      action._byClipCacheIndex = null;
+      const actionByRoot = actionsForClip.actionByRoot;
+      const rootUuid = (action._localRoot || this._root).uuid;
+      delete actionByRoot[rootUuid];
+      if (knownActionsForClip.length === 0) delete actionsByClip[clipUuid];
+      this._removeInactiveBindingsForAction(action);
+    }
+    _removeInactiveBindingsForAction(action) {
+      const bindings = action._propertyBindings;
+      for (let i = 0, n = bindings.length; i !== n; ++i) {
+        const binding = bindings[i];
+        if (--binding.referenceCount === 0) this._removeInactiveBinding(binding);
+      }
+    }
+    _lendAction(action) {
+      const actions = this._actions;
+      const prevIndex = action._cacheIndex;
+      const lastActiveIndex = this._nActiveActions++;
+      const firstInactiveAction = actions[lastActiveIndex];
+      action._cacheIndex = lastActiveIndex;
+      actions[lastActiveIndex] = action;
+      firstInactiveAction._cacheIndex = prevIndex;
+      actions[prevIndex] = firstInactiveAction;
+    }
+    _takeBackAction(action) {
+      const actions = this._actions;
+      const prevIndex = action._cacheIndex;
+      const firstInactiveIndex = --this._nActiveActions;
+      const lastActiveAction = actions[firstInactiveIndex];
+      action._cacheIndex = firstInactiveIndex;
+      actions[firstInactiveIndex] = action;
+      lastActiveAction._cacheIndex = prevIndex;
+      actions[prevIndex] = lastActiveAction;
+    }
+    _addInactiveBinding(binding, rootUuid, trackName) {
+      const bindingsByRoot = this._bindingsByRootAndName;
+      const bindings = this._bindings;
+      let bindingByName = bindingsByRoot[rootUuid];
+      if (bindingByName === undefined) {
+        bindingByName = {};
+        bindingsByRoot[rootUuid] = bindingByName;
+      }
+      bindingByName[trackName] = binding;
+      binding._cacheIndex = bindings.length;
+      bindings.push(binding);
+    }
+    _removeInactiveBinding(binding) {
+      const bindings = this._bindings;
+      const propBinding = binding.binding;
+      const rootUuid = propBinding.rootNode.uuid;
+      const trackName = propBinding.path;
+      const bindingsByRoot = this._bindingsByRootAndName;
+      const bindingByName = bindingsByRoot[rootUuid];
+      const lastInactiveBinding = bindings[bindings.length - 1];
+      const cacheIndex = binding._cacheIndex;
+      lastInactiveBinding._cacheIndex = cacheIndex;
+      bindings[cacheIndex] = lastInactiveBinding;
+      bindings.pop();
+      delete bindingByName[trackName];
+      if (Object.keys(bindingByName).length === 0) delete bindingsByRoot[rootUuid];
+    }
+    _lendBinding(binding) {
+      const bindings = this._bindings;
+      const prevIndex = binding._cacheIndex;
+      const lastActiveIndex = this._nActiveBindings++;
+      const firstInactiveBinding = bindings[lastActiveIndex];
+      binding._cacheIndex = lastActiveIndex;
+      bindings[lastActiveIndex] = binding;
+      firstInactiveBinding._cacheIndex = prevIndex;
+      bindings[prevIndex] = firstInactiveBinding;
+    }
+    _takeBackBinding(binding) {
+      const bindings = this._bindings;
+      const prevIndex = binding._cacheIndex;
+      const firstInactiveIndex = --this._nActiveBindings;
+      const lastActiveBinding = bindings[firstInactiveIndex];
+      binding._cacheIndex = firstInactiveIndex;
+      bindings[firstInactiveIndex] = binding;
+      lastActiveBinding._cacheIndex = prevIndex;
+      bindings[prevIndex] = lastActiveBinding;
+    }
+    _lendControlInterpolant() {
+      const interpolants = this._controlInterpolants;
+      const lastActiveIndex = this._nActiveControlInterpolants++;
+      let interpolant = interpolants[lastActiveIndex];
+      if (interpolant === undefined) {
+        interpolant = new LinearInterpolant(
+          new Float32Array(2),
+          new Float32Array(2),
+          1,
+          _controlInterpolantsResultBuffer
+        );
+        interpolant.__cacheIndex = lastActiveIndex;
+        interpolants[lastActiveIndex] = interpolant;
+      }
+      return interpolant;
+    }
+    _takeBackControlInterpolant(interpolant) {
+      const interpolants = this._controlInterpolants;
+      const prevIndex = interpolant.__cacheIndex;
+      const firstInactiveIndex = --this._nActiveControlInterpolants;
+      const lastActiveInterpolant = interpolants[firstInactiveIndex];
+      interpolant.__cacheIndex = firstInactiveIndex;
+      interpolants[firstInactiveIndex] = interpolant;
+      lastActiveInterpolant.__cacheIndex = prevIndex;
+      interpolants[prevIndex] = lastActiveInterpolant;
     }
     clipAction(clip, optionalRoot, blendMode) {
-      const key = clip || optionalRoot;
-      if (key && this._actionsByClip.has(key)) return this._actionsByClip.get(key);
-      const action = new AnimationAction(this, clip, optionalRoot || this._root, blendMode);
+      const root = optionalRoot || this._root;
+      const rootUuid = root.uuid;
+      let clipObject = typeof clip === "string" ? AnimationClip.findByName(root, clip) : clip;
+      const clipUuid = clipObject !== null ? clipObject.uuid : clip;
+      const actionsForClip = this._actionsByClip[clipUuid];
+      let prototypeAction = null;
+      if (blendMode === undefined) {
+        blendMode = clipObject !== null
+          ? clipObject.blendMode
+          : TN.NormalAnimationBlendMode ?? 2500;
+      }
+      if (actionsForClip !== undefined) {
+        const existingAction = actionsForClip.actionByRoot[rootUuid];
+        if (existingAction !== undefined && existingAction.blendMode === blendMode) {
+          return existingAction;
+        }
+        prototypeAction = actionsForClip.knownActions[0];
+        if (clipObject === null) clipObject = prototypeAction._clip;
+      }
+      if (clipObject === null) return null;
+      const newAction = new AnimationAction(this, clipObject, optionalRoot, blendMode);
       let idx = 0;
-      if (clip && typeof clip._index === "number") idx = clip._index;
-      else if (this._root && Array.isArray(this._root.animations)) {
-        const found = this._root.animations.indexOf(clip);
+      if (typeof clipObject._index === "number") idx = clipObject._index;
+      else if (root && Array.isArray(root.animations)) {
+        const found = root.animations.indexOf(clipObject);
         if (found >= 0) idx = found;
       }
-      action._clipIndex = idx;
-      this._actions.push(action);
-      if (key) this._actionsByClip.set(key, action);
-      return action;
+      newAction._clipIndex = idx;
+      this._bindAction(newAction, prototypeAction);
+      this._addInactiveAction(newAction, clipUuid, rootUuid);
+      return newAction;
     }
-    existingAction(clip) {
-      return this._actionsByClip.get(clip) || null;
+    existingAction(clip, optionalRoot) {
+      const root = optionalRoot || this._root;
+      const rootUuid = root.uuid;
+      const clipObject = typeof clip === "string" ? AnimationClip.findByName(root, clip) : clip;
+      const clipUuid = clipObject ? clipObject.uuid : clip;
+      const actionsForClip = this._actionsByClip[clipUuid];
+      if (actionsForClip !== undefined) return actionsForClip.actionByRoot[rootUuid] || null;
+      return null;
     }
     stopAllAction() {
-      for (const action of this._actions) action.stop();
+      const actions = this._actions;
+      const nActions = this._nActiveActions;
+      for (let i = nActions - 1; i >= 0; --i) actions[i].stop();
       return this;
     }
     update(deltaTime) {
-      const dt = deltaTime * this.timeScale;
-      this.time += dt;
-      const n = this._native || native();
-      if (this._h && n && typeof n.MixerUpdate === "function") n.MixerUpdate(this._h, dt);
-      for (const action of this._actions) {
-        if (action.isRunning()) action.time += dt * action.timeScale;
+      deltaTime *= this.timeScale;
+      const actions = this._actions;
+      const nActions = this._nActiveActions;
+      const time = this.time += deltaTime;
+      const timeDirection = Math.sign(deltaTime);
+      const accuIndex = this._accuIndex ^= 1;
+      for (let i = 0; i !== nActions; ++i) {
+        actions[i]._update(time, deltaTime, timeDirection, accuIndex);
       }
+      const bindings = this._bindings;
+      const nBindings = this._nActiveBindings;
+      for (let i = 0; i !== nBindings; ++i) {
+        bindings[i].apply(accuIndex);
+      }
+      const n = this._native || native();
+      if (this._h && n && typeof n.MixerUpdate === "function") n.MixerUpdate(this._h, deltaTime);
       return this;
     }
     setTime(timeInSeconds) {
       this.time = 0;
-      for (const action of this._actions) action.time = 0;
+      for (let i = 0; i < this._actions.length; i++) this._actions[i].time = 0;
       return this.update(timeInSeconds);
     }
     getRoot() {
       return this._root;
     }
     uncacheClip(clip) {
-      this._actionsByClip.delete(clip);
+      const actions = this._actions;
+      const clipUuid = clip.uuid;
+      const actionsByClip = this._actionsByClip;
+      const actionsForClip = actionsByClip[clipUuid];
+      if (actionsForClip !== undefined) {
+        const actionsToRemove = actionsForClip.knownActions;
+        for (let i = 0, n = actionsToRemove.length; i !== n; ++i) {
+          const action = actionsToRemove[i];
+          this._deactivateAction(action);
+          const cacheIndex = action._cacheIndex;
+          const lastInactiveAction = actions[actions.length - 1];
+          action._cacheIndex = null;
+          action._byClipCacheIndex = null;
+          lastInactiveAction._cacheIndex = cacheIndex;
+          actions[cacheIndex] = lastInactiveAction;
+          actions.pop();
+          this._removeInactiveBindingsForAction(action);
+        }
+        delete actionsByClip[clipUuid];
+      }
       return this;
     }
-    uncacheRoot() {
+    uncacheRoot(root) {
+      const rootUuid = root.uuid;
+      const actionsByClip = this._actionsByClip;
+      for (const clipUuid in actionsByClip) {
+        const actionByRoot = actionsByClip[clipUuid].actionByRoot;
+        const action = actionByRoot[rootUuid];
+        if (action !== undefined) {
+          this._deactivateAction(action);
+          this._removeInactiveAction(action);
+        }
+      }
+      const bindingsByRoot = this._bindingsByRootAndName;
+      const bindingByName = bindingsByRoot[rootUuid];
+      if (bindingByName !== undefined) {
+        for (const trackName in bindingByName) {
+          const binding = bindingByName[trackName];
+          binding.restoreOriginalState();
+          this._removeInactiveBinding(binding);
+        }
+      }
       return this;
     }
-    uncacheAction(clip) {
-      this._actionsByClip.delete(clip);
+    uncacheAction(clip, optionalRoot) {
+      const action = this.existingAction(clip, optionalRoot);
+      if (action !== null) {
+        this._deactivateAction(action);
+        this._removeInactiveAction(action);
+      }
       return this;
     }
   }
@@ -1037,58 +1907,464 @@
     }
   }
 
-  class PropertyBinding {
-    constructor(rootNode, path, parsedPath) {
-      this.rootNode = rootNode;
-      this.path = path;
-      this.parsedPath = parsedPath || PropertyBinding.parseTrackName(path);
-      this.node = PropertyBinding.findNode(rootNode, this.parsedPath.nodeName) || rootNode;
+  const _RESERVED_CHARS_RE = "\\[\\]\\.:\\/";
+  const _reservedRe = new RegExp("[" + _RESERVED_CHARS_RE + "]", "g");
+  const _wordChar = "[^" + _RESERVED_CHARS_RE + "]";
+  const _wordCharOrDot = "[^" + _RESERVED_CHARS_RE.replace("\\.", "") + "]";
+  const _directoryRe = /((?:WC+[\/:])*)/.source.replace("WC", _wordChar);
+  const _nodeRe = /(WCOD+)?/.source.replace("WCOD", _wordCharOrDot);
+  const _objectRe = /(?:\.(WC+)(?:\[(.+)\])?)?/.source.replace("WC", _wordChar);
+  const _propertyRe = /\.(WC+)(?:\[(.+)\])?/.source.replace("WC", _wordChar);
+  const _trackRe = new RegExp("" + "^" + _directoryRe + _nodeRe + _objectRe + _propertyRe + "$");
+  const _supportedObjectNames = ["material", "materials", "bones", "map"];
+
+  class CompositePropertyBinding {
+    constructor(targetGroup, path, optionalParsedPath) {
+      const parsedPath = optionalParsedPath || PropertyBinding.parseTrackName(path);
+      this._targetGroup = targetGroup;
+      this._bindings = targetGroup.subscribe_(path, parsedPath);
     }
-    getValue() {}
-    setValue() {}
-    bind() {}
-    unbind() {}
-    static create(root, path, parsedPath) {
-      return new PropertyBinding(root, path, parsedPath);
+    getValue(array, offset) {
+      this.bind();
+      const firstValidIndex = this._targetGroup.nCachedObjects_;
+      const binding = this._bindings[firstValidIndex];
+      if (binding !== undefined) binding.getValue(array, offset);
     }
-    static parseTrackName(trackName) {
-      const s = String(trackName || "");
-      const lastDot = s.lastIndexOf(".");
-      return {
-        nodeName: lastDot >= 0 ? s.slice(0, lastDot) : s,
-        objectName: "",
-        objectIndex: undefined,
-        propertyName: lastDot >= 0 ? s.slice(lastDot + 1) : s,
-        propertyIndex: undefined,
-      };
+    setValue(array, offset) {
+      const bindings = this._bindings;
+      for (let i = this._targetGroup.nCachedObjects_, n = bindings.length; i !== n; ++i) {
+        bindings[i].setValue(array, offset);
+      }
     }
-    static findNode(root, nodeName) {
-      if (!root || !nodeName || nodeName === "." || nodeName === root.name) return root;
-      if (typeof root.getObjectByName === "function") return root.getObjectByName(nodeName) || root;
-      let found = null;
-      root.traverse?.((c) => {
-        if (!found && c.name === nodeName) found = c;
-      });
-      return found || root;
+    bind() {
+      const bindings = this._bindings;
+      for (let i = this._targetGroup.nCachedObjects_, n = bindings.length; i !== n; ++i) {
+        bindings[i].bind();
+      }
+    }
+    unbind() {
+      const bindings = this._bindings;
+      for (let i = this._targetGroup.nCachedObjects_, n = bindings.length; i !== n; ++i) {
+        bindings[i].unbind();
+      }
     }
   }
+
+  class PropertyBinding {
+    constructor(rootNode, path, parsedPath) {
+      this.path = path;
+      this.parsedPath = parsedPath || PropertyBinding.parseTrackName(path);
+      this.node = PropertyBinding.findNode(rootNode, this.parsedPath.nodeName);
+      this.rootNode = rootNode;
+      this.getValue = this._getValue_unbound;
+      this.setValue = this._setValue_unbound;
+    }
+    static create(root, path, parsedPath) {
+      if (!(root && root.isAnimationObjectGroup)) {
+        return new PropertyBinding(root, path, parsedPath);
+      }
+      return new PropertyBinding.Composite(root, path, parsedPath);
+    }
+    static sanitizeNodeName(name) {
+      return name.replace(/\s/g, "_").replace(_reservedRe, "");
+    }
+    static parseTrackName(trackName) {
+      const matches = _trackRe.exec(trackName);
+      if (matches === null) {
+        throw new Error("THREE.PropertyBinding: Cannot parse trackName: " + trackName);
+      }
+      const results = {
+        nodeName: matches[2],
+        objectName: matches[3],
+        objectIndex: matches[4],
+        propertyName: matches[5],
+        propertyIndex: matches[6],
+      };
+      const lastDot = results.nodeName && results.nodeName.lastIndexOf(".");
+      if (lastDot !== undefined && lastDot !== -1) {
+        const objectName = results.nodeName.substring(lastDot + 1);
+        if (_supportedObjectNames.indexOf(objectName) !== -1) {
+          results.nodeName = results.nodeName.substring(0, lastDot);
+          results.objectName = objectName;
+        }
+      }
+      if (results.propertyName === null || results.propertyName.length === 0) {
+        throw new Error("THREE.PropertyBinding: can not parse propertyName from trackName: " + trackName);
+      }
+      return results;
+    }
+    static findNode(root, nodeName) {
+      if (
+        nodeName === undefined ||
+        nodeName === "" ||
+        nodeName === "." ||
+        nodeName === -1 ||
+        nodeName === root.name ||
+        nodeName === root.uuid
+      ) {
+        return root;
+      }
+      if (root.skeleton) {
+        const bone = root.skeleton.getBoneByName?.(nodeName);
+        if (bone !== undefined) return bone;
+      }
+      if (root.children) {
+        const searchNodeSubtree = function (children) {
+          for (let i = 0; i < children.length; i++) {
+            const childNode = children[i];
+            if (childNode.name === nodeName || childNode.uuid === nodeName) return childNode;
+            const result = searchNodeSubtree(childNode.children);
+            if (result) return result;
+          }
+          return null;
+        };
+        const subTreeNode = searchNodeSubtree(root.children);
+        if (subTreeNode) return subTreeNode;
+      }
+      if (typeof root.getObjectByName === "function") {
+        const named = root.getObjectByName(nodeName);
+        if (named) return named;
+      }
+      return null;
+    }
+    _getValue_unavailable() {}
+    _setValue_unavailable() {}
+    _getValue_direct(buffer, offset) {
+      buffer[offset] = this.targetObject[this.propertyName];
+    }
+    _getValue_array(buffer, offset) {
+      const source = this.resolvedProperty;
+      for (let i = 0, n = source.length; i !== n; ++i) buffer[offset++] = source[i];
+    }
+    _getValue_arrayElement(buffer, offset) {
+      buffer[offset] = this.resolvedProperty[this.propertyIndex];
+    }
+    _getValue_toArray(buffer, offset) {
+      this.resolvedProperty.toArray(buffer, offset);
+    }
+    _setValue_direct(buffer, offset) {
+      this.targetObject[this.propertyName] = buffer[offset];
+    }
+    _setValue_direct_setNeedsUpdate(buffer, offset) {
+      this.targetObject[this.propertyName] = buffer[offset];
+      this.targetObject.needsUpdate = true;
+    }
+    _setValue_direct_setMatrixWorldNeedsUpdate(buffer, offset) {
+      this.targetObject[this.propertyName] = buffer[offset];
+      this.targetObject.matrixWorldNeedsUpdate = true;
+    }
+    _setValue_array(buffer, offset) {
+      const dest = this.resolvedProperty;
+      for (let i = 0, n = dest.length; i !== n; ++i) dest[i] = buffer[offset++];
+    }
+    _setValue_array_setNeedsUpdate(buffer, offset) {
+      const dest = this.resolvedProperty;
+      for (let i = 0, n = dest.length; i !== n; ++i) dest[i] = buffer[offset++];
+      this.targetObject.needsUpdate = true;
+    }
+    _setValue_array_setMatrixWorldNeedsUpdate(buffer, offset) {
+      const dest = this.resolvedProperty;
+      for (let i = 0, n = dest.length; i !== n; ++i) dest[i] = buffer[offset++];
+      this.targetObject.matrixWorldNeedsUpdate = true;
+    }
+    _setValue_arrayElement(buffer, offset) {
+      this.resolvedProperty[this.propertyIndex] = buffer[offset];
+    }
+    _setValue_arrayElement_setNeedsUpdate(buffer, offset) {
+      this.resolvedProperty[this.propertyIndex] = buffer[offset];
+      this.targetObject.needsUpdate = true;
+    }
+    _setValue_arrayElement_setMatrixWorldNeedsUpdate(buffer, offset) {
+      this.resolvedProperty[this.propertyIndex] = buffer[offset];
+      this.targetObject.matrixWorldNeedsUpdate = true;
+    }
+    _setValue_fromArray(buffer, offset) {
+      this.resolvedProperty.fromArray(buffer, offset);
+    }
+    _setValue_fromArray_setNeedsUpdate(buffer, offset) {
+      this.resolvedProperty.fromArray(buffer, offset);
+      this.targetObject.needsUpdate = true;
+    }
+    _setValue_fromArray_setMatrixWorldNeedsUpdate(buffer, offset) {
+      this.resolvedProperty.fromArray(buffer, offset);
+      this.targetObject.matrixWorldNeedsUpdate = true;
+    }
+    _getValue_unbound(targetArray, offset) {
+      this.bind();
+      this.getValue(targetArray, offset);
+    }
+    _setValue_unbound(sourceArray, offset) {
+      this.bind();
+      this.setValue(sourceArray, offset);
+    }
+    bind() {
+      let targetObject = this.node;
+      const parsedPath = this.parsedPath;
+      const objectName = parsedPath.objectName;
+      const propertyName = parsedPath.propertyName;
+      let propertyIndex = parsedPath.propertyIndex;
+      if (!targetObject) {
+        targetObject = PropertyBinding.findNode(this.rootNode, parsedPath.nodeName);
+        this.node = targetObject;
+      }
+      this.getValue = this._getValue_unavailable;
+      this.setValue = this._setValue_unavailable;
+      if (!targetObject) return;
+      if (objectName) {
+        let objectIndex = parsedPath.objectIndex;
+        switch (objectName) {
+          case "materials":
+            if (!targetObject.material?.materials) return;
+            targetObject = targetObject.material.materials;
+            break;
+          case "bones":
+            if (!targetObject.skeleton) return;
+            targetObject = targetObject.skeleton.bones;
+            for (let i = 0; i < targetObject.length; i++) {
+              if (targetObject[i].name === objectIndex) {
+                objectIndex = i;
+                break;
+              }
+            }
+            break;
+          case "map":
+            if ("map" in targetObject) {
+              targetObject = targetObject.map;
+              break;
+            }
+            if (!targetObject.material?.map) return;
+            targetObject = targetObject.material.map;
+            break;
+          default:
+            if (targetObject[objectName] === undefined) return;
+            targetObject = targetObject[objectName];
+        }
+        if (objectIndex !== undefined) {
+          if (targetObject[objectIndex] === undefined) return;
+          targetObject = targetObject[objectIndex];
+        }
+      }
+      const nodeProperty = targetObject[propertyName];
+      if (nodeProperty === undefined) return;
+      let versioning = this.Versioning.None;
+      this.targetObject = targetObject;
+      if (targetObject.isMaterial === true) versioning = this.Versioning.NeedsUpdate;
+      else if (targetObject.isObject3D === true) versioning = this.Versioning.MatrixWorldNeedsUpdate;
+      let bindingType = this.BindingType.Direct;
+      if (propertyIndex !== undefined) {
+        if (propertyName === "morphTargetInfluences") {
+          if (!targetObject.geometry?.morphAttributes) return;
+          if (targetObject.morphTargetDictionary?.[propertyIndex] !== undefined) {
+            propertyIndex = targetObject.morphTargetDictionary[propertyIndex];
+          }
+        }
+        bindingType = this.BindingType.ArrayElement;
+        this.resolvedProperty = nodeProperty;
+        this.propertyIndex = propertyIndex;
+      } else if (nodeProperty.fromArray !== undefined && nodeProperty.toArray !== undefined) {
+        bindingType = this.BindingType.HasFromToArray;
+        this.resolvedProperty = nodeProperty;
+      } else if (Array.isArray(nodeProperty)) {
+        bindingType = this.BindingType.EntireArray;
+        this.resolvedProperty = nodeProperty;
+      } else {
+        this.propertyName = propertyName;
+      }
+      this.getValue = this.GetterByBindingType[bindingType];
+      this.setValue = this.SetterByBindingTypeAndVersioning[bindingType][versioning];
+    }
+    unbind() {
+      this.node = null;
+      this.getValue = this._getValue_unbound;
+      this.setValue = this._setValue_unbound;
+    }
+  }
+  PropertyBinding.Composite = CompositePropertyBinding;
+  PropertyBinding.prototype.BindingType = {
+    Direct: 0,
+    EntireArray: 1,
+    ArrayElement: 2,
+    HasFromToArray: 3,
+  };
+  PropertyBinding.prototype.Versioning = {
+    None: 0,
+    NeedsUpdate: 1,
+    MatrixWorldNeedsUpdate: 2,
+  };
+  PropertyBinding.prototype.GetterByBindingType = [
+    PropertyBinding.prototype._getValue_direct,
+    PropertyBinding.prototype._getValue_array,
+    PropertyBinding.prototype._getValue_arrayElement,
+    PropertyBinding.prototype._getValue_toArray,
+  ];
+  PropertyBinding.prototype.SetterByBindingTypeAndVersioning = [
+    [
+      PropertyBinding.prototype._setValue_direct,
+      PropertyBinding.prototype._setValue_direct_setNeedsUpdate,
+      PropertyBinding.prototype._setValue_direct_setMatrixWorldNeedsUpdate,
+    ],
+    [
+      PropertyBinding.prototype._setValue_array,
+      PropertyBinding.prototype._setValue_array_setNeedsUpdate,
+      PropertyBinding.prototype._setValue_array_setMatrixWorldNeedsUpdate,
+    ],
+    [
+      PropertyBinding.prototype._setValue_arrayElement,
+      PropertyBinding.prototype._setValue_arrayElement_setNeedsUpdate,
+      PropertyBinding.prototype._setValue_arrayElement_setMatrixWorldNeedsUpdate,
+    ],
+    [
+      PropertyBinding.prototype._setValue_fromArray,
+      PropertyBinding.prototype._setValue_fromArray_setNeedsUpdate,
+      PropertyBinding.prototype._setValue_fromArray_setMatrixWorldNeedsUpdate,
+    ],
+  ];
 
   class PropertyMixer {
     constructor(binding, typeName, valueSize) {
       this.binding = binding;
       this.typeName = typeName;
       this.valueSize = valueSize || 1;
-      this.buffer = new Float64Array((valueSize || 1) * 4);
+      let mixFunction;
+      let mixFunctionAdditive;
+      let setIdentity;
+      switch (typeName) {
+        case "quaternion":
+          mixFunction = this._slerp;
+          mixFunctionAdditive = this._slerpAdditive;
+          setIdentity = this._setAdditiveIdentityQuaternion;
+          this.buffer = new Float64Array(this.valueSize * 6);
+          this._workIndex = 5;
+          break;
+        case "string":
+        case "bool":
+          mixFunction = this._select;
+          mixFunctionAdditive = this._select;
+          setIdentity = this._setAdditiveIdentityOther;
+          this.buffer = new Array(this.valueSize * 5);
+          break;
+        default:
+          mixFunction = this._lerp;
+          mixFunctionAdditive = this._lerpAdditive;
+          setIdentity = this._setAdditiveIdentityNumeric;
+          this.buffer = new Float64Array(this.valueSize * 5);
+      }
+      this._mixBufferRegion = mixFunction;
+      this._mixBufferRegionAdditive = mixFunctionAdditive;
+      this._setIdentity = setIdentity;
+      this._origIndex = 3;
+      this._addIndex = 4;
       this.cumulativeWeight = 0;
       this.cumulativeWeightAdditive = 0;
       this.useCount = 0;
       this.referenceCount = 0;
+      this._cacheIndex = null;
     }
-    accumulate() {}
-    accumulateAdditive() {}
-    apply() {}
-    saveOriginalState() {}
-    restoreOriginalState() {}
+    accumulate(accuIndex, weight) {
+      const buffer = this.buffer;
+      const stride = this.valueSize;
+      const offset = accuIndex * stride + stride;
+      let currentWeight = this.cumulativeWeight;
+      if (currentWeight === 0) {
+        for (let i = 0; i !== stride; ++i) buffer[offset + i] = buffer[i];
+        currentWeight = weight;
+      } else {
+        currentWeight += weight;
+        const mix = weight / currentWeight;
+        this._mixBufferRegion(buffer, offset, 0, mix, stride);
+      }
+      this.cumulativeWeight = currentWeight;
+    }
+    accumulateAdditive(weight) {
+      const buffer = this.buffer;
+      const stride = this.valueSize;
+      const offset = stride * this._addIndex;
+      if (this.cumulativeWeightAdditive === 0) this._setIdentity();
+      this._mixBufferRegionAdditive(buffer, offset, 0, weight, stride);
+      this.cumulativeWeightAdditive += weight;
+    }
+    apply(accuIndex) {
+      const stride = this.valueSize;
+      const buffer = this.buffer;
+      const offset = accuIndex * stride + stride;
+      const weight = this.cumulativeWeight;
+      const weightAdditive = this.cumulativeWeightAdditive;
+      const binding = this.binding;
+      this.cumulativeWeight = 0;
+      this.cumulativeWeightAdditive = 0;
+      if (weight < 1) {
+        const originalValueOffset = stride * this._origIndex;
+        this._mixBufferRegion(buffer, offset, originalValueOffset, 1 - weight, stride);
+      }
+      if (weightAdditive > 0) {
+        this._mixBufferRegionAdditive(buffer, offset, this._addIndex * stride, 1, stride);
+      }
+      for (let i = stride, e = stride + stride; i !== e; ++i) {
+        if (buffer[i] !== buffer[i + stride]) {
+          binding.setValue(buffer, offset);
+          break;
+        }
+      }
+    }
+    saveOriginalState() {
+      const binding = this.binding;
+      const buffer = this.buffer;
+      const stride = this.valueSize;
+      const originalValueOffset = stride * this._origIndex;
+      binding.getValue(buffer, originalValueOffset);
+      for (let i = stride, e = originalValueOffset; i !== e; ++i) {
+        buffer[i] = buffer[originalValueOffset + (i % stride)];
+      }
+      this._setIdentity();
+      this.cumulativeWeight = 0;
+      this.cumulativeWeightAdditive = 0;
+    }
+    restoreOriginalState() {
+      const originalValueOffset = this.valueSize * 3;
+      this.binding.setValue(this.buffer, originalValueOffset);
+    }
+    _setAdditiveIdentityNumeric() {
+      const startIndex = this._addIndex * this.valueSize;
+      const endIndex = startIndex + this.valueSize;
+      for (let i = startIndex; i < endIndex; i++) this.buffer[i] = 0;
+    }
+    _setAdditiveIdentityQuaternion() {
+      this._setAdditiveIdentityNumeric();
+      this.buffer[this._addIndex * this.valueSize + 3] = 1;
+    }
+    _setAdditiveIdentityOther() {
+      const startIndex = this._origIndex * this.valueSize;
+      const targetIndex = this._addIndex * this.valueSize;
+      for (let i = 0; i < this.valueSize; i++) {
+        this.buffer[targetIndex + i] = this.buffer[startIndex + i];
+      }
+    }
+    _select(buffer, dstOffset, srcOffset, t, stride) {
+      if (t >= 0.5) {
+        for (let i = 0; i !== stride; ++i) buffer[dstOffset + i] = buffer[srcOffset + i];
+      }
+    }
+    _slerp(buffer, dstOffset, srcOffset, t) {
+      TN.Quaternion.slerpFlat(buffer, dstOffset, buffer, dstOffset, buffer, srcOffset, t);
+    }
+    _slerpAdditive(buffer, dstOffset, srcOffset, t, stride) {
+      const workOffset = this._workIndex * stride;
+      TN.Quaternion.multiplyQuaternionsFlat(buffer, workOffset, buffer, dstOffset, buffer, srcOffset);
+      TN.Quaternion.slerpFlat(buffer, dstOffset, buffer, dstOffset, buffer, workOffset, t);
+    }
+    _lerp(buffer, dstOffset, srcOffset, t, stride) {
+      const s = 1 - t;
+      for (let i = 0; i !== stride; ++i) {
+        const j = dstOffset + i;
+        buffer[j] = buffer[j] * s + buffer[srcOffset + i] * t;
+      }
+    }
+    _lerpAdditive(buffer, dstOffset, srcOffset, t, stride) {
+      for (let i = 0; i !== stride; ++i) {
+        const j = dstOffset + i;
+        buffer[j] = buffer[j] + buffer[srcOffset + i] * t;
+      }
+    }
   }
 
   class AnimationObjectGroup {
@@ -2035,6 +3311,11 @@
     ColorKeyframeTrack,
     BooleanKeyframeTrack,
     StringKeyframeTrack,
+    Interpolant,
+    LinearInterpolant,
+    DiscreteInterpolant,
+    CubicInterpolant,
+    QuaternionLinearInterpolant,
     PropertyBinding,
     PropertyMixer,
     AnimationObjectGroup,

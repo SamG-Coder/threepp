@@ -88,4 +88,24 @@ internal static partial class Native
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
     public static extern uint tn_shader_material_create(string vertexSrc, string fragmentSrc);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tn_scene_set_environment(uint scene, uint texture);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    public static extern uint tn_pmrem_from_sky(
+        uint id,
+        float sunX, float sunY, float sunZ,
+        float turbidity, float rayleigh,
+        float mieCoefficient, float mieDirectionalG);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    public static extern uint tn_pmrem_from_equirect(uint id, uint texture);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    public static extern uint tn_pmrem_from_cubemap(uint id, uint texture);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+    public static extern void tn_buffer_geometry_set_attr(
+        uint geometry, string name, int itemSize, float[] data, int floatCount);
 }

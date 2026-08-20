@@ -3,6 +3,7 @@
 #include "threepp/threepp.hpp"
 #include "threepp/animation/AnimationMixer.hpp"
 #include "threepp/objects/Skeleton.hpp"
+#include "threepp/renderers/RenderTarget.hpp"
 
 #include <atomic>
 #include <condition_variable>
@@ -41,6 +42,7 @@ struct Slot {
     std::shared_ptr<Texture> texture;
     std::shared_ptr<Skeleton> skeleton;
     std::unique_ptr<AnimationMixer> mixer;
+    std::unique_ptr<RenderTarget> renderTarget;
     std::vector<std::shared_ptr<AnimationClip>> clips;
 };
 
@@ -70,6 +72,9 @@ struct Runtime {
 
     std::mutex errMu;
     std::string lastError;
+
+    // scene handle -> env texture handle, applied once the Scene slot exists.
+    std::unordered_map<uint32_t, uint32_t> pendingEnvironment;
 };
 
 extern Runtime g;
@@ -84,6 +89,7 @@ uint32_t insertAt(uint32_t id, Slot slot);
 Slot* getSlot(uint32_t id);
 Object3D* asObject(uint32_t id);
 void onWorkerAsync(std::function<void()> fn);
+void applyPendingEnvironment();
 
 template<class Fn>
 auto onWorker(Fn&& fn) -> std::invoke_result_t<Fn> {

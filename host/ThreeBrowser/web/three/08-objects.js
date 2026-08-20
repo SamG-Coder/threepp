@@ -35,33 +35,102 @@
     return material._h || 0;
   }
 
+  function attrToF32(attr) {
+    if (!attr) return null;
+    const itemSize = attr.itemSize || 0;
+    if (!itemSize) return null;
+    if (attr.isInterleavedBufferAttribute || (attr.data && attr.data.stride != null)) {
+      const count = attr.count || 0;
+      const out = new Float32Array(count * itemSize);
+      for (let i = 0; i < count; i++) {
+        for (let j = 0; j < itemSize; j++) {
+          out[i * itemSize + j] = attr.getComponent ? attr.getComponent(i, j) : 0;
+        }
+      }
+      return out;
+    }
+    const src = attr.array;
+    if (!src || !src.length) return null;
+    if (attr.normalized && typeof attr.getComponent === "function" && !(src instanceof Float32Array)) {
+      const count = attr.count || ((src.length / itemSize) | 0);
+      const out = new Float32Array(count * itemSize);
+      for (let i = 0; i < count; i++) {
+        for (let j = 0; j < itemSize; j++) out[i * itemSize + j] = attr.getComponent(i, j);
+      }
+      return out;
+    }
+    if (src instanceof Float32Array) return src;
+    const out = new Float32Array(src.length);
+    for (let i = 0; i < src.length; i++) out[i] = src[i];
+    return out;
+  }
+
+  function uploadExtraAttributes(geo) {
+    if (!geo || !geo._h) return;
+    const skip = { position: 1, normal: 1, uv: 1 };
+    const attrs = geo.attributes || {};
+    if (!geo._nativeAttrs) geo._nativeAttrs = {};
+    for (const name in attrs) {
+      if (skip[name] || geo._nativeAttrs[name]) continue;
+      const attr = attrs[name];
+      const itemSize = attr && attr.itemSize;
+      const floats = attrToF32(attr);
+      if (!itemSize || !floats || !floats.length) continue;
+      geo._nativeAttrs[name] = 1;
+      if (TN.cmd && typeof TN.cmd.bufAttr === "function") {
+        TN.cmd.bufAttr(geo._h, name, itemSize, floats);
+      } else {
+        const n = native();
+        if (n && typeof n.BufferGeometrySetAttr === "function") {
+          try {
+            n.BufferGeometrySetAttr(geo._h, name, itemSize, f32ToB64(floats));
+          } catch {
+            /* extra attributes optional */
+          }
+        }
+      }
+    }
+  }
+
   function ensureNativeGeometry(geo) {
     if (!geo) return 0;
-    if (geo._h) return geo._h;
+    if (!geo._h && geo._nativeId) geo._h = geo._nativeId;
     const pos = geo.attributes?.position;
-    if (!pos) return 0;
+    if (!pos) return geo._h || 0;
+    if (geo._h) {
+      uploadExtraAttributes(geo);
+      return geo._h;
+    }
     if (TN.cmd) {
       geo._h = TN.cmd.alloc();
       TN.cmd.bufGeo(
         geo._h,
-        pos.array,
-        geo.attributes.normal?.array,
-        geo.attributes.uv?.array,
+        attrToF32(pos),
+        attrToF32(geo.attributes.normal),
+        attrToF32(geo.attributes.uv),
         geo.index?.array || geo.index
       );
+      geo._nativeId = geo._h;
+      geo._nativeAttrs = {};
+      uploadExtraAttributes(geo);
       return geo._h;
     }
     const n = native();
     if (!n || typeof n.BufferGeometryCreate !== "function") return 0;
     try {
       geo._h = n.BufferGeometryCreate(
-        f32ToB64(pos.array),
-        f32ToB64(geo.attributes.normal?.array),
-        f32ToB64(geo.attributes.uv?.array),
+        f32ToB64(attrToF32(pos)),
+        f32ToB64(attrToF32(geo.attributes.normal)),
+        f32ToB64(attrToF32(geo.attributes.uv)),
         indexToB64(geo.index)
       );
     } catch {
       geo._h = 0;
+    }
+    if (geo._h) {
+      geo._nativeId = geo._h;
+      geo._nativeAttrs = {};
+      uploadExtraAttributes(geo);
     }
     return geo._h || 0;
   }
@@ -79,6 +148,24 @@
     if (!n || typeof n.MeshCreate !== "function") return 0;
     try {
       return n.MeshCreate(gh, mh) || 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  function nativeSkinnedHandle(geometry, material) {
+    const gh = ensureNativeGeometry(geometry);
+    const mh = materialHandle(material);
+    if (!gh || !mh) return 0;
+    if (TN.cmd && typeof TN.cmd.skinnedMesh === "function") {
+      const id = TN.cmd.alloc();
+      TN.cmd.skinnedMesh(id, gh, mh);
+      return id;
+    }
+    const n = native();
+    if (!n || typeof n.SkinnedMeshCreate !== "function") return 0;
+    try {
+      return n.SkinnedMeshCreate(gh, mh) || 0;
     } catch {
       return 0;
     }
@@ -230,8 +317,31 @@
       this.morphTargetInfluences = undefined;
       this.count = 1;
       this.updateMorphTargets();
+      if (!this._h && TN.cmd) TN.cmd.markPose(this);
     }
     updateMorphTargets() {}
+    flushSelf() {
+      if (!this._h) {
+        const handle = this.isSkinnedMesh
+          ? nativeSkinnedHandle(this.geometry, this.material)
+          : nativeMeshHandle(this.geometry, this.material);
+        if (handle) {
+          this._h = handle;
+          const parent = this.parent;
+          if (parent && parent._h) {
+            if (TN.cmd) TN.cmd.add(parent._h, this._h);
+            else {
+              const n = native();
+              if (n && n.ObjectAdd) n.ObjectAdd(parent._h, this._h);
+            }
+          }
+        }
+      } else if (this.geometry) {
+        ensureNativeGeometry(this.geometry);
+      }
+      if (typeof super.flushSelf === "function") return super.flushSelf();
+      return this;
+    }
     raycast() {}
     getVertexPosition(index, target) {
       const position = this.geometry?.attributes?.position;
@@ -819,18 +929,7 @@
 
   class SkinnedMesh extends Mesh {
     constructor(geometry, material) {
-      const n = native();
-      let handle = 0;
-      const gh = ensureNativeGeometry(geometry);
-      const mh = materialHandle(material);
-      if (n && typeof n.SkinnedMeshCreate === "function" && gh && mh) {
-        try {
-          handle = n.SkinnedMeshCreate(gh, mh) || 0;
-        } catch {
-          handle = 0;
-        }
-      }
-      super(geometry, material, handle);
+      super(geometry, material, nativeSkinnedHandle(geometry, material));
       this.isSkinnedMesh = true;
       this.type = "SkinnedMesh";
       this.bindMode = TN.AttachedBindMode || "attached";
@@ -854,12 +953,18 @@
           if (typeof this.bindMatrixInverse.invert === "function") this.bindMatrixInverse.invert();
         }
       }
-      const n = native();
-      if (this._h && skeleton?._h && n && typeof n.SkinnedBind === "function") {
-        try {
-          n.SkinnedBind(this._h, skeleton._h);
-        } catch {
-          /* native skin bind optional */
+      if (this._h && skeleton?._h) {
+        if (TN.cmd && typeof TN.cmd.skinnedBind === "function") {
+          TN.cmd.skinnedBind(this._h, skeleton._h);
+        } else {
+          const n = native();
+          if (n && typeof n.SkinnedBind === "function") {
+            try {
+              n.SkinnedBind(this._h, skeleton._h);
+            } catch {
+              /* native skin bind optional */
+            }
+          }
         }
       }
     }

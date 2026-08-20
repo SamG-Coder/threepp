@@ -18,6 +18,7 @@
     CAM_UPD_PROJ: 24,
     BUF_GEO: 30,
     BOX_GEO: 31,
+    BUF_ATTR: 32,
     MAT_BASIC: 40,
     MAT_LAMBERT: 41,
     MAT_STANDARD: 42,
@@ -28,6 +29,7 @@
     MAT_MAP: 47,
     MAT_PBR: 48,
     MAT_EMISSIVE: 49,
+    MAT_MAP_SLOT: 50,
     MESH: 60,
     GROUP: 61,
     INSTANCED: 62,
@@ -36,6 +38,8 @@
     LINE_LOOP: 65,
     POINTS: 66,
     SPRITE: 67,
+    SKINNED: 68,
+    SKINNED_BIND: 69,
     OBJECT_ADD: 80,
     SET_POSE: 81,
     LOOK_AT: 82,
@@ -47,6 +51,16 @@
     LIGHT_SPOT: 94,
     INST_MATRIX: 100,
     INST_COLOR: 101,
+  };
+
+  // Keep in sync with native/cmd_ops.hpp MAP_SLOT_*
+  const MAP_SLOT = {
+    map: 0,
+    normalMap: 1,
+    roughnessMap: 2,
+    metalnessMap: 3,
+    aoMap: 4,
+    emissiveMap: 5,
   };
 
   const CAP = 8 * 1024 * 1024;
@@ -185,6 +199,7 @@
 
   const cmd = {
     OP,
+    MAP_SLOT,
     alloc,
     attach,
     markPose,
@@ -279,6 +294,11 @@
       wu32(0);
       end(s);
     },
+    // OP_BUF_GEO payload after 8-byte header (unchanged, backward compatible):
+    //   u32 id, posN, nrmN, uvN, idxN, pad,
+    //   f32 pos[posN], f32 nrm[nrmN], f32 uv[uvN], u32 idx[idxN]
+    // Extra float attributes (skinIndex, skinWeight, uv2, color, tangent, ...)
+    // are uploaded separately via OP_BUF_ATTR.
     bufGeo(id, pos, nrm, uv, idx) {
       const posN = pos && pos.length ? pos.length : 0;
       const nrmN = nrm && nrm.length ? nrm.length : 0;
@@ -304,6 +324,25 @@
           copyBytes(u);
         }
       }
+      end(s);
+    },
+    // OP_BUF_ATTR payload after 8-byte header:
+    //   u32 geoId, u32 itemSize, u32 floatCount, u32 pad,
+    //   char name[16], f32 data[floatCount]
+    bufAttr(id, name, itemSize, data) {
+      const floats = data instanceof Float32Array ? data : new Float32Array(data || []);
+      const n = floats.length;
+      const payload = 32 + n * 4;
+      const s = begin(OP.BUF_ATTR, payload);
+      wu32(id);
+      wu32(itemSize);
+      wu32(n);
+      wu32(0);
+      const nameBytes = new Uint8Array(16);
+      const str = String(name || "");
+      for (let i = 0; i < str.length && i < 15; i++) nameBytes[i] = str.charCodeAt(i) & 255;
+      copyBytes(nameBytes);
+      if (n) copyBytes(floats);
       end(s);
     },
     boxGeo(id, w, h, d) {
@@ -366,6 +405,15 @@
       const s = begin(OP.MAT_MAP, 8);
       wu32(id);
       wu32(tex);
+      end(s);
+    },
+    // OP_MAT_MAP_SLOT payload: u32 matId, u32 slot, u32 texId, u32 pad
+    matMapSlot(id, slot, tex) {
+      const s = begin(OP.MAT_MAP_SLOT, 16);
+      wu32(id);
+      wu32(slot);
+      wu32(tex);
+      wu32(0);
       end(s);
     },
     matPbr(id, metal, rough) {
@@ -440,6 +488,20 @@
       const s = begin(OP.SPRITE, 8);
       wu32(id);
       wu32(mat);
+      end(s);
+    },
+    skinnedMesh(id, geo, mat) {
+      const s = begin(OP.SKINNED, 16);
+      wu32(id);
+      wu32(geo);
+      wu32(mat);
+      wu32(0);
+      end(s);
+    },
+    skinnedBind(mesh, skeleton) {
+      const s = begin(OP.SKINNED_BIND, 8);
+      wu32(mesh);
+      wu32(skeleton);
       end(s);
     },
     add(parent, child) {

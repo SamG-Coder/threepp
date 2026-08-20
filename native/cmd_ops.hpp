@@ -28,6 +28,7 @@ constexpr uint32_t OP_CAM_UPD_PROJ = 24;
 
 constexpr uint32_t OP_BUF_GEO = 30;
 constexpr uint32_t OP_BOX_GEO = 31;
+constexpr uint32_t OP_BUF_ATTR = 32;
 
 constexpr uint32_t OP_MAT_BASIC = 40;
 constexpr uint32_t OP_MAT_LAMBERT = 41;
@@ -39,6 +40,7 @@ constexpr uint32_t OP_MAT_SIDE = 46;
 constexpr uint32_t OP_MAT_MAP = 47;
 constexpr uint32_t OP_MAT_PBR = 48;
 constexpr uint32_t OP_MAT_EMISSIVE = 49;
+constexpr uint32_t OP_MAT_MAP_SLOT = 50;
 
 constexpr uint32_t OP_MESH = 60;
 constexpr uint32_t OP_GROUP = 61;
@@ -48,6 +50,16 @@ constexpr uint32_t OP_LINE_SEG = 64;
 constexpr uint32_t OP_LINE_LOOP = 65;
 constexpr uint32_t OP_POINTS = 66;
 constexpr uint32_t OP_SPRITE = 67;
+constexpr uint32_t OP_SKINNED = 68;
+constexpr uint32_t OP_SKINNED_BIND = 69;
+
+// OP_MAT_MAP_SLOT slot ids (keep in sync with 00-cmdbuf.js MAP_SLOT)
+constexpr uint32_t MAP_SLOT_ALBEDO = 0;
+constexpr uint32_t MAP_SLOT_NORMAL = 1;
+constexpr uint32_t MAP_SLOT_ROUGHNESS = 2;
+constexpr uint32_t MAP_SLOT_METALNESS = 3;
+constexpr uint32_t MAP_SLOT_AO = 4;
+constexpr uint32_t MAP_SLOT_EMISSIVE = 5;
 
 constexpr uint32_t OP_OBJECT_ADD = 80;
 constexpr uint32_t OP_SET_POSE = 81;

@@ -95,6 +95,50 @@ public partial class NativeBridge
     public int ShaderMaterialCreate(string vertexSrc, string fragmentSrc) =>
         (int)Native.tn_shader_material_create(vertexSrc ?? "", fragmentSrc ?? "");
 
+    public void MaterialSetMapSlot(int material, int slot, int texture) =>
+        Native.tn_material_set_map_slot((uint)material, slot, (uint)texture);
+
+    public void BufferGeometrySetAttr(int geometry, string name, int itemSize, string f32B64)
+    {
+        var data = DecodeBase64Floats(f32B64);
+        Native.tn_buffer_geometry_set_attr((uint)geometry, name ?? "", itemSize, data, data.Length);
+    }
+
+    public void ShaderUniformFloat(int material, string name, double v) =>
+        Native.tn_shader_uniform_float((uint)material, name ?? "", (float)v);
+
+    public void ShaderUniformVec2(int material, string name, double x, double y) =>
+        Native.tn_shader_uniform_vec2((uint)material, name ?? "", (float)x, (float)y);
+
+    public void ShaderUniformVec3(int material, string name, double x, double y, double z) =>
+        Native.tn_shader_uniform_vec3((uint)material, name ?? "", (float)x, (float)y, (float)z);
+
+    public void ShaderUniformVec4(int material, string name, double x, double y, double z, double w) =>
+        Native.tn_shader_uniform_vec4((uint)material, name ?? "", (float)x, (float)y, (float)z, (float)w);
+
+    public void ShaderSetFlags(int material, int side, int depthWrite) =>
+        Native.tn_shader_set_flags((uint)material, side, depthWrite);
+
+    public void SceneSetEnvironment(int scene, int texture) =>
+        Native.tn_scene_set_environment((uint)scene, (uint)texture);
+
+    public int PmremFromSky(
+        int id,
+        double sunX, double sunY, double sunZ,
+        double turbidity, double rayleigh,
+        double mieCoefficient, double mieDirectionalG) =>
+        (int)Native.tn_pmrem_from_sky(
+            (uint)id,
+            (float)sunX, (float)sunY, (float)sunZ,
+            (float)turbidity, (float)rayleigh,
+            (float)mieCoefficient, (float)mieDirectionalG);
+
+    public int PmremFromEquirect(int id, int texture) =>
+        (int)Native.tn_pmrem_from_equirect((uint)id, (uint)texture);
+
+    public int PmremFromCubemap(int id, int texture) =>
+        (int)Native.tn_pmrem_from_cubemap((uint)id, (uint)texture);
+
     private static float[] DecodeBase64Floats(string? b64)
     {
         if (string.IsNullOrEmpty(b64))
