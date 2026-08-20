@@ -1871,6 +1871,32 @@
         _childremovedEvent.child = object;
         this.dispatchEvent(_childremovedEvent);
         _childremovedEvent.child = null;
+        const parentH = this._h;
+        const childH = object && object._h;
+        if (parentH && childH) {
+          const drawable =
+            object.isMesh ||
+            object.isLine ||
+            object.isLineSegments ||
+            object.isLineLoop ||
+            object.isPoints ||
+            object.isSprite;
+          if (drawable && typeof TN.releaseHandle === "function") {
+            TN.releaseHandle(childH);
+            object._h = 0;
+          } else if (TN.cmd && typeof TN.cmd.remove === "function") {
+            TN.cmd.remove(parentH, childH);
+          } else {
+            const n = native();
+            if (TN.hostHas?.(n, "ObjectRemove")) {
+              try {
+                n.ObjectRemove(parentH, childH);
+              } catch {
+                /* native remove optional */
+              }
+            }
+          }
+        }
       }
       return this;
     }
@@ -2593,6 +2619,11 @@
 
     dispose() {
       this.dispatchEvent({ type: 'dispose' });
+      if (this._h && typeof TN.releaseHandle === "function") {
+        TN.releaseHandle(this._h);
+        this._h = 0;
+        this._nativeId = 0;
+      }
     }
   }
 

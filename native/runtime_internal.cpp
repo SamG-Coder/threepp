@@ -100,6 +100,33 @@ Slot* getSlot(uint32_t id) {
     return slot;
 }
 
+void destroySlot(uint32_t id) {
+    auto it = g.slots.find(id);
+    if (it == g.slots.end()) {
+        return;
+    }
+    Slot& slot = it->second;
+    if (slot.object) {
+        if (Object3D* parent = slot.object->parent) {
+            parent->remove(*slot.object);
+        }
+    }
+    if (slot.geometry) {
+        slot.geometry->dispose();
+    }
+    if (slot.material) {
+        slot.material->dispose();
+    }
+    if (slot.texture) {
+        slot.texture->dispose();
+    }
+    if (slot.renderTarget) {
+        slot.renderTarget->dispose();
+    }
+    g.slots.erase(it);
+    markDirty();
+}
+
 Object3D* findObject(uint32_t id) {
     Slot* slot = findSlot(id);
     if (!slot || !slot->object) {

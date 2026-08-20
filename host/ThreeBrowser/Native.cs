@@ -96,6 +96,12 @@ internal static partial class Native
     public static extern int tn_object_add(uint parent, uint child);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tn_object_remove(uint parent, uint child);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tn_slot_destroy(uint id);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     public static extern int tn_object_set_visible(uint obj, int visible);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]

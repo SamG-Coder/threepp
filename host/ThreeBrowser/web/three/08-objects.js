@@ -627,7 +627,12 @@
       }
       return this;
     }
-    dispose() {}
+    dispose() {
+      if (this._h && typeof TN.releaseHandle === "function") {
+        TN.releaseHandle(this._h);
+        this._h = 0;
+      }
+    }
   }
 
   class Group extends TN.Object3D {

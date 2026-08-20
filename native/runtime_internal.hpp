@@ -109,6 +109,7 @@ Object3D* findObject(uint32_t id);
 void resetIds();
 void onWorkerAsync(std::function<void()> fn);
 void applyPendingEnvironment();
+void destroySlot(uint32_t id);
 
 template<class Fn>
 auto onWorker(Fn&& fn) -> std::invoke_result_t<Fn> {

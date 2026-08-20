@@ -94,6 +94,11 @@ public partial class NativeBridge
     public int ObjectAdd(int parent, int child) =>
         Native.tn_object_add((uint)parent, (uint)child);
 
+    public void ObjectRemove(int parent, int child) =>
+        Native.tn_object_remove((uint)parent, (uint)child);
+
+    public void SlotDestroy(int id) => Native.tn_slot_destroy((uint)id);
+
     public int ObjectSetVisible(int obj, int visible) =>
         Native.tn_object_set_visible((uint)obj, visible);
 

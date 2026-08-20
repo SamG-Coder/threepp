@@ -723,6 +723,20 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             parent->object->add(child->object);
             return;
         }
+        case tn::cmd::OP_OBJECT_REMOVE: {
+            if (!has(p, end, 8)) return;
+            Slot* parent = findSlot(ru32(p));
+            Slot* child = findSlot(ru32(p + 4));
+            if (!parent || !parent->object || !child || !child->object) return;
+            parent->object->remove(*child->object);
+            markDirty();
+            return;
+        }
+        case tn::cmd::OP_SLOT_DESTROY: {
+            if (!has(p, end, 4)) return;
+            destroySlot(ru32(p));
+            return;
+        }
         case tn::cmd::OP_SET_POSE: {
             if (!has(p, end, 40)) return;
             Object3D* object = findObject(ru32(p));

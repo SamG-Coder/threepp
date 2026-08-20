@@ -56,6 +56,8 @@ TN_API uint32_t tn_hemisphere_light_create(void);
 TN_API uint32_t tn_point_light_create(uint32_t color, float intensity);
 
 TN_API int tn_object_add(uint32_t parent, uint32_t child);
+TN_API void tn_object_remove(uint32_t parent, uint32_t child);
+TN_API void tn_slot_destroy(uint32_t id);
 TN_API int tn_object_set_visible(uint32_t object, int visible);
 TN_API int tn_object_set_position(uint32_t object, float x, float y, float z);
 TN_API int tn_object_get_position(uint32_t object, float* x, float* y, float* z);

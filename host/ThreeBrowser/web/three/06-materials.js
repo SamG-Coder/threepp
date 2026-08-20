@@ -639,6 +639,12 @@
       if (typeof this.dispatchEvent === "function") {
         this.dispatchEvent({ type: "dispose" });
       }
+      const handle = this.__h || 0;
+      if (handle && typeof TN.releaseHandle === "function") {
+        TN.releaseHandle(handle);
+        this.__h = 0;
+        this.__bound = false;
+      }
     }
 
     set needsUpdate(value) {

@@ -53,6 +53,8 @@
     LOOK_AT: 82,
     LOOK_FROM: 83,
     SET_VISIBLE: 84,
+    OBJECT_REMOVE: 85,
+    SLOT_DESTROY: 86,
     LIGHT_AMBIENT: 90,
     LIGHT_DIR: 91,
     LIGHT_HEMI: 92,
@@ -99,6 +101,23 @@
       return typeof n[name] === "function";
     } catch {
       return false;
+    }
+  };
+
+  TN.releaseHandle = function releaseHandle(handle) {
+    handle = handle >>> 0;
+    if (!handle) return;
+    if (TN.cmd && typeof TN.cmd.destroy === "function") {
+      TN.cmd.destroy(handle);
+      return;
+    }
+    const n = host();
+    if (TN.hostHas(n, "SlotDestroy")) {
+      try {
+        n.SlotDestroy(handle);
+      } catch {
+        /* native destroy optional */
+      }
     }
   };
 
@@ -693,6 +712,18 @@
       const s = begin(OP.OBJECT_ADD, 8);
       wu32(parent);
       wu32(child);
+      end(s);
+    },
+    remove(parent, child) {
+      const s = begin(OP.OBJECT_REMOVE, 8);
+      wu32(parent);
+      wu32(child);
+      end(s);
+    },
+    destroy(id) {
+      const s = begin(OP.SLOT_DESTROY, 8);
+      wu32(id);
+      wu32(0);
       end(s);
     },
     setPose(id, px, py, pz, rx, ry, rz, sx, sy, sz) {

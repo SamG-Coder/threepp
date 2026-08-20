@@ -75,6 +75,8 @@ constexpr uint32_t OP_SET_POSE = 81;
 constexpr uint32_t OP_LOOK_AT = 82;
 constexpr uint32_t OP_LOOK_FROM = 83;
 constexpr uint32_t OP_SET_VISIBLE = 84;
+constexpr uint32_t OP_OBJECT_REMOVE = 85;
+constexpr uint32_t OP_SLOT_DESTROY = 86;
 
 constexpr uint32_t OP_LIGHT_AMBIENT = 90;
 constexpr uint32_t OP_LIGHT_DIR = 91;

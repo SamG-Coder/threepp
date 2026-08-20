@@ -65,7 +65,9 @@ using tn::destroySurface;
 using tn::Kind;
 using tn::Slot;
 using tn::asObject;
+using tn::destroySlot;
 using tn::ensureWorker;
+using tn::findSlot;
 using tn::getSlot;
 using tn::insert;
 using tn::logLine;
@@ -784,6 +786,30 @@ int tn_object_add(uint32_t parentHandle, uint32_t childHandle) {
     } catch (const std::exception& ex) {
         setError(ex.what());
         return 0;
+    }
+}
+
+void tn_object_remove(uint32_t parentHandle, uint32_t childHandle) {
+    try {
+        onWorker([parentHandle, childHandle] {
+            Slot* parent = findSlot(parentHandle);
+            Slot* child = findSlot(childHandle);
+            if (!parent || !parent->object || !child || !child->object) {
+                return;
+            }
+            parent->object->remove(*child->object);
+            markDirty();
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+    }
+}
+
+void tn_slot_destroy(uint32_t id) {
+    try {
+        onWorker([id] { destroySlot(id); });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
     }
 }
 

@@ -736,6 +736,10 @@
     }
     dispose() {
       this.dispatchEvent({ type: "dispose" });
+      if (this._h && typeof TN.releaseHandle === "function") {
+        TN.releaseHandle(this._h);
+        this._h = 0;
+      }
     }
     transformUv(uv) {
       if (this.mapping !== UVMapping) return uv;
