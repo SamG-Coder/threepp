@@ -154,8 +154,19 @@
       void sigma;
       void near;
       void far;
-      const handle = nativePmremFromSky(extractSky(scene));
-      return makeTarget(handle);
+      const n = native();
+      const objH = scene && scene._h ? scene._h : 0;
+      if (objH && TN.hostHas?.(n, "PmremFromObject")) {
+        const id = allocHandle();
+        try {
+          if (TN.cmd && typeof TN.cmd.submit === "function") TN.cmd.submit();
+          const handle = n.PmremFromObject(id, objH);
+          if (handle) return makeTarget(handle);
+        } catch {
+          /* fall back */
+        }
+      }
+      return makeTarget(nativePmremFromSky(extractSky(scene)));
     }
     fromEquirectangular(texture) {
       return makeTarget(nativePmremFromTexture("equirect", texture));

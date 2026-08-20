@@ -2,6 +2,7 @@
 #include "cmd_ops.hpp"
 #include "runtime_internal.hpp"
 
+#include "threepp/math/Vector2.hpp"
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/LineLoop.hpp"
 #include "threepp/objects/LineSegments.hpp"
@@ -53,25 +54,104 @@ struct PendingTex {
     int width{0};
     int height{0};
     int rows{0};
+    TextureWrapping wrapS{TextureWrapping::Repeat};
+    TextureWrapping wrapT{TextureWrapping::Repeat};
+    ColorSpace colorSpace{ColorSpace::sRGB};
+    Filter magFilter{Filter::Linear};
+    Filter minFilter{Filter::LinearMipmapLinear};
+    int texCoord{0};
+    Vector2 offset{0, 0};
+    Vector2 repeat{1, 1};
     std::vector<unsigned char> pixels;
 };
 
 std::unordered_map<uint32_t, PendingTex> pendingTex;
 
-void finishRgbaTexture(uint32_t id, int width, int height, std::vector<unsigned char> pixels) {
+void finishRgbaTexture(
+        uint32_t id,
+        int width,
+        int height,
+        std::vector<unsigned char> pixels,
+        TextureWrapping wrapS = TextureWrapping::Repeat,
+        TextureWrapping wrapT = TextureWrapping::Repeat,
+        ColorSpace colorSpace = ColorSpace::sRGB,
+        Filter magFilter = Filter::Linear,
+        Filter minFilter = Filter::LinearMipmapLinear,
+        int texCoord = 0,
+        Vector2 offset = {0, 0},
+        Vector2 repeat = {1, 1}) {
     Image image(std::move(pixels), static_cast<unsigned>(width), static_cast<unsigned>(height));
     auto tex = Texture::create(image);
     tex->format = Format::RGBA;
-    tex->colorSpace = ColorSpace::sRGB;
-    tex->magFilter = Filter::Linear;
-    tex->minFilter = Filter::LinearMipmapLinear;
-    tex->generateMipmaps = true;
+    tex->colorSpace = colorSpace;
+    tex->wrapS = wrapS;
+    tex->wrapT = wrapT;
+    tex->magFilter = magFilter;
+    tex->minFilter = minFilter;
+    tex->texCoord = texCoord;
+    tex->offset.copy(offset);
+    tex->repeat.copy(repeat);
+    tex->generateMipmaps =
+            minFilter != Filter::Nearest && minFilter != Filter::Linear;
     tex->needsUpdate();
     Slot slot;
     slot.kind = Kind::Texture;
     slot.texture = std::move(tex);
     insertAt(id, std::move(slot));
     markDirty();
+}
+
+// Same tables as three.js Texture / WEBGL_WRAPPINGS / WEBGL_FILTERS.
+// Accept both three.js enums (1000+) and the GL enums loaders sometimes leave
+// on the object (10497, 33071, 9729, …). Unknown wrap → Repeat (glTF default).
+TextureWrapping wrapFromJs(uint32_t value) {
+    switch (value) {
+        case 1001u: // ClampToEdgeWrapping
+        case 33071u: // GL_CLAMP_TO_EDGE
+            return TextureWrapping::ClampToEdge;
+        case 1002u: // MirroredRepeatWrapping
+        case 33648u: // GL_MIRRORED_REPEAT
+            return TextureWrapping::MirroredRepeat;
+        default:
+            return TextureWrapping::Repeat;
+    }
+}
+
+Filter magFilterFromJs(uint32_t value) {
+    switch (value) {
+        case 1003u: // NearestFilter
+        case 9728u: // GL_NEAREST
+            return Filter::Nearest;
+        default:
+            return Filter::Linear;
+    }
+}
+
+Filter minFilterFromJs(uint32_t value) {
+    switch (value) {
+        case 1003u:
+        case 9728u:
+            return Filter::Nearest;
+        case 1006u: // LinearFilter
+        case 9729u: // GL_LINEAR
+            return Filter::Linear;
+        case 1004u: // NearestMipmapNearestFilter
+        case 9984u:
+            return Filter::NearestMipmapNearest;
+        case 1007u: // LinearMipmapNearestFilter
+        case 9985u:
+            return Filter::LinearMipmapNearest;
+        case 1005u: // NearestMipmapLinearFilter
+        case 9986u:
+            return Filter::NearestMipmapLinear;
+        default:
+            return Filter::LinearMipmapLinear;
+    }
+}
+
+ColorSpace colorSpaceFromJs(uint32_t value) {
+    if (value == 3001u) return ColorSpace::sRGB;
+    return ColorSpace::NoColorSpace;
 }
 
 void applyMaterialMapSlot(Material* material, const std::shared_ptr<Texture>& texture, uint32_t slot) {
@@ -332,8 +412,51 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
                 const int h = tex.height;
                 auto pixels = std::move(tex.pixels);
                 pendingTex.erase(it);
-                finishRgbaTexture(id, w, h, std::move(pixels));
+                finishRgbaTexture(
+                        id, w, h, std::move(pixels),
+                        tex.wrapS, tex.wrapT, tex.colorSpace,
+                        tex.magFilter, tex.minFilter, tex.texCoord,
+                        tex.offset, tex.repeat);
             }
+            return;
+        }
+        case tn::cmd::OP_TEX_PARAMS: {
+            if (!has(p, end, 48)) return;
+            const uint32_t id = ru32(p);
+            const auto wrapS = wrapFromJs(ru32(p + 4));
+            const auto wrapT = wrapFromJs(ru32(p + 8));
+            const auto colorSpace = colorSpaceFromJs(ru32(p + 12));
+            const auto magFilter = magFilterFromJs(ru32(p + 16));
+            const auto minFilter = minFilterFromJs(ru32(p + 20));
+            const int texCoord = static_cast<int>(ru32(p + 24));
+            const Vector2 offset(rf32(p + 32), rf32(p + 36));
+            const Vector2 repeat(rf32(p + 40), rf32(p + 44));
+            auto pending = pendingTex.find(id);
+            if (pending != pendingTex.end()) {
+                pending->second.wrapS = wrapS;
+                pending->second.wrapT = wrapT;
+                pending->second.colorSpace = colorSpace;
+                pending->second.magFilter = magFilter;
+                pending->second.minFilter = minFilter;
+                pending->second.texCoord = texCoord;
+                pending->second.offset.copy(offset);
+                pending->second.repeat.copy(repeat);
+                return;
+            }
+            Slot* slot = findSlot(id);
+            if (!slot || !slot->texture) return;
+            slot->texture->wrapS = wrapS;
+            slot->texture->wrapT = wrapT;
+            slot->texture->colorSpace = colorSpace;
+            slot->texture->magFilter = magFilter;
+            slot->texture->minFilter = minFilter;
+            slot->texture->texCoord = texCoord;
+            slot->texture->offset.copy(offset);
+            slot->texture->repeat.copy(repeat);
+            slot->texture->generateMipmaps =
+                    minFilter != Filter::Nearest && minFilter != Filter::Linear;
+            slot->texture->needsUpdate();
+            markDirty();
             return;
         }
         case tn::cmd::OP_BUF_ATTR: {
@@ -361,8 +484,14 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             }
             std::vector<float> data(floatCount);
             std::memcpy(data.data(), cur, need);
+            // three.js r152+ names TEXCOORD_1 "uv1"; threepp AO/lightmap still
+            // reads the uv2 attribute.
+            std::string attrName(nameBuf);
+            if (attrName == "uv1") {
+                attrName = "uv2";
+            }
             slot->geometry->setAttribute(
-                    std::string(nameBuf),
+                    attrName,
                     std::shared_ptr<BufferAttribute>(
                             FloatBufferAttribute::create(std::move(data), static_cast<int>(itemSize))));
             markDirty();
@@ -418,6 +547,19 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
         case tn::cmd::OP_MAT_NORMAL: {
             if (!has(p, end, 4)) return;
             insertMaterial(ru32(p), MeshNormalMaterial::create());
+            return;
+        }
+        case tn::cmd::OP_MAT_ALPHA: {
+            if (!has(p, end, 16)) return;
+            Slot* slot = findSlot(ru32(p));
+            if (!slot || !slot->material) return;
+            slot->material->opacity = rf32(p + 4);
+            slot->material->alphaTest = rf32(p + 8);
+            const uint32_t flags = ru32(p + 12);
+            slot->material->transparent = (flags & 1u) != 0;
+            slot->material->depthWrite = (flags & 2u) != 0;
+            slot->material->needsUpdate();
+            markDirty();
             return;
         }
         case tn::cmd::OP_MAT_SIDE: {

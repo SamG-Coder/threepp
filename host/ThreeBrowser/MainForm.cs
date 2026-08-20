@@ -454,13 +454,21 @@ public sealed class MainForm : Form
                   const proto = Element.prototype;
                   proto.setPointerCapture = function () {};
                   proto.releasePointerCapture = function () {};
+                  const activePtrs = new Set();
+                  window.addEventListener('pointerdown', function (e) { activePtrs.add(e.pointerId); }, true);
+                  window.addEventListener('pointerup', function (e) { activePtrs.delete(e.pointerId); }, true);
+                  window.addEventListener('pointercancel', function (e) { activePtrs.delete(e.pointerId); }, true);
                   window.__threeReleasePointer = function () {
                     try { document.exitPointerLock && document.exitPointerLock(); } catch (e) {}
-                    try {
-                      window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
-                      window.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, cancelable: true }));
-                      document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
-                    } catch (e) {}
+                    const ids = Array.from(activePtrs);
+                    activePtrs.clear();
+                    for (let i = 0; i < ids.length; i++) {
+                      try {
+                        document.dispatchEvent(new PointerEvent('pointerup', {
+                          bubbles: true, cancelable: true, pointerId: ids[i], pointerType: 'mouse'
+                        }));
+                      } catch (e) {}
+                    }
                   };
                   window.addEventListener('blur', window.__threeReleasePointer, true);
                   window.addEventListener('keydown', function (e) {

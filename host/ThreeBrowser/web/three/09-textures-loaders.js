@@ -660,7 +660,7 @@
       this.matrix = new Matrix3();
       this.generateMipmaps = true;
       this.premultiplyAlpha = false;
-      this.flipY = true;
+      this._flipY = true;
       this.unpackAlignment = 4;
       this.colorSpace = colorSpace;
       this.userData = {};
@@ -670,6 +670,18 @@
       this.pmremVersion = 0;
       this._h = 0;
       this._materials = [];
+    }
+    get flipY() {
+      return this._flipY;
+    }
+    set flipY(value) {
+      const next = !!value;
+      if (this._flipY === next) return;
+      this._flipY = next;
+      // WebGL reads UNPACK_FLIP_Y at upload/draw time. Loaders set needsUpdate
+      // first, then flipY in a later .then — re-upload if GPU pixels used the
+      // previous convention.
+      if (this._h && this._nativeFlipY !== next) scheduleTextureUpload(this);
     }
     get image() {
       return this.source.data;
@@ -1000,14 +1012,20 @@
   function scheduleTextureUpload(texture) {
     if (!texture || _pendingUpload.has(texture)) return;
     _pendingUpload.add(texture);
-    queueMicrotask(function () {
+    const run = function () {
       _pendingUpload.delete(texture);
       try {
         uploadTextureNative(texture);
       } catch (err) {
         console.warn("ThreeBrowser texture upload failed", err);
       }
-    });
+    };
+    // GLTFLoader (and others) set needsUpdate in one promise .then and
+    // flipY/wrap/colorSpace in the next. A microtask still sees Texture
+    // defaults (flipY=true) and V-flips glTF atlases. WebGL uploads at
+    // draw time; a macrotask is the equivalent — after those loader hooks.
+    if (typeof setTimeout === "function") setTimeout(run, 0);
+    else queueMicrotask(run);
   }
 
   function absorbNativeId(handle) {
@@ -1020,12 +1038,75 @@
     }
   }
 
+  function textureParams(texture) {
+    const cs = texture && texture.colorSpace;
+    const linear =
+      cs == null ||
+      cs === "" ||
+      cs === -1 ||
+      cs === 3000 ||
+      cs === TN.LinearSRGBColorSpace ||
+      cs === "srgb-linear" ||
+      cs === "NoColorSpace";
+    const off = texture && texture.offset;
+    const rep = texture && texture.repeat;
+    return {
+      wrapS: texture && texture.wrapS != null ? texture.wrapS : TN.RepeatWrapping ?? 1000,
+      wrapT: texture && texture.wrapT != null ? texture.wrapT : TN.RepeatWrapping ?? 1000,
+      colorSpace: linear ? 0xffffffff : 3001,
+      mag: texture && texture.magFilter != null ? texture.magFilter : TN.LinearFilter ?? 1006,
+      min:
+        texture && texture.minFilter != null
+          ? texture.minFilter
+          : TN.LinearMipmapLinearFilter ?? 1008,
+      channel: texture && texture.channel ? texture.channel : 0,
+      ox: off && typeof off.x === "number" ? off.x : 0,
+      oy: off && typeof off.y === "number" ? off.y : 0,
+      rx: rep && typeof rep.x === "number" ? rep.x : 1,
+      ry: rep && typeof rep.y === "number" ? rep.y : 1,
+    };
+  }
+
+  function applyNativeTexParams(texture) {
+    if (!texture || !texture._h) return;
+    if (!TN.cmd || typeof TN.cmd.texParams !== "function") return;
+    const p = textureParams(texture);
+    TN.cmd.texParams(
+      texture._h,
+      p.wrapS,
+      p.wrapT,
+      p.colorSpace,
+      p.mag,
+      p.min,
+      p.channel,
+      p.ox,
+      p.oy,
+      p.rx,
+      p.ry
+    );
+  }
+
   function uploadTextureNative(texture) {
-    if (!texture) return;
+    if (!texture || texture._uploadingNative) return;
+    const flip = !!texture.flipY;
+    const ver = texture.version | 0;
+    if (texture._h && texture._nativeFlipY === flip && texture._nativeVersion === ver) {
+      applyNativeTexParams(texture);
+      return;
+    }
+    texture._uploadingNative = true;
+    try {
+      uploadTextureNativeBody(texture, flip, ver);
+    } finally {
+      texture._uploadingNative = false;
+    }
+  }
+
+  function uploadTextureNativeBody(texture, flip, ver) {
     const raster = rasterizeToRgba(texture);
     if (!raster || !raster.width || !raster.height || !raster.pixels) return;
     let pixels = raster.pixels;
-    if (texture.flipY) {
+    if (flip) {
       const stride = raster.width * 4;
       const flipped = new Uint8ClampedArray(pixels.length);
       for (let y = 0; y < raster.height; y++) {
@@ -1033,11 +1114,14 @@
       }
       pixels = flipped;
     }
+    const params = textureParams(texture);
     if (TN.cmd && typeof TN.cmd.uploadRgba === "function") {
       try {
-        const id = TN.cmd.alloc();
-        if (TN.cmd.uploadRgba(id, raster.width, raster.height, pixels)) {
+        const id = texture._h || TN.cmd.alloc();
+        if (TN.cmd.uploadRgba(id, raster.width, raster.height, pixels, params)) {
           texture._h = id;
+          texture._nativeFlipY = flip;
+          texture._nativeVersion = ver;
           bindWaitingMaterials(texture);
           return;
         }
@@ -1062,6 +1146,8 @@
       return;
     }
     if (!texture._h) return;
+    texture._nativeFlipY = flip;
+    texture._nativeVersion = ver;
     try {
       if (TN.hostHas(host, "TextureSetFilter")) {
         host.TextureSetFilter(texture._h, texture.magFilter, texture.minFilter);
@@ -1069,7 +1155,17 @@
     } catch {
       /* filter is optional */
     }
+    try {
+      applyNativeTexParams(texture);
+    } catch {
+      /* wrap/colorSpace optional */
+    }
     bindWaitingMaterials(texture);
+  }
+
+  function ensureTextureNative(texture) {
+    if (!texture || !texture.image) return;
+    uploadTextureNative(texture);
   }
 
   class TextureLoader extends Loader {
@@ -1492,4 +1588,5 @@
   TN.MaterialLoader = MaterialLoader;
   TN.BufferGeometryLoader = BufferGeometryLoader;
   TN.AudioLoader = AudioLoader;
+  TN._ensureTextureNative = ensureTextureNative;
 })(globalThis.__TN = globalThis.__TN || {});

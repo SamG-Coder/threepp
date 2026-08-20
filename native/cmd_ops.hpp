@@ -45,6 +45,8 @@ constexpr uint32_t OP_MAT_PBR = 48;
 constexpr uint32_t OP_MAT_EMISSIVE = 49;
 constexpr uint32_t OP_MAT_MAP_SLOT = 50;
 constexpr uint32_t OP_MAT_NORMAL = 51;
+constexpr uint32_t OP_MAT_ALPHA = 52;
+constexpr uint32_t OP_TEX_PARAMS = 36;
 
 constexpr uint32_t OP_MESH = 60;
 constexpr uint32_t OP_GROUP = 61;

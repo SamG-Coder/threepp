@@ -1,9 +1,17 @@
 #include "three_native.h"
 #include "runtime_internal.hpp"
 
+#include "threepp/cameras/CubeCamera.hpp"
+#include "threepp/cameras/OrthographicCamera.hpp"
+#include "threepp/core/BufferAttribute.hpp"
+#include "threepp/core/BufferGeometry.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/lights/HemisphereLight.hpp"
+#include "threepp/materials/RawShaderMaterial.hpp"
+#include "threepp/objects/Mesh.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
+#include "threepp/renderers/GLCubeRenderTarget.hpp"
+#include "threepp/renderers/RenderTarget.hpp"
 #include "threepp/renderers/gl/GLPMREM.hpp"
 
 #include <algorithm>
@@ -117,17 +125,13 @@ Vector3 evalSky(const Vector3& direction, const SkyParams& params) {
     Lin.z *= (1.f - mixF) + mixF * Lin2.z;
 
     Vector3 L0 = Fex * 0.1f;
-    // Widen the solar disc so a 256x128 atlas still captures a highlight for IBL.
-    const float disc = smoothstep(0.997f, 0.9994f, cosTheta);
     const float glow = std::pow(std::max(cosTheta, 0.f), 48.f);
-    L0 += Fex * (sunE * (19000.f * disc + 8.f * glow));
+    L0 += Fex * (sunE * 8.f * glow);
 
-    Vector3 texColor = (Lin + L0) * 0.04f;
-    texColor.y += 0.0003f;
-    texColor.z += 0.00075f;
-
-    const float gamma = 1.f / (1.2f + 1.2f * sunfade);
-    Vector3 color = pow3(texColor, gamma);
+    // Linear radiance for PMREM (no display gamma).
+    Vector3 color = (Lin + L0) * 0.04f;
+    color.y += 0.0003f;
+    color.z += 0.00075f;
     color.x = std::min(color.x, 40.f);
     color.y = std::min(color.y, 40.f);
     color.z = std::min(color.z, 40.f);
@@ -232,6 +236,95 @@ uint32_t pmremFromTexture(uint32_t id, std::shared_ptr<Texture> equirect) {
         return insertAt(id, std::move(slot));
     }
     return insert(std::move(slot));
+}
+
+std::shared_ptr<BufferGeometry> makeFullscreenQuad() {
+    const std::vector<float> positions = {
+            -1.f, -1.f, 0.f, 1.f, -1.f, 0.f, 1.f, 1.f, 0.f,
+            -1.f, -1.f, 0.f, 1.f, 1.f, 0.f, -1.f, 1.f, 0.f};
+    const std::vector<float> uvs = {
+            0.f, 0.f, 1.f, 0.f, 1.f, 1.f,
+            0.f, 0.f, 1.f, 1.f, 0.f, 1.f};
+    auto geom = BufferGeometry::create();
+    geom->setAttribute("position", FloatBufferAttribute::create(positions, 3));
+    geom->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
+    return geom;
+}
+
+// Capture whatever mesh/scene the page passed to PMREMGenerator.fromScene
+// (the live ShaderMaterial already on the object).
+std::unique_ptr<RenderTarget> captureObjectEquirect(GLRenderer& gl, Object3D& object) {
+    RenderTarget::Options cubeOpts;
+    cubeOpts.type = Type::Float;
+    cubeOpts.format = Format::RGBA;
+    cubeOpts.encoding = ColorSpace::Linear;
+    cubeOpts.generateMipmaps = false;
+    cubeOpts.depthBuffer = true;
+    auto cubeRT = std::make_unique<GLCubeRenderTarget>(128, cubeOpts);
+
+    object.updateMatrixWorld(true);
+    const auto oldTone = gl.toneMapping;
+    const bool oldClear = gl.autoClear;
+    auto* oldTarget = gl.getRenderTarget();
+    gl.toneMapping = ToneMapping::None;
+    CubeCamera cubeCam(0.1f, 100000.f, *cubeRT);
+    cubeCam.update(gl, object);
+
+    RenderTarget::Options eqOpts;
+    eqOpts.type = Type::Float;
+    eqOpts.format = Format::RGBA;
+    eqOpts.encoding = ColorSpace::Linear;
+    eqOpts.generateMipmaps = true;
+    eqOpts.depthBuffer = false;
+    eqOpts.wrapS = TextureWrapping::Repeat;
+    eqOpts.wrapT = TextureWrapping::ClampToEdge;
+    eqOpts.minFilter = Filter::LinearMipmapLinear;
+    eqOpts.magFilter = Filter::Linear;
+    auto equirectRT = RenderTarget::create(kEqW, kEqH, eqOpts);
+    equirectRT->texture->mapping = Mapping::EquirectangularReflection;
+    equirectRT->texture->colorSpace = ColorSpace::Linear;
+
+    auto mat = RawShaderMaterial::create();
+    mat->depthTest = false;
+    mat->depthWrite = false;
+    mat->side = Side::Double;
+    mat->vertexShader = R"(#version 330 core
+in vec3 position;
+in vec2 uv;
+out vec2 vUv;
+void main() {
+    vUv = uv;
+    gl_Position = vec4(position, 1.0);
+}
+)";
+    mat->fragmentShader = R"(#version 330 core
+in vec2 vUv;
+out vec4 fragColor;
+uniform samplerCube envMap;
+#define PI  3.14159265359
+#define PI2 6.28318530718
+void main() {
+    float phi = (vUv.x - 0.5) * PI2;
+    float theta = (vUv.y - 0.5) * PI;
+    float cosT = cos(theta);
+    vec3 dir = normalize(vec3(cosT * cos(phi), sin(theta), cosT * sin(phi)));
+    fragColor = vec4(texture(envMap, dir).rgb, 1.0);
+}
+)";
+    mat->uniforms["envMap"].setValue(cubeRT->texture.get());
+    mat->envMap = cubeRT->texture;
+
+    Mesh blit(makeFullscreenQuad(), mat);
+    blit.frustumCulled = false;
+    auto blitCam = OrthographicCamera::create();
+    gl.autoClear = true;
+    gl.setRenderTarget(equirectRT.get());
+    gl.render(blit, *blitCam);
+
+    gl.toneMapping = oldTone;
+    gl.autoClear = oldClear;
+    gl.setRenderTarget(oldTarget);
+    return equirectRT;
 }
 
 SkyParams lastSky{};
@@ -382,4 +475,30 @@ uint32_t tn_pmrem_from_equirect(uint32_t id, uint32_t textureHandle) {
 
 uint32_t tn_pmrem_from_cubemap(uint32_t id, uint32_t textureHandle) {
     return tn_pmrem_from_equirect(id, textureHandle);
+}
+
+uint32_t tn_pmrem_from_object(uint32_t id, uint32_t objectHandle) {
+    try {
+        return onWorker([=] {
+            Object3D* object = findObject(objectHandle);
+            auto* gl = dynamic_cast<GLRenderer*>(g.renderer.get());
+            if (!object || !gl) {
+                return pmremFromTexture(id, makeEquirect(lastSky));
+            }
+            try {
+                auto captured = captureObjectEquirect(*gl, *object);
+                if (captured && captured->texture) {
+                    return pmremFromTexture(id, captured->texture);
+                }
+            } catch (const std::exception& ex) {
+                setError(ex.what());
+            } catch (...) {
+                setError("pmrem from object failed");
+            }
+            return pmremFromTexture(id, makeEquirect(lastSky));
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
 }

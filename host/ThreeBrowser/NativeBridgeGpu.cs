@@ -139,6 +139,9 @@ public partial class NativeBridge
     public int PmremFromCubemap(int id, int texture) =>
         (int)Native.tn_pmrem_from_cubemap((uint)id, (uint)texture);
 
+    public int PmremFromObject(int id, int obj) =>
+        (int)Native.tn_pmrem_from_object((uint)id, (uint)obj);
+
     private static float[] DecodeBase64Floats(string? b64)
     {
         if (string.IsNullOrEmpty(b64))

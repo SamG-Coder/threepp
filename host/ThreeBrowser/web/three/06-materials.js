@@ -111,6 +111,15 @@
     if (!texture || typeof texture !== "object") return;
     if (!texture._materials) texture._materials = [];
     if (texture._materials.indexOf(mat) < 0) texture._materials.push(mat);
+    // Upload at bind time, after loaders have set flipY/wrap/colorSpace.
+    // needsUpdate alone is too early: GLTFLoader still has Texture.flipY=true.
+    if (typeof TN._ensureTextureNative === "function") {
+      try {
+        TN._ensureTextureNative(texture);
+      } catch (err) {
+        console.warn("ThreeBrowser texture upload failed", err);
+      }
+    }
     const matId = mat.__h || 0;
     if (!matId || !texture._h) return;
     applyMapSlot(matId, slot == null ? 0 : slot, texture._h);
@@ -297,6 +306,15 @@
       }
       if (handle) {
         if (mat.side != null) TN.cmd.matSide(handle, mat.side);
+        if (typeof TN.cmd.matAlpha === "function") {
+          TN.cmd.matAlpha(
+            handle,
+            mat.opacity ?? 1,
+            mat.alphaTest ?? 0,
+            mat.transparent ? 1 : 0,
+            mat.depthWrite !== false ? 1 : 0
+          );
+        }
         mat.__h = handle;
         bindAllMaps(mat);
         bindEmissive(mat);
@@ -522,6 +540,22 @@
           else {
             const n = native();
             if (n && n.MaterialSetPbr) n.MaterialSetPbr(this.__h, metal, rough);
+          }
+        }
+        if (
+          key === "opacity" ||
+          key === "alphaTest" ||
+          key === "transparent" ||
+          key === "depthWrite"
+        ) {
+          if (TN.cmd && typeof TN.cmd.matAlpha === "function") {
+            TN.cmd.matAlpha(
+              this.__h,
+              this.opacity ?? 1,
+              this.alphaTest ?? 0,
+              this.transparent ? 1 : 0,
+              this.depthWrite !== false ? 1 : 0
+            );
           }
         }
       }

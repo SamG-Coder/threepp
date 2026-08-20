@@ -147,6 +147,7 @@ TN_API uint32_t tn_pmrem_from_sky(
     float mie_coefficient, float mie_directional_g);
 TN_API uint32_t tn_pmrem_from_equirect(uint32_t id, uint32_t texture);
 TN_API uint32_t tn_pmrem_from_cubemap(uint32_t id, uint32_t texture);
+TN_API uint32_t tn_pmrem_from_object(uint32_t id, uint32_t object);
 
 #ifdef __cplusplus
 }

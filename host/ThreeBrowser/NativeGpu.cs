@@ -105,6 +105,9 @@ internal static partial class Native
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     public static extern uint tn_pmrem_from_cubemap(uint id, uint texture);
 
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    public static extern uint tn_pmrem_from_object(uint id, uint obj);
+
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
     public static extern void tn_buffer_geometry_set_attr(
         uint geometry, string name, int itemSize, float[] data, int floatCount);

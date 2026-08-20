@@ -39,9 +39,20 @@
     if (!attr) return null;
     const itemSize = attr.itemSize || 0;
     if (!itemSize) return null;
-    if (attr.isInterleavedBufferAttribute || (attr.data && attr.data.stride != null)) {
-      const count = attr.count || 0;
-      const out = new Float32Array(count * itemSize);
+    const count =
+      attr.count != null
+        ? attr.count
+        : attr.array && itemSize
+          ? (attr.array.length / itemSize) | 0
+          : 0;
+    if (!count) return null;
+    const packed = count * itemSize;
+    const src = attr.array;
+    const interleaved =
+      !!(attr.isInterleavedBufferAttribute || (attr.data && attr.data.stride != null)) ||
+      (src && src.length !== packed);
+    if (interleaved || attr.normalized || !src || !(src instanceof Float32Array)) {
+      const out = new Float32Array(packed);
       for (let i = 0; i < count; i++) {
         for (let j = 0; j < itemSize; j++) {
           out[i * itemSize + j] = attr.getComponent ? attr.getComponent(i, j) : 0;
@@ -49,20 +60,7 @@
       }
       return out;
     }
-    const src = attr.array;
-    if (!src || !src.length) return null;
-    if (attr.normalized && typeof attr.getComponent === "function" && !(src instanceof Float32Array)) {
-      const count = attr.count || ((src.length / itemSize) | 0);
-      const out = new Float32Array(count * itemSize);
-      for (let i = 0; i < count; i++) {
-        for (let j = 0; j < itemSize; j++) out[i * itemSize + j] = attr.getComponent(i, j);
-      }
-      return out;
-    }
-    if (src instanceof Float32Array) return src;
-    const out = new Float32Array(src.length);
-    for (let i = 0; i < src.length; i++) out[i] = src[i];
-    return out;
+    return src;
   }
 
   function uploadExtraAttributes(geo) {
@@ -77,13 +75,14 @@
       const floats = attrToF32(attr);
       if (!itemSize || !floats || !floats.length) continue;
       geo._nativeAttrs[name] = 1;
+      const nativeName = name === "uv1" ? "uv2" : name;
       if (TN.cmd && typeof TN.cmd.bufAttr === "function") {
-        TN.cmd.bufAttr(geo._h, name, itemSize, floats);
+        TN.cmd.bufAttr(geo._h, nativeName, itemSize, floats);
       } else {
         const n = native();
         if (n && typeof n.BufferGeometrySetAttr === "function") {
           try {
-            n.BufferGeometrySetAttr(geo._h, name, itemSize, f32ToB64(floats));
+            n.BufferGeometrySetAttr(geo._h, nativeName, itemSize, f32ToB64(floats));
           } catch {
             /* extra attributes optional */
           }

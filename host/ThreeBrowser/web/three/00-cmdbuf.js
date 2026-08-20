@@ -22,6 +22,7 @@
     TEX_RGBA: 33,
     TEX_BEGIN: 34,
     TEX_ROWS: 35,
+    TEX_PARAMS: 36,
     MAT_BASIC: 40,
     MAT_LAMBERT: 41,
     MAT_STANDARD: 42,
@@ -34,6 +35,7 @@
     MAT_EMISSIVE: 49,
     MAT_MAP_SLOT: 50,
     MAT_NORMAL: 51,
+    MAT_ALPHA: 52,
     MESH: 60,
     GROUP: 61,
     INSTANCED: 62,
@@ -397,6 +399,24 @@
       end(s);
       return true;
     },
+    // OP_TEX_PARAMS: u32 id, wrapS, wrapT, colorSpace, mag, min, channel, pad,
+    //                f32 ox, oy, repeatX, repeatY
+    texParams(id, wrapS, wrapT, colorSpace, mag, min, channel, ox, oy, rx, ry) {
+      const s = begin(OP.TEX_PARAMS, 48);
+      wu32(id);
+      wu32(wrapS);
+      wu32(wrapT);
+      wu32(colorSpace);
+      wu32(mag);
+      wu32(min);
+      wu32(channel);
+      wu32(0);
+      wf32(ox);
+      wf32(oy);
+      wf32(rx);
+      wf32(ry);
+      end(s);
+    },
     // OP_TEX_BEGIN: u32 id, u32 width, u32 height, u32 pad
     texBegin(id, width, height) {
       const payload = 16;
@@ -423,8 +443,12 @@
       end(s);
       return true;
     },
-    uploadRgba(id, width, height, pixels) {
-      if (this.texRgba(id, width, height, pixels)) return true;
+    uploadRgba(id, width, height, pixels, params) {
+      const ok = this.texRgba(id, width, height, pixels);
+      if (ok) {
+        if (params) this.texParams(id, params.wrapS, params.wrapT, params.colorSpace, params.mag, params.min, params.channel, params.ox, params.oy, params.rx, params.ry);
+        return true;
+      }
       const w = width | 0;
       const h = height | 0;
       if (w <= 0 || h <= 0) return false;
@@ -442,6 +466,21 @@
         const slice = src.subarray(y * stride, (y + rows) * stride);
         if (!this.texRows(id, y, rows, slice)) return false;
         y += rows;
+      }
+      if (params) {
+        this.texParams(
+          id,
+          params.wrapS,
+          params.wrapT,
+          params.colorSpace,
+          params.mag,
+          params.min,
+          params.channel,
+          params.ox,
+          params.oy,
+          params.rx,
+          params.ry
+        );
       }
       return true;
     },
@@ -526,6 +565,16 @@
       const s = begin(OP.MAT_EMISSIVE, 8);
       wu32(id);
       wu32(hex);
+      end(s);
+    },
+    // OP_MAT_ALPHA: u32 id, f32 opacity, f32 alphaTest, u32 flags
+    // flags: bit0 transparent, bit1 depthWrite
+    matAlpha(id, opacity, alphaTest, transparent, depthWrite) {
+      const s = begin(OP.MAT_ALPHA, 16);
+      wu32(id);
+      wf32(opacity);
+      wf32(alphaTest);
+      wu32((transparent ? 1 : 0) | (depthWrite ? 2 : 0));
       end(s);
     },
     mesh(id, geo, mat) {
