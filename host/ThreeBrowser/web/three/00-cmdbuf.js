@@ -36,6 +36,7 @@
     MAT_MAP_SLOT: 50,
     MAT_NORMAL: 51,
     MAT_ALPHA: 52,
+    MAT_VISIBLE: 53,
     MESH: 60,
     GROUP: 61,
     INSTANCED: 62,
@@ -51,6 +52,7 @@
     SET_POSE: 81,
     LOOK_AT: 82,
     LOOK_FROM: 83,
+    SET_VISIBLE: 84,
     LIGHT_AMBIENT: 90,
     LIGHT_DIR: 91,
     LIGHT_HEMI: 92,
@@ -601,6 +603,12 @@
       wu32((transparent ? 1 : 0) | (depthWrite ? 2 : 0));
       end(s);
     },
+    matVisible(id, visible) {
+      const s = begin(OP.MAT_VISIBLE, 8);
+      wu32(id);
+      wu32(visible ? 1 : 0);
+      end(s);
+    },
     mesh(id, geo, mat) {
       const s = begin(OP.MESH, 16);
       wu32(id);
@@ -669,20 +677,10 @@
       wu32(0);
       end(s);
     },
-    skinnedBind(mesh, skeleton, bindMatrix) {
-      // payload: u32 mesh, u32 skeleton, f32 bindMatrix[16]
-      const s = begin(OP.SKINNED_BIND, 72);
+    skinnedBind(mesh, skeleton) {
+      const s = begin(OP.SKINNED_BIND, 8);
       wu32(mesh);
       wu32(skeleton);
-      const e = bindMatrix && bindMatrix.length >= 16 ? bindMatrix : null;
-      if (e) {
-        for (let i = 0; i < 16; i++) wf32(e[i]);
-      } else {
-        wf32(1); wf32(0); wf32(0); wf32(0);
-        wf32(0); wf32(1); wf32(0); wf32(0);
-        wf32(0); wf32(0); wf32(1); wf32(0);
-        wf32(0); wf32(0); wf32(0); wf32(1);
-      }
       end(s);
     },
     meshMaterial(mesh, material) {
@@ -729,6 +727,12 @@
       wf32(ty);
       wf32(tz);
       wu32(0);
+      end(s);
+    },
+    setVisible(id, visible) {
+      const s = begin(OP.SET_VISIBLE, 8);
+      wu32(id);
+      wu32(visible ? 1 : 0);
       end(s);
     },
     lightAmbient(id, hex, intensity) {

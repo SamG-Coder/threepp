@@ -1,32 +1,16 @@
 #include "three_native.h"
 #include "runtime_internal.hpp"
 
-#include "threepp/math/Matrix4.hpp"
 #include "threepp/objects/Bone.hpp"
 #include "threepp/objects/ObjectWithMaterials.hpp"
 #include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/materials/SpriteMaterial.hpp"
 #include "threepp/objects/Sprite.hpp"
 
-#include <array>
-#include <cstring>
 #include <vector>
 
 using namespace tn;
 using namespace threepp;
-
-namespace {
-
-Matrix4 matrixFromFloats(const float* src, size_t offset = 0) {
-    Matrix4 m;
-    if (!src) {
-        return m;
-    }
-    m.fromArray(src, offset);
-    return m;
-}
-
-} // namespace
 
 uint32_t tn_bone_create(void) {
     try {
@@ -43,38 +27,27 @@ uint32_t tn_bone_create(void) {
     }
 }
 
-uint32_t tn_skeleton_create(
-        const uint32_t* bones, int count, const float* inverses, int inverseCount) {
+uint32_t tn_skeleton_create(const uint32_t* bones, int count) {
     try {
         std::vector<uint32_t> boneIds;
-        std::vector<float> inv;
         if (bones && count > 0) {
             boneIds.assign(bones, bones + count);
         }
-        if (inverses && inverseCount > 0) {
-            inv.assign(inverses, inverses + inverseCount);
-        }
-        return onWorker([boneIds, inv] {
+        return onWorker([boneIds] {
             std::vector<std::shared_ptr<Bone>> boneList;
             boneList.reserve(boneIds.size());
             for (uint32_t id : boneIds) {
-                std::shared_ptr<Bone> bone;
-                if (id) {
-                    Slot* boneSlot = getSlot(id);
-                    if (boneSlot && boneSlot->object) {
-                        bone = std::dynamic_pointer_cast<Bone>(boneSlot->object);
-                    }
+                Slot* boneSlot = getSlot(id);
+                if (!boneSlot || !boneSlot->object) {
+                    continue;
+                }
+                auto bone = std::dynamic_pointer_cast<Bone>(boneSlot->object);
+                if (!bone) {
+                    continue;
                 }
                 boneList.push_back(std::move(bone));
             }
-            std::vector<Matrix4> boneInverses;
-            if (inv.size() >= boneList.size() * 16) {
-                boneInverses.resize(boneList.size());
-                for (size_t i = 0; i < boneList.size(); i++) {
-                    boneInverses[i] = matrixFromFloats(inv.data(), i * 16);
-                }
-            }
-            auto skeleton = Skeleton::create(boneList, boneInverses);
+            auto skeleton = Skeleton::create(boneList);
             Slot slot;
             slot.kind = Kind::Skeleton;
             slot.skeleton = skeleton;
@@ -111,15 +84,9 @@ uint32_t tn_skinned_mesh_create(uint32_t geometry, uint32_t material) {
     }
 }
 
-int tn_skinned_bind(
-        uint32_t mesh, uint32_t skeleton, const float* bindMatrix16, int bindCount) {
+int tn_skinned_bind(uint32_t mesh, uint32_t skeleton) {
     try {
-        std::array<float, 16> bm{};
-        const bool hasBm = bindMatrix16 && bindCount >= 16;
-        if (hasBm) {
-            std::memcpy(bm.data(), bindMatrix16, 16 * sizeof(float));
-        }
-        return onWorker([mesh, skeleton, bm, hasBm] {
+        return onWorker([mesh, skeleton] {
             Slot* meshSlot = getSlot(mesh);
             if (!meshSlot || !meshSlot->object) {
                 setError("skinned bind needs a skinned mesh");
@@ -135,11 +102,7 @@ int tn_skinned_bind(
                 setError("skinned bind needs a skeleton");
                 return 0;
             }
-            if (hasBm) {
-                skinned->bind(skelSlot->skeleton, matrixFromFloats(bm.data()));
-            } else {
-                skinned->bind(skelSlot->skeleton);
-            }
+            skinned->bind(skelSlot->skeleton);
             markDirty();
             return 1;
         });

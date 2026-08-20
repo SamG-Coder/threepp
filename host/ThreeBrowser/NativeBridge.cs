@@ -94,6 +94,12 @@ public partial class NativeBridge
     public int ObjectAdd(int parent, int child) =>
         Native.tn_object_add((uint)parent, (uint)child);
 
+    public int ObjectSetVisible(int obj, int visible) =>
+        Native.tn_object_set_visible((uint)obj, visible);
+
+    public void MaterialSetVisible(int material, int visible) =>
+        Native.tn_material_set_visible((uint)material, visible);
+
     public int ObjectSetPosition(int obj, double x, double y, double z) =>
         Native.tn_object_set_position((uint)obj, (float)x, (float)y, (float)z);
 

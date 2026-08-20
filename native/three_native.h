@@ -56,6 +56,7 @@ TN_API uint32_t tn_hemisphere_light_create(void);
 TN_API uint32_t tn_point_light_create(uint32_t color, float intensity);
 
 TN_API int tn_object_add(uint32_t parent, uint32_t child);
+TN_API int tn_object_set_visible(uint32_t object, int visible);
 TN_API int tn_object_set_position(uint32_t object, float x, float y, float z);
 TN_API int tn_object_get_position(uint32_t object, float* x, float* y, float* z);
 TN_API int tn_object_set_rotation(uint32_t object, float x, float y, float z);
@@ -89,6 +90,7 @@ TN_API void tn_buffer_geometry_set_attr(
 TN_API uint32_t tn_mesh_lambert_material_create(uint32_t color);
 TN_API uint32_t tn_mesh_normal_material_create(void);
 TN_API void tn_material_set_side(uint32_t material, int side);
+TN_API void tn_material_set_visible(uint32_t material, int visible);
 TN_API void tn_material_set_map(uint32_t material, uint32_t texture);
 TN_API void tn_material_set_map_slot(uint32_t material, int slot, uint32_t texture);
 TN_API uint32_t tn_texture_from_rgba(int width, int height, const uint8_t* rgba, int nbytes);
@@ -106,11 +108,9 @@ TN_API uint32_t tn_sprite_create(uint32_t material);
 TN_API uint32_t tn_sprite_material_create(uint32_t color);
 
 TN_API uint32_t tn_bone_create(void);
-TN_API uint32_t tn_skeleton_create(
-    const uint32_t* bones, int count, const float* inverses, int inverse_count);
+TN_API uint32_t tn_skeleton_create(const uint32_t* bones, int count);
 TN_API uint32_t tn_skinned_mesh_create(uint32_t geometry, uint32_t material);
-TN_API int tn_skinned_bind(
-    uint32_t mesh, uint32_t skeleton, const float* bind_matrix16, int bind_count);
+TN_API int tn_skinned_bind(uint32_t mesh, uint32_t skeleton);
 TN_API int tn_mesh_set_material(uint32_t mesh, uint32_t material);
 
 TN_API uint32_t tn_cube_rt_create(uint32_t id, int size);

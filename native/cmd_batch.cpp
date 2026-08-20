@@ -571,6 +571,15 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             markDirty();
             return;
         }
+        case tn::cmd::OP_MAT_VISIBLE: {
+            if (!has(p, end, 8)) return;
+            Slot* slot = getSlot(ru32(p));
+            if (!slot || !slot->material) return;
+            slot->material->visible = ru32(p + 4) != 0;
+            slot->material->needsUpdate();
+            markDirty();
+            return;
+        }
         case tn::cmd::OP_MAT_SIDE: {
             if (!has(p, end, 8)) return;
             Slot* slot = getSlot(ru32(p));
@@ -685,15 +694,7 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             if (!meshSlot || !meshSlot->object || !skelSlot || !skelSlot->skeleton) return;
             auto skinned = std::dynamic_pointer_cast<SkinnedMesh>(meshSlot->object);
             if (!skinned) return;
-            if (has(p, end, 72)) {
-                float elems[16];
-                std::memcpy(elems, p + 8, sizeof(elems));
-                Matrix4 bindMatrix;
-                bindMatrix.fromArray(elems);
-                skinned->bind(skelSlot->skeleton, bindMatrix);
-            } else {
-                skinned->bind(skelSlot->skeleton);
-            }
+            skinned->bind(skelSlot->skeleton);
             markDirty();
             return;
         }
@@ -743,6 +744,14 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             if (!object) return;
             object->position.set(rf32(p + 4), rf32(p + 8), rf32(p + 12));
             object->lookAt(rf32(p + 16), rf32(p + 20), rf32(p + 24));
+            return;
+        }
+        case tn::cmd::OP_SET_VISIBLE: {
+            if (!has(p, end, 8)) return;
+            Object3D* object = findObject(ru32(p));
+            if (!object) return;
+            object->visible = ru32(p + 4) != 0;
+            markDirty();
             return;
         }
         case tn::cmd::OP_LIGHT_AMBIENT: {

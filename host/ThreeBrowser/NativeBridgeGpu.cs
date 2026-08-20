@@ -28,21 +28,17 @@ public partial class NativeBridge
 
     public int BoneCreate() => (int)Native.tn_bone_create();
 
-    public int SkeletonCreate(string boneCsv, string inversesB64 = "")
+    public int SkeletonCreate(string boneCsv)
     {
         var bones = ParseBoneCsv(boneCsv);
-        var inverses = DecodeBase64Floats(inversesB64);
-        return (int)Native.tn_skeleton_create(bones, bones.Length, inverses, inverses.Length);
+        return (int)Native.tn_skeleton_create(bones, bones.Length);
     }
 
     public int SkinnedMeshCreate(int geometry, int material) =>
         (int)Native.tn_skinned_mesh_create((uint)geometry, (uint)material);
 
-    public int SkinnedBind(int mesh, int skeleton, string bindMatrixB64 = "")
-    {
-        var bindMatrix = DecodeBase64Floats(bindMatrixB64);
-        return Native.tn_skinned_bind((uint)mesh, (uint)skeleton, bindMatrix, bindMatrix.Length);
-    }
+    public int SkinnedBind(int mesh, int skeleton) =>
+        Native.tn_skinned_bind((uint)mesh, (uint)skeleton);
 
     public int MeshSetMaterial(int mesh, int material) =>
         Native.tn_mesh_set_material((uint)mesh, (uint)material);

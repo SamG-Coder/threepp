@@ -787,6 +787,17 @@ int tn_object_add(uint32_t parentHandle, uint32_t childHandle) {
     }
 }
 
+int tn_object_set_visible(uint32_t objectHandle, int visible) {
+    onWorkerAsync([objectHandle, visible] {
+        Object3D* object = asObject(objectHandle);
+        if (object) {
+            object->visible = visible != 0;
+            markDirty();
+        }
+    });
+    return 1;
+}
+
 int tn_object_set_position(uint32_t objectHandle, float x, float y, float z) {
     onWorkerAsync([objectHandle, x, y, z] {
         Object3D* object = asObject(objectHandle);
@@ -1199,6 +1210,22 @@ void tn_material_set_side(uint32_t materialHandle, int side) {
                 return;
             }
             slot->material->side = side <= 0 ? Side::Front : side == 1 ? Side::Back : Side::Double;
+            slot->material->needsUpdate();
+            markDirty();
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+    }
+}
+
+void tn_material_set_visible(uint32_t materialHandle, int visible) {
+    try {
+        onWorker([materialHandle, visible] {
+            Slot* slot = getSlot(materialHandle);
+            if (!slot || !slot->material) {
+                return;
+            }
+            slot->material->visible = visible != 0;
             slot->material->needsUpdate();
             markDirty();
         });

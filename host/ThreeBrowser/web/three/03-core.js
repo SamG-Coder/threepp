@@ -1678,7 +1678,33 @@
       this.matrixWorldAutoUpdate = Object3D.DEFAULT_MATRIX_WORLD_AUTO_UPDATE;
       this.matrixWorldNeedsUpdate = false;
       this.layers = new Layers();
-      this.visible = true;
+      let visible = true;
+      Object.defineProperty(this, "visible", {
+        configurable: true,
+        enumerable: true,
+        get() {
+          return visible;
+        },
+        set(value) {
+          const on = !!value;
+          if (visible === on) return;
+          visible = on;
+          const h = this._h;
+          if (!h) return;
+          if (TN.cmd && typeof TN.cmd.setVisible === "function") {
+            TN.cmd.setVisible(h, on ? 1 : 0);
+          } else {
+            const n = native();
+            if (n && typeof n.ObjectSetVisible === "function") {
+              try {
+                n.ObjectSetVisible(h, on ? 1 : 0);
+              } catch {
+                /* native visibility optional */
+              }
+            }
+          }
+        },
+      });
       this.castShadow = false;
       this.receiveShadow = false;
       this.frustumCulled = true;

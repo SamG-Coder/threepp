@@ -46,6 +46,7 @@ constexpr uint32_t OP_MAT_EMISSIVE = 49;
 constexpr uint32_t OP_MAT_MAP_SLOT = 50;
 constexpr uint32_t OP_MAT_NORMAL = 51;
 constexpr uint32_t OP_MAT_ALPHA = 52;
+constexpr uint32_t OP_MAT_VISIBLE = 53;
 constexpr uint32_t OP_TEX_PARAMS = 36;
 
 constexpr uint32_t OP_MESH = 60;
@@ -73,6 +74,7 @@ constexpr uint32_t OP_OBJECT_ADD = 80;
 constexpr uint32_t OP_SET_POSE = 81;
 constexpr uint32_t OP_LOOK_AT = 82;
 constexpr uint32_t OP_LOOK_FROM = 83;
+constexpr uint32_t OP_SET_VISIBLE = 84;
 
 constexpr uint32_t OP_LIGHT_AMBIENT = 90;
 constexpr uint32_t OP_LIGHT_DIR = 91;

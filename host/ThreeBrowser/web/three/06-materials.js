@@ -323,6 +323,9 @@
             mat.depthWrite !== false ? 1 : 0
           );
         }
+        if (mat.visible === false && typeof TN.cmd.matVisible === "function") {
+          TN.cmd.matVisible(handle, 0);
+        }
         mat.__h = handle;
         bindAllMaps(mat);
         bindEmissive(mat);
@@ -407,6 +410,7 @@
     }
     mat.__h = handle || 0;
     if (mat.__h && n.MaterialSetSide) n.MaterialSetSide(mat.__h, mat.side ?? FrontSide);
+    if (mat.__h && mat.visible === false && n.MaterialSetVisible) n.MaterialSetVisible(mat.__h, 0);
     bindAllMaps(mat);
     bindEmissive(mat);
   }
@@ -462,7 +466,33 @@
       this.side = FrontSide;
       this.opacity = 1;
       this.transparent = false;
-      this.visible = true;
+      let visible = true;
+      Object.defineProperty(this, "visible", {
+        configurable: true,
+        enumerable: true,
+        get() {
+          return visible;
+        },
+        set(value) {
+          const on = !!value;
+          if (visible === on) return;
+          visible = on;
+          const h = this.__h;
+          if (!h) return;
+          if (TN.cmd && typeof TN.cmd.matVisible === "function") {
+            TN.cmd.matVisible(h, on ? 1 : 0);
+          } else {
+            const n = native();
+            if (n && typeof n.MaterialSetVisible === "function") {
+              try {
+                n.MaterialSetVisible(h, on ? 1 : 0);
+              } catch {
+                /* native material visibility optional */
+              }
+            }
+          }
+        },
+      });
       this.depthTest = true;
       this.depthWrite = true;
       this.depthFunc = LessEqualDepth;

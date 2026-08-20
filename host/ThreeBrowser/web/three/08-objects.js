@@ -35,21 +35,6 @@
     return material._h || 0;
   }
 
-  function matrixElements(matrix) {
-    if (matrix && matrix.elements && matrix.elements.length >= 16) return matrix.elements;
-    if (matrix && matrix.length >= 16) return matrix;
-    return [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
-  }
-
-  function packBoneInverses(bones, boneInverses) {
-    const floats = new Float32Array(bones.length * 16);
-    for (let i = 0; i < bones.length; i++) {
-      const e = matrixElements(boneInverses[i]);
-      floats.set(e, i * 16);
-    }
-    return floats;
-  }
-
   function syncNativeMaterial(obj, material) {
     if (!obj?._h) return;
     const mh = materialHandle(material);
@@ -1052,11 +1037,9 @@
       const n = native();
       if (n && typeof n.SkeletonCreate === "function") {
         try {
-          this._h =
-            n.SkeletonCreate(
-              this.bones.map((b) => b._h || 0).join(","),
-              f32ToB64(packBoneInverses(this.bones, this.boneInverses))
-            ) || 0;
+          this._h = n.SkeletonCreate(
+            this.bones.map((b) => b._h || 0).filter(Boolean).join(",")
+          ) || 0;
         } catch {
           this._h = 0;
         }
@@ -1183,14 +1166,13 @@
         }
       }
       if (this._h && skeleton?._h) {
-        const bindElems = matrixElements(this.bindMatrix);
         if (TN.cmd && typeof TN.cmd.skinnedBind === "function") {
-          TN.cmd.skinnedBind(this._h, skeleton._h, bindElems);
+          TN.cmd.skinnedBind(this._h, skeleton._h);
         } else {
           const n = native();
           if (n && typeof n.SkinnedBind === "function") {
             try {
-              n.SkinnedBind(this._h, skeleton._h, f32ToB64(bindElems));
+              n.SkinnedBind(this._h, skeleton._h);
             } catch {
               /* native skin bind optional */
             }
