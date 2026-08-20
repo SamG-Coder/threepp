@@ -1,7 +1,8 @@
 #include "three_native.h"
 #include "runtime_internal.hpp"
 
-#include "threepp/renderers/gl/GLPMREM.hpp"
+#include "threepp/lights/DirectionalLight.hpp"
+#include "threepp/lights/HemisphereLight.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -204,16 +205,48 @@ uint32_t pmremFromTexture(uint32_t id, std::shared_ptr<Texture> equirect) {
         setError("pmrem needs an equirect texture");
         return 0;
     }
-    if (g.renderer &&
-        (equirect->mapping == Mapping::EquirectangularReflection ||
-         equirect->mapping == Mapping::EquirectangularRefraction)) {
-        gl::GLPMREM generator(*g.renderer);
-        auto target = generator.fromEquirectangular(*equirect);
-        if (target && target->texture) {
-            return storeEnvTexture(id, target->texture, std::move(target));
-        }
-    }
     return storeEnvTexture(id, std::move(equirect), nullptr);
+}
+
+SkyParams lastSky{};
+
+Color toColor(const Vector3& v) {
+    const float m = std::max({v.x, v.y, v.z, 1.f});
+    return Color(v.x / m, v.y / m, v.z / m);
+}
+
+void clearSkyLights(Scene* scene) {
+    if (g.envHemi) {
+        if (scene) {
+            scene->remove(*g.envHemi);
+        }
+        g.envHemi.reset();
+    }
+    if (g.envSun) {
+        if (scene) {
+            scene->remove(*g.envSun);
+        }
+        g.envSun.reset();
+    }
+}
+
+void applySkyLights(Scene* scene) {
+    if (!scene) {
+        return;
+    }
+    clearSkyLights(scene);
+    const Vector3 skyCol = evalSky(Vector3(0.f, 1.f, 0.f), lastSky);
+    const Vector3 gndCol = evalSky(Vector3(0.f, -1.f, 0.f), lastSky);
+    auto hemi = HemisphereLight::create(toColor(skyCol), toColor(gndCol), 1.2f);
+    auto sun = DirectionalLight::create(Color(0xffffff), 2.8f);
+    sun->position.copy(lastSky.sunPosition);
+    if (sun->position.lengthSq() < 1e-8f) {
+        sun->position.set(-0.8f, 0.19f, 0.56f);
+    }
+    scene->add(hemi);
+    scene->add(sun);
+    g.envHemi = std::move(hemi);
+    g.envSun = std::move(sun);
 }
 
 SkyParams defaultsFromArgs(
@@ -247,11 +280,15 @@ void tn::applyPendingEnvironment() {
             ++it;
             continue;
         }
+        // Do not assign an equirect to scene.environment: GLRenderer would
+        // GLPMREM-filter it on the presenter thread (seconds of GGX) and the
+        // UI would freeze. WebGL does that bake on the page's own context
+        // before the animation loop; we approximate IBL with sky lights.
+        scene->environment = nullptr;
         if (it->second == 0) {
-            scene->environment = nullptr;
+            clearSkyLights(scene);
         } else {
-            auto texIt = g.slots.find(it->second);
-            scene->environment = (texIt != g.slots.end()) ? texIt->second.texture : nullptr;
+            applySkyLights(scene);
         }
         it = g.pendingEnvironment.erase(it);
         markDirty();
@@ -262,21 +299,6 @@ void tn_scene_set_environment(uint32_t sceneHandle, uint32_t textureHandle) {
     try {
         onWorker([sceneHandle, textureHandle] {
             g.pendingEnvironment[sceneHandle] = textureHandle;
-            auto sceneIt = g.slots.find(sceneHandle);
-            if (sceneIt == g.slots.end() || sceneIt->second.kind != Kind::Scene || !sceneIt->second.object) {
-                return;
-            }
-            auto* scene = dynamic_cast<Scene*>(sceneIt->second.object.get());
-            if (!scene) {
-                return;
-            }
-            if (textureHandle == 0) {
-                scene->environment = nullptr;
-            } else {
-                auto texIt = g.slots.find(textureHandle);
-                scene->environment = (texIt != g.slots.end()) ? texIt->second.texture : nullptr;
-            }
-            g.pendingEnvironment.erase(sceneHandle);
             markDirty();
         });
     } catch (const std::exception& ex) {
@@ -291,9 +313,9 @@ uint32_t tn_pmrem_from_sky(
         float mieCoefficient, float mieDirectionalG) {
     try {
         return onWorker([=] {
-            const SkyParams params = defaultsFromArgs(
+            lastSky = defaultsFromArgs(
                     sunX, sunY, sunZ, turbidity, rayleigh, mieCoefficient, mieDirectionalG);
-            auto equirect = makeEquirect(params);
+            auto equirect = makeEquirect(lastSky);
             return pmremFromTexture(id, std::move(equirect));
         });
     } catch (const std::exception& ex) {

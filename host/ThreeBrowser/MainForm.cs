@@ -143,10 +143,15 @@ public sealed class MainForm : Form
                 return;
             }
             var r = _web.ClientRectangle;
+            var w = Math.Max(1, r.Width);
+            var h = Math.Max(1, r.Height);
+            if (r.Width <= 0 || r.Height <= 0)
+            {
+                return;
+            }
             var origin = _web.PointToScreen(r.Location);
             var local = PointToClient(origin);
-            Native.tn_runtime_attach_host(Handle, local.X, local.Y, r.Width, r.Height);
-            Native.tn_runtime_set_size(r.Width, r.Height);
+            Native.tn_runtime_attach_host(Handle, local.X, local.Y, w, h);
             SetWindowPos(_web.Handle, HWND_TOP, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpNoActivate);
         }
         catch (DllNotFoundException)

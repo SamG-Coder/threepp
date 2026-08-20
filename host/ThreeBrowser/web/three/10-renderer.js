@@ -171,8 +171,79 @@
 
   function applyToneMapping(mode, exposure) {
     const n = native();
-    if (n && typeof n.RendererSetToneMapping === "function") {
-      n.RendererSetToneMapping(mode, exposure);
+    if (TN.hostHas?.(n, "RendererSetToneMapping")) n.RendererSetToneMapping(mode, exposure);
+  }
+
+  function makeDummyGL() {
+    return {
+      TEXTURE_2D: 3553,
+      UNSIGNED_BYTE: 5121,
+      BYTE: 5120,
+      SHORT: 5122,
+      UNSIGNED_SHORT: 5123,
+      INT: 5124,
+      UNSIGNED_INT: 5125,
+      FLOAT: 5126,
+      HALF_FLOAT: 5131,
+      ALPHA: 6406,
+      RGB: 6407,
+      RGBA: 6408,
+      DEPTH_COMPONENT: 6402,
+      DEPTH_STENCIL: 34041,
+      RED: 6403,
+      RED_INTEGER: 36244,
+      RG: 33319,
+      RG_INTEGER: 33320,
+      RGBA_INTEGER: 36249,
+      NONE: 0,
+      BROWSER_DEFAULT_WEBGL: 37444,
+      UNPACK_FLIP_Y_WEBGL: 37440,
+      UNPACK_PREMULTIPLY_ALPHA_WEBGL: 37441,
+      UNPACK_ALIGNMENT: 3317,
+      UNPACK_COLORSPACE_CONVERSION_WEBGL: 37443,
+      bindTexture() {},
+      pixelStorei() {},
+      texSubImage2D() {},
+      texImage2D() {},
+    };
+  }
+
+  const _glEnum = {
+    [TN.UnsignedByteType ?? 1009]: 5121,
+    [TN.ByteType ?? 1010]: 5120,
+    [TN.ShortType ?? 1011]: 5122,
+    [TN.UnsignedShortType ?? 1012]: 5123,
+    [TN.IntType ?? 1013]: 5124,
+    [TN.UnsignedIntType ?? 1014]: 5125,
+    [TN.FloatType ?? 1015]: 5126,
+    [TN.HalfFloatType ?? 1016]: 5131,
+    [TN.UnsignedShort4444Type ?? 1017]: 32819,
+    [TN.UnsignedShort5551Type ?? 1018]: 32820,
+    [TN.UnsignedInt248Type ?? 1020]: 34042,
+    [TN.AlphaFormat ?? 1021]: 6406,
+    [TN.RGBFormat ?? 1022]: 6407,
+    [TN.RGBAFormat ?? 1023]: 6408,
+    [TN.DepthFormat ?? 1026]: 6402,
+    [TN.DepthStencilFormat ?? 1027]: 34041,
+    [TN.RedFormat ?? 1028]: 6403,
+    [TN.RedIntegerFormat ?? 1029]: 36244,
+    [TN.RGFormat ?? 1030]: 33319,
+    [TN.RGIntegerFormat ?? 1031]: 33320,
+    [TN.RGBAIntegerFormat ?? 1033]: 36249,
+  };
+
+  class WebGLUtils {
+    constructor(gl, extensions, capabilities) {
+      this.gl = gl;
+      this.extensions = extensions;
+      this.capabilities = capabilities;
+    }
+    convert(p, colorSpace) {
+      void colorSpace;
+      if (_glEnum[p] != null) return _glEnum[p];
+      const gl = this.gl;
+      if (gl && gl[p] !== undefined) return gl[p];
+      return null;
     }
   }
 
@@ -192,7 +263,7 @@
       );
 
       const n = native();
-      if (n && typeof n.RuntimeStart === "function") {
+      if (TN.hostHas?.(n, "RuntimeStart")) {
         const ok = n.RuntimeStart(width, height, "ThreeBrowser");
         if (!ok) throw new Error(n.LastError?.() || "failed to start native renderer");
         this.backend = n.BackendName?.() || "native";
@@ -265,7 +336,15 @@
       this._clearColor = 0x000000;
       this._clearAlpha = 1;
       this._anim = null;
-      this._dummyContext = {};
+      this._dummyContext = makeDummyGL();
+      this.extensions = {
+        get() {
+          return null;
+        },
+        has() {
+          return false;
+        },
+      };
 
       globalThis.__threeNativeCanvas = canvas;
       applyToneMapping(this._toneMapping, this._toneMappingExposure);
@@ -308,7 +387,7 @@
       if (TN.cmd) TN.cmd.setSize(w, h);
       else {
         const n = native();
-        if (n && typeof n.RuntimeSetSize === "function") n.RuntimeSetSize(w, h);
+        if (TN.hostHas?.(n, "RuntimeSetSize")) n.RuntimeSetSize(w, h);
       }
       const el = this.domElement;
       if (el) {
@@ -400,7 +479,13 @@
         this._animPort = ch.port1;
         const loop = () => {
           if (self._anim !== cb) return;
-          cb(performance.now());
+          try {
+            cb(performance.now());
+          } catch (err) {
+            console.error(err);
+            self._anim = null;
+            return;
+          }
           if (self._anim === cb) ch.port2.postMessage(0);
         };
         ch.port1.onmessage = loop;
@@ -409,7 +494,13 @@
       }
       const loop = (t) => {
         if (self._anim !== cb) return;
-        cb(t);
+        try {
+          cb(t);
+        } catch (err) {
+          console.error(err);
+          self._anim = null;
+          return;
+        }
         const raf = globalThis.requestAnimationFrame;
         if (typeof raf === "function") raf(loop);
       };
@@ -428,7 +519,7 @@
       flushObject(scene);
       flushObject(camera);
       const n = native();
-      if (!n || typeof n.RuntimeRender !== "function") return false;
+      if (!TN.hostHas?.(n, "RuntimeRender")) return false;
       const keep = n.RuntimeRender(scene?._h || 0, camera?._h || 0);
       if (!keep) {
         const err = n.LastError?.();
@@ -1125,11 +1216,6 @@
     }
     play() {
       this._mixer._activateAction(this);
-      const mixer = this._mixer;
-      const n = mixer?._native;
-      if (n && mixer._h && typeof n.MixerPlay === "function") {
-        n.MixerPlay(mixer._h, this._clipIndex | 0);
-      }
       return this;
     }
     stop() {
@@ -1456,17 +1542,6 @@
       this._accuIndex = 0;
       this.time = 0;
       this.timeScale = 1;
-      this._h = 0;
-      this._native = null;
-      const n = native();
-      if (n && typeof n.MixerCreate === "function" && root && root._h) {
-        try {
-          this._h = n.MixerCreate(root._h);
-          this._native = n;
-        } catch {
-          this._h = 0;
-        }
-      }
     }
     _bindAction(action, prototypeAction) {
       const root = action._localRoot || this._root;
@@ -1791,8 +1866,6 @@
       for (let i = 0; i !== nBindings; ++i) {
         bindings[i].apply(accuIndex);
       }
-      const n = this._native || native();
-      if (this._h && n && typeof n.MixerUpdate === "function") n.MixerUpdate(this._h, deltaTime);
       return this;
     }
     setTime(timeInSeconds) {
@@ -3295,6 +3368,7 @@
     WebGLCubeRenderTarget,
     WebGLArrayRenderTarget,
     WebGL3DRenderTarget,
+    WebGLUtils,
     PMREMGenerator,
     ShaderLib,
     UniformsLib,

@@ -53,25 +53,23 @@ using tn::setError;
 
 static void renderPendingFrame() {
     tn::applyPendingEnvironment();
-    if (!g.canvas || !g.renderer) {
-        return;
-    }
     const uint32_t sceneHandle = g.drawScene.load();
     const uint32_t cameraHandle = g.drawCamera.load();
-    if (sceneHandle == 0 || cameraHandle == 0) {
+    if (!g.canvas || !g.renderer || sceneHandle == 0 || cameraHandle == 0) {
+        g.sceneDirty.store(false, std::memory_order_relaxed);
         return;
     }
     Slot* sceneSlot = getSlot(sceneHandle);
     Slot* cameraSlot = getSlot(cameraHandle);
-    if (!sceneSlot || sceneSlot->kind != Kind::Scene || !sceneSlot->object) {
-        return;
-    }
-    if (!cameraSlot || cameraSlot->kind != Kind::Camera || !cameraSlot->object) {
+    if (!sceneSlot || sceneSlot->kind != Kind::Scene || !sceneSlot->object ||
+        !cameraSlot || cameraSlot->kind != Kind::Camera || !cameraSlot->object) {
+        g.sceneDirty.store(false, std::memory_order_relaxed);
         return;
     }
     auto* scene = dynamic_cast<Scene*>(sceneSlot->object.get());
     auto* camera = dynamic_cast<Camera*>(cameraSlot->object.get());
     if (!scene || !camera) {
+        g.sceneDirty.store(false, std::memory_order_relaxed);
         return;
     }
     if (!g.sceneDirty.exchange(false, std::memory_order_acq_rel)) {
@@ -202,6 +200,8 @@ int tn_runtime_is_open(void) {
 
 void tn_runtime_set_size(int width, int height) {
     try {
+        width = std::max(1, width);
+        height = std::max(1, height);
         onWorkerAsync([width, height] {
             if (!g.canvas || !g.renderer) {
                 return;
@@ -251,6 +251,10 @@ int tn_runtime_attach_host(void* parentHwnd, int x, int y, int width, int height
             setError("invalid hwnd");
             return 0;
         }
+        width = std::max(1, width);
+        height = std::max(1, height);
+        // GLFW created the window on this worker. All hwnd ops stay here —
+        // SetParent from the UI thread deadlocks against glfwPollEvents.
         onWorkerAsync([parentHwnd, x, y, width, height] {
             if (!g.canvas || !parentHwnd) {
                 setError("runtime not started");
@@ -267,16 +271,18 @@ int tn_runtime_attach_host(void* parentHwnd, int x, int y, int width, int height
                 setError("invalid hwnd");
                 return;
             }
-            LONG_PTR style = GetWindowLongPtrW(child, GWL_STYLE);
-            style &= ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_SYSMENU |
-                       WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_BORDER);
-            style |= WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
-            SetWindowLongPtrW(child, GWL_STYLE, style);
-            LONG_PTR ex = GetWindowLongPtrW(child, GWL_EXSTYLE);
-            ex |= WS_EX_NOACTIVATE | WS_EX_TRANSPARENT;
-            SetWindowLongPtrW(child, GWL_EXSTYLE, ex);
-            SetParent(child, parent);
             g.nativeHwnd.store(child);
+            if (GetParent(child) != parent) {
+                LONG_PTR style = GetWindowLongPtrW(child, GWL_STYLE);
+                style &= ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_SYSMENU |
+                           WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_BORDER);
+                style |= WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
+                SetWindowLongPtrW(child, GWL_STYLE, style);
+                LONG_PTR ex = GetWindowLongPtrW(child, GWL_EXSTYLE);
+                ex |= WS_EX_NOACTIVATE | WS_EX_TRANSPARENT;
+                SetWindowLongPtrW(child, GWL_EXSTYLE, ex);
+                SetParent(child, parent);
+            }
             SetWindowPos(child, HWND_BOTTOM, x, y, width, height,
                          SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED);
             if (g.renderer) {
@@ -326,6 +332,8 @@ void tn_runtime_reset(void) {
             g.drawCamera.store(0);
             g.slots.clear();
             g.pendingEnvironment.clear();
+            g.envHemi.reset();
+            g.envSun.reset();
             g.next = 1;
             if (g.renderer) {
                 g.renderer->toneMapping = ToneMapping::None;

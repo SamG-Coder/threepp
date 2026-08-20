@@ -4,6 +4,7 @@ WebGLRenderTarget
 WebGLCubeRenderTarget
 WebGLArrayRenderTarget
 WebGL3DRenderTarget
+WebGLUtils
 PMREMGenerator
 ShaderLib
 UniformsLib

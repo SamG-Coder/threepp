@@ -61,7 +61,7 @@ struct Runtime {
     bool workerStarted{false};
     std::atomic<uint32_t> drawScene{0};
     std::atomic<uint32_t> drawCamera{0};
-    std::atomic<bool> sceneDirty{true};
+    std::atomic<bool> sceneDirty{false};
     std::atomic<void*> nativeHwnd{nullptr};
 
     std::mutex frameMu;
@@ -75,6 +75,8 @@ struct Runtime {
 
     // scene handle -> env texture handle, applied once the Scene slot exists.
     std::unordered_map<uint32_t, uint32_t> pendingEnvironment;
+    std::shared_ptr<Object3D> envHemi;
+    std::shared_ptr<Object3D> envSun;
 };
 
 extern Runtime g;

@@ -81,6 +81,17 @@
     return hostCache;
   }
 
+  // WebView2 COM throws DISP_E_UNKNOWNNAME (0x80020006) on missing members.
+  // Never use `typeof n.Foo === "function"` — the property get throws.
+  TN.hostHas = function hostHas(n, name) {
+    if (!n) return false;
+    try {
+      return typeof n[name] === "function";
+    } catch {
+      return false;
+    }
+  };
+
   function views() {
     u8 = new Uint8Array(ab);
     u32 = new Uint32Array(ab);
@@ -94,11 +105,11 @@
   function submitNow() {
     if (off <= 0) return;
     const n = host();
-    if (!n || typeof n.CmdSubmit !== "function") {
+    if (!TN.hostHas(n, "CmdSubmit")) {
       off = 0;
       return;
     }
-    if (!shared && typeof n.EnsureCmdBuffer === "function") {
+    if (!shared && TN.hostHas?.(n, "EnsureCmdBuffer")) {
       try {
         n.EnsureCmdBuffer();
       } catch {

@@ -18,6 +18,15 @@ int main() {
             tn_mesh_standard_material_create(0x22cc66));
     tn_object_add(scene, mesh);
 
+    const uint32_t env = tn_pmrem_from_sky(0, -0.8f, 0.19f, 0.56f, 0.f, 3.f, 0.005f, 0.7f);
+    if (!env) {
+        std::cerr << "pmrem failed: " << tn_last_error() << '\n';
+        tn_runtime_shutdown();
+        return 2;
+    }
+    tn_scene_set_environment(scene, env);
+    tn_renderer_set_tone_mapping(4, 1.f);
+
     tn_runtime_render(scene, camera);
     float y = 0;
     for (int i = 0; i < 90; ++i) {
@@ -26,6 +35,6 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
     tn_runtime_shutdown();
-    std::cout << "SMOKE OK\n";
+    std::cout << "SMOKE OK env=" << env << '\n';
     return 0;
 }

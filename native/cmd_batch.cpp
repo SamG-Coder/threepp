@@ -100,8 +100,8 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
         }
         case tn::cmd::OP_SET_SIZE: {
             if (!has(p, end, 8)) return;
-            const int w = static_cast<int>(ru32(p));
-            const int h = static_cast<int>(ru32(p + 4));
+            const int w = std::max(1, static_cast<int>(ru32(p)));
+            const int h = std::max(1, static_cast<int>(ru32(p + 4)));
             if (g.canvas && g.renderer) {
                 g.canvas->setSize({w, h});
                 g.renderer->setSize({w, h});
@@ -560,8 +560,9 @@ int tn_cmd_submit(const uint8_t* data, int nbytes) {
         if (!data || nbytes <= 0) {
             return 1;
         }
-        return onWorker([data, nbytes] {
-            execStream(data, nbytes);
+        std::vector<uint8_t> copy(data, data + nbytes);
+        return onWorker([buf = std::move(copy)] {
+            execStream(buf.data(), static_cast<int>(buf.size()));
             return 1;
         });
     } catch (const std::exception& ex) {
