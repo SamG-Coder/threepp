@@ -29,7 +29,8 @@ internal static class ThreeInject
 
         var file = Path.GetFileName(path);
         if (file is "three.module.js" or "three.module.min.js" or "three.min.js"
-            or "three.core.js" or "three.core.min.js" or "three.cjs")
+            or "three.core.js" or "three.core.min.js" or "three.cjs"
+            or "three.webgpu.js" or "three.webgpu.min.js")
         {
             return true;
         }

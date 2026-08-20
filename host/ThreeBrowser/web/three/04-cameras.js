@@ -641,7 +641,46 @@
       }
     }
 
-    update() {}
+    update(renderer, scene) {
+      if (this.parent === null && typeof this.updateMatrixWorld === "function") {
+        this.updateMatrixWorld();
+      }
+      const rt = this.renderTarget;
+      if (!rt) return this;
+      const n = native();
+      const size = rt.width || rt.height || 256;
+      if (!rt._h && TN.hostHas?.(n, "CubeRtCreate")) {
+        try {
+          if (TN.cmd && typeof TN.cmd.submit === "function") TN.cmd.submit();
+          const id = TN.cmd && typeof TN.cmd.alloc === "function" ? TN.cmd.alloc() : 0;
+          rt._h = n.CubeRtCreate(id, size) || 0;
+        } catch {
+          rt._h = 0;
+        }
+        if (rt.texture) {
+          rt.texture._h = rt._h;
+          rt.texture.isCubeTexture = true;
+          rt.texture.mapping = TN.CubeReflectionMapping ?? 301;
+          if (typeof TN._notifyTextureNative === "function") TN._notifyTextureNative(rt.texture);
+        }
+      }
+      const sceneH = scene && scene._h ? scene._h : 0;
+      if (!rt._h || !sceneH || !TN.hostHas?.(n, "CubeRtUpdate")) return this;
+      const pos =
+        typeof this.getWorldPosition === "function" && TN.Vector3
+          ? this.getWorldPosition(new TN.Vector3())
+          : this.position;
+      const near = this.children[0] && this.children[0].near != null ? this.children[0].near : 0.05;
+      const far = this.children[0] && this.children[0].far != null ? this.children[0].far : 50;
+      try {
+        if (TN.cmd && typeof TN.cmd.flushPoses === "function") TN.cmd.flushPoses();
+        if (TN.cmd && typeof TN.cmd.submit === "function") TN.cmd.submit();
+        n.CubeRtUpdate(rt._h, sceneH, pos.x || 0, pos.y || 0, pos.z || 0, near, far);
+      } catch {
+        /* cube capture optional */
+      }
+      return this;
+    }
   }
 
   class ArrayCamera extends PerspectiveCamera {

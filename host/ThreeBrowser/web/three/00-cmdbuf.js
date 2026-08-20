@@ -46,6 +46,7 @@
     SPRITE: 67,
     SKINNED: 68,
     SKINNED_BIND: 69,
+    MESH_MAT: 70,
     OBJECT_ADD: 80,
     SET_POSE: 81,
     LOOK_AT: 82,
@@ -67,6 +68,7 @@
     metalnessMap: 3,
     aoMap: 4,
     emissiveMap: 5,
+    envMap: 6,
   };
 
   const CAP = 8 * 1024 * 1024;
@@ -667,10 +669,26 @@
       wu32(0);
       end(s);
     },
-    skinnedBind(mesh, skeleton) {
-      const s = begin(OP.SKINNED_BIND, 8);
+    skinnedBind(mesh, skeleton, bindMatrix) {
+      // payload: u32 mesh, u32 skeleton, f32 bindMatrix[16]
+      const s = begin(OP.SKINNED_BIND, 72);
       wu32(mesh);
       wu32(skeleton);
+      const e = bindMatrix && bindMatrix.length >= 16 ? bindMatrix : null;
+      if (e) {
+        for (let i = 0; i < 16; i++) wf32(e[i]);
+      } else {
+        wf32(1); wf32(0); wf32(0); wf32(0);
+        wf32(0); wf32(1); wf32(0); wf32(0);
+        wf32(0); wf32(0); wf32(1); wf32(0);
+        wf32(0); wf32(0); wf32(0); wf32(1);
+      }
+      end(s);
+    },
+    meshMaterial(mesh, material) {
+      const s = begin(OP.MESH_MAT, 8);
+      wu32(mesh);
+      wu32(material);
       end(s);
     },
     add(parent, child) {

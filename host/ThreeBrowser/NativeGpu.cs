@@ -32,13 +32,23 @@ internal static partial class Native
     public static extern uint tn_bone_create();
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    public static extern uint tn_skeleton_create(uint[] bones, int count);
+    public static extern uint tn_skeleton_create(uint[] bones, int count, float[] inverses, int inverseCount);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     public static extern uint tn_skinned_mesh_create(uint geometry, uint material);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    public static extern int tn_skinned_bind(uint mesh, uint skeleton);
+    public static extern int tn_skinned_bind(uint mesh, uint skeleton, float[] bindMatrix16, int bindCount);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int tn_mesh_set_material(uint mesh, uint material);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    public static extern uint tn_cube_rt_create(uint id, int size);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tn_cube_rt_update(
+        uint cubeRt, uint scene, float x, float y, float z, float nearPlane, float farPlane);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     public static extern uint tn_axes_helper_create(float size);

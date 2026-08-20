@@ -58,6 +58,7 @@ constexpr uint32_t OP_POINTS = 66;
 constexpr uint32_t OP_SPRITE = 67;
 constexpr uint32_t OP_SKINNED = 68;
 constexpr uint32_t OP_SKINNED_BIND = 69;
+constexpr uint32_t OP_MESH_MAT = 70;
 
 // OP_MAT_MAP_SLOT slot ids (keep in sync with 00-cmdbuf.js MAP_SLOT)
 constexpr uint32_t MAP_SLOT_ALBEDO = 0;
@@ -66,6 +67,7 @@ constexpr uint32_t MAP_SLOT_ROUGHNESS = 2;
 constexpr uint32_t MAP_SLOT_METALNESS = 3;
 constexpr uint32_t MAP_SLOT_AO = 4;
 constexpr uint32_t MAP_SLOT_EMISSIVE = 5;
+constexpr uint32_t MAP_SLOT_ENV = 6;
 
 constexpr uint32_t OP_OBJECT_ADD = 80;
 constexpr uint32_t OP_SET_POSE = 81;

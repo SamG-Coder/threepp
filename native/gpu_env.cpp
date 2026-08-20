@@ -507,3 +507,71 @@ uint32_t tn_pmrem_from_object(uint32_t id, uint32_t objectHandle) {
         return 0;
     }
 }
+
+uint32_t tn_cube_rt_create(uint32_t id, int size) {
+    try {
+        return onWorker([=] {
+            int dim = size;
+            if (dim < 1) {
+                dim = 1;
+            }
+            if (dim > 2048) {
+                dim = 2048;
+            }
+            RenderTarget::Options opts;
+            opts.generateMipmaps = true;
+            opts.minFilter = Filter::Linear;
+            opts.magFilter = Filter::Linear;
+            opts.format = Format::RGBA;
+            auto cube = std::make_unique<GLCubeRenderTarget>(dim, opts);
+            cube->texture->mapping = Mapping::CubeReflection;
+            const uint32_t handle = id ? id : 0;
+            Slot slot;
+            slot.kind = Kind::Texture;
+            slot.texture = cube->texture;
+            slot.renderTarget.reset(static_cast<RenderTarget*>(cube.release()));
+            if (handle) {
+                return insertAt(handle, std::move(slot));
+            }
+            return insert(std::move(slot));
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+}
+
+void tn_cube_rt_update(
+        uint32_t cubeRt,
+        uint32_t sceneHandle,
+        float x,
+        float y,
+        float z,
+        float nearPlane,
+        float farPlane) {
+    try {
+        onWorker([=] {
+            Slot* slot = getSlot(cubeRt);
+            auto* gl = dynamic_cast<GLRenderer*>(g.renderer.get());
+            Object3D* scene = findObject(sceneHandle);
+            if (!slot || !slot->renderTarget || !gl || !scene) {
+                logLine("cube rt update needs cube target, scene, and GL");
+                return;
+            }
+            auto* cube = dynamic_cast<GLCubeRenderTarget*>(slot->renderTarget.get());
+            if (!cube) {
+                logLine("cube rt update: handle is not a cube target");
+                return;
+            }
+            const float n = nearPlane > 0.f ? nearPlane : 0.05f;
+            const float f = farPlane > 0.f ? farPlane : 50.f;
+            CubeCamera cam(n, f, *cube);
+            cam.position.set(x, y, z);
+            cam.updateMatrixWorld();
+            cam.update(*gl, *scene);
+            markDirty();
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+    }
+}

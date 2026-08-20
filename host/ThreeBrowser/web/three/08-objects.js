@@ -35,6 +35,57 @@
     return material._h || 0;
   }
 
+  function matrixElements(matrix) {
+    if (matrix && matrix.elements && matrix.elements.length >= 16) return matrix.elements;
+    if (matrix && matrix.length >= 16) return matrix;
+    return [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+  }
+
+  function packBoneInverses(bones, boneInverses) {
+    const floats = new Float32Array(bones.length * 16);
+    for (let i = 0; i < bones.length; i++) {
+      const e = matrixElements(boneInverses[i]);
+      floats.set(e, i * 16);
+    }
+    return floats;
+  }
+
+  function syncNativeMaterial(obj, material) {
+    if (!obj?._h) return;
+    const mh = materialHandle(material);
+    if (!mh) return;
+    if (TN.cmd && typeof TN.cmd.meshMaterial === "function") {
+      TN.cmd.meshMaterial(obj._h, mh);
+      return;
+    }
+    const n = native();
+    if (n && typeof n.MeshSetMaterial === "function") {
+      try {
+        n.MeshSetMaterial(obj._h, mh);
+      } catch {
+        /* native material swap optional */
+      }
+    }
+  }
+
+  function installMaterial(obj, material) {
+    obj._material = material;
+    Object.defineProperty(obj, "material", {
+      configurable: true,
+      enumerable: true,
+      get() {
+        return this._material;
+      },
+      set(value) {
+        this._material = value;
+        if (value && typeof TN._bindMaterialMaps === "function") {
+          TN._bindMaterialMaps(Array.isArray(value) ? value[0] : value);
+        }
+        syncNativeMaterial(this, value);
+      },
+    });
+  }
+
   function attrToF32(attr) {
     if (!attr) return null;
     const itemSize = attr.itemSize || 0;
@@ -486,7 +537,7 @@
       this.isMesh = true;
       this.type = "Mesh";
       this.geometry = geometry;
-      this.material = material;
+      installMaterial(this, material);
       this.morphTargetDictionary = undefined;
       this.morphTargetInfluences = undefined;
       this.count = 1;
@@ -679,7 +730,7 @@
       this.isLine = true;
       this.type = "Line";
       this.geometry = geometry;
-      this.material = material;
+      installMaterial(this, material);
       this.morphTargetDictionary = undefined;
       this.morphTargetInfluences = undefined;
       this.updateMorphTargets();
@@ -773,7 +824,7 @@
       this.isPoints = true;
       this.type = "Points";
       this.geometry = geometry;
-      this.material = material;
+      installMaterial(this, material);
       this.morphTargetDictionary = undefined;
       this.morphTargetInfluences = undefined;
       this.updateMorphTargets();
@@ -829,7 +880,7 @@
       this.isSprite = true;
       this.type = "Sprite";
       this.geometry = geometry;
-      this.material = material;
+      installMaterial(this, material);
       this.center = TN.Vector2 ? new TN.Vector2(0.5, 0.5) : { x: 0.5, y: 0.5 };
       this.count = 1;
     }
@@ -1001,9 +1052,11 @@
       const n = native();
       if (n && typeof n.SkeletonCreate === "function") {
         try {
-          this._h = n.SkeletonCreate(
-            this.bones.map((b) => b._h || 0).filter(Boolean).join(",")
-          ) || 0;
+          this._h =
+            n.SkeletonCreate(
+              this.bones.map((b) => b._h || 0).join(","),
+              f32ToB64(packBoneInverses(this.bones, this.boneInverses))
+            ) || 0;
         } catch {
           this._h = 0;
         }
@@ -1130,13 +1183,14 @@
         }
       }
       if (this._h && skeleton?._h) {
+        const bindElems = matrixElements(this.bindMatrix);
         if (TN.cmd && typeof TN.cmd.skinnedBind === "function") {
-          TN.cmd.skinnedBind(this._h, skeleton._h);
+          TN.cmd.skinnedBind(this._h, skeleton._h, bindElems);
         } else {
           const n = native();
           if (n && typeof n.SkinnedBind === "function") {
             try {
-              n.SkinnedBind(this._h, skeleton._h);
+              n.SkinnedBind(this._h, skeleton._h, f32ToB64(bindElems));
             } catch {
               /* native skin bind optional */
             }
@@ -1177,7 +1231,20 @@
       return this.applyBoneTransform(index, target);
     }
     computeBoundingBox() {}
-    computeBoundingSphere() {}
+    computeBoundingSphere() {
+      const Sphere = TN.Sphere;
+      if (!this.boundingSphere) {
+        this.boundingSphere = Sphere ? new Sphere() : { center: { x: 0, y: 0, z: 0 }, radius: 0 };
+      }
+      const geo = this.geometry;
+      if (geo && geo.boundingSphere == null && typeof geo.computeBoundingSphere === "function") {
+        geo.computeBoundingSphere();
+      }
+      if (geo && geo.boundingSphere && typeof this.boundingSphere.copy === "function") {
+        this.boundingSphere.copy(geo.boundingSphere);
+      }
+      return this;
+    }
     copy(source, recursive) {
       super.copy(source, recursive);
       this.bindMode = source.bindMode;

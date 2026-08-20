@@ -106,9 +106,16 @@ TN_API uint32_t tn_sprite_create(uint32_t material);
 TN_API uint32_t tn_sprite_material_create(uint32_t color);
 
 TN_API uint32_t tn_bone_create(void);
-TN_API uint32_t tn_skeleton_create(const uint32_t* bones, int count);
+TN_API uint32_t tn_skeleton_create(
+    const uint32_t* bones, int count, const float* inverses, int inverse_count);
 TN_API uint32_t tn_skinned_mesh_create(uint32_t geometry, uint32_t material);
-TN_API int tn_skinned_bind(uint32_t mesh, uint32_t skeleton);
+TN_API int tn_skinned_bind(
+    uint32_t mesh, uint32_t skeleton, const float* bind_matrix16, int bind_count);
+TN_API int tn_mesh_set_material(uint32_t mesh, uint32_t material);
+
+TN_API uint32_t tn_cube_rt_create(uint32_t id, int size);
+TN_API void tn_cube_rt_update(
+    uint32_t cubeRt, uint32_t scene, float x, float y, float z, float near_plane, float far_plane);
 
 TN_API uint32_t tn_axes_helper_create(float size);
 TN_API uint32_t tn_grid_helper_create(float size, int divisions, uint32_t color1, uint32_t color2);

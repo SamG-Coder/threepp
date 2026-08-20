@@ -95,6 +95,7 @@
     metalnessMap: 3,
     aoMap: 4,
     emissiveMap: 5,
+    envMap: 6,
   };
 
   function applyMapSlot(matId, slot, texId) {
@@ -133,6 +134,13 @@
   }
 
   TN._bindMaterialMaps = bindAllMaps;
+
+  TN._notifyTextureNative = function notifyTextureNative(texture) {
+    if (!texture || !texture._h) return;
+    const users = texture._materials;
+    if (!users || !users.length) return;
+    for (let i = 0; i < users.length; i++) bindAllMaps(users[i]);
+  };
 
   function bindEmissive(mat) {
     const col = mat.emissive;

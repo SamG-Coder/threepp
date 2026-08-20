@@ -1876,8 +1876,12 @@
       _childaddedEvent.child = object;
       this.dispatchEvent(_childaddedEvent);
       _childaddedEvent.child = null;
-      const n = native();
-      if (n && this._h && object._h) n.ObjectAdd(this._h, object._h);
+      if (TN.cmd && this._h && object._h) {
+        TN.cmd.add(this._h, object._h);
+      } else {
+        const n = native();
+        if (n && this._h && object._h) n.ObjectAdd(this._h, object._h);
+      }
       return this;
     }
 

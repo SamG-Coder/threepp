@@ -2,11 +2,15 @@
 #include "cmd_ops.hpp"
 #include "runtime_internal.hpp"
 
+#include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Vector2.hpp"
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/LineLoop.hpp"
 #include "threepp/objects/LineSegments.hpp"
+#include "threepp/objects/ObjectWithMaterials.hpp"
 #include "threepp/objects/SkinnedMesh.hpp"
+#include "threepp/materials/SpriteMaterial.hpp"
+#include "threepp/objects/Sprite.hpp"
 #include "threepp/textures/Texture.hpp"
 
 #include <algorithm>
@@ -182,6 +186,11 @@ void applyMaterialMapSlot(Material* material, const std::shared_ptr<Texture>& te
         case tn::cmd::MAP_SLOT_EMISSIVE:
             if (auto* m = dynamic_cast<MaterialWithEmissive*>(material)) {
                 m->emissiveMap = texture;
+            }
+            break;
+        case tn::cmd::MAP_SLOT_ENV:
+            if (auto* m = dynamic_cast<MaterialWithEnvMap*>(material)) {
+                m->envMap = texture;
             }
             break;
         default:
@@ -676,8 +685,33 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             if (!meshSlot || !meshSlot->object || !skelSlot || !skelSlot->skeleton) return;
             auto skinned = std::dynamic_pointer_cast<SkinnedMesh>(meshSlot->object);
             if (!skinned) return;
-            skinned->bind(skelSlot->skeleton);
+            if (has(p, end, 72)) {
+                float elems[16];
+                std::memcpy(elems, p + 8, sizeof(elems));
+                Matrix4 bindMatrix;
+                bindMatrix.fromArray(elems);
+                skinned->bind(skelSlot->skeleton, bindMatrix);
+            } else {
+                skinned->bind(skelSlot->skeleton);
+            }
             markDirty();
+            return;
+        }
+        case tn::cmd::OP_MESH_MAT: {
+            if (!has(p, end, 8)) return;
+            Slot* meshSlot = getSlot(ru32(p));
+            Slot* matSlot = getSlot(ru32(p + 4));
+            if (!meshSlot || !meshSlot->object || !matSlot || !matSlot->material) return;
+            if (auto owm = std::dynamic_pointer_cast<ObjectWithMaterials>(meshSlot->object)) {
+                owm->setMaterial(matSlot->material);
+                markDirty();
+            } else if (auto sprite = std::dynamic_pointer_cast<Sprite>(meshSlot->object)) {
+                auto spriteMat = std::dynamic_pointer_cast<SpriteMaterial>(matSlot->material);
+                if (spriteMat) {
+                    sprite->setMaterial(spriteMat);
+                    markDirty();
+                }
+            }
             return;
         }
         case tn::cmd::OP_OBJECT_ADD: {

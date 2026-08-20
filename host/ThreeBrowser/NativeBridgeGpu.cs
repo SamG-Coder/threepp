@@ -28,17 +28,38 @@ public partial class NativeBridge
 
     public int BoneCreate() => (int)Native.tn_bone_create();
 
-    public int SkeletonCreate(string boneCsv)
+    public int SkeletonCreate(string boneCsv, string inversesB64 = "")
     {
         var bones = ParseBoneCsv(boneCsv);
-        return (int)Native.tn_skeleton_create(bones, bones.Length);
+        var inverses = DecodeBase64Floats(inversesB64);
+        return (int)Native.tn_skeleton_create(bones, bones.Length, inverses, inverses.Length);
     }
 
     public int SkinnedMeshCreate(int geometry, int material) =>
         (int)Native.tn_skinned_mesh_create((uint)geometry, (uint)material);
 
-    public int SkinnedBind(int mesh, int skeleton) =>
-        Native.tn_skinned_bind((uint)mesh, (uint)skeleton);
+    public int SkinnedBind(int mesh, int skeleton, string bindMatrixB64 = "")
+    {
+        var bindMatrix = DecodeBase64Floats(bindMatrixB64);
+        return Native.tn_skinned_bind((uint)mesh, (uint)skeleton, bindMatrix, bindMatrix.Length);
+    }
+
+    public int MeshSetMaterial(int mesh, int material) =>
+        Native.tn_mesh_set_material((uint)mesh, (uint)material);
+
+    public int CubeRtCreate(int id, int size) =>
+        (int)Native.tn_cube_rt_create((uint)id, size);
+
+    public void CubeRtUpdate(
+        int cubeRt, int scene, double x, double y, double z, double nearPlane, double farPlane) =>
+        Native.tn_cube_rt_update(
+            (uint)cubeRt,
+            (uint)scene,
+            (float)x,
+            (float)y,
+            (float)z,
+            (float)nearPlane,
+            (float)farPlane);
 
     public int AxesHelperCreate(double size) =>
         (int)Native.tn_axes_helper_create((float)size);
