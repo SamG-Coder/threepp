@@ -146,7 +146,7 @@ int impl_runtime_start(int width, int height, const char* title) {
     params.title(title ? title : "ThreeBrowser")
             .size(width > 0 ? width : 800, height > 0 ? height : 600)
             .antialiasing(2)
-            .vsync(false)
+            .vsync(g.vsync.load(std::memory_order_relaxed))
             .headless(true)
             .exitOnKeyEscape(false);
     g.canvas = std::make_unique<Canvas>(params);
@@ -208,6 +208,26 @@ void tn_runtime_set_size(int width, int height) {
             }
             g.canvas->setSize({width, height});
             g.renderer->setSize({width, height});
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+    }
+}
+
+void tn_runtime_set_vsync(int enabled) {
+    try {
+        const bool on = enabled != 0;
+        g.vsync.store(on, std::memory_order_relaxed);
+        onWorkerAsync([on] {
+            if (!g.canvas) {
+                return;
+            }
+            auto* glfwWindow = static_cast<GLFWwindow*>(g.canvas->windowPtr());
+            if (!glfwWindow) {
+                return;
+            }
+            glfwMakeContextCurrent(glfwWindow);
+            glfwSwapInterval(on ? 1 : 0);
         });
     } catch (const std::exception& ex) {
         setError(ex.what());

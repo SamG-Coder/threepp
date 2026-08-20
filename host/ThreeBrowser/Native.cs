@@ -22,6 +22,9 @@ internal static partial class Native
     public static extern void tn_runtime_set_size(int width, int height);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tn_runtime_set_vsync(int enabled);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     public static extern int tn_runtime_render(uint scene, uint camera);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]

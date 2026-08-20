@@ -83,13 +83,16 @@ internal sealed class BrowserChrome : Panel
     internal readonly ChromeButton ForwardButton = MakeIcon('\uE72A', "Forward (Alt+Right)");
     internal readonly ChromeButton ReloadButton = MakeIcon('\uE72C', "Reload (Ctrl+R)");
     internal readonly ChromeButton HomeButton = MakeIcon('\uE80F', "Home");
+    internal readonly ChromeButton VsyncBtn = MakeIcon('\uE895', "Vsync on/off");
     internal readonly ChromeButton NativeBtn = MakeIcon('\uE964', "Native THREE (Ctrl+Shift+N)");
     internal readonly ChromeButton WebGlBtn = MakeIcon('\uE774', "Stock WebGL (Ctrl+Shift+N)");
     internal readonly FlatAddress Address = new();
     internal readonly Label Badge = new();
 
     private readonly Panel _omnibox = new();
+    private readonly TableLayoutPanel _bar;
     private bool _injectOn = true;
+    private bool _vsyncOn;
     private bool _loading;
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
@@ -109,6 +112,11 @@ internal sealed class BrowserChrome : Panel
     }
 
     internal event EventHandler? InjectToggled;
+    internal event EventHandler? VsyncToggled;
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    [Browsable(false)]
+    internal bool VsyncEnabled => _vsyncOn;
 
     internal bool IsLoading => _loading;
 
@@ -120,30 +128,33 @@ internal sealed class BrowserChrome : Panel
         BackColor = Bar;
         Padding = new Padding(0);
 
-        var table = new TableLayoutPanel
+        _bar = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 7,
+            ColumnCount = 8,
             RowCount = 1,
             Padding = new Padding(6, 0, 6, 0),
             Margin = new Padding(0),
             BackColor = Bar,
         };
-        table.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
-        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
-        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
-        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
-        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
-        table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
-        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
+        _bar.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        _bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
+        _bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
+        _bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
+        _bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
+        _bar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        _bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
+        _bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
+        _bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
 
-        Place(table, BackButton, 0);
-        Place(table, ForwardButton, 1);
-        Place(table, ReloadButton, 2);
-        Place(table, HomeButton, 3);
-        Place(table, NativeBtn, 5);
-        Place(table, WebGlBtn, 6);
+        Place(_bar, BackButton, 0);
+        Place(_bar, ForwardButton, 1);
+        Place(_bar, ReloadButton, 2);
+        Place(_bar, HomeButton, 3);
+        Place(_bar, VsyncBtn, 5);
+        Place(_bar, NativeBtn, 6);
+        Place(_bar, WebGlBtn, 7);
+        VsyncBtn.Click += (_, _) => ToggleVsync();
         NativeBtn.Click += (_, _) => SetMode(true);
         WebGlBtn.Click += (_, _) => SetMode(false);
         PaintInject();
@@ -173,9 +184,9 @@ internal sealed class BrowserChrome : Panel
 
         _omnibox.Controls.Add(Address);
         _omnibox.Controls.Add(Badge);
-        table.Controls.Add(_omnibox, 4, 0);
+        _bar.Controls.Add(_omnibox, 4, 0);
 
-        Controls.Add(table);
+        Controls.Add(_bar);
     }
 
     internal void SetBadge(bool native)
@@ -242,11 +253,29 @@ internal sealed class BrowserChrome : Panel
         InjectToggled?.Invoke(this, EventArgs.Empty);
     }
 
+    private void ToggleVsync()
+    {
+        if (!_injectOn)
+        {
+            return;
+        }
+        _vsyncOn = !_vsyncOn;
+        PaintInject();
+        VsyncToggled?.Invoke(this, EventArgs.Empty);
+    }
+
     private void PaintInject()
     {
+        VsyncBtn.Visible = _injectOn;
+        if (_bar.ColumnStyles.Count > 5)
+        {
+            _bar.ColumnStyles[5].Width = _injectOn ? 36 : 0;
+        }
+        StyleMode(VsyncBtn, _vsyncOn);
         StyleMode(NativeBtn, _injectOn);
         StyleMode(WebGlBtn, !_injectOn);
         SetBadge(_injectOn);
+        VsyncBtn.AccessibleName = _vsyncOn ? "Vsync on" : "Vsync off";
     }
 
     private static void StyleMode(Button btn, bool on)

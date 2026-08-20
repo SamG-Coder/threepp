@@ -62,6 +62,7 @@ struct Runtime {
     std::atomic<uint32_t> drawScene{0};
     std::atomic<uint32_t> drawCamera{0};
     std::atomic<bool> sceneDirty{false};
+    std::atomic<bool> vsync{false};
     std::atomic<void*> nativeHwnd{nullptr};
 
     std::mutex frameMu;

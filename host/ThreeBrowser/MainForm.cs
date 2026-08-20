@@ -72,6 +72,7 @@ public sealed class MainForm : Form
             NavigateTo(HomeUrl);
         };
         _chrome.InjectToggled += (_, _) => _ = SetInjectorAsync(_chrome.InjectEnabled);
+        _chrome.VsyncToggled += (_, _) => ApplyNativeVsync();
 
         _web.Dock = DockStyle.Fill;
         _web.DefaultBackgroundColor = Color.Transparent;
@@ -128,6 +129,17 @@ public sealed class MainForm : Form
             }
         }
         catch (DllNotFoundException) { }
+    }
+
+    public void ApplyNativeVsync()
+    {
+        try
+        {
+            Native.tn_runtime_set_vsync(_chrome.VsyncEnabled ? 1 : 0);
+        }
+        catch (DllNotFoundException)
+        {
+        }
     }
 
     public void EmbedNativeSurface()

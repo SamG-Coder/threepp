@@ -22,6 +22,7 @@ public partial class NativeBridge
         var ok = Native.tn_runtime_start(width, height, title ?? "ThreeBrowser");
         if (ok != 0)
         {
+            _form.ApplyNativeVsync();
             _form.BeginInvoke(_form.EmbedNativeSurface);
         }
         return ok;

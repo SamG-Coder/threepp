@@ -149,10 +149,25 @@
     const doc = globalThis.document;
     if (!doc?.documentElement) return;
     const style = doc.createElement("style");
-    // Native HWND overlay needs a transparent page; keep this generic.
-    style.textContent =
-      "html,body{background:transparent!important;}canvas{background:transparent!important;}";
+    // Native HWND is sized by the host WebView. Do not restyle the page.
+    style.textContent = "html,body{background:transparent!important;}";
     (doc.head || doc.documentElement).appendChild(style);
+  }
+
+  function styleHitCanvas(el) {
+    if (!el || !el.style) return;
+    const s = el.style;
+    s.position = "fixed";
+    s.left = "0";
+    s.top = "0";
+    s.width = "100%";
+    s.height = "100%";
+    s.margin = "0";
+    s.border = "0";
+    s.padding = "0";
+    s.display = "block";
+    s.boxSizing = "border-box";
+    s.background = "transparent";
   }
 
   function dummyTexture(width, height, depth) {
@@ -273,6 +288,7 @@
 
       this.isWebGLRenderer = true;
       this.domElement = canvas;
+      styleHitCanvas(canvas);
       this.autoClear = true;
       this.autoClearColor = true;
       this.autoClearDepth = true;
@@ -384,20 +400,11 @@
       const h = Math.max(1, height | 0);
       this._width = w;
       this._height = h;
-      if (TN.cmd) TN.cmd.setSize(w, h);
-      else {
-        const n = native();
-        if (TN.hostHas?.(n, "RuntimeSetSize")) n.RuntimeSetSize(w, h);
-      }
-      const el = this.domElement;
-      if (el) {
-        el.width = w;
-        el.height = h;
-        if (updateStyle && el.style) {
-          el.style.width = w + "px";
-          el.style.height = h + "px";
-        }
-      }
+      // Native GL size comes from the host WebView client rect, not from
+      // page innerWidth CSS. Applying those pixels as canvas style overflowed
+      // the document and added scrollbars.
+      void updateStyle;
+      styleHitCanvas(this.domElement);
     }
 
     getPixelRatio() {
