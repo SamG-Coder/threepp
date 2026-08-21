@@ -788,6 +788,7 @@ export async function loadEntry(entryPath) {
       let manifest;
       try { manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")); }
       catch (error) { throw new Error(`Invalid pull manifest in ${manifestPath}: ${error.message}`); }
+      if (manifest.html) globalThis.location = new URL(pathToFileURL(path.join(path.dirname(absolute), manifest.html)));
       if (manifest.requiresWebGPU) await enableWebGPU();
     }
     return import(pathToFileURL(absolute));

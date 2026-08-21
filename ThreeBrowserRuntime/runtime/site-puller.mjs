@@ -147,6 +147,9 @@ function inspectJavaScript(record, source) {
   for (const match of source.matchAll(/\bnew\s+URL\s*\(\s*["']([^"']+)["']\s*,\s*import\.meta\.url\s*\)/g)) {
     collectReference(record, match[1], "asset");
   }
+  for (const match of source.matchAll(/\.setPath\(\s*["']([^"']*)["']\s*\)\s*\.load\(\s*["']([^"']+)["']/g)) {
+    collectReference(record, `${match[1]}${match[2]}`, "asset", true);
+  }
 
   const assetSource = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
   const assetStrings = /["']([^"'\\\r\n]+\.(?:m?js|css|wasm|json|glsl|vert|frag|wgsl|png|jpe?g|webp|gif|svg|hdr|exr|gltf|glb|bin)(?:[?#][^"']*)?)["']/gi;
@@ -241,7 +244,11 @@ async function fetchRecord(record) {
 }
 
 function relativeSpecifier(fromRecord, toRecord, documentRelative = false) {
-  if (documentRelative) return `./${toRecord.localPath.replaceAll("\\", "/")}`;
+  if (documentRelative) {
+    let relative = path.relative(path.dirname(rootRecord.localPath), toRecord.localPath).replaceAll("\\", "/");
+    if (!relative.startsWith(".")) relative = `./${relative}`;
+    return relative;
+  }
   let relative = path.relative(path.dirname(fromRecord.localPath), toRecord.localPath).replaceAll("\\", "/");
   if (!relative.startsWith(".")) relative = `./${relative}`;
   return relative;
