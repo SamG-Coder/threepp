@@ -40,6 +40,7 @@ TN_API int tn_frame_copy(uint8_t* dst, int max_bytes, int* width, int* height, u
 
 TN_API uint32_t tn_scene_create(void);
 TN_API void tn_scene_set_background(uint32_t scene, uint32_t hex);
+TN_API void tn_scene_set_background_texture(uint32_t scene, uint32_t texture);
 
 TN_API uint32_t tn_perspective_camera_create(float fov, float aspect, float near_plane, float far_plane);
 TN_API void tn_camera_update_projection_matrix(uint32_t camera);

@@ -386,6 +386,55 @@ napi_value setToneMapping(napi_env env, napi_callback_info info) {
     return undefined(env);
 }
 
+napi_value setSceneBackgroundTexture(napi_env env, napi_callback_info info) {
+    napi_value argv[2]{};
+    std::size_t argc = 2;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (runtimeActive.load(std::memory_order_acquire) && argc == 2) {
+        tn_scene_set_background_texture(static_cast<std::uint32_t>(argNumber(env, argv[0], 0)),
+                                        static_cast<std::uint32_t>(argNumber(env, argv[1], 0)));
+    }
+    return undefined(env);
+}
+
+napi_value setSceneEnvironment(napi_env env, napi_callback_info info) {
+    napi_value argv[2]{};
+    std::size_t argc = 2;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (runtimeActive.load(std::memory_order_acquire) && argc == 2) {
+        tn_scene_set_environment(static_cast<std::uint32_t>(argNumber(env, argv[0], 0)),
+                                 static_cast<std::uint32_t>(argNumber(env, argv[1], 0)));
+    }
+    return undefined(env);
+}
+
+napi_value pmremFromEquirect(napi_env env, napi_callback_info info) {
+    napi_value argv[2]{};
+    std::size_t argc = 2;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (!runtimeActive.load(std::memory_order_acquire) || argc != 2) return number(env, 0);
+    return number(env, tn_pmrem_from_equirect(static_cast<std::uint32_t>(argNumber(env, argv[0], 0)),
+                                              static_cast<std::uint32_t>(argNumber(env, argv[1], 0))));
+}
+
+napi_value pmremFromCubemap(napi_env env, napi_callback_info info) {
+    napi_value argv[2]{};
+    std::size_t argc = 2;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (!runtimeActive.load(std::memory_order_acquire) || argc != 2) return number(env, 0);
+    return number(env, tn_pmrem_from_cubemap(static_cast<std::uint32_t>(argNumber(env, argv[0], 0)),
+                                             static_cast<std::uint32_t>(argNumber(env, argv[1], 0))));
+}
+
+napi_value pmremFromObject(napi_env env, napi_callback_info info) {
+    napi_value argv[2]{};
+    std::size_t argc = 2;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (!runtimeActive.load(std::memory_order_acquire) || argc != 2) return number(env, 0);
+    return number(env, tn_pmrem_from_object(static_cast<std::uint32_t>(argNumber(env, argv[0], 0)),
+                                            static_cast<std::uint32_t>(argNumber(env, argv[1], 0))));
+}
+
 napi_value destroySlot(napi_env env, napi_callback_info info) {
     napi_value argv[1]{};
     std::size_t argc = 1;
@@ -536,6 +585,11 @@ napi_value init(napi_env env, napi_value exports) {
         {"backendName", nullptr, backendName, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"lastError", nullptr, lastError, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setToneMapping", nullptr, setToneMapping, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setSceneBackgroundTexture", nullptr, setSceneBackgroundTexture, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setSceneEnvironment", nullptr, setSceneEnvironment, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"pmremFromEquirect", nullptr, pmremFromEquirect, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"pmremFromCubemap", nullptr, pmremFromCubemap, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"pmremFromObject", nullptr, pmremFromObject, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"destroySlot", nullptr, destroySlot, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"stats", nullptr, stats, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"pollInput", nullptr, pollInput, nullptr, nullptr, nullptr, napi_default, nullptr},

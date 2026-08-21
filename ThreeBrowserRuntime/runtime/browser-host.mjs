@@ -202,7 +202,24 @@ class Canvas2DContext {
   createRadialGradient() { return { addColorStop() {} }; }
   createPattern() { return null; }
   createImageData(width, height) { return { width, height, data: new Uint8ClampedArray(width * height * 4) }; }
-  getImageData(x, y, width, height) { return this.createImageData(width, height); }
+  getImageData(x, y, width, height) {
+    const result = this.createImageData(width, height);
+    if (!this.pixels) return result;
+    const sourceWidth = this.canvas.width;
+    const sourceHeight = this.canvas.height;
+    if (x === 0 && y === 0 && width === sourceWidth && height === sourceHeight) {
+      result.data.set(this.pixels);
+      return result;
+    }
+    for (let row = 0; row < height; ++row) {
+      if (y + row < 0 || y + row >= sourceHeight) continue;
+      const sourceOffset = ((y + row) * sourceWidth + Math.max(0, x)) * 4;
+      const destinationOffset = (row * width + Math.max(0, -x)) * 4;
+      const copyWidth = Math.max(0, Math.min(width - Math.max(0, -x), sourceWidth - Math.max(0, x)));
+      result.data.set(this.pixels.subarray(sourceOffset, sourceOffset + copyWidth * 4), destinationOffset);
+    }
+    return result;
+  }
   putImageData() {}
   save() {}
   restore() {}
@@ -229,7 +246,44 @@ class Canvas2DContext {
   clip() {}
   fillText() {}
   strokeText() {}
-  drawImage() {}
+  drawImage(image, ...args) {
+    const source = image?.data || image?.pixels;
+    const sourceWidth = image?.width || image?.naturalWidth || 0;
+    const sourceHeight = image?.height || image?.naturalHeight || 0;
+    if (!source || !sourceWidth || !sourceHeight) return;
+    let sourceX = 0, sourceY = 0, sourceDrawWidth = sourceWidth, sourceDrawHeight = sourceHeight;
+    let destinationX = 0, destinationY = 0, destinationWidth = sourceWidth, destinationHeight = sourceHeight;
+    if (args.length >= 2) [destinationX, destinationY] = args;
+    if (args.length >= 4) [destinationX, destinationY, destinationWidth, destinationHeight] = args;
+    if (args.length >= 8) {
+      [sourceX, sourceY, sourceDrawWidth, sourceDrawHeight, destinationX, destinationY, destinationWidth, destinationHeight] = args;
+    }
+    const canvasWidth = this.canvas.width;
+    const canvasHeight = this.canvas.height;
+    if (!this.pixels || this.pixels.length !== canvasWidth * canvasHeight * 4) {
+      this.pixels = new Uint8ClampedArray(canvasWidth * canvasHeight * 4);
+    }
+    if (sourceX === 0 && sourceY === 0 && destinationX === 0 && destinationY === 0 &&
+        sourceDrawWidth === sourceWidth && sourceDrawHeight === sourceHeight &&
+        destinationWidth === sourceWidth && destinationHeight === sourceHeight &&
+        canvasWidth === sourceWidth && canvasHeight === sourceHeight) {
+      this.pixels.set(source);
+      return;
+    }
+    for (let y = 0; y < destinationHeight; ++y) {
+      const targetY = destinationY + y;
+      if (targetY < 0 || targetY >= canvasHeight) continue;
+      const sampleY = Math.min(sourceHeight - 1, Math.max(0, sourceY + Math.floor(y * sourceDrawHeight / destinationHeight)));
+      for (let x = 0; x < destinationWidth; ++x) {
+        const targetX = destinationX + x;
+        if (targetX < 0 || targetX >= canvasWidth) continue;
+        const sampleX = Math.min(sourceWidth - 1, Math.max(0, sourceX + Math.floor(x * sourceDrawWidth / destinationWidth)));
+        const sourceOffset = (sampleY * sourceWidth + sampleX) * 4;
+        const targetOffset = (targetY * canvasWidth + targetX) * 4;
+        this.pixels.set(source.subarray(sourceOffset, sourceOffset + 4), targetOffset);
+      }
+    }
+  }
   setLineDash() {}
 }
 
@@ -395,6 +449,32 @@ globalThis.HTMLCanvasElement = CanvasElement;
 globalThis.CanvasRenderingContext2D = Canvas2DContext;
 globalThis.HTMLImageElement = ImageElement;
 globalThis.Image = ImageElement;
+globalThis.createImageBitmap = async source => {
+  const bytes = source instanceof Blob ? Buffer.from(await source.arrayBuffer()) : Buffer.from(source);
+  const decoded = native.decodeImage(bytes);
+  if (!decoded) throw new Error("Unsupported encoded image");
+  return { width: decoded.width, height: decoded.height, data: decoded.pixels, close() {} };
+};
+
+globalThis.DOMParser = class {
+  parseFromString(source) {
+    const xml = String(source);
+    return {
+      getElementsByTagName(name) {
+        const escaped = String(name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const nodes = [];
+        for (const match of xml.matchAll(new RegExp(`<${escaped}\\b([^>]*)>`, "gi"))) {
+          const attributes = new Map();
+          for (const attribute of match[1].matchAll(/([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
+            attributes.set(attribute[1], attribute[2] ?? attribute[3] ?? "");
+          }
+          nodes.push({ getAttribute: attribute => attributes.get(String(attribute)) ?? null });
+        }
+        return nodes;
+      },
+    };
+  }
+};
 
 class MemoryStorage {
   constructor() { this.values = new Map(); }
@@ -509,6 +589,7 @@ globalThis.fetch = async (input, init) => {
   let resolved;
   try { resolved = new URL(raw, globalThis.location?.href); }
   catch { return platformFetch(input, init); }
+  if (process.env.THREEBROWSER_TRACE_FETCH) console.error(`ThreeBrowser fetch: ${resolved.href}`);
   if (resolved.protocol !== "file:") return platformFetch(resolved, init);
   const method = String(init?.method || (input instanceof Request ? input.method : "GET")).toUpperCase();
   if (method !== "GET" && method !== "HEAD") return new Response(null, { status: 405, statusText: "Method Not Allowed" });
@@ -567,6 +648,11 @@ function hostObject() {
     CmdSubmit: used => submitNativeCommands(new Uint8Array(globalThis.__TN_SHARED, 0, used)),
     CmdSubmitBuffer: submitNativeCommands,
     RendererSetToneMapping: (mode, exposure) => native.setToneMapping(mode, exposure),
+    SceneSetBackgroundTexture: (scene, texture) => native.setSceneBackgroundTexture(scene, texture),
+    SceneSetEnvironment: (scene, texture) => native.setSceneEnvironment(scene, texture),
+    PmremFromEquirect: (id, texture) => native.pmremFromEquirect(id, texture),
+    PmremFromCubemap: (id, texture) => native.pmremFromCubemap(id, texture),
+    PmremFromObject: (id, object) => native.pmremFromObject(id, object),
     SlotDestroy: id => native.destroySlot(id),
     RuntimeStartWebGpu: () => 1,
     WebGpuIsNative: () => 1,

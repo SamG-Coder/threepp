@@ -982,6 +982,28 @@
       ) {
         return { width: img.width, height: img.height, pixels: data };
       }
+      if (data.length >= img.width * img.height * 4 &&
+          (data instanceof Float32Array || data instanceof Uint16Array)) {
+        const pixels = new Uint8ClampedArray(img.width * img.height * 4);
+        const halfToFloat = value => {
+          const sign = (value & 0x8000) ? -1 : 1;
+          const exponent = (value >> 10) & 0x1f;
+          const fraction = value & 0x03ff;
+          if (exponent === 0) return sign * Math.pow(2, -14) * (fraction / 1024);
+          if (exponent === 31) return fraction ? 0 : sign * 65504;
+          return sign * Math.pow(2, exponent - 15) * (1 + fraction / 1024);
+        };
+        const sample = data instanceof Uint16Array ? halfToFloat : value => value;
+        for (let i = 0; i < pixels.length; i += 4) {
+          for (let channel = 0; channel < 3; ++channel) {
+            const linear = Math.max(0, sample(data[i + channel]));
+            const mapped = linear / (1 + linear);
+            pixels[i + channel] = Math.round(255 * Math.pow(mapped, 1 / 2.2));
+          }
+          pixels[i + 3] = Math.round(255 * Math.max(0, Math.min(1, sample(data[i + 3]))));
+        }
+        return { width: img.width, height: img.height, pixels };
+      }
     }
     const width = img.width || img.naturalWidth || 0;
     const height = img.height || img.naturalHeight || 0;
@@ -1008,6 +1030,23 @@
       else {
         const host = native();
         if (host && mat._h && texture._h) host.MaterialSetMap(mat._h, texture._h);
+      }
+    }
+    const host = native();
+    if ((texture._environmentScenes?.size || texture._backgroundScenes?.size) &&
+        TN.cmd && typeof TN.cmd.submit === "function") {
+      TN.cmd.submit();
+    }
+    for (const scene of texture._backgroundScenes || []) {
+      if (scene?._h && texture._h && TN.hostHas?.(host, "SceneSetBackgroundTexture")) {
+        host.SceneSetBackgroundTexture(scene._h, texture._h);
+      }
+    }
+    // Keep the background's shared pointer to the original equirect before
+    // environment assignment replaces the texture slot with its PMREM bake.
+    for (const scene of texture._environmentScenes || []) {
+      if (scene?._h && texture._h && TN.hostHas?.(host, "SceneSetEnvironment")) {
+        host.SceneSetEnvironment(scene._h, texture._h);
       }
     }
   }
@@ -1108,6 +1147,9 @@
 
   function uploadTextureNativeBody(texture, flip, ver) {
     const raster = rasterizeToRgba(texture);
+    if (globalThis.process?.env?.THREEBROWSER_TRACE_TEXTURES) {
+      console.error(`ThreeBrowser texture: ${texture.image?.data?.constructor?.name || texture.image?.constructor?.name || "unknown"} ${raster?.width || 0}x${raster?.height || 0} existing=${texture._h || 0}`);
+    }
     if (!raster || !raster.width || !raster.height || !raster.pixels) return;
     let pixels = raster.pixels;
     if (flip) {
@@ -1127,6 +1169,7 @@
           texture._nativeFlipY = flip;
           texture._nativeVersion = ver;
           bindWaitingMaterials(texture);
+          if (globalThis.process?.env?.THREEBROWSER_TRACE_TEXTURES) console.error(`ThreeBrowser texture uploaded: ${id}`);
           return;
         }
       } catch {

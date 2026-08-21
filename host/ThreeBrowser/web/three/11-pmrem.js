@@ -135,6 +135,13 @@
     const sceneH = scene && scene._h ? scene._h : 0;
     if (!sceneH) return;
     const texH = texture && texture._h ? texture._h : 0;
+    if (globalThis.process?.env?.THREEBROWSER_TRACE_TEXTURES) {
+      console.error(`ThreeBrowser environment: scene=${sceneH} texture=${texH}`);
+    }
+    if (texture) {
+      if (!texture._environmentScenes) texture._environmentScenes = new Set();
+      texture._environmentScenes.add(scene);
+    }
     try {
       if (TN.cmd && typeof TN.cmd.submit === "function") TN.cmd.submit();
       const n = native();

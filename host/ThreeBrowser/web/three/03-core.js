@@ -2681,6 +2681,13 @@
           const n = native();
           if (n) n.SceneSetBackground(this._h, toHex(value));
         }
+      } else if (this._h && value && value.isTexture) {
+        if (!value._backgroundScenes) value._backgroundScenes = new Set();
+        value._backgroundScenes.add(this);
+        const n = native();
+        if (value._h && TN.hostHas?.(n, "SceneSetBackgroundTexture")) {
+          n.SceneSetBackgroundTexture(this._h, value._h);
+        }
       }
     }
     get fog() {

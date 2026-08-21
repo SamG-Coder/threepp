@@ -694,6 +694,27 @@ void tn_scene_set_background(uint32_t sceneHandle, uint32_t hex) {
     }
 }
 
+void tn_scene_set_background_texture(uint32_t sceneHandle, uint32_t textureHandle) {
+    try {
+        onWorker([sceneHandle, textureHandle] {
+            Slot* sceneSlot = getSlot(sceneHandle);
+            Slot* textureSlot = getSlot(textureHandle);
+            if (!sceneSlot || sceneSlot->kind != Kind::Scene ||
+                !textureSlot || textureSlot->kind != Kind::Texture || !textureSlot->texture) {
+                return;
+            }
+            if (auto* scene = dynamic_cast<Scene*>(sceneSlot->object.get())) {
+                textureSlot->texture->mapping = Mapping::EquirectangularReflection;
+                textureSlot->texture->wrapS = TextureWrapping::Repeat;
+                scene->background = Background(textureSlot->texture);
+                markDirty();
+            }
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+    }
+}
+
 uint32_t tn_perspective_camera_create(float fov, float aspect, float nearPlane, float farPlane) {
     try {
         return onWorker([=] {
