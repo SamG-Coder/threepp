@@ -400,6 +400,7 @@ class GPUTextureView {
     this._h = handle;
     this._kind = "view";
     this._tex = texture;
+    this._desc = { ...(desc || {}) };
     this._swapchain = !!(texture && texture._swapchain);
     this.label = desc?.label || "";
   }
@@ -426,6 +427,9 @@ class GPUTexture {
     if (this._swapchain) return new GPUTextureView(0, this, desc);
     const h = cmd.allocHandle();
     cmd.texView(h, this._h, desc);
+    if (globalThis.process?.env?.THREEBROWSER_TRACE_WEBGPU_VIEWS) {
+      console.error("ThreeBrowser WebGPU view", JSON.stringify({ view: h, texture: this._h, size: [this.width, this.height, this.depthOrArrayLayers], desc }));
+    }
     return new GPUTextureView(h, this, desc);
   }
   destroy() {
@@ -959,6 +963,9 @@ class GPUDevice extends Emitter {
   }
   createBindGroup(desc) {
     const h = cmd.allocHandle();
+    if (globalThis.process?.env?.THREEBROWSER_TRACE_WEBGPU_VIEWS) {
+      console.error("ThreeBrowser WebGPU bind group", JSON.stringify({ handle: h, entries: (desc.entries || []).map(entry => ({ binding: entry.binding, view: entry.resource?._h, texture: entry.resource?._tex?._h, size: entry.resource?._tex ? [entry.resource._tex.width, entry.resource._tex.height, entry.resource._tex.depthOrArrayLayers] : undefined, viewDesc: entry.resource?._desc })) }));
+    }
     cmd.bgCreate(h, desc.layout._h, bgEntries(desc.entries));
     const g = new GPUBindGroup(h);
     g.label = desc.label || "";

@@ -1642,12 +1642,12 @@ bool hasWgslFn(const std::string& src, const std::string& name) {
 
 std::string pickEntry(const Slot* sh, const std::string& want, const char* stage) {
     const std::string& src = sh ? sh->wgsl : std::string();
+    if (!want.empty() && hasWgslFn(src, want)) {
+        return want;
+    }
     std::string found = findWgslEntry(src, stage);
     if (!found.empty()) {
         return found;
-    }
-    if (!want.empty() && hasWgslFn(src, want)) {
-        return want;
     }
     static const char* kCands[] = {"main", "vs_main", "fs_main", "vertex", "fragment",
                                    "vertex_main", "fragment_main", "main_vertex", "main_fragment"};
@@ -2227,6 +2227,8 @@ void execOne(uint32_t op, Reader& r) {
             std::string fsEp = "fs_main";
             uint32_t topology = 0;
             uint32_t cull = 0;
+            uint32_t front = 0;
+            uint32_t stripIndex = 0;
             uint32_t format = 0;
             uint32_t depthFmt = 0;
             bool hasDepth = false;
@@ -2244,8 +2246,8 @@ void execOne(uint32_t op, Reader& r) {
                 if (fsEp.empty()) fsEp = "main";
                 topology = r.u32();
                 cull = r.u32();
-                const uint32_t front = r.u32();
-                const uint32_t strip = r.u32();
+                front = r.u32();
+                stripIndex = r.u32();
                 sampleCount = std::max(1u, r.u32());
                 r.u32(); // alphaToCoverage
                 r.u32(); // pad
@@ -2278,8 +2280,6 @@ void execOne(uint32_t op, Reader& r) {
                         targets[i].blend = &blends[i];
                     }
                 }
-                (void)front;
-                (void)strip;
                 const uint32_t vbCount = r.has(4) ? r.u32() : 0;
                 vbLayouts.resize(vbCount);
                 vbAttrs.resize(vbCount);
@@ -2347,7 +2347,9 @@ void execOne(uint32_t op, Reader& r) {
             pd.fragment = &fragSt;
             pd.primitive.topology = topologyFrom(topology);
             pd.primitive.cullMode = cullFrom(cull);
-            pd.primitive.frontFace = WGPUFrontFace_CCW;
+            pd.primitive.frontFace = front ? static_cast<WGPUFrontFace>(front) : WGPUFrontFace_CCW;
+            pd.primitive.stripIndexFormat = stripIndex ? static_cast<WGPUIndexFormat>(stripIndex)
+                                                       : WGPUIndexFormat_Undefined;
             pd.multisample.count = sampleCount;
             pd.multisample.mask = 0xFFFFFFFFu;
             if (hasDepth && depthFmt) {

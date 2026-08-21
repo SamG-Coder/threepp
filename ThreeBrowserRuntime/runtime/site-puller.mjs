@@ -76,8 +76,14 @@ function isFetchable(value) {
   return !/^(?:data:|blob:|javascript:|mailto:|tel:|#)/i.test(value);
 }
 
-function resolveReference(value, baseURL, allowAssetLiteral = false) {
+function resolveReference(value, baseURL, allowAssetLiteral = false, documentRelative = false) {
   if (!value || !isFetchable(value)) return null;
+  // Literal loader/fetch assets in an extracted inline HTML module retain the
+  // document's base URL in a browser. The synthetic __inline__ file is only a
+  // storage detail and must not alter those URLs.
+  if (documentRelative && (value.startsWith("./") || value.startsWith("../"))) {
+    try { return new URL(value, rootURL); } catch { return null; }
+  }
   if (/^[a-z][a-z\d+.-]*:/i.test(value) || value.startsWith("//") || value.startsWith("/") ||
       value.startsWith("./") || value.startsWith("../")) {
     try { return new URL(value, baseURL); } catch { return null; }
@@ -115,15 +121,23 @@ function enqueue(url, hint = "asset", parent = null) {
   return record;
 }
 
-function collectReference(record, value, hint = "asset", allowAssetLiteral = false) {
-  const resolved = resolveReference(value, record.url, allowAssetLiteral);
+function collectReference(record, value, hint = "asset", allowAssetLiteral = false, documentRelative = allowAssetLiteral) {
+  // Module specifiers and new URL(..., import.meta.url) references are scanned
+  // before the broad asset-literal pass. Keep their module-relative meaning
+  // instead of enqueueing a second, document-relative copy of the same text.
+  if (record.references.some(reference => reference.value === value)) return;
+  const resolved = resolveReference(value, record.url, allowAssetLiteral, documentRelative);
   if (!resolved || !new Set(["http:", "https:"]).has(resolved.protocol)) return;
   const dependency = enqueue(resolved, hintFor(value, hint), record.url.href);
   record.references.push({
     value,
     target: dependency.url.href,
-    preserveSpecifier: value === "three",
-    documentRelative: allowAssetLiteral,
+    // WebGPU's package entry and its addons must share the exact same
+    // three.core module instance. Leaving addon imports as bare `three`
+    // routes them through the native WebGL facade and creates a second set of
+    // classes, breaking instanceof checks and cached geometry state.
+    preserveSpecifier: value === "three" && !importMapEntries.has("three/webgpu"),
+    documentRelative,
   });
 }
 
@@ -148,12 +162,14 @@ function inspectJavaScript(record, source) {
     collectReference(record, match[1], "asset");
   }
   for (const match of source.matchAll(/\.setPath\(\s*["']([^"']*)["']\s*\)\s*\.load\(\s*["']([^"']+)["']/g)) {
-    collectReference(record, `${match[1]}${match[2]}`, "asset", true);
+    collectReference(record, `${match[1]}${match[2]}`, "asset", true, record.virtualSource !== undefined);
   }
 
   const assetSource = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
   const assetStrings = /["']([^"'\\\r\n]+\.(?:m?js|css|wasm|json|glsl|vert|frag|wgsl|png|jpe?g|webp|gif|svg|hdr|exr|gltf|glb|bin)(?:[?#][^"']*)?)["']/gi;
-  for (const match of assetSource.matchAll(assetStrings)) collectReference(record, match[1], "asset", true);
+  for (const match of assetSource.matchAll(assetStrings)) {
+    collectReference(record, match[1], "asset", true, record.virtualSource !== undefined);
+  }
   const sourceMap = /\/\/[#@]\s*sourceMappingURL\s*=\s*([^\s]+)/g;
   for (const match of source.matchAll(sourceMap)) collectReference(record, match[1], "map");
 }

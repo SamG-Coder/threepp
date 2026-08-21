@@ -12,6 +12,16 @@ const addonPath = process.env.THREEBROWSER_RUNTIME_ADDON || path.join(here, ".."
 export const native = require(addonPath);
 
 class BrowserEventTarget extends EventTarget {}
+if (typeof globalThis.ProgressEvent === "undefined") {
+  globalThis.ProgressEvent = class ProgressEvent extends Event {
+    constructor(type, init = {}) {
+      super(type, init);
+      this.lengthComputable = Boolean(init.lengthComputable);
+      this.loaded = Number(init.loaded || 0);
+      this.total = Number(init.total || 0);
+    }
+  };
+}
 
 class Element extends BrowserEventTarget {
   constructor(tagName) {
@@ -577,6 +587,17 @@ class BrowserWorker extends BrowserEventTarget {
 globalThis.Worker = BrowserWorker;
 globalThis.OffscreenCanvas = CanvasElement;
 
+const PlatformRequest = globalThis.Request;
+globalThis.Request = class BrowserRequest extends PlatformRequest {
+  constructor(input, init) {
+    // Browser Request accepts document-relative URLs; Node's undici Request
+    // rejects them before our fetch wrapper gets a chance to resolve them.
+    const resolved = typeof input === "string" || input instanceof URL
+      ? new URL(String(input), globalThis.location?.href)
+      : input;
+    super(resolved, init);
+  }
+};
 const platformFetch = globalThis.fetch.bind(globalThis);
 const contentTypes = new Map([
   [".json", "application/json"], [".gltf", "model/gltf+json"], [".glb", "model/gltf-binary"],
