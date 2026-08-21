@@ -440,21 +440,48 @@ int tn_runtime_attach_host(void* parentHwnd, int x, int y, int width, int height
                 return;
             }
             g.nativeHwnd.store(child);
+            glfwSetWindowAttrib(glfwWindow, GLFW_DECORATED, GLFW_FALSE);
+            LONG_PTR style = GetWindowLongPtrW(child, GWL_STYLE);
+            style &= ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_SYSMENU |
+                       WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_BORDER | WS_DLGFRAME);
+            style |= WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
+            SetWindowLongPtrW(child, GWL_STYLE, style);
+            LONG_PTR ex = GetWindowLongPtrW(child, GWL_EXSTYLE);
+            ex &= ~(WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_DLGMODALFRAME |
+                    WS_EX_STATICEDGE | WS_EX_OVERLAPPEDWINDOW);
+            ex |= WS_EX_NOACTIVATE | WS_EX_TRANSPARENT;
+            SetWindowLongPtrW(child, GWL_EXSTYLE, ex);
             if (GetParent(child) != parent) {
-                LONG_PTR style = GetWindowLongPtrW(child, GWL_STYLE);
-                style &= ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_SYSMENU |
-                           WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_BORDER);
-                style |= WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
-                SetWindowLongPtrW(child, GWL_STYLE, style);
-                LONG_PTR ex = GetWindowLongPtrW(child, GWL_EXSTYLE);
-                ex |= WS_EX_NOACTIVATE | WS_EX_TRANSPARENT;
-                SetWindowLongPtrW(child, GWL_EXSTYLE, ex);
                 SetParent(child, parent);
             }
             SetWindowPos(child, HWND_BOTTOM, x, y, width, height,
                          SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED);
+            // GLFW may still report a caption inset. Shift the outer HWND so
+            // the GL *client* fills (x,y,w,h) in the parent — otherwise a black
+            // title-bar block sits at the top of the WebView and raycasts miss.
+            POINT clientOrigin{0, 0};
+            ClientToScreen(child, &clientOrigin);
+            POINT parentOrigin{0, 0};
+            ClientToScreen(parent, &parentOrigin);
+            RECT clientRc{};
+            GetClientRect(child, &clientRc);
+            const int curX = clientOrigin.x - parentOrigin.x;
+            const int curY = clientOrigin.y - parentOrigin.y;
+            const int curW = clientRc.right;
+            const int curH = clientRc.bottom;
+            if (curX != x || curY != y || curW != width || curH != height) {
+                RECT outer{};
+                GetWindowRect(child, &outer);
+                POINT outerPos{outer.left, outer.top};
+                ScreenToClient(parent, &outerPos);
+                SetWindowPos(child, HWND_BOTTOM,
+                        outerPos.x + (x - curX),
+                        outerPos.y + (y - curY),
+                        (outer.right - outer.left) + (width - curW),
+                        (outer.bottom - outer.top) + (height - curH),
+                        SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            }
             if (g.renderer) {
-                g.canvas->setSize({width, height});
                 g.renderer->setSize({width, height});
             }
             logLine("attached host hwnd");

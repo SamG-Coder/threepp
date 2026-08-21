@@ -310,16 +310,16 @@ public sealed class MainForm : Form
             {
                 return;
             }
-            var r = _web.ClientRectangle;
-            var w = Math.Max(1, r.Width);
-            var h = Math.Max(1, r.Height);
-            if (r.Width <= 0 || r.Height <= 0)
+            var sz = _web.ClientSize;
+            if (sz.Width <= 0 || sz.Height <= 0)
             {
                 return;
             }
-            var origin = _web.PointToScreen(r.Location);
-            var local = PointToClient(origin);
-            Native.tn_runtime_attach_host(Handle, local.X, local.Y, w, h);
+            // Child of the form: coords are the form client area, not the
+            // outer window. PointToScreen/PointToClient was adding the caption
+            // height to Y, so raycasts (clientY / innerHeight) sat too low.
+            Native.tn_runtime_attach_host(
+                Handle, _web.Left, _web.Top, Math.Max(1, sz.Width), Math.Max(1, sz.Height));
             SetWindowPos(_web.Handle, HWND_TOP, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpNoActivate);
         }
         catch (DllNotFoundException)
