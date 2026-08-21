@@ -176,6 +176,7 @@ internal sealed class BrowserChrome : Panel
     internal readonly ChromeButton ForwardButton = MakeIcon('\uE72A', "Forward (Alt+Right)");
     internal readonly ChromeButton ReloadButton = MakeIcon('\uE72C', "Reload (Ctrl+R)");
     internal readonly ChromeButton HomeButton = MakeIcon('\uE80F', "Home");
+    internal readonly ChromeButton SandboxBtn = MakeSandboxButton();
     internal readonly ChromeButton DebugBtn = MakeIcon('\uE9F9', "Debug (FPS)");
     internal readonly ChromeButton NativeWindowBtn = MakeIcon('\uE8A7', "Open native test window");
     internal readonly ChromeButton VsyncBtn = MakeIcon('\uE895', "Vsync on/off");
@@ -189,6 +190,7 @@ internal sealed class BrowserChrome : Panel
     private bool _injectOn = true;
     private bool _vsyncOn;
     private bool _debugOn;
+    private bool _sandboxActive;
     private bool _vulkan;
     private bool _loading;
     private BackendMenu? _backendMenu;
@@ -213,6 +215,7 @@ internal sealed class BrowserChrome : Panel
     internal event EventHandler? VsyncToggled;
     internal event EventHandler? DebugToggled;
     internal event EventHandler? NativeWindowRequested;
+    internal event EventHandler? SandboxRequested;
     internal event EventHandler? BackendChanged;
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
@@ -227,6 +230,22 @@ internal sealed class BrowserChrome : Panel
     [Browsable(false)]
     internal bool DebugEnabled => _debugOn;
 
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    [Browsable(false)]
+    internal bool SandboxActive
+    {
+        get => _sandboxActive;
+        set
+        {
+            if (_sandboxActive == value)
+            {
+                return;
+            }
+            _sandboxActive = value;
+            PaintInject();
+        }
+    }
+
     internal bool IsLoading => _loading;
 
     public BrowserChrome()
@@ -240,7 +259,7 @@ internal sealed class BrowserChrome : Panel
         _bar = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 10,
+            ColumnCount = 11,
             RowCount = 1,
             Padding = new Padding(6, 0, 6, 0),
             Margin = new Padding(0),
@@ -257,6 +276,7 @@ internal sealed class BrowserChrome : Panel
         _bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
         _bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
         _bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
+        _bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
 
         Place(_bar, BackButton, 0);
         Place(_bar, ForwardButton, 1);
@@ -267,6 +287,8 @@ internal sealed class BrowserChrome : Panel
         Place(_bar, VsyncBtn, 7);
         Place(_bar, NativeBtn, 8);
         Place(_bar, WebGlBtn, 9);
+        Place(_bar, SandboxBtn, 10);
+        SandboxBtn.Click += (_, _) => SandboxRequested?.Invoke(this, EventArgs.Empty);
         DebugBtn.Click += (_, _) => ToggleDebug();
         NativeWindowBtn.Click += (_, _) => NativeWindowRequested?.Invoke(this, EventArgs.Empty);
         VsyncBtn.Click += (_, _) => ToggleVsync();
@@ -435,12 +457,14 @@ internal sealed class BrowserChrome : Panel
         DebugBtn.Visible = _injectOn;
         NativeWindowBtn.Visible = _injectOn && _debugOn;
         VsyncBtn.Visible = _injectOn;
-        if (_bar.ColumnStyles.Count > 7)
+        SandboxBtn.Visible = true;
+        if (_bar.ColumnStyles.Count > 8)
         {
             _bar.ColumnStyles[5].Width = _injectOn && _debugOn ? 36 : 0;
             _bar.ColumnStyles[6].Width = _injectOn ? 36 : 0;
             _bar.ColumnStyles[7].Width = _injectOn ? 36 : 0;
         }
+        StyleSandbox();
         StyleMode(DebugBtn, _debugOn);
         StyleMode(NativeWindowBtn, false);
         StyleMode(VsyncBtn, _vsyncOn);
@@ -449,6 +473,16 @@ internal sealed class BrowserChrome : Panel
         SetBadge(_injectOn);
         DebugBtn.AccessibleName = _debugOn ? "Debug on" : "Debug off";
         VsyncBtn.AccessibleName = _vsyncOn ? "Vsync on" : "Vsync off";
+    }
+
+    private void StyleSandbox()
+    {
+        SandboxBtn.BackColor = _sandboxActive ? NativeFill : Color.Transparent;
+        SandboxBtn.ForeColor = _sandboxActive ? NativeInk : Ink;
+        SandboxBtn.FlatAppearance.BorderSize = 0;
+        SandboxBtn.FlatAppearance.MouseOverBackColor = Hover;
+        SandboxBtn.FlatAppearance.MouseDownBackColor = Press;
+        SandboxBtn.AccessibleName = _sandboxActive ? "Sandbox active" : "Sandbox";
     }
 
     private static void StyleMode(Button btn, bool on)
@@ -511,6 +545,19 @@ internal sealed class BrowserChrome : Panel
         var t = new ToolTip();
         t.SetToolTip(b, tip);
         return b;
+    }
+
+    private static ChromeButton MakeSandboxButton()
+    {
+        var button = new ChromeButton
+        {
+            Text = "⚗",
+            Font = new Font("Segoe UI Symbol", 13f),
+            AccessibleName = "Sandbox",
+        };
+        var tip = new ToolTip();
+        tip.SetToolTip(button, "Sandbox HTML editor");
+        return button;
     }
 
     private static Font IconFont()

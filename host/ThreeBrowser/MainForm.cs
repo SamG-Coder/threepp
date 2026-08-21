@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
@@ -15,6 +16,9 @@ public sealed class MainForm : Form
     private readonly WebView2 _web = new();
     private readonly System.Windows.Forms.Timer _debugTimer = new();
     private Form? _nativePreview;
+    private SandboxEditorForm? _sandboxEditor;
+    private Guid? _sandboxId;
+    private string _sandboxHtml = DefaultSandboxHtml;
     private bool _nativePreviewMayClose;
     private bool _nativePreviewReturning;
     private string _lastDebugOverlay = "";
@@ -116,6 +120,7 @@ public sealed class MainForm : Form
             }
         };
         _chrome.NativeWindowRequested += (_, _) => ToggleNativePreview();
+        _chrome.SandboxRequested += (_, _) => ShowSandboxEditor();
         _chrome.BackendChanged += (_, _) => _ = ApplyBackendAsync();
 
         _web.Dock = DockStyle.Fill;
@@ -746,6 +751,11 @@ public sealed class MainForm : Form
                 _webRoot,
                 CoreWebView2HostResourceAccessKind.Allow);
 
+            _web.CoreWebView2.AddWebResourceRequestedFilter(
+                "https://sandbox.threebrowser.local/*",
+                CoreWebView2WebResourceContext.Document,
+                CoreWebView2WebResourceRequestSourceKinds.All);
+
             foreach (var filter in new[]
             {
                 "*three.module.js*",
@@ -870,11 +880,15 @@ public sealed class MainForm : Form
 
     private void OnWebResourceRequested(object? sender, CoreWebView2WebResourceRequestedEventArgs e)
     {
+        var uri = e.Request?.Uri;
+        if (TryServeSandbox(uri, e))
+        {
+            return;
+        }
         if (!_chrome.InjectEnabled)
         {
             return;
         }
-        var uri = e.Request?.Uri;
         if (ThreeInject.IsPassthrough(uri))
         {
             return;
@@ -904,6 +918,129 @@ public sealed class MainForm : Form
                 uri + "\n" + ex);
         }
     }
+
+    private bool TryServeSandbox(string? requestedUri, CoreWebView2WebResourceRequestedEventArgs e)
+    {
+        if (_sandboxId is not Guid id ||
+            !Uri.TryCreate(requestedUri, UriKind.Absolute, out var uri) ||
+            !uri.Host.Equals("sandbox.threebrowser.local", StringComparison.OrdinalIgnoreCase) ||
+            !uri.AbsolutePath.Equals($"/{id:D}/index.html", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var bytes = Encoding.UTF8.GetBytes(_sandboxHtml);
+        var stream = new MemoryStream(bytes, writable: false);
+        e.Response = _web.CoreWebView2.Environment.CreateWebResourceResponse(
+            stream,
+            200,
+            "OK",
+            "Content-Type: text/html; charset=utf-8\r\n" +
+            "Cache-Control: no-store, no-cache, must-revalidate\r\n" +
+            "Pragma: no-cache\r\n" +
+            "X-Content-Type-Options: nosniff");
+        return true;
+    }
+
+    private void ShowSandboxEditor()
+    {
+        if (_sandboxEditor == null || _sandboxEditor.IsDisposed)
+        {
+            if (_env == null)
+            {
+                return;
+            }
+            _sandboxEditor = new SandboxEditorForm(Icon, _env, _webRoot);
+            _sandboxEditor.LoadSandbox(_sandboxId, _sandboxHtml);
+            _sandboxEditor.SaveRequested += async (_, _) => await SaveSandboxAsync(navigate: false);
+            _sandboxEditor.NavigateRequested += async (_, _) => await SaveSandboxAsync(navigate: true);
+            _sandboxEditor.NewRequested += (_, _) => NewSandbox();
+        }
+
+        if (_sandboxEditor.Visible)
+        {
+            _sandboxEditor.Activate();
+        }
+        else
+        {
+            _sandboxEditor.Show(this);
+        }
+    }
+
+    private async Task SaveSandboxAsync(bool navigate)
+    {
+        var editor = _sandboxEditor;
+        if (editor == null || editor.IsDisposed)
+        {
+            return;
+        }
+        try
+        {
+            _sandboxId ??= Guid.NewGuid();
+            _sandboxHtml = await editor.GetHtmlAsync();
+            editor.MarkSaved(_sandboxId.Value);
+            _chrome.SandboxActive = true;
+
+            if (navigate && _web.CoreWebView2 != null)
+            {
+                ReleasePointer();
+                _web.CoreWebView2.Navigate(SandboxEditorForm.SandboxUrl(_sandboxId.Value));
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(editor, ex.Message, "Sandbox save failed");
+        }
+    }
+
+    private void NewSandbox()
+    {
+        var editor = _sandboxEditor;
+        if (editor == null || editor.IsDisposed)
+        {
+            return;
+        }
+        if (editor.IsDirty && MessageBox.Show(
+                editor,
+                "Discard the unsaved changes and start a new sandbox?",
+                "New sandbox",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question) != DialogResult.Yes)
+        {
+            return;
+        }
+        _sandboxId = null;
+        _sandboxHtml = DefaultSandboxHtml;
+        _chrome.SandboxActive = false;
+        editor.LoadSandbox(null, _sandboxHtml);
+    }
+
+    private static readonly string DefaultSandboxHtml = """
+        <!doctype html>
+        <html lang="en">
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>ThreeBrowser Sandbox</title>
+          <style>
+            :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+            body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #111827; color: #e5e7eb; }
+            main { max-width: 720px; padding: 48px; }
+            h1 { color: #60a5fa; }
+          </style>
+        </head>
+        <body>
+          <main>
+            <h1>ThreeBrowser Sandbox</h1>
+            <p>Edit this HTML, save it, then navigate to run the page.</p>
+          </main>
+          <script type="module">
+            console.log('Sandbox ready');
+          </script>
+        </body>
+        </html>
+        """.Replace("\r\n", "\n", StringComparison.Ordinal)
+           .Replace("\n", "\r\n", StringComparison.Ordinal);
 
     private static string FindWebRoot()
     {

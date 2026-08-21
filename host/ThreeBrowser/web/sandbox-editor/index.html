@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sandbox editor</title>
+  <style>
+    :root { font-family: "Segoe UI", system-ui, sans-serif; color: #202124; }
+    * { box-sizing: border-box; }
+    html, body, #app { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #fff; }
+    #app { display: flex; flex-direction: column; }
+    #editor { min-height: 0; flex: 1 1 auto; }
+    #prompt-drawer {
+      flex: 0 0 184px;
+      display: none;
+      padding: 12px 14px 14px;
+      border-top: 1px solid #dadce0;
+      background: #f8f9fa;
+      box-shadow: 0 -8px 24px rgba(32, 33, 36, .08);
+    }
+    #prompt-drawer.open { display: flex; flex-direction: column; gap: 10px; }
+    .prompt-head { display: flex; align-items: center; min-height: 32px; gap: 9px; }
+    .ollama-mark {
+      display: inline-grid; place-items: center; width: 25px; height: 25px;
+      border-radius: 8px; color: #185abc; background: #e8f0fe; font-size: 15px;
+    }
+    .prompt-title { font-weight: 600; white-space: nowrap; }
+    #model-select {
+      width: min(300px, 32vw); height: 30px; padding: 0 30px 0 9px;
+      border: 1px solid #dadce0; border-radius: 7px; background: #fff; color: #202124;
+      font: 13px "Segoe UI", system-ui, sans-serif; outline: none;
+    }
+    #model-select:focus { border-color: #1a73e8; box-shadow: 0 0 0 2px rgba(26,115,232,.15); }
+    #ollama-status { min-width: 0; flex: 1; overflow: hidden; color: #5f6368; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+    .icon-button {
+      display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0;
+      border: 0; border-radius: 50%; background: transparent; color: #3c4043; cursor: pointer;
+      font-size: 17px;
+    }
+    .icon-button:hover { background: #e8eaed; }
+    .icon-button:disabled { opacity: .38; cursor: default; background: transparent; }
+    .composer { min-height: 0; flex: 1; display: flex; gap: 10px; }
+    #website-prompt {
+      min-width: 0; flex: 1; resize: none; padding: 11px 13px;
+      border: 1px solid #dadce0; border-radius: 10px; background: #fff; color: #202124;
+      font: 14px/1.45 "Segoe UI", system-ui, sans-serif; outline: none;
+    }
+    #website-prompt:focus { border-color: #1a73e8; box-shadow: 0 0 0 2px rgba(26,115,232,.14); }
+    #website-prompt::placeholder { color: #80868b; }
+    .prompt-actions { display: flex; flex-direction: column; justify-content: flex-end; gap: 7px; }
+    .action-button {
+      height: 34px; min-width: 104px; padding: 0 13px; border: 1px solid #dadce0;
+      border-radius: 8px; background: #fff; color: #3c4043; cursor: pointer;
+      font: 600 13px "Segoe UI", system-ui, sans-serif;
+    }
+    .action-button:hover { background: #f1f3f4; }
+    .action-button.primary { border-color: #1a73e8; background: #1a73e8; color: #fff; }
+    .action-button.primary:hover { background: #185abc; }
+    .action-button:disabled { opacity: .45; cursor: default; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="editor"></div>
+    <section id="prompt-drawer" aria-label="AI website generator">
+      <div class="prompt-head">
+        <span class="ollama-mark" aria-hidden="true">✦</span>
+        <span class="prompt-title">Create with Ollama</span>
+        <select id="model-select" aria-label="Ollama model" disabled></select>
+        <span id="ollama-status">Detecting local Ollama…</span>
+        <button id="retry-button" class="icon-button" title="Detect Ollama again" aria-label="Detect Ollama again">↻</button>
+        <button id="close-prompt" class="icon-button" title="Close prompt" aria-label="Close prompt">×</button>
+      </div>
+      <div class="composer">
+        <textarea id="website-prompt" aria-label="Website prompt" placeholder="Describe the website you want to create or the change you want to make…"></textarea>
+        <div class="prompt-actions">
+          <button id="stop-button" class="action-button" disabled>Stop</button>
+          <button id="generate-button" class="action-button primary" disabled>✦&nbsp; Generate</button>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script src="/monaco/vs/loader.js"></script>
+  <script>
+    require.config({ paths: { vs: '/monaco/vs' } });
+    require(['vs/editor/editor.main'], function () {
+      const model = monaco.editor.createModel('', 'html');
+      const editor = monaco.editor.create(document.getElementById('editor'), {
+        model,
+        theme: 'vs',
+        automaticLayout: true,
+        fontFamily: "'Cascadia Code', 'Cascadia Mono', Consolas, monospace",
+        fontLigatures: true,
+        fontSize: 14,
+        lineHeight: 21,
+        minimap: { enabled: true, showSlider: 'mouseover' },
+        padding: { top: 10, bottom: 18 },
+        bracketPairColorization: { enabled: true },
+        guides: { bracketPairs: true, indentation: true },
+        stickyScroll: { enabled: true },
+        smoothScrolling: true,
+        cursorSmoothCaretAnimation: 'on',
+        formatOnPaste: true,
+        formatOnType: true,
+        scrollBeyondLastLine: false,
+        renderWhitespace: 'selection',
+        tabSize: 2,
+        insertSpaces: true,
+      });
+
+      let loading = false;
+      function eolName() {
+        return model.getEOL() === '\r\n' ? 'CRLF' : 'LF';
+      }
+      function notify(type) {
+        chrome.webview.postMessage({ type, eol: eolName() });
+      }
+
+      const promptDrawer = document.getElementById('prompt-drawer');
+      const modelSelect = document.getElementById('model-select');
+      const ollamaStatus = document.getElementById('ollama-status');
+      const promptInput = document.getElementById('website-prompt');
+      const retryButton = document.getElementById('retry-button');
+      const closePrompt = document.getElementById('close-prompt');
+      const stopButton = document.getElementById('stop-button');
+      const generateButton = document.getElementById('generate-button');
+      let ollamaState = { models: [], detecting: false, generating: false, status: '' };
+
+      function postPrompt(type, extra = {}) {
+        chrome.webview.postMessage({ type, ...extra });
+      }
+      function updatePromptControls() {
+        const hasModel = modelSelect.options.length > 0 && modelSelect.value;
+        modelSelect.disabled = ollamaState.detecting || ollamaState.generating || !hasModel;
+        retryButton.disabled = ollamaState.detecting || ollamaState.generating;
+        promptInput.disabled = ollamaState.generating;
+        stopButton.disabled = !ollamaState.generating;
+        generateButton.disabled = ollamaState.generating || !hasModel || !promptInput.value.trim();
+        ollamaStatus.textContent = ollamaState.status || '';
+      }
+      promptInput.addEventListener('input', updatePromptControls);
+      promptInput.addEventListener('keydown', event => {
+        if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !generateButton.disabled) {
+          event.preventDefault();
+          generateButton.click();
+        }
+      });
+      generateButton.addEventListener('click', () => postPrompt('prompt-generate', {
+        prompt: promptInput.value,
+        model: modelSelect.value,
+      }));
+      stopButton.addEventListener('click', () => postPrompt('prompt-stop'));
+      retryButton.addEventListener('click', () => postPrompt('prompt-retry'));
+      closePrompt.addEventListener('click', () => {
+        promptDrawer.classList.remove('open');
+        editor.layout();
+        postPrompt('prompt-close');
+      });
+
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => notify('save'));
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => notify('navigate'));
+      model.onDidChangeContent(() => {
+        if (!loading) notify('changed');
+      });
+      model.onDidChangeOptions(() => notify('eol'));
+
+      window.sandboxEditor = {
+        setValue(value) {
+          loading = true;
+          const text = String(value ?? '');
+          model.setValue(text);
+          model.setEOL(text.includes('\r\n')
+            ? monaco.editor.EndOfLineSequence.CRLF
+            : monaco.editor.EndOfLineSequence.LF);
+          loading = false;
+          editor.setPosition({ lineNumber: 1, column: 1 });
+          editor.revealLine(1);
+          editor.focus();
+          notify('loaded');
+        },
+        getValue() {
+          return model.getValue(monaco.editor.EndOfLinePreference.TextDefined, true);
+        },
+        beginStream(eol) {
+          loading = true;
+          model.setValue('');
+          model.setEOL(eol === 'CRLF'
+            ? monaco.editor.EndOfLineSequence.CRLF
+            : monaco.editor.EndOfLineSequence.LF);
+          loading = false;
+          editor.setPosition({ lineNumber: 1, column: 1 });
+          editor.focus();
+        },
+        appendChunk(chunk) {
+          const end = model.getFullModelRange().getEndPosition();
+          loading = true;
+          model.applyEdits([{
+            range: new monaco.Range(end.lineNumber, end.column, end.lineNumber, end.column),
+            text: String(chunk ?? ''),
+            forceMoveMarkers: true,
+          }]);
+          loading = false;
+          const next = model.getFullModelRange().getEndPosition();
+          editor.setPosition(next);
+          editor.revealPosition(next, monaco.editor.ScrollType.Smooth);
+        },
+        finishStream() {
+          notify('changed');
+          const end = model.getFullModelRange().getEndPosition();
+          editor.setPosition(end);
+          editor.revealPosition(end, monaco.editor.ScrollType.Smooth);
+          editor.focus();
+        },
+        setPromptVisible(visible) {
+          promptDrawer.classList.toggle('open', !!visible);
+          editor.layout();
+          if (visible) promptInput.focus();
+        },
+        setOllamaState(state) {
+          ollamaState = { ...ollamaState, ...state };
+          const previous = modelSelect.value;
+          const models = Array.isArray(ollamaState.models) ? ollamaState.models : [];
+          const current = Array.from(modelSelect.options).map(option => option.value);
+          if (current.length !== models.length || current.some((value, index) => value !== models[index])) {
+            modelSelect.replaceChildren(...models.map(name => {
+              const option = document.createElement('option');
+              option.value = name;
+              option.textContent = name;
+              return option;
+            }));
+            if (models.includes(previous)) modelSelect.value = previous;
+          }
+          updatePromptControls();
+        },
+        focus() { editor.focus(); },
+      };
+      notify('ready');
+    });
+  </script>
+</body>
+</html>
