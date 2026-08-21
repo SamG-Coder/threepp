@@ -651,8 +651,17 @@ function hostObject() {
     SceneSetBackgroundTexture: (scene, texture) => native.setSceneBackgroundTexture(scene, texture),
     SceneSetEnvironment: (scene, texture) => native.setSceneEnvironment(scene, texture),
     PmremFromEquirect: (id, texture) => native.pmremFromEquirect(id, texture),
+    PmremFromSky: (id, sunX, sunY, sunZ, turbidity, rayleigh, _mieCoefficient, mieDirectionalG) =>
+      native.pmremFromSky(id, sunX, sunY, sunZ, turbidity, rayleigh, mieDirectionalG),
     PmremFromCubemap: (id, texture) => native.pmremFromCubemap(id, texture),
     PmremFromObject: (id, object) => native.pmremFromObject(id, object),
+    BoneCreate: () => native.boneCreate(),
+    SkeletonCreate: csv => native.skeletonCreate(Uint32Array.from(String(csv).split(",").filter(Boolean).map(Number))),
+    SkeletonSetInverses: (skeleton, encoded) => {
+      const bytes = Buffer.from(String(encoded), "base64");
+      const copy = Uint8Array.from(bytes);
+      return native.skeletonSetInverses(skeleton, new Float32Array(copy.buffer));
+    },
     SlotDestroy: id => native.destroySlot(id),
     RuntimeStartWebGpu: () => 1,
     WebGpuIsNative: () => 1,

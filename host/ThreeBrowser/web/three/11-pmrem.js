@@ -183,6 +183,11 @@
           console.warn("ThreeBrowser PMREMGenerator.fromScene", err);
         }
       }
+      const sky = extractSkyFrom(scene);
+      if (sky) {
+        const handle = nativePmremFromSky(sky);
+        if (handle) return makeTarget(handle);
+      }
       console.warn(
         "ThreeBrowser: fromScene captures the live object shader; not substituting a default sky"
       );

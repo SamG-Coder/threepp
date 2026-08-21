@@ -417,6 +417,22 @@ napi_value pmremFromEquirect(napi_env env, napi_callback_info info) {
                                               static_cast<std::uint32_t>(argNumber(env, argv[1], 0))));
 }
 
+napi_value pmremFromSky(napi_env env, napi_callback_info info) {
+    napi_value argv[7]{};
+    std::size_t argc = 7;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (!runtimeActive.load(std::memory_order_acquire) || argc != 7) return number(env, 0);
+    return number(env, tn_pmrem_from_sky(
+        static_cast<std::uint32_t>(argNumber(env, argv[0], 0)),
+        static_cast<float>(argNumber(env, argv[1], 1)),
+        static_cast<float>(argNumber(env, argv[2], 0.45)),
+        static_cast<float>(argNumber(env, argv[3], 0.25)),
+        static_cast<float>(argNumber(env, argv[4], 2)),
+        static_cast<float>(argNumber(env, argv[5], 1)),
+        0.005f,
+        static_cast<float>(argNumber(env, argv[6], 0.8))));
+}
+
 napi_value pmremFromCubemap(napi_env env, napi_callback_info info) {
     napi_value argv[2]{};
     std::size_t argc = 2;
@@ -433,6 +449,41 @@ napi_value pmremFromObject(napi_env env, napi_callback_info info) {
     if (!runtimeActive.load(std::memory_order_acquire) || argc != 2) return number(env, 0);
     return number(env, tn_pmrem_from_object(static_cast<std::uint32_t>(argNumber(env, argv[0], 0)),
                                             static_cast<std::uint32_t>(argNumber(env, argv[1], 0))));
+}
+
+napi_value boneCreate(napi_env env, napi_callback_info) {
+    return number(env, runtimeActive.load(std::memory_order_acquire) ? tn_bone_create() : 0);
+}
+
+napi_value skeletonCreate(napi_env env, napi_callback_info info) {
+    napi_value argv[1]{};
+    std::size_t argc = 1;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (!runtimeActive.load(std::memory_order_acquire) || argc != 1) return number(env, 0);
+    void* data = nullptr;
+    std::size_t length = 0;
+    napi_typedarray_type type{};
+    napi_value arrayBuffer{};
+    std::size_t offset = 0;
+    if (napi_get_typedarray_info(env, argv[0], &type, &length, &data, &arrayBuffer, &offset) != napi_ok ||
+        type != napi_uint32_array) return number(env, 0);
+    return number(env, tn_skeleton_create(static_cast<const std::uint32_t*>(data), static_cast<int>(length)));
+}
+
+napi_value skeletonSetInverses(napi_env env, napi_callback_info info) {
+    napi_value argv[2]{};
+    std::size_t argc = 2;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (!runtimeActive.load(std::memory_order_acquire) || argc != 2) return boolean(env, false);
+    void* data = nullptr;
+    std::size_t length = 0;
+    napi_typedarray_type type{};
+    napi_value arrayBuffer{};
+    std::size_t offset = 0;
+    if (napi_get_typedarray_info(env, argv[1], &type, &length, &data, &arrayBuffer, &offset) != napi_ok ||
+        type != napi_float32_array) return boolean(env, false);
+    return boolean(env, tn_skeleton_set_inverses(static_cast<std::uint32_t>(argNumber(env, argv[0], 0)),
+                                                  static_cast<const float*>(data), static_cast<int>(length)) != 0);
 }
 
 napi_value destroySlot(napi_env env, napi_callback_info info) {
@@ -588,8 +639,12 @@ napi_value init(napi_env env, napi_value exports) {
         {"setSceneBackgroundTexture", nullptr, setSceneBackgroundTexture, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setSceneEnvironment", nullptr, setSceneEnvironment, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"pmremFromEquirect", nullptr, pmremFromEquirect, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"pmremFromSky", nullptr, pmremFromSky, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"pmremFromCubemap", nullptr, pmremFromCubemap, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"pmremFromObject", nullptr, pmremFromObject, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"boneCreate", nullptr, boneCreate, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"skeletonCreate", nullptr, skeletonCreate, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"skeletonSetInverses", nullptr, skeletonSetInverses, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"destroySlot", nullptr, destroySlot, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"stats", nullptr, stats, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"pollInput", nullptr, pollInput, nullptr, nullptr, nullptr, napi_default, nullptr},
