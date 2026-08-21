@@ -91,3 +91,4 @@ and visually checked in the native window:
 - `webgl_loader_gltf.html` — GLB, embedded textures, UltraHDR and PMREM;
 - `webgl_animation_keyframes.html` — DRACO WASM worker and skinned animation;
 - `webgpu_compute_particles.html` — stock WebGPU/TSL compute and rendering.
+- `webgpu_postprocessing.html` — TSL render pipeline, dot-screen and RGB shift.
