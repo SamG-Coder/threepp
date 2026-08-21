@@ -5,7 +5,9 @@
 #include "threepp/renderers/gl/GLBindingStates.hpp"
 #include "threepp/renderers/gl/GLInfo.hpp"
 
-#ifndef __EMSCRIPTEN__
+#if defined(__ANDROID__)
+#include <GLES3/gl32.h>
+#elif !defined(__EMSCRIPTEN__)
 #include <glad/glad.h>
 #else
 #include <GL/glew.h>

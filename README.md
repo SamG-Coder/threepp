@@ -173,6 +173,11 @@ Windows-only WebView2 shell (`host/ThreeBrowser`) that intercepts `three.js` /
 `three.module.js` and talks to `three_native.dll`. Page JS keeps the three.js API;
 the GPU is a threepp `GLRenderer` HWND behind the WebView.
 
+An Android port is being developed as the separate
+[`ThreeBrowserDroid`](ThreeBrowserDroid) Android Studio project. It already has
+the WebView browser shell, JNI command boundary, and a lifecycle-safe native
+OpenGL ES surface; see its README for the remaining three.js renderer work.
+
 ```shell
 .\build.ps1    # MSYS2 Ninja native DLL + dotnet host
 .\run.ps1      # ThreeBrowser.exe

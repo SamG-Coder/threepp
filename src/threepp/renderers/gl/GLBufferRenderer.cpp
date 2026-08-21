@@ -5,7 +5,7 @@
 
 #include "threepp/renderers/gl/GLBufferRenderer.hpp"
 
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
 #include <glad/glad.h>
 #else
 #include <GLES3/gl3.h>

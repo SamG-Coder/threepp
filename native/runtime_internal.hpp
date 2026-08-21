@@ -110,6 +110,9 @@ void resetIds();
 void onWorkerAsync(std::function<void()> fn);
 void applyPendingEnvironment();
 void destroySlot(uint32_t id);
+#if defined(__ANDROID__)
+void androidWakeWorker();
+#endif
 
 template<class Fn>
 auto onWorker(Fn&& fn) -> std::invoke_result_t<Fn> {
@@ -128,6 +131,9 @@ auto onWorker(Fn&& fn) -> std::invoke_result_t<Fn> {
         g.jobs.emplace_back([task] { (*task)(); });
     }
     g.cv.notify_one();
+#if defined(__ANDROID__)
+    androidWakeWorker();
+#endif
     return fut.get();
 }
 

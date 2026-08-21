@@ -40,7 +40,7 @@
 
 #include "threepp/utils/ImageUtils.hpp"
 
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
 #include "threepp/utils/LoadGlad.hpp"
 #else
 #include <GLES3/gl32.h>
@@ -1390,7 +1390,7 @@ struct GLRenderer::Impl {
         const auto newSize = static_cast<size_t>(image.width()) * image.height() * channels;
         data.resize(newSize);
 
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) || defined(__ANDROID__)
         // WebGL lacks glGetTexImage; use a temporary FBO and glReadPixels instead.
         // glReadPixels in WebGL only reliably supports GL_RGBA/GL_UNSIGNED_BYTE.
         const auto texId = textures.getGlTexture(texture);
@@ -1515,16 +1515,24 @@ struct GLRenderer::Impl {
     friend struct gl::GLShadowMap;
 };
 
+#if !defined(__ANDROID__)
 GLRenderer::GLRenderer(Canvas& canvas, const Parameters& parameters) {
 
     canvas.initWindow(GraphicsAPI::OpenGL);
 
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
     loadGlad();
 #endif
 
     pimpl_ = std::make_unique<Impl>(*this, canvas.size(), parameters);
 }
+#endif
+
+#ifdef __ANDROID__
+GLRenderer::GLRenderer(WindowSize size, const Parameters& parameters) {
+    pimpl_ = std::make_unique<Impl>(*this, size, parameters);
+}
+#endif
 
 
 const gl::GLInfo& GLRenderer::info() {

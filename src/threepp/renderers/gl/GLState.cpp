@@ -4,7 +4,7 @@
 #include "threepp/materials/Material.hpp"
 #include "threepp/renderers/gl/GLUtils.hpp"
 
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) || defined(__ANDROID__)
 #include <GLES3/gl32.h>
 #endif
 
@@ -193,7 +193,11 @@ void gl::DepthBuffer::setLocked(bool lock) {
 void gl::DepthBuffer::setClear(float depth) {
     if (currentDepthClear != depth) {
 
+#if defined(__ANDROID__)
+        glClearDepthf(depth);
+#else
         glClearDepth(depth);
+#endif
         currentDepthClear = depth;
     }
 }
@@ -777,7 +781,11 @@ void gl::GLState::reset(std::pair<int, int> size) {
 
     glDepthMask(true);
     glDepthFunc(GL_LESS);
+#if defined(__ANDROID__)
+    glClearDepthf(1);
+#else
     glClearDepth(1);
+#endif
 
     glStencilMask(0xffffffff);
     glStencilFunc(GL_ALWAYS, 0, 0xffffffff);

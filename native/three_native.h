@@ -33,6 +33,7 @@ TN_API float tn_runtime_aspect(void);
 TN_API int tn_runtime_attach_host(void* parent_hwnd, int x, int y, int width, int height);
 TN_API void* tn_runtime_hwnd(void);
 TN_API int tn_cmd_submit(const uint8_t* data, int nbytes);
+TN_API int tn_cmd_submit_async(const uint8_t* data, int nbytes);
 TN_API int tn_frame_info(int* width, int* height, uint64_t* generation);
 TN_API int tn_frame_copy(uint8_t* dst, int max_bytes, int* width, int* height, uint64_t* generation);
 

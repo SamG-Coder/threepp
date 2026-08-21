@@ -3,7 +3,10 @@
 #ifndef THREEPP_GLUTILS_HPP
 #define THREEPP_GLUTILS_HPP
 
-#ifndef __EMSCRIPTEN__
+#if defined(__ANDROID__)
+#include <GLES3/gl32.h>
+#include <GLES2/gl2ext.h>
+#elif !defined(__EMSCRIPTEN__)
 #include <glad/glad.h>
 #else
 #include <GL/gl.h>
@@ -35,9 +38,18 @@ namespace threepp::gl {
             case Format::RGBA:
                 return GL_RGBA;
             case Format::BGR:
+#if defined(__ANDROID__)
+                // OpenGL ES has no three-component BGR upload format.
+                return GL_RGB;
+#else
                 return GL_BGR;
+#endif
             case Format::BGRA:
+#if defined(__ANDROID__)
+                return GL_BGRA_EXT;
+#else
                 return GL_BGRA;
+#endif
             case Format::Luminance:
                 return GL_LUMINANCE;
             case Format::LuminanceAlpha:

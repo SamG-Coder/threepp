@@ -289,7 +289,13 @@ std::unique_ptr<RenderTarget> captureObjectEquirect(GLRenderer& gl, Object3D& ob
     mat->depthTest = false;
     mat->depthWrite = false;
     mat->side = Side::Double;
-    mat->vertexShader = R"(#version 330 core
+    mat->vertexShader =
+#if defined(__ANDROID__)
+            "#version 300 es\n"
+#else
+            "#version 330 core\n"
+#endif
+            R"(
 in vec3 position;
 in vec2 uv;
 out vec2 vUv;
@@ -298,7 +304,15 @@ void main() {
     gl_Position = vec4(position, 1.0);
 }
 )";
-    mat->fragmentShader = R"(#version 330 core
+    mat->fragmentShader =
+#if defined(__ANDROID__)
+            "#version 300 es\n"
+#else
+            "#version 330 core\n"
+#endif
+            R"(
+precision highp float;
+precision highp int;
 in vec2 vUv;
 out vec4 fragColor;
 uniform samplerCube envMap;

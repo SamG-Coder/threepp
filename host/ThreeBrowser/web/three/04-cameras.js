@@ -389,8 +389,16 @@
         this.reversedDepth
       );
       copyInverse(this.projectionMatrix, this.projectionMatrixInverse);
-      const n = native();
-      if (n && this._h) n.CameraUpdateProjectionMatrix(this._h);
+      if (this._h) {
+        if (TN.cmd && typeof TN.cmd.camUpdProj === "function") {
+          TN.cmd.camUpdProj(this._h);
+        } else {
+          const n = native();
+          if (n && typeof n.CameraUpdateProjectionMatrix === "function") {
+            n.CameraUpdateProjectionMatrix(this._h);
+          }
+        }
+      }
     }
 
     toJSON(meta) {

@@ -218,8 +218,10 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             if (!has(p, end, 8)) return;
             const int w = std::max(1, static_cast<int>(ru32(p)));
             const int h = std::max(1, static_cast<int>(ru32(p + 4)));
-            if (g.canvas && g.renderer) {
+            if (g.renderer) {
+#if !defined(__ANDROID__)
                 g.canvas->setSize({w, h});
+#endif
                 g.renderer->setSize({w, h});
             }
             return;
@@ -892,6 +894,22 @@ int tn_cmd_submit(const uint8_t* data, int nbytes) {
             execStream(buf.data(), static_cast<int>(buf.size()));
             return 1;
         });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+}
+
+int tn_cmd_submit_async(const uint8_t* data, int nbytes) {
+    try {
+        if (!data || nbytes <= 0) {
+            return 1;
+        }
+        std::vector<uint8_t> copy(data, data + nbytes);
+        onWorkerAsync([buf = std::move(copy)] {
+            execStream(buf.data(), static_cast<int>(buf.size()));
+        });
+        return 1;
     } catch (const std::exception& ex) {
         setError(ex.what());
         return 0;

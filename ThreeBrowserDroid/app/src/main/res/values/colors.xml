@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="chrome_background">#F5F6F8</color>
+    <color name="chrome_border">#D8DCE3</color>
+    <color name="accent">#0B67D1</color>
+    <color name="text_primary">#15171A</color>
+</resources>
+

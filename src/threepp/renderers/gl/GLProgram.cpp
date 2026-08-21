@@ -16,7 +16,7 @@
 #include <sstream>
 #include <vector>
 
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
 #include <glad/glad.h>
 #else
 #include <GLES3/gl32.h>
@@ -729,7 +729,7 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
     fragmentShader = unrollLoops(fragmentShader);
 
     std::string glslVersion{"330 core"};
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) || defined(__ANDROID__)
     glslVersion = "300 es";
 #endif
 

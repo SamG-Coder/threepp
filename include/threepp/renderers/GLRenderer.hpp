@@ -36,6 +36,11 @@ namespace threepp {
         /// constructor when using Canvas, as it handles lazy window init.
         explicit GLRenderer(Canvas& canvas, const Parameters& parameters = {});
 
+#ifdef __ANDROID__
+        /// Uses the EGL/OpenGL ES context already made current by the Android host.
+        explicit GLRenderer(WindowSize size, const Parameters& parameters = {});
+#endif
+
         GLRenderer(GLRenderer&&) = delete;
         GLRenderer(const GLRenderer&) = delete;
         GLRenderer& operator=(const GLRenderer&) = delete;

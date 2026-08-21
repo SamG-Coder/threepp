@@ -88,6 +88,10 @@
   let pendingSubmit = false;
   let hostCache = null;
   let dirtyHead = null;
+  let asyncSubmitTimer = 0;
+  let lastAsyncSubmitAt = -Infinity;
+  let pendingAsyncScene = 0;
+  let pendingAsyncCamera = 0;
 
   function host() {
     if (hostCache) return hostCache;
@@ -142,7 +146,7 @@
     return btoa(s);
   }
 
-  function submitNow() {
+  function submitNow(preferAsync) {
     if (off <= 0) return;
     const n = host();
     const used = off;
@@ -150,6 +154,19 @@
     // COM CmdSubmit reads the C# mapping, not this JS heap — copy the
     // pending bytes so geometry/mesh exist before PMREM captures them.
     if (!shared) {
+      // Android WebView can move an ArrayBuffer through its asynchronous
+      // WebMessage channel. Keep synchronous Base64 below for initialization
+      // barriers where the caller immediately invokes a native host method.
+      if (preferAsync && TN.hostHas(n, "CmdSubmitBuffer")) {
+        try {
+          n.CmdSubmitBuffer(ab.slice(0, used));
+          off = 0;
+          pendingSubmit = false;
+          return;
+        } catch (err) {
+          console.warn("ThreeBrowser binary cmd submit failed", err);
+        }
+      }
       if (TN.hostHas(n, "CmdSubmitB64")) {
         try {
           n.CmdSubmitB64(bytesToB64(u8.subarray(0, used)));
@@ -273,6 +290,72 @@
     submitNow();
   }
 
+  function asyncSubmitInterval(n) {
+    if (!TN.hostHas(n, "CmdSubmitIntervalMs")) return 0;
+    try {
+      const value = Number(n.CmdSubmitIntervalMs());
+      return Number.isFinite(value) && value > 0 ? value : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  function appendRender(scene, camera) {
+    const s = begin(OP.RENDER, 8);
+    wu32(scene);
+    wu32(camera);
+    end(s);
+  }
+
+  function emitAsyncFrame() {
+    const scene = pendingAsyncScene;
+    const camera = pendingAsyncCamera;
+    pendingAsyncScene = 0;
+    pendingAsyncCamera = 0;
+    flushPoses();
+    appendRender(scene, camera);
+    lastAsyncSubmitAt = performance.now();
+    submitNow(true);
+  }
+
+  function submitFrame(scene, camera) {
+    const n = host();
+    const interval = asyncSubmitInterval(n);
+    if (interval <= 0) {
+      flushPoses();
+      appendRender(scene, camera);
+      submitNow(true);
+      return;
+    }
+
+    // Retain only the most recent requested view while pose objects remain on
+    // the dirty list. When emitted, flushPoses reads their latest JS state, so
+    // obsolete animation frames are coalesced without losing one-shot edits.
+    pendingAsyncScene = scene;
+    pendingAsyncCamera = camera;
+    const now = performance.now();
+    const delay = interval - (now - lastAsyncSubmitAt);
+    if (delay <= 0) {
+      if (asyncSubmitTimer) {
+        clearTimeout(asyncSubmitTimer);
+        asyncSubmitTimer = 0;
+      }
+      emitAsyncFrame();
+      return;
+    }
+    if (!asyncSubmitTimer) {
+      asyncSubmitTimer = setTimeout(() => {
+        asyncSubmitTimer = 0;
+        emitAsyncFrame();
+      }, delay);
+    }
+  }
+
+  function submitAsync() {
+    flushPoses();
+    submitNow(true);
+  }
+
   const cmd = {
     OP,
     MAP_SLOT,
@@ -281,14 +364,13 @@
     markPose,
     flushPoses,
     submit,
+    submitAsync,
+    submitFrame,
     ready() {
       return !!host();
     },
     render(scene, camera) {
-      const s = begin(OP.RENDER, 8);
-      wu32(scene);
-      wu32(camera);
-      end(s);
+      appendRender(scene, camera);
     },
     setSize(w, h) {
       const s = begin(OP.SET_SIZE, 8);

@@ -921,7 +921,7 @@ if (THREEPP_WITH_VULKAN)
     endif ()
 endif ()
 
-if (NOT DEFINED EMSCRIPTEN)
+if (NOT DEFINED EMSCRIPTEN AND NOT ANDROID)
     list(APPEND privateHeaders
             "threepp/utils/LoadGlad.hpp"
     )
@@ -947,7 +947,7 @@ add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull})
 add_library(threepp::threepp ALIAS threepp)
 target_compile_features(threepp PUBLIC "cxx_std_20")
 
-if (UNIX)
+if (UNIX AND NOT ANDROID)
     target_link_libraries(threepp PRIVATE pthread dl)
 endif ()
 
@@ -1006,7 +1006,7 @@ if (THREEPP_WITH_FBX)
     target_compile_definitions(threepp PRIVATE THREEPP_WITH_FBX)
 endif ()
 
-if (NOT DEFINED EMSCRIPTEN)
+if (NOT DEFINED EMSCRIPTEN AND NOT ANDROID)
 
     target_include_directories(threepp
             PRIVATE
@@ -1024,6 +1024,10 @@ if (NOT DEFINED EMSCRIPTEN)
         endif ()
     endif ()
 
+endif ()
+
+if (ANDROID)
+    target_link_libraries(threepp PRIVATE GLESv3 log)
 endif ()
 
 

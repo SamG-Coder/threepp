@@ -2,16 +2,23 @@
 
 #include <cstring>
 #include <fstream>
+#if defined(__ANDROID__)
+#include <android/log.h>
+#endif
 
 namespace tn {
 
 Runtime g;
 
 void logLine(const char* message) {
+#if defined(__ANDROID__)
+    __android_log_print(ANDROID_LOG_INFO, "ThreeBrowserNative", "%s", message ? message : "");
+#else
     std::ofstream out("C:\\ThreeBrowser\\host\\native.log", std::ios::app);
     if (out) {
         out << message << '\n';
     }
+#endif
 }
 
 void setError(const char* message) {
@@ -34,9 +41,13 @@ void ensureWorker() {
     if (g.workerStarted) {
         return;
     }
+#if defined(__ANDROID__)
+    throw std::runtime_error("Android render context is not attached");
+#else
     g.stop = false;
     g.worker = std::thread(workerMain);
     g.workerStarted = true;
+#endif
 }
 
 void onWorkerAsync(std::function<void()> fn) {
@@ -52,6 +63,9 @@ void onWorkerAsync(std::function<void()> fn) {
         });
     }
     g.cv.notify_one();
+#if defined(__ANDROID__)
+    androidWakeWorker();
+#endif
 }
 
 void resetIds() {

@@ -548,9 +548,13 @@
         }
       }
       if (TN.cmd) {
-        TN.cmd.flushPoses();
-        TN.cmd.render(scene?._h || 0, camera?._h || 0);
-        TN.cmd.submit();
+        if (typeof TN.cmd.submitFrame === "function") {
+          TN.cmd.submitFrame(scene?._h || 0, camera?._h || 0);
+        } else {
+          TN.cmd.flushPoses();
+          TN.cmd.render(scene?._h || 0, camera?._h || 0);
+          TN.cmd.submit();
+        }
         return true;
       }
       flushObject(scene);

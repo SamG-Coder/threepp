@@ -18,6 +18,12 @@ using namespace threepp::gl;
 
 namespace {
 
+#if defined(__ANDROID__)
+    const std::string GLSL_VERSION = "#version 300 es\n";
+#else
+    const std::string GLSL_VERSION = "#version 330 core\n";
+#endif
+
     // ---------------------------------------------------------------------
     // Equirect LOD-strip atlas (replaces the old cube-face "cubeUV" atlas).
     //
@@ -64,7 +70,7 @@ namespace {
     // [0,1]^2 over the strip, uv.y increasing upward (GL bottom-up) so uv.y=0 is
     // the south pole. getDirection() in the fragment shader maps (uv) -> world
     // direction; the material's eqUvFromDir() is its exact inverse.
-    const char* const VERTEX_SRC = R"(#version 330 core
+    const std::string VERTEX_SRC = GLSL_VERSION + R"(
 in vec3 position;
 in vec2 uv;
 out vec2 vUv;
@@ -79,7 +85,7 @@ void main() {
     // prefilter (prefilter_env.comp): integrate the
     // source equirect over a GGX lobe around the output direction (= N for the
     // prefilter), weighted by NdotL. roughness==0 collapses to a direct fetch.
-    const char* const FRAGMENT_SRC = R"(#version 330 core
+    const std::string FRAGMENT_SRC = GLSL_VERSION + R"(
 precision highp float;
 precision highp int;
 

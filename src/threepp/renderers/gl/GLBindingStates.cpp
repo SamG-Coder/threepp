@@ -8,7 +8,7 @@
 #include "threepp/materials/materials.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) || defined(__ANDROID__)
 #include <GLES3/gl32.h>
 #endif
 

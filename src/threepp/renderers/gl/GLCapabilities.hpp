@@ -7,6 +7,7 @@
 
 #include <ostream>
 #include <string>
+#include <cstring>
 
 namespace threepp::gl {
 
@@ -62,8 +63,20 @@ namespace threepp::gl {
         }
 
     private:
+#if defined(__ANDROID__)
+        static int queryMaxAnisotropy() {
+            const auto* extensions = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
+            if (!extensions || !std::strstr(extensions, "GL_EXT_texture_filter_anisotropic")) return 1;
+            return static_cast<int>(glGetParameterf(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT));
+        }
+#endif
+
         GLCapabilities()
+#if defined(__ANDROID__)
+            : maxAnisotropy(queryMaxAnisotropy()),
+#else
             : maxAnisotropy(static_cast<int>(glGetParameterf(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT))),
+#endif
 
               maxTextures(glGetParameteri(GL_MAX_TEXTURE_IMAGE_UNITS)),
               maxVertexTextures(glGetParameteri(GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS)),
@@ -76,7 +89,11 @@ namespace threepp::gl {
               maxFragmentUniforms(glGetParameteri(GL_MAX_FRAGMENT_UNIFORM_VECTORS)),
 
               vertexTextures(maxVertexTextures > 0),
+#if defined(__ANDROID__)
+              floatFragmentTextures(true),
+#else
               floatFragmentTextures(GL_ARB_texture_float),
+#endif
               floatVertexTextures(vertexTextures && floatFragmentTextures),
 
               maxSamples(glGetParameteri(GL_MAX_SAMPLES)) {}

@@ -9,6 +9,7 @@
 #include "threepp/renderers/VulkanRenderer.hpp"
 #endif
 
+#if defined(_WIN32)
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -17,6 +18,7 @@
 #define GLFW_NATIVE_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <GLFW/glfw3native.h>
+#endif
 
 #include <atomic>
 #include <chrono>
@@ -46,6 +48,7 @@ using tn::g;
 namespace tn {
 
 void destroySurface() {
+#if defined(_WIN32)
     if (g.canvas) {
         if (auto* glfwWindow = static_cast<GLFWwindow*>(g.canvas->windowPtr())) {
             if (HWND child = glfwGetWin32Window(glfwWindow)) {
@@ -54,6 +57,7 @@ void destroySurface() {
             }
         }
     }
+#endif
     g.nativeHwnd.store(nullptr);
     g.renderer.reset();
     g.canvas.reset();
@@ -80,7 +84,7 @@ static void renderPendingFrame() {
     tn::applyPendingEnvironment();
     const uint32_t sceneHandle = g.drawScene.load();
     const uint32_t cameraHandle = g.drawCamera.load();
-    if (!g.canvas || !g.renderer || sceneHandle == 0 || cameraHandle == 0) {
+    if (!g.renderer || sceneHandle == 0 || cameraHandle == 0) {
         g.sceneDirty.store(false, std::memory_order_relaxed);
         return;
     }
@@ -101,7 +105,11 @@ static void renderPendingFrame() {
         return;
     }
     const auto t0 = std::chrono::steady_clock::now();
+#if defined(__ANDROID__)
+    g.renderer->render(*scene, *camera);
+#else
     g.canvas->animateOnce([&] { g.renderer->render(*scene, *camera); });
+#endif
     const auto t1 = std::chrono::steady_clock::now();
     g.statsFrameUs.store(
             static_cast<int>(std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count()),
@@ -169,9 +177,15 @@ namespace {
 
 int impl_runtime_start(int width, int height, const char* title) {
     setError("");
-    if (g.canvas) {
+    if (g.renderer) {
         return 1;
     }
+#if defined(__ANDROID__)
+    (void) title;
+    const int w = width > 0 ? width : 1;
+    const int h = height > 0 ? height : 1;
+    g.renderer = std::make_unique<GLRenderer>(WindowSize{w, h});
+#else
     const bool wantVulkan = g.backend.load(std::memory_order_relaxed) != 0;
 #ifndef THREEPP_WITH_VULKAN
     if (wantVulkan) {
@@ -228,6 +242,7 @@ int impl_runtime_start(int width, int height, const char* title) {
     }
     const int w = width > 0 ? width : 800;
     const int h = height > 0 ? height : 600;
+#endif
     g.statsW.store(w, std::memory_order_relaxed);
     g.statsH.store(h, std::memory_order_relaxed);
     logLine("runtime started");
@@ -237,6 +252,66 @@ int impl_runtime_start(int width, int height, const char* title) {
 }// namespace
 
 extern "C" {
+
+#if defined(__ANDROID__)
+int tn_android_context_create(int width, int height) {
+    std::lock_guard<std::mutex> lock(g.mu);
+    g.stop = false;
+    g.workerStarted = true;
+    g.workerId = std::this_thread::get_id();
+    return impl_runtime_start(width, height, "ThreeBrowserDroid");
+}
+
+void tn_android_context_resize(int width, int height) {
+    width = std::max(1, width);
+    height = std::max(1, height);
+    g.statsW.store(width, std::memory_order_relaxed);
+    g.statsH.store(height, std::memory_order_relaxed);
+    if (g.renderer) g.renderer->setSize({width, height});
+}
+
+void tn_android_frame(void) {
+    std::vector<std::function<void()>> jobs;
+    {
+        std::lock_guard<std::mutex> lock(g.mu);
+        while (!g.jobs.empty()) {
+            jobs.push_back(std::move(g.jobs.front()));
+            g.jobs.pop_front();
+        }
+    }
+    for (auto& job : jobs) {
+        try {
+            job();
+        } catch (const std::exception& ex) {
+            setError(ex.what());
+        } catch (...) {
+            setError("Android native job failed");
+        }
+    }
+    try {
+        renderPendingFrame();
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+    } catch (...) {
+        setError("Android native render failed");
+    }
+}
+
+void tn_android_context_destroy(void) {
+    tn_android_frame();
+    g.drawScene.store(0);
+    g.drawCamera.store(0);
+    g.slots.clear();
+    g.pendingEnvironment.clear();
+    g.envHemi.reset();
+    g.envSun.reset();
+    destroySurface();
+    std::lock_guard<std::mutex> lock(g.mu);
+    g.workerStarted = false;
+    g.workerId = {};
+    tn::resetIds();
+}
+#endif
 
 const char* tn_last_error(void) {
     thread_local std::string copy;
@@ -258,6 +333,11 @@ int tn_runtime_has_vulkan(void) {
 }
 
 void tn_runtime_set_backend(int vulkan) {
+#if defined(__ANDROID__)
+    if (vulkan != 0) setError("Vulkan is not available in the Android build");
+    g.backend.store(0, std::memory_order_relaxed);
+    return;
+#else
 #ifdef THREEPP_WITH_VULKAN
     const int want = vulkan != 0 ? 1 : 0;
 #else
@@ -290,6 +370,7 @@ void tn_runtime_set_backend(int vulkan) {
     } catch (const std::exception& ex) {
         setError(ex.what());
     }
+#endif
 }
 
 int tn_runtime_start(int width, int height, const char* title) {
@@ -306,7 +387,11 @@ int tn_runtime_start(int width, int height, const char* title) {
 
 int tn_runtime_is_open(void) {
     try {
+#if defined(__ANDROID__)
+        return g.renderer ? 1 : 0;
+#else
         return onWorker([] { return g.canvas && g.canvas->isOpen() ? 1 : 0; });
+#endif
     } catch (...) {
         return 0;
     }
@@ -319,10 +404,12 @@ void tn_runtime_set_size(int width, int height) {
         g.statsW.store(width, std::memory_order_relaxed);
         g.statsH.store(height, std::memory_order_relaxed);
         onWorkerAsync([width, height] {
-            if (!g.canvas || !g.renderer) {
+            if (!g.renderer) {
                 return;
             }
+#if !defined(__ANDROID__)
             g.canvas->setSize({width, height});
+#endif
             g.renderer->setSize({width, height});
         });
     } catch (const std::exception& ex) {
@@ -355,6 +442,7 @@ void tn_runtime_set_vsync(int enabled) {
     try {
         const bool on = enabled != 0;
         g.vsync.store(on, std::memory_order_relaxed);
+#if defined(_WIN32)
         onWorkerAsync([on] {
             if (!g.canvas) {
                 return;
@@ -375,6 +463,7 @@ void tn_runtime_set_vsync(int enabled) {
             glfwMakeContextCurrent(glfwWindow);
             glfwSwapInterval(on ? 1 : 0);
         });
+#endif
     } catch (const std::exception& ex) {
         setError(ex.what());
     }
@@ -412,6 +501,7 @@ int tn_frame_copy(uint8_t* dst, int maxBytes, int* width, int* height, uint64_t*
 }
 
 int tn_runtime_attach_host(void* parentHwnd, int x, int y, int width, int height) {
+#if defined(_WIN32)
     try {
         if (!parentHwnd) {
             setError("invalid hwnd");
@@ -491,6 +581,15 @@ int tn_runtime_attach_host(void* parentHwnd, int x, int y, int width, int height
         setError(ex.what());
         return 0;
     }
+#else
+    (void) parentHwnd;
+    (void) x;
+    (void) y;
+    (void) width;
+    (void) height;
+    setError("host HWND attachment is only available on Windows");
+    return 0;
+#endif
 }
 
 void* tn_runtime_hwnd(void) {
@@ -544,7 +643,14 @@ void tn_runtime_reset(void) {
 
 float tn_runtime_aspect(void) {
     try {
-        return onWorker([] { return g.canvas ? g.canvas->aspect() : 1.f; });
+        return onWorker([] {
+#if defined(__ANDROID__)
+            const int h = std::max(1, g.statsH.load(std::memory_order_relaxed));
+            return static_cast<float>(g.statsW.load(std::memory_order_relaxed)) / static_cast<float>(h);
+#else
+            return g.canvas ? g.canvas->aspect() : 1.f;
+#endif
+        });
     } catch (...) {
         return 1.f;
     }
