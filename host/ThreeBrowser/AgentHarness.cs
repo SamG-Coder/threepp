@@ -54,6 +54,9 @@ internal sealed class AgentHarness : IDisposable
         for (var turn = 0; turn < MaxTurns; turn++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            emit("activity", turn == 0
+                ? "Planning the work"
+                : "Reviewing results and planning the next step");
             using var request = new HttpRequestMessage(HttpMethod.Post, "api/chat")
             {
                 Content = JsonContent.Create(new
@@ -123,10 +126,12 @@ internal sealed class AgentHarness : IDisposable
                 try
                 {
                     var value = await ExecuteToolAsync(name, arguments, emit, cancellationToken);
+                    emit("result", DescribeToolCompletion(name, arguments));
                     result = JsonSerializer.Serialize(new { ok = true, result = value });
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
+                    emit("error", $"{name} failed: {ex.Message}");
                     result = JsonSerializer.Serialize(new { ok = false, error = ex.Message });
                 }
                 messages.Add(new Dictionary<string, object?>
@@ -256,7 +261,10 @@ internal sealed class AgentHarness : IDisposable
     {
         var detail = name switch
         {
-            "read_file" or "write_file" or "create_directory" => String(arguments, "path", ""),
+            "list_files" => String(arguments, "path", "."),
+            "read_file" or "create_directory" => String(arguments, "path", ""),
+            "write_file" => $"{String(arguments, "path", "")} · {String(arguments, "content", "").Length:N0} characters",
+            "replace_in_file" => String(arguments, "path", ""),
             "grep" => String(arguments, "pattern", ""),
             "create_goal" => String(arguments, "title", ""),
             "create_task" => String(arguments, "prompt", ""),
@@ -265,6 +273,27 @@ internal sealed class AgentHarness : IDisposable
             _ => "",
         };
         return detail.Length == 0 ? name : $"{name}: {detail}";
+    }
+
+    private static string DescribeToolCompletion(string name, JsonElement arguments)
+    {
+        var path = String(arguments, "path", "");
+        return name switch
+        {
+            "list_files" => $"Listed {String(arguments, "path", ".")}",
+            "read_file" => $"Read {path}",
+            "write_file" => $"Wrote {path}",
+            "replace_in_file" => $"Updated {path}",
+            "create_directory" => $"Created folder {path}",
+            "grep" => $"Finished searching for {String(arguments, "pattern", "")}",
+            "list_goals" => "Loaded workspace goals",
+            "create_goal" => "Created workspace goal",
+            "update_goal" => "Updated workspace goal",
+            "create_task" => "Started local subtask",
+            "wait_task" => $"Finished waiting for {String(arguments, "task_id", "task")}",
+            "run_project" => "Opened the project in ThreeBrowser",
+            _ => $"Completed {name}",
+        };
     }
 
     private static string RequiredString(JsonElement arguments, string name)

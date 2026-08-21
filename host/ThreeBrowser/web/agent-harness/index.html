@@ -66,6 +66,8 @@
     .event.user::before { content: '›'; color: #1a73e8; font-size: 18px; }
     .event.tool { background: #f8f9fa; color: #3c4043; font: 12px/1.5 "Cascadia Mono", Consolas, monospace; }
     .event.tool::before { content: '⚙'; }
+    .event.result { padding-top: 8px; padding-bottom: 8px; border-color: #e4e6e8; background: #fff; color: #5f6368; font-size: 12px; }
+    .event.result::before { top: 8px; content: '✓'; color: #188038; }
     .event.task::before { content: '◇'; color: #7b1fa2; }
     .event.change { border-color: #d2e3fc; background: #f5f8ff; color: #174ea6; font: 12px/1.5 "Cascadia Mono", Consolas, monospace; }
     .event.change::before { content: 'M'; color: #1a73e8; font: 700 10px/18px "Segoe UI", system-ui, sans-serif; }
@@ -76,6 +78,8 @@
     .event.system::before { content: 'i'; color: #1a73e8; }
     .event.thinking { width: fit-content; min-width: 126px; color: #5f6368; }
     .event.thinking::before { content: '◇'; color: #1a73e8; animation: think-pulse 1.2s ease-in-out infinite; }
+    .event.activity { width: fit-content; min-width: 210px; border-color: #d2e3fc; background: #f5f8ff; color: #3c4043; }
+    .event.activity::before { content: '◇'; color: #1a73e8; animation: think-pulse 1.2s ease-in-out infinite; }
     .thinking-dots { display: inline-flex; width: 23px; justify-content: space-between; margin-left: 6px; vertical-align: middle; }
     .thinking-dots span { width: 4px; height: 4px; border-radius: 50%; background: #5f6368; animation: think-dot 1.2s ease-in-out infinite; }
     .thinking-dots span:nth-child(2) { animation-delay: .16s; }
@@ -478,12 +482,36 @@
           selectedFile = null;
           selectedDirectory = null;
         }
-        if (!state.running) document.getElementById('agent-thinking')?.remove();
+        if (!state.running) {
+          document.getElementById('agent-thinking')?.remove();
+          document.getElementById('agent-activity')?.remove();
+        }
         updateControls();
       },
       appendEvent(kind, message) {
         welcome?.remove();
+        if (kind === 'activity') {
+          document.getElementById('agent-thinking')?.remove();
+          let activity = document.getElementById('agent-activity');
+          if (!activity) {
+            activity = document.createElement('div');
+            activity.id = 'agent-activity';
+            activity.className = 'event activity';
+            const label = document.createElement('span');
+            label.className = 'activity-label';
+            const dots = document.createElement('span');
+            dots.className = 'thinking-dots';
+            dots.setAttribute('aria-label', 'Agent is working');
+            dots.append(document.createElement('span'), document.createElement('span'), document.createElement('span'));
+            activity.append(label, dots);
+            timeline.append(activity);
+          }
+          activity.querySelector('.activity-label').textContent = message;
+          timeline.scrollTop = timeline.scrollHeight;
+          return;
+        }
         document.getElementById('agent-thinking')?.remove();
+        document.getElementById('agent-activity')?.remove();
         const item = document.createElement('div');
         item.className = `event ${kind}`;
         if (kind === 'thinking') {
