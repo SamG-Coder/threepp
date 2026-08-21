@@ -7,33 +7,58 @@
   <style>
     :root { font-family: "Segoe UI", system-ui, sans-serif; color: #202124; background: #fff; }
     * { box-sizing: border-box; }
-    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    html, body { width: 100%; height: 100%; min-height: 0; margin: 0; overflow: hidden; }
     button, select, textarea { font: inherit; }
-    #app { height: 100%; display: grid; grid-template-columns: 260px minmax(0, 1fr); }
-    aside { min-width: 0; display: flex; flex-direction: column; border-right: 1px solid #dadce0; background: #f8f9fa; }
+    #app { width: 100%; height: 100%; min-height: 0; display: grid; grid-template-columns: 248px minmax(0, 1fr); overflow: hidden; }
+    aside { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid #dadce0; background: #f8f9fa; }
     .sidebar-head { display: flex; align-items: center; height: 50px; padding: 0 10px 0 15px; }
     .sidebar-title { flex: 1; color: #3c4043; font-size: 13px; font-weight: 600; }
     .count { min-width: 22px; margin-right: 5px; padding: 2px 7px; border-radius: 999px; background: #e8eaed; color: #5f6368; font-size: 11px; text-align: center; }
     .icon-button { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: #3c4043; cursor: pointer; font-size: 17px; }
     .icon-button:hover { background: #e8eaed; }
-    .sidebar-body { min-height: 0; flex: 1; overflow: auto; padding: 0 9px 12px; }
-    .section { padding: 12px 6px 14px; border-top: 1px solid #e4e6e8; }
+    .icon-button:disabled { opacity: .38; cursor: default; background: transparent; }
+    .sidebar-body { min-height: 0; flex: 1; overflow: auto; padding: 0 8px 12px; }
+    .section { padding: 12px 7px 14px; border-top: 1px solid #e4e6e8; }
     .section:first-child { border-top: 0; }
     .section-label { margin-bottom: 8px; color: #5f6368; font-size: 11px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
-    select { width: 100%; height: 34px; padding: 0 9px; border: 1px solid #dadce0; border-radius: 7px; background: #fff; color: #202124; outline: none; }
+    select { width: 100%; height: 34px; padding: 0 9px; border: 1px solid #dadce0; border-radius: 7px; background: #fff; color: #202124; font-size: 13px; outline: none; }
     select:focus, textarea:focus { border-color: #1a73e8; box-shadow: 0 0 0 2px rgba(26,115,232,.14); }
+    .model-warning { display: none; margin-top: 7px; padding: 7px 8px; border-radius: 6px; background: #fce8e6; color: #b3261e; font-size: 11px; line-height: 1.4; }
+    .model-warning.visible { display: block; }
     #project-detail { min-height: 18px; margin-top: 6px; overflow: hidden; color: #80868b; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+    .project-actions { display: flex; justify-content: flex-end; margin-top: 5px; }
+    .link-button { height: 27px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: #185abc; font-size: 12px; cursor: pointer; }
+    .link-button:hover { background: #e8f0fe; }
+    .link-button:disabled { opacity: .38; cursor: default; background: transparent; }
     .tools { display: grid; gap: 9px; }
     .tool { display: flex; align-items: center; gap: 8px; color: #5f6368; font-size: 12px; }
     .tool-glyph { width: 20px; color: #1a73e8; text-align: center; }
-    .offline { margin-top: auto; padding: 12px 14px; border-top: 1px solid #ceead6; background: #e6f4ea; color: #137333; }
+    .offline { flex: 0 0 auto; margin-top: auto; padding: 12px 14px; border-top: 1px solid #ceead6; background: #e6f4ea; color: #137333; }
     .offline-title { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 650; }
     .offline-copy { margin-top: 5px; font-size: 11px; line-height: 1.45; }
-    main { min-width: 0; display: flex; flex-direction: column; background: #fff; }
+    .section-heading { display: flex; align-items: center; min-height: 24px; margin-bottom: 4px; }
+    .section-heading .section-label { min-width: 0; flex: 1; margin: 0; }
+    .section-count { min-width: 19px; padding: 1px 6px; border-radius: 999px; background: #e8eaed; color: #5f6368; font-size: 10px; text-align: center; }
+    .file-tree { margin: 0 -2px; padding: 2px 0; background: #fff; border: 1px solid #e4e6e8; border-radius: 7px; overflow: hidden; }
+    .tree-row { display: flex; align-items: center; width: 100%; height: 28px; padding: 0 7px; border: 0; background: transparent; color: #3c4043; font: 12px "Segoe UI", system-ui, sans-serif; text-align: left; }
+    .tree-row.changed { background: #e8f0fe; color: #174ea6; }
+    .tree-row.file { cursor: pointer; }
+    .tree-row.file:hover { background: #f1f3f4; }
+    .tree-row.file.selected { background: #d2e3fc; color: #174ea6; }
+    .tree-glyph { flex: 0 0 20px; color: #5f6368; text-align: center; }
+    .tree-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tree-size { margin-left: 6px; color: #9aa0a6; font-size: 10px; }
+    .tree-state { flex: 0 0 18px; margin-left: 4px; color: #1a73e8; font-size: 10px; font-weight: 700; text-align: center; }
+    .empty-tree { padding: 10px 8px; color: #80868b; font-size: 12px; line-height: 1.45; text-align: center; }
+    .changed-list { display: grid; gap: 2px; }
+    .changed-file { display: flex; align-items: center; min-height: 28px; padding: 4px 7px; border-radius: 5px; background: #e8f0fe; color: #174ea6; font-size: 12px; }
+    .changed-file::before { content: 'M'; flex: 0 0 20px; color: #1a73e8; font-size: 10px; font-weight: 700; text-align: center; }
+    .changed-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    main { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: #fff; }
     #timeline { min-height: 0; flex: 1; overflow: auto; padding: 22px max(24px, calc((100% - 760px) / 2)); scroll-behavior: smooth; }
     .welcome { max-width: 580px; margin: 12vh auto 0; text-align: center; }
     .welcome-mark { display: grid; place-items: center; width: 46px; height: 46px; margin: 0 auto 14px; border-radius: 12px; background: #e8f0fe; color: #185abc; font-size: 22px; }
-    .welcome h2 { margin: 0 0 7px; font-size: 20px; font-weight: 650; }
+    .welcome h2 { margin: 0 0 7px; font-size: 18px; font-weight: 650; }
     .welcome p { margin: 0; color: #5f6368; font-size: 13px; line-height: 1.55; }
     .event { position: relative; margin: 0 0 11px; padding: 11px 13px 11px 38px; border: 1px solid #dadce0; border-radius: 9px; background: #fff; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
     .event::before { position: absolute; left: 12px; top: 11px; width: 18px; color: #5f6368; text-align: center; }
@@ -42,20 +67,41 @@
     .event.tool { background: #f8f9fa; color: #3c4043; font: 12px/1.5 "Cascadia Mono", Consolas, monospace; }
     .event.tool::before { content: '⚙'; }
     .event.task::before { content: '◇'; color: #7b1fa2; }
+    .event.change { border-color: #d2e3fc; background: #f5f8ff; color: #174ea6; font: 12px/1.5 "Cascadia Mono", Consolas, monospace; }
+    .event.change::before { content: 'M'; color: #1a73e8; font: 700 10px/18px "Segoe UI", system-ui, sans-serif; }
     .event.answer { border-color: #ceead6; background: #f4fbf6; }
     .event.answer::before { content: '✓'; color: #188038; }
     .event.error { border-color: #f6aea9; background: #fce8e6; color: #b3261e; }
     .event.error::before { content: '!'; }
     .event.system::before { content: 'i'; color: #1a73e8; }
-    .composer { flex: 0 0 150px; display: flex; gap: 10px; padding: 12px 14px 14px; border-top: 1px solid #dadce0; background: #f8f9fa; box-shadow: 0 -8px 24px rgba(32,33,36,.06); }
-    textarea { min-width: 0; flex: 1; resize: none; padding: 11px 13px; border: 1px solid #dadce0; border-radius: 10px; background: #fff; color: #202124; font: 14px/1.45 "Segoe UI", system-ui, sans-serif; outline: none; }
+    .event.thinking { width: fit-content; min-width: 126px; color: #5f6368; }
+    .event.thinking::before { content: '◇'; color: #1a73e8; animation: think-pulse 1.2s ease-in-out infinite; }
+    .thinking-dots { display: inline-flex; width: 23px; justify-content: space-between; margin-left: 6px; vertical-align: middle; }
+    .thinking-dots span { width: 4px; height: 4px; border-radius: 50%; background: #5f6368; animation: think-dot 1.2s ease-in-out infinite; }
+    .thinking-dots span:nth-child(2) { animation-delay: .16s; }
+    .thinking-dots span:nth-child(3) { animation-delay: .32s; }
+    @keyframes think-dot { 0%, 60%, 100% { opacity: .28; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
+    @keyframes think-pulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
+    .composer { min-height: 0; flex: 0 0 184px; display: flex; gap: 10px; padding: 12px 14px 14px; overflow: hidden; border-top: 1px solid #dadce0; background: #f8f9fa; box-shadow: 0 -8px 24px rgba(32,33,36,.08); }
+    textarea { min-width: 0; min-height: 0; flex: 1; resize: none; padding: 11px 13px; border: 1px solid #dadce0; border-radius: 10px; background: #fff; color: #202124; font: 14px/1.45 "Segoe UI", system-ui, sans-serif; outline: none; }
     textarea::placeholder { color: #80868b; }
     .run-actions { display: flex; flex-direction: column; justify-content: flex-end; gap: 7px; }
-    .action-button { height: 34px; min-width: 104px; padding: 0 13px; border: 1px solid #dadce0; border-radius: 8px; background: #fff; color: #3c4043; cursor: pointer; font-weight: 600; }
+    .composer-column { min-width: 0; min-height: 0; flex: 1; display: flex; flex-direction: column; }
+    .action-button { height: 34px; min-width: 104px; padding: 0 13px; border: 1px solid #dadce0; border-radius: 8px; background: #fff; color: #3c4043; cursor: pointer; font: 600 13px "Segoe UI", system-ui, sans-serif; }
     .action-button:hover { background: #f1f3f4; }
     .action-button.primary { border-color: #1a73e8; background: #1a73e8; color: #fff; }
     .action-button.primary:hover { background: #185abc; }
     .action-button:disabled { opacity: .45; cursor: default; }
+    dialog { width: min(430px, calc(100vw - 40px)); padding: 0; border: 0; border-radius: 13px; background: #fff; color: #202124; box-shadow: 0 18px 56px rgba(32,33,36,.28); }
+    dialog::backdrop { background: rgba(32,33,36,.38); }
+    .dialog-body { padding: 22px 24px 12px; }
+    .dialog-title { margin: 0 0 8px; font-size: 18px; font-weight: 600; }
+    .dialog-copy { margin: 0 0 14px; color: #5f6368; font-size: 13px; line-height: 1.5; }
+    .dialog-input { width: 100%; height: 36px; padding: 0 10px; border: 1px solid #dadce0; border-radius: 8px; background: #fff; color: #202124; font: 13px "Segoe UI", system-ui, sans-serif; outline: none; }
+    .dialog-input:focus { border-color: #1a73e8; box-shadow: 0 0 0 2px rgba(26,115,232,.14); }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px 16px; }
+    .danger-button { border-color: #d93025; background: #d93025; color: #fff; }
+    .danger-button:hover { background: #b3261e; }
   </style>
 </head>
 <body>
@@ -64,6 +110,7 @@
       <div class="sidebar-head">
         <span class="sidebar-title">Sandbox project</span>
         <span id="project-count" class="count">0</span>
+        <button id="new-project" class="icon-button" title="Create a sandbox project" aria-label="Create a sandbox project">＋</button>
         <button id="refresh-projects" class="icon-button" title="Refresh sandbox projects" aria-label="Refresh sandbox projects">↻</button>
       </div>
       <div class="sidebar-body">
@@ -71,10 +118,33 @@
           <div class="section-label">Agent workspace</div>
           <select id="project" aria-label="Sandbox project" disabled></select>
           <div id="project-detail">Save a sandbox project first.</div>
+          <div class="project-actions">
+            <button id="run-project" class="link-button" disabled>▶ Run index page</button>
+            <button id="rename-project" class="link-button" disabled>Rename project</button>
+          </div>
+        </section>
+        <section class="section">
+          <div class="section-heading">
+            <div class="section-label">Solution</div>
+            <span id="solution-count" class="section-count">0</span>
+            <button id="new-file" class="icon-button" title="Create a file" aria-label="Create a file">＋</button>
+            <button id="new-directory" class="icon-button" title="Create a folder" aria-label="Create a folder">▱</button>
+            <button id="rename-file" class="icon-button" title="Rename selected item" aria-label="Rename selected item" disabled>✎</button>
+            <button id="delete-file" class="icon-button" title="Delete selected item" aria-label="Delete selected item" disabled>×</button>
+          </div>
+          <div id="solution-files" class="file-tree"><div class="empty-tree">Select a sandbox project.</div></div>
+        </section>
+        <section class="section">
+          <div class="section-heading">
+            <div class="section-label">Changed files</div>
+            <span id="change-count" class="section-count">0</span>
+          </div>
+          <div id="change-list" class="changed-list"><div class="empty-tree">No files changed in this run.</div></div>
         </section>
         <section class="section">
           <div class="section-label">Local Ollama model</div>
           <select id="model" aria-label="Ollama model" disabled></select>
+          <div id="model-warning" class="model-warning" role="status"></div>
         </section>
         <section class="section">
           <div class="section-label">Allowlisted tools</div>
@@ -100,7 +170,9 @@
         </div>
       </div>
       <div class="composer">
-        <textarea id="prompt" placeholder="Describe the task for the local agent…" aria-label="Agent task"></textarea>
+        <div class="composer-column">
+          <textarea id="prompt" placeholder="Describe the task for the local agent…" aria-label="Agent task"></textarea>
+        </div>
         <div class="run-actions">
           <button id="stop" class="action-button" disabled>Stop</button>
           <button id="run" class="action-button primary" disabled>◇&nbsp; Run task</button>
@@ -108,23 +180,72 @@
       </div>
     </main>
   </div>
+  <dialog id="name-dialog">
+    <div class="dialog-body">
+      <h2 id="dialog-title" class="dialog-title">Create project</h2>
+      <p id="dialog-copy" class="dialog-copy"></p>
+      <input id="dialog-input" class="dialog-input" maxlength="240" autocomplete="off">
+    </div>
+    <div class="dialog-actions">
+      <button id="dialog-cancel" class="action-button">Cancel</button>
+      <button id="dialog-save" class="action-button primary">Save</button>
+    </div>
+  </dialog>
+  <dialog id="delete-dialog">
+    <div class="dialog-body">
+      <h2 class="dialog-title">Delete file?</h2>
+      <p id="delete-copy" class="dialog-copy"></p>
+    </div>
+    <div class="dialog-actions">
+      <button id="delete-cancel" class="action-button">Cancel</button>
+      <button id="delete-confirm" class="action-button danger-button">Delete</button>
+    </div>
+  </dialog>
   <script>
     const project = document.getElementById('project');
     const projectCount = document.getElementById('project-count');
     const projectDetail = document.getElementById('project-detail');
+    const solutionCount = document.getElementById('solution-count');
+    const solutionFiles = document.getElementById('solution-files');
+    const changeCount = document.getElementById('change-count');
+    const changeList = document.getElementById('change-list');
     const refreshProjects = document.getElementById('refresh-projects');
+    const newProject = document.getElementById('new-project');
+    const renameProject = document.getElementById('rename-project');
+    const runProject = document.getElementById('run-project');
+    const newFile = document.getElementById('new-file');
+    const newDirectory = document.getElementById('new-directory');
+    const renameFile = document.getElementById('rename-file');
+    const deleteFile = document.getElementById('delete-file');
     const model = document.getElementById('model');
+    const modelWarning = document.getElementById('model-warning');
     const timeline = document.getElementById('timeline');
     const welcome = document.getElementById('welcome');
     const prompt = document.getElementById('prompt');
     const run = document.getElementById('run');
     const stop = document.getElementById('stop');
-    let state = { selectedProject: null, projects: [], models: [], detecting: false, running: false };
+    const nameDialog = document.getElementById('name-dialog');
+    const dialogTitle = document.getElementById('dialog-title');
+    const dialogCopy = document.getElementById('dialog-copy');
+    const dialogInput = document.getElementById('dialog-input');
+    const dialogCancel = document.getElementById('dialog-cancel');
+    const dialogSave = document.getElementById('dialog-save');
+    const deleteDialog = document.getElementById('delete-dialog');
+    const deleteCopy = document.getElementById('delete-copy');
+    const deleteCancel = document.getElementById('delete-cancel');
+    const deleteConfirm = document.getElementById('delete-confirm');
+    let state = { selectedProject: null, projects: [], changedFiles: [], models: [], detecting: false, running: false };
+    let selectedFile = null;
+    let selectedDirectory = null;
+    let dialogMode = null;
+    let modelProject = null;
+    let modelSignature = '';
 
     function post(type, extra = {}) { chrome.webview.postMessage({ type, ...extra }); }
     function replaceOptions(select, values, selected, label) {
-      const current = Array.from(select.options).map(option => option.value);
-      if (current.length !== values.length || current.some((value, index) => value !== values[index].value)) {
+      const current = Array.from(select.options).map(option => ({ value: option.value, label: option.textContent }));
+      if (current.length !== values.length || current.some((item, index) =>
+          item.value !== values[index].value || item.label !== values[index].label)) {
         select.replaceChildren(...values.map(item => {
           const option = document.createElement('option');
           option.value = item.value;
@@ -135,13 +256,130 @@
       if (values.some(item => item.value === selected)) select.value = selected;
       select.setAttribute('aria-label', label);
     }
+    function formatSize(bytes) {
+      if (!Number.isFinite(bytes)) return '';
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    }
+    function renderSolution(selected, changed) {
+      const files = Array.isArray(selected?.files) ? selected.files : [];
+      const directories = Array.isArray(selected?.directories) ? selected.directories.map(String) : [];
+      if (!files.some(file => String(file.path) === selectedFile)) selectedFile = null;
+      if (!directories.includes(selectedDirectory)) selectedDirectory = null;
+      solutionCount.textContent = String(files.length + directories.length);
+      solutionFiles.replaceChildren();
+      if (!files.length && !directories.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-tree';
+        empty.textContent = selected ? 'This project has no files.' : 'Select a sandbox project.';
+        solutionFiles.append(empty);
+        return;
+      }
+      const items = [
+        ...directories.map(path => ({ kind: 'directory', path })),
+        ...files.map(file => ({ kind: 'file', path: String(file.path || ''), file })),
+      ].sort((a, b) => a.path.localeCompare(b.path, undefined, { sensitivity: 'base' }) || a.kind.localeCompare(b.kind));
+      items.forEach(item => {
+        if (item.kind === 'directory') {
+          const path = item.path.replaceAll('\\', '/');
+          const depth = Math.max(0, path.split('/').length - 1);
+          const folder = document.createElement('div');
+          folder.className = `tree-row file${path === selectedDirectory ? ' selected' : ''}${changed.has(path.toLowerCase()) ? ' changed' : ''}`;
+          folder.style.paddingLeft = `${7 + depth * 12}px`;
+          folder.title = path;
+          const folderGlyph = document.createElement('span');
+          folderGlyph.className = 'tree-glyph';
+          folderGlyph.textContent = '▾';
+          const folderName = document.createElement('span');
+          folderName.className = 'tree-name';
+          folderName.textContent = path.split('/').at(-1);
+          folder.append(folderGlyph, folderName);
+          folder.addEventListener('click', () => {
+            selectedDirectory = path;
+            selectedFile = null;
+            updateControls();
+          });
+          solutionFiles.append(folder);
+          return;
+        }
+        const file = item.file;
+        const path = String(file.path || '').replaceAll('\\', '/');
+        const depth = Math.max(0, path.split('/').length - 1);
+        const row = document.createElement('div');
+        row.className = `tree-row file${changed.has(path.toLowerCase()) ? ' changed' : ''}${path === selectedFile ? ' selected' : ''}`;
+        row.style.paddingLeft = `${7 + depth * 12}px`;
+        row.title = path;
+        const glyph = document.createElement('span');
+        glyph.className = 'tree-glyph';
+        glyph.textContent = file.isHtml ? '</>' : '·';
+        const name = document.createElement('span');
+        name.className = 'tree-name';
+        name.textContent = path.split('/').at(-1);
+        const size = document.createElement('span');
+        size.className = 'tree-size';
+        size.textContent = formatSize(Number(file.size));
+        row.append(glyph, name, size);
+        if (changed.has(path.toLowerCase())) {
+          const marker = document.createElement('span');
+          marker.className = 'tree-state';
+          marker.textContent = 'M';
+          row.append(marker);
+        }
+        row.addEventListener('click', () => {
+          selectedFile = path;
+          selectedDirectory = null;
+          updateControls();
+        });
+        row.addEventListener('dblclick', () => post('open-file', { path }));
+        row.title = `${path} — double-click to open in the text editor`;
+        solutionFiles.append(row);
+      });
+    }
+    function renderChanges(paths) {
+      changeCount.textContent = String(paths.length);
+      changeList.replaceChildren();
+      if (!paths.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-tree';
+        empty.textContent = 'No files changed in this run.';
+        changeList.append(empty);
+        return;
+      }
+      paths.forEach(path => {
+        const row = document.createElement('div');
+        row.className = 'changed-file';
+        row.title = path;
+        const label = document.createElement('span');
+        label.className = 'changed-path';
+        label.textContent = path;
+        row.append(label);
+        changeList.append(row);
+      });
+    }
     function updateControls() {
       const projects = Array.isArray(state.projects) ? state.projects : [];
       const models = Array.isArray(state.models) ? state.models : [];
       replaceOptions(project, projects.map(item => ({ value: item.id, label: item.title })), state.selectedProject, 'Sandbox project');
-      replaceOptions(model, models.map(name => ({ value: name, label: name })), model.value, 'Ollama model');
-      projectCount.textContent = String(projects.length);
       const selected = projects.find(item => item.id === project.value);
+      const nextModelSignature = models.join('\u0000');
+      const restoreRememberedModel = modelProject !== selected?.id || modelSignature !== nextModelSignature;
+      replaceOptions(model, models.map(name => ({ value: name, label: name })), model.value, 'Ollama model');
+      if (restoreRememberedModel && selected?.lastModel && models.includes(selected.lastModel)) {
+        model.value = selected.lastModel;
+      }
+      modelProject = selected?.id || null;
+      modelSignature = nextModelSignature;
+      projectCount.textContent = String(projects.length);
+      const missingRememberedModel = !!selected?.lastModel && !state.detecting && !models.includes(selected.lastModel);
+      modelWarning.textContent = missingRememberedModel
+        ? `This project last used “${selected.lastModel}”, but that model is not installed in Ollama.`
+        : '';
+      modelWarning.classList.toggle('visible', missingRememberedModel);
+      const changedPaths = Array.isArray(state.changedFiles) ? state.changedFiles.map(String) : [];
+      const changed = new Set(changedPaths.map(path => path.replaceAll('\\', '/').toLowerCase()));
+      renderSolution(selected, changed);
+      renderChanges(changedPaths);
       projectDetail.textContent = selected
         ? `${selected.fileCount} file${selected.fileCount === 1 ? '' : 's'} · ${selected.id.slice(0, 8)}`
         : 'Save a sandbox project first.';
@@ -149,33 +387,116 @@
       project.disabled = state.running || !projects.length;
       model.disabled = state.detecting || state.running || !models.length;
       refreshProjects.disabled = state.running;
+      newProject.disabled = state.running;
+      renameProject.disabled = state.running || !selected;
+      runProject.disabled = state.running || !selected;
+      newFile.disabled = state.running || !selected;
+      newDirectory.disabled = state.running || !selected;
+      renameFile.disabled = state.running || !selected || (!selectedFile && !selectedDirectory);
+      deleteFile.disabled = state.running || !selected || (!selectedFile && !selectedDirectory) || (!!selectedFile && selected.files.length <= 1);
       prompt.disabled = state.running;
       run.disabled = state.running || !ready || !prompt.value.trim();
       stop.disabled = !state.running;
     }
 
-    project.addEventListener('change', () => post('select-project', { id: project.value }));
+    function openNameDialog(mode, title, copy, value) {
+      dialogMode = mode;
+      dialogTitle.textContent = title;
+      dialogCopy.textContent = copy;
+      dialogInput.value = value;
+      nameDialog.showModal();
+      requestAnimationFrame(() => { dialogInput.focus(); dialogInput.select(); });
+    }
+    project.addEventListener('change', () => {
+      selectedFile = null;
+      selectedDirectory = null;
+      post('select-project', { id: project.value });
+    });
     refreshProjects.addEventListener('click', () => post('refresh-projects'));
+    newProject.addEventListener('click', () => openNameDialog('new-project', 'Create sandbox project', 'The project is assigned a GUID and saved immediately with an index.html file.', 'New sandbox'));
+    renameProject.addEventListener('click', () => {
+      const selected = state.projects.find(item => item.id === project.value);
+      if (selected) openNameDialog('rename-project', 'Rename project', 'Save a display name for this sandbox solution.', selected.title);
+    });
+    runProject.addEventListener('click', () => post('navigate-project'));
+    newFile.addEventListener('click', () => openNameDialog('new-file', 'Create file', 'Enter a path inside this solution, such as pages/about.html or styles/site.css.', 'new-file.html'));
+    newDirectory.addEventListener('click', () => openNameDialog('new-directory', 'Create folder', 'Enter a folder path inside this solution, such as pages or assets/images.', 'new-folder'));
+    renameFile.addEventListener('click', () => {
+      if (selectedFile) openNameDialog('rename-file', 'Rename file', 'Change the file name or move it to another folder inside this solution.', selectedFile);
+      if (selectedDirectory) openNameDialog('rename-directory', 'Rename folder', 'Change the folder name or move it inside this solution.', selectedDirectory);
+    });
+    deleteFile.addEventListener('click', () => {
+      const selectedPath = selectedFile || selectedDirectory;
+      if (!selectedPath) return;
+      deleteCopy.textContent = `Delete ${selectedPath}${selectedDirectory ? ' and everything inside it' : ''} from this sandbox project? This cannot be undone.`;
+      deleteDialog.showModal();
+    });
+    dialogCancel.addEventListener('click', () => nameDialog.close());
+    dialogSave.addEventListener('click', () => {
+      const value = dialogInput.value.trim();
+      if (!value || !dialogMode) return;
+      if (dialogMode === 'new-project' || dialogMode === 'rename-project') post(dialogMode, { title: value });
+      if (dialogMode === 'new-file') post(dialogMode, { path: value });
+      if (dialogMode === 'rename-file') post(dialogMode, { path: selectedFile, newPath: value });
+      if (dialogMode === 'new-directory') post(dialogMode, { path: value });
+      if (dialogMode === 'rename-directory') post(dialogMode, { path: selectedDirectory, newPath: value });
+      nameDialog.close();
+    });
+    dialogInput.addEventListener('keydown', event => {
+      if (event.key === 'Enter') { event.preventDefault(); dialogSave.click(); }
+    });
+    deleteCancel.addEventListener('click', () => deleteDialog.close());
+    deleteConfirm.addEventListener('click', () => {
+      if (selectedFile) post('delete-file', { path: selectedFile });
+      if (selectedDirectory) post('delete-directory', { path: selectedDirectory });
+      selectedFile = null;
+      selectedDirectory = null;
+      deleteDialog.close();
+    });
     prompt.addEventListener('input', updateControls);
+    model.addEventListener('change', () => post('select-model', { model: model.value }));
     prompt.addEventListener('keydown', event => {
       if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !run.disabled) {
         event.preventDefault();
         run.click();
       }
     });
-    run.addEventListener('click', () => post('run', { prompt: prompt.value, model: model.value }));
+    run.addEventListener('click', () => {
+      const message = prompt.value.trim();
+      if (!message) return;
+      post('run', { prompt: message, model: model.value });
+      prompt.value = '';
+      updateControls();
+    });
     stop.addEventListener('click', () => post('stop'));
 
     window.agentHarness = {
       setState(next) {
+        const previousProject = state.selectedProject;
         state = { ...state, ...next };
+        if (state.selectedProject !== previousProject) {
+          selectedFile = null;
+          selectedDirectory = null;
+        }
+        if (!state.running) document.getElementById('agent-thinking')?.remove();
         updateControls();
       },
       appendEvent(kind, message) {
         welcome?.remove();
+        document.getElementById('agent-thinking')?.remove();
         const item = document.createElement('div');
         item.className = `event ${kind}`;
-        item.textContent = message;
+        if (kind === 'thinking') {
+          item.id = 'agent-thinking';
+          item.append(document.createTextNode(message));
+          const dots = document.createElement('span');
+          dots.className = 'thinking-dots';
+          dots.setAttribute('aria-label', 'Agent is thinking');
+          dots.append(document.createElement('span'), document.createElement('span'), document.createElement('span'));
+          item.append(dots);
+        } else {
+          item.textContent = message;
+        }
         timeline.append(item);
         timeline.scrollTop = timeline.scrollHeight;
       },

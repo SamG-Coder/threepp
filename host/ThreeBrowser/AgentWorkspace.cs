@@ -11,6 +11,8 @@ internal sealed class AgentWorkspace
     private readonly string _rootWithSeparator;
     private readonly object _goalLock = new();
 
+    internal event Action<string>? FileChanged;
+
     internal AgentWorkspace(string root)
     {
         Root = Path.GetFullPath(root);
@@ -62,6 +64,7 @@ internal sealed class AgentWorkspace
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         ValidateExistingPath(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, content);
+        FileChanged?.Invoke(DisplayPath(path));
         return new { path = DisplayPath(path), bytes = new FileInfo(path).Length };
     }
 
@@ -90,6 +93,7 @@ internal sealed class AgentWorkspace
             throw new InvalidDataException("The updated file exceeds the 2 MB write limit.");
         }
         File.WriteAllText(path, updated);
+        FileChanged?.Invoke(DisplayPath(path));
         return new { path = DisplayPath(path), replacements = replaceAll ? count : 1 };
     }
 
@@ -98,6 +102,7 @@ internal sealed class AgentWorkspace
         var path = ResolveDirectory(relativePath, mustExist: false);
         Directory.CreateDirectory(path);
         ValidateExistingPath(path);
+        FileChanged?.Invoke(DisplayPath(path));
         return new { path = DisplayPath(path) };
     }
 
@@ -336,6 +341,7 @@ internal sealed class AgentWorkspace
         var path = GoalPath();
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, JsonSerializer.Serialize(goals, new JsonSerializerOptions { WriteIndented = true }));
+        FileChanged?.Invoke(DisplayPath(path));
     }
 
     private string GoalPath() => Path.Combine(Root, StateDirectoryName, "goals.json");

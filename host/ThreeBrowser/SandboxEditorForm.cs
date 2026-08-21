@@ -192,6 +192,26 @@ internal sealed class SandboxEditorForm : Form
         }
     }
 
+    internal void ReportExternalChange(string path)
+    {
+        _status.Text = $"Agent changed {path} on disk — reopen the file to load it without discarding your edits";
+    }
+
+    internal void ReportExternalDeletion(string path)
+    {
+        _status.Text = $"Agent deleted {path} on disk — your open editor content has been preserved";
+    }
+
+    internal void ApplyExternalRename(string path)
+    {
+        _filePath = path;
+        UpdateLabels();
+        if (IsDirty)
+        {
+            _status.Text = $"Agent renamed the open file to {path} — your unsaved edits are still open";
+        }
+    }
+
     internal static string SandboxUrl(Guid id, string path = "index.html") =>
         $"https://sandbox.threebrowser.local/{id:D}/{EscapeUrlPath(path)}";
 
@@ -616,6 +636,7 @@ internal sealed class SandboxEditorForm : Form
                 updatedUtc = page.UpdatedUtc,
                 entryPath = page.EntryPath,
                 url = SandboxUrl(page.Id, page.EntryPath),
+                directories = new SandboxStore().ListDirectories(page.Id),
                 files = page.Files.Select(file => new
                 {
                     path = file.Path,
@@ -678,12 +699,12 @@ internal sealed class SandboxEditorForm : Form
         if (_sandboxId is Guid id)
         {
             _identity.Text = _filePath + modified;
-            _status.Text = SandboxUrl(id, _filePath) + $"    HTML    {_eol}    UTF-8";
+            _status.Text = SandboxUrl(id, _filePath) + $"    TEXT    {_eol}    UTF-8";
         }
         else
         {
             _identity.Text = "New sandbox" + modified;
-            _status.Text = $"GUID is created on first save    HTML    {_eol}    UTF-8";
+            _status.Text = $"GUID is created on first save    TEXT    {_eol}    UTF-8";
         }
     }
 

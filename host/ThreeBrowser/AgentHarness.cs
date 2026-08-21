@@ -11,6 +11,7 @@ internal sealed class AgentHarness : IDisposable
     private const int MaxTasks = 8;
     private readonly AgentWorkspace _workspace;
     private readonly string _model;
+    private readonly Action _runProject;
     private readonly HttpClient _ollama = new()
     {
         BaseAddress = new Uri("http://127.0.0.1:11434/"),
@@ -20,10 +21,11 @@ internal sealed class AgentHarness : IDisposable
     private readonly SemaphoreSlim _taskSlots = new(3);
     private int _nextTaskId;
 
-    internal AgentHarness(AgentWorkspace workspace, string model)
+    internal AgentHarness(AgentWorkspace workspace, string model, Action runProject)
     {
         _workspace = workspace;
         _model = model;
+        _runProject = runProject;
     }
 
     internal Task<string> RunAsync(
@@ -170,8 +172,15 @@ internal sealed class AgentHarness : IDisposable
                 RequiredString(arguments, "status")),
             "create_task" => CreateTask(RequiredString(arguments, "prompt"), emit, cancellationToken),
             "wait_task" => await WaitTaskAsync(RequiredString(arguments, "task_id"), cancellationToken),
+            "run_project" => RunProject(),
             _ => throw new InvalidDataException($"Unknown tool: {name}"),
         };
+    }
+
+    private object RunProject()
+    {
+        _runProject();
+        return new { navigation_requested = true };
     }
 
     private object CreateTask(string prompt, Action<string, string> emit, CancellationToken cancellationToken)
@@ -226,6 +235,7 @@ internal sealed class AgentHarness : IDisposable
         Never claim to have accessed anything outside the workspace. Never invent tool results.
         Inspect relevant files before editing. Keep changes focused and preserve existing conventions.
         Use grep for code search. Use goals to track multi-step work. Verify your work by reading changed files.
+        When the user asks to run, launch, preview, or open the finished project, call run_project after completing file writes.
         {{(allowTasks
             ? "You may create multiple independent tasks, continue useful work, then wait for their task IDs before finishing."
             : "This is a bounded subtask. Do not attempt to create other tasks.")}}
@@ -237,7 +247,7 @@ internal sealed class AgentHarness : IDisposable
         using var document = JsonDocument.Parse(ToolDefinitionsJson);
         return document.RootElement.EnumerateArray()
             .Where(tool => allowTasks ||
-                tool.GetProperty("function").GetProperty("name").GetString() is not ("create_task" or "wait_task"))
+                tool.GetProperty("function").GetProperty("name").GetString() is not ("create_task" or "wait_task" or "run_project"))
             .Select(tool => tool.Clone())
             .ToArray();
     }
@@ -251,6 +261,7 @@ internal sealed class AgentHarness : IDisposable
             "create_goal" => String(arguments, "title", ""),
             "create_task" => String(arguments, "prompt", ""),
             "wait_task" => String(arguments, "task_id", ""),
+            "run_project" => "open the solution entry page in ThreeBrowser",
             _ => "",
         };
         return detail.Length == 0 ? name : $"{name}: {detail}";
@@ -290,6 +301,7 @@ internal sealed class AgentHarness : IDisposable
           {"type":"function","function":{"name":"update_goal","description":"Update a goal to active, complete, or blocked.","parameters":{"type":"object","properties":{"id":{"type":"string"},"status":{"type":"string","enum":["active","complete","blocked"]}},"required":["id","status"]}}},
           {"type":"function","function":{"name":"create_task","description":"Start an independent local AI task and return its task ID immediately.","parameters":{"type":"object","properties":{"prompt":{"type":"string"}},"required":["prompt"]}}},
           {"type":"function","function":{"name":"wait_task","description":"Wait for a previously created task and return its result.","parameters":{"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"]}}}
+          ,{"type":"function","function":{"name":"run_project","description":"Open the current solution's index or entry page in the main ThreeBrowser window after the files are ready.","parameters":{"type":"object","properties":{}}}}
         ]
         """;
 }

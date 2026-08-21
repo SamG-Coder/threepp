@@ -6,6 +6,20 @@ using Microsoft.Web.WebView2.WinForms;
 
 namespace ThreeBrowser;
 
+internal sealed class AgentProjectChangedEventArgs(
+    Guid projectId,
+    IReadOnlyList<string> changedFiles,
+    string? previousPath = null,
+    string? currentPath = null,
+    bool isDirectory = false) : EventArgs
+{
+    internal Guid ProjectId { get; } = projectId;
+    internal IReadOnlyList<string> ChangedFiles { get; } = changedFiles;
+    internal string? PreviousPath { get; } = previousPath;
+    internal string? CurrentPath { get; } = currentPath;
+    internal bool IsDirectory { get; } = isDirectory;
+}
+
 internal sealed class AgentHarnessForm : Form
 {
     private readonly WebView2 _view = new();
@@ -29,8 +43,27 @@ internal sealed class AgentHarnessForm : Form
     private bool _detecting;
     private CancellationTokenSource? _runCancellation;
     private AgentHarness? _harness;
+    private readonly object _changeLock = new();
+    private readonly HashSet<string> _changedFiles = new(StringComparer.OrdinalIgnoreCase);
 
-    internal event EventHandler? ProjectChanged;
+    internal event EventHandler<AgentProjectChangedEventArgs>? ProjectChanged;
+    internal event Action<Guid, string>? FileOpenRequested;
+    internal event Action<Guid, string>? NavigateRequested;
+
+    internal void RefreshFromStore()
+    {
+        if (IsDisposed)
+        {
+            return;
+        }
+        if (InvokeRequired)
+        {
+            BeginInvoke(RefreshFromStore);
+            return;
+        }
+        RefreshProjects();
+        _ = PushStateAsync();
+    }
 
     internal AgentHarnessForm(
         Icon? icon,
@@ -133,6 +166,17 @@ internal sealed class AgentHarnessForm : Form
         base.OnFormClosing(e);
     }
 
+    protected override async void OnVisibleChanged(EventArgs e)
+    {
+        base.OnVisibleChanged(e);
+        if (!Visible || IsDisposed)
+        {
+            return;
+        }
+        RefreshProjects();
+        await PushStateAsync();
+    }
+
     protected override void Dispose(bool disposing)
     {
         if (disposing)
@@ -203,6 +247,7 @@ internal sealed class AgentHarnessForm : Form
                         _projects.Any(project => project.Id == projectId))
                     {
                         _projectId = projectId;
+                        ClearChangedFiles();
                         _status = "Sandbox project exposed. Parent directories and the internet remain inaccessible.";
                         await PushStateAsync();
                     }
@@ -211,8 +256,130 @@ internal sealed class AgentHarnessForm : Form
                     RefreshProjects();
                     await PushStateAsync();
                     break;
+                case "new-project":
+                    if (_runCancellation == null)
+                    {
+                        var title = ReadMessageString(root, "title");
+                        var created = _sandboxStore.CreateProject(title);
+                        _projectId = created.Id;
+                        ClearChangedFiles();
+                        _status = $"Created and saved {created.Title}.";
+                        RefreshProjects();
+                        ProjectChanged?.Invoke(this, new AgentProjectChangedEventArgs(created.Id, [created.EntryPath]));
+                        await PushStateAsync();
+                    }
+                    break;
+                case "rename-project":
+                    if (_runCancellation == null && _projectId is Guid renameProjectId)
+                    {
+                        _sandboxStore.RenameProject(renameProjectId, ReadMessageString(root, "title"));
+                        _status = "Project name saved.";
+                        RefreshProjects();
+                        ProjectChanged?.Invoke(this, new AgentProjectChangedEventArgs(renameProjectId, []));
+                        await PushStateAsync();
+                    }
+                    break;
+                case "new-file":
+                    if (_runCancellation == null && _projectId is Guid newFileProjectId)
+                    {
+                        var path = _sandboxStore.CreateFile(newFileProjectId, ReadMessageString(root, "path"));
+                        RegisterManagedChange(newFileProjectId, path);
+                        _status = $"Created and saved {path}.";
+                        RefreshProjects();
+                        await PushStateAsync();
+                    }
+                    break;
+                case "rename-file":
+                    if (_runCancellation == null && _projectId is Guid renameFileProjectId)
+                    {
+                        var previousPath = ReadMessageString(root, "path");
+                        var currentPath = _sandboxStore.RenameFile(
+                            renameFileProjectId,
+                            previousPath,
+                            ReadMessageString(root, "newPath"));
+                        RegisterManagedChange(renameFileProjectId, currentPath, previousPath, currentPath);
+                        _status = $"Renamed {previousPath} to {currentPath}.";
+                        RefreshProjects();
+                        await PushStateAsync();
+                    }
+                    break;
+                case "delete-file":
+                    if (_runCancellation == null && _projectId is Guid deleteFileProjectId)
+                    {
+                        var path = ReadMessageString(root, "path");
+                        _sandboxStore.DeleteFile(deleteFileProjectId, path);
+                        RegisterManagedChange(deleteFileProjectId, path, path, null);
+                        _status = $"Deleted {path}.";
+                        RefreshProjects();
+                        await PushStateAsync();
+                    }
+                    break;
+                case "open-file":
+                    if (_projectId is Guid openFileProjectId)
+                    {
+                        FileOpenRequested?.Invoke(openFileProjectId, ReadMessageString(root, "path"));
+                    }
+                    break;
+                case "navigate-project":
+                    if (_projectId is Guid navigateProjectId)
+                    {
+                        NavigateProject(navigateProjectId);
+                    }
+                    break;
+                case "new-directory":
+                    if (_runCancellation == null && _projectId is Guid newDirectoryProjectId)
+                    {
+                        var path = _sandboxStore.CreateDirectory(newDirectoryProjectId, ReadMessageString(root, "path"));
+                        RegisterManagedChange(newDirectoryProjectId, path, isDirectory: true);
+                        _status = $"Created folder {path}.";
+                        RefreshProjects();
+                        await PushStateAsync();
+                    }
+                    break;
+                case "rename-directory":
+                    if (_runCancellation == null && _projectId is Guid renameDirectoryProjectId)
+                    {
+                        var previousPath = ReadMessageString(root, "path");
+                        var currentPath = _sandboxStore.RenameDirectory(
+                            renameDirectoryProjectId,
+                            previousPath,
+                            ReadMessageString(root, "newPath"));
+                        RegisterManagedChange(
+                            renameDirectoryProjectId,
+                            currentPath,
+                            previousPath,
+                            currentPath,
+                            isDirectory: true);
+                        _status = $"Renamed folder {previousPath} to {currentPath}.";
+                        RefreshProjects();
+                        await PushStateAsync();
+                    }
+                    break;
+                case "delete-directory":
+                    if (_runCancellation == null && _projectId is Guid deleteDirectoryProjectId)
+                    {
+                        var path = ReadMessageString(root, "path");
+                        _sandboxStore.DeleteDirectory(deleteDirectoryProjectId, path);
+                        RegisterManagedChange(deleteDirectoryProjectId, path, path, null, isDirectory: true);
+                        _status = $"Deleted folder {path}.";
+                        RefreshProjects();
+                        await PushStateAsync();
+                    }
+                    break;
                 case "detect-models":
                     await DetectModelsAsync(force: true);
+                    break;
+                case "select-model":
+                    if (_runCancellation == null && _projectId is Guid modelProjectId)
+                    {
+                        var selectedModel = ReadMessageString(root, "model");
+                        if (_models.Contains(selectedModel, StringComparer.Ordinal))
+                        {
+                            _sandboxStore.SetLastModel(modelProjectId, selectedModel);
+                            RefreshProjects();
+                            await PushStateAsync();
+                        }
+                    }
                     break;
                 case "run":
                     var prompt = root.TryGetProperty("prompt", out var promptValue)
@@ -231,7 +398,16 @@ internal sealed class AgentHarnessForm : Form
         catch (JsonException)
         {
         }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException)
+        {
+            _status = ex.Message;
+            await AppendEventAsync("error", ex.Message);
+            await PushStateAsync();
+        }
     }
+
+    private static string ReadMessageString(JsonElement root, string name) =>
+        root.TryGetProperty(name, out var value) ? value.GetString() ?? "" : "";
 
     private void RefreshProjects()
     {
@@ -304,16 +480,23 @@ internal sealed class AgentHarnessForm : Form
         }
         try
         {
+            _sandboxStore.SetLastModel(projectId, model);
+            RefreshProjects();
             var workspace = new AgentWorkspace(_sandboxStore.GetProjectDirectory(projectId));
+            lock (_changeLock)
+            {
+                _changedFiles.Clear();
+            }
+            workspace.FileChanged += RecordChangedFile;
             _runCancellation = new CancellationTokenSource();
-            _harness = new AgentHarness(workspace, model);
+            _harness = new AgentHarness(workspace, model, () => NavigateProject(projectId));
             _status = $"Running locally with {model}";
             await PushStateAsync(running: true);
             await AppendEventAsync("user", prompt);
+            await AppendEventAsync("thinking", "Thinking");
             await _harness.RunAsync(prompt, Emit, _runCancellation.Token);
             _status = "Agent run completed.";
             RefreshProjects();
-            ProjectChanged?.Invoke(this, EventArgs.Empty);
         }
         catch (OperationCanceledException)
         {
@@ -377,7 +560,16 @@ internal sealed class AgentHarnessForm : Form
                 id = project.Id.ToString("D"),
                 title = project.Title,
                 fileCount = project.Files.Count,
+                lastModel = project.LastModel,
+                directories = _sandboxStore.ListDirectories(project.Id),
+                files = project.Files.Select(file => new
+                {
+                    path = file.Path,
+                    size = file.Size,
+                    isHtml = file.IsHtml,
+                }),
             }),
+            changedFiles = ChangedFilesSnapshot(),
             models = _models,
             status = _status,
             detecting = _detecting,
@@ -389,6 +581,67 @@ internal sealed class AgentHarnessForm : Form
         return _view.CoreWebView2.ExecuteScriptAsync($"window.agentHarness.setState({json})");
     }
 
+    private void RecordChangedFile(string path)
+    {
+        bool firstChange;
+        lock (_changeLock)
+        {
+            firstChange = _changedFiles.Add(path);
+        }
+        if (firstChange)
+        {
+            Emit("change", path);
+        }
+        if (IsDisposed || !IsHandleCreated)
+        {
+            return;
+        }
+        BeginInvoke(() =>
+        {
+            RefreshProjects();
+            if (_projectId is Guid projectId)
+            {
+                ProjectChanged?.Invoke(this, new AgentProjectChangedEventArgs(projectId, [path]));
+            }
+            _ = PushStateAsync();
+        });
+    }
+
+    private IReadOnlyList<string> ChangedFilesSnapshot()
+    {
+        lock (_changeLock)
+        {
+            return _changedFiles.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+    }
+
+    private void ClearChangedFiles()
+    {
+        lock (_changeLock)
+        {
+            _changedFiles.Clear();
+        }
+    }
+
+    private void RegisterManagedChange(
+        Guid projectId,
+        string path,
+        string? previousPath = null,
+        string? currentPath = null,
+        bool isDirectory = false)
+    {
+        lock (_changeLock)
+        {
+            _changedFiles.Add(path);
+        }
+        ProjectChanged?.Invoke(this, new AgentProjectChangedEventArgs(
+            projectId,
+            [path],
+            previousPath,
+            currentPath,
+            isDirectory));
+    }
+
     private void UpdateChrome()
     {
         var project = _projects.FirstOrDefault(item => item.Id == _projectId);
@@ -396,6 +649,19 @@ internal sealed class AgentHarnessForm : Form
         _statusLabel.Text = _status + "    Offline    Local Ollama";
         _refreshButton.Enabled = _runCancellation == null;
         _stopButton.Enabled = _runCancellation != null;
+    }
+
+    private void NavigateProject(Guid projectId)
+    {
+        var project = _sandboxStore.List().FirstOrDefault(item => item.Id == projectId);
+        if (project == null)
+        {
+            return;
+        }
+        var path = project.Files.FirstOrDefault(file =>
+                       file.Path.Equals("index.html", StringComparison.OrdinalIgnoreCase))?.Path
+                   ?? project.EntryPath;
+        NavigateRequested?.Invoke(projectId, path);
     }
 
     private static ChromeButton MakeButton(char glyph, string accessibleName)

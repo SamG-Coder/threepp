@@ -53,8 +53,8 @@
       font: 12px "Segoe UI", system-ui, sans-serif; text-align: left;
     }
     button.tree-row { cursor: default; }
-    button.tree-row.html-file { cursor: pointer; }
-    button.tree-row.html-file:hover { background: #f1f3f4; }
+    button.tree-row.text-file { cursor: pointer; }
+    button.tree-row.text-file:hover { background: #f1f3f4; }
     button.tree-row.selected { background: #e8f0fe; color: #174ea6; }
     .tree-glyph { flex: 0 0 20px; color: #5f6368; text-align: center; }
     .tree-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -182,7 +182,7 @@
   <dialog id="import-dialog">
     <div class="dialog-body">
       <h2 class="dialog-title">Add project files</h2>
-      <p class="dialog-copy">Files keep their folder structure inside the active sandbox. Double-click any HTML file in the sidebar to edit it.</p>
+      <p class="dialog-copy">Files keep their folder structure inside the active sandbox. Double-click any UTF-8 text file in the sidebar to edit it.</p>
       <div id="drop-zone" class="drop-zone">
         <div>
           <div class="drop-icon" aria-hidden="true">⇩</div>
@@ -206,7 +206,7 @@
   <script>
     require.config({ paths: { vs: '/monaco/vs' } });
     require(['vs/editor/editor.main'], function () {
-      const model = monaco.editor.createModel('', 'html');
+      const model = monaco.editor.createModel('', 'plaintext');
       const editor = monaco.editor.create(document.getElementById('editor'), {
         model,
         theme: 'vs',
@@ -217,13 +217,13 @@
         lineHeight: 21,
         minimap: { enabled: true, showSlider: 'mouseover' },
         padding: { top: 10, bottom: 18 },
-        bracketPairColorization: { enabled: true },
-        guides: { bracketPairs: true, indentation: true },
+        bracketPairColorization: { enabled: false },
+        guides: { bracketPairs: false, indentation: true },
         stickyScroll: { enabled: true },
         smoothScrolling: true,
         cursorSmoothCaretAnimation: 'on',
-        formatOnPaste: true,
-        formatOnType: true,
+        formatOnPaste: false,
+        formatOnType: false,
         scrollBeyondLastLine: false,
         renderWhitespace: 'selection',
         tabSize: 2,
@@ -415,6 +415,23 @@
       function treeRows(page) {
         const rows = [];
         const folders = new Set();
+        for (const folderPath of page.directories || []) {
+          if (folders.has(folderPath)) continue;
+          folders.add(folderPath);
+          const parts = folderPath.split('/');
+          const depth = parts.length - 1;
+          const folder = document.createElement('div');
+          folder.className = 'tree-row';
+          folder.style.paddingLeft = `${7 + depth * 14}px`;
+          const glyph = document.createElement('span');
+          glyph.className = 'tree-glyph';
+          glyph.textContent = '▾';
+          const label = document.createElement('span');
+          label.className = 'tree-name';
+          label.textContent = parts.at(-1);
+          folder.append(glyph, label);
+          rows.push({ sort: `${folderPath}/`, node: folder });
+        }
         for (const file of page.files || []) {
           const parts = file.path.split('/');
           for (let depth = 0; depth < parts.length - 1; depth++) {
@@ -434,10 +451,10 @@
           const button = document.createElement('button');
           const depth = parts.length - 1;
           const selected = page.id === pagesState.activeId && file.path === pagesState.activeFile;
-          button.className = 'tree-row' + (file.isHtml ? ' html-file' : '') + (selected ? ' selected' : '');
+          button.className = 'tree-row text-file' + (selected ? ' selected' : '');
           button.style.paddingLeft = `${7 + depth * 14}px`;
-          button.title = file.isHtml ? `Double-click to edit ${file.path}` : file.path;
-          button.setAttribute('aria-label', `${file.isHtml ? 'HTML file' : 'File'} ${file.path}`);
+          button.title = `Double-click to edit ${file.path}`;
+          button.setAttribute('aria-label', `Text file ${file.path}`);
           const glyph = document.createElement('span');
           glyph.className = 'tree-glyph';
           glyph.textContent = file.isHtml ? '<>' : '·';
@@ -448,9 +465,7 @@
           size.className = 'tree-size';
           size.textContent = formatSize(file.size);
           button.append(glyph, label, size);
-          if (file.isHtml) {
-            button.addEventListener('dblclick', () => postPrompt('file-open', { id: page.id, path: file.path }));
-          }
+          button.addEventListener('dblclick', () => postPrompt('file-open', { id: page.id, path: file.path }));
           rows.push({ sort: file.path, node: button });
         }
         return rows.sort((a, b) => a.sort.localeCompare(b.sort)).map(item => item.node);
@@ -461,7 +476,7 @@
         if (!pages.length) {
           const empty = document.createElement('div');
           empty.className = 'empty-pages';
-          empty.textContent = 'Your saved HTML pages will appear here.';
+          empty.textContent = 'Your saved sandbox projects will appear here.';
           pageList.replaceChildren(empty);
           return;
         }

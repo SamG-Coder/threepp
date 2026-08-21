@@ -758,7 +758,7 @@ public sealed class MainForm : Form
 
             _web.CoreWebView2.AddWebResourceRequestedFilter(
                 "https://sandbox.threebrowser.local/*",
-                CoreWebView2WebResourceContext.Document,
+                CoreWebView2WebResourceContext.All,
                 CoreWebView2WebResourceRequestSourceKinds.All);
 
             foreach (var filter in new[]
@@ -933,19 +933,38 @@ public sealed class MainForm : Form
             return false;
         }
 
+        string? resolvedPath;
+        try
+        {
+            resolvedPath = _sandboxStore.ResolveResourcePath(id, relativePath);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            SetSandboxErrorResponse(e, 400, "Bad Request", ex.Message);
+            return true;
+        }
+        if (resolvedPath == null)
+        {
+            SetSandboxErrorResponse(e, 404, "Not Found", $"Sandbox resource not found: {relativePath}");
+            return true;
+        }
+
         SandboxResource? resource;
         if (_sandboxId == id &&
-            relativePath.Equals(_sandboxFilePath, StringComparison.OrdinalIgnoreCase))
+            resolvedPath.Equals(_sandboxFilePath, StringComparison.OrdinalIgnoreCase))
         {
-            resource = new SandboxResource(Encoding.UTF8.GetBytes(_sandboxHtml), "text/html; charset=utf-8");
+            resource = new SandboxResource(
+                Encoding.UTF8.GetBytes(_sandboxHtml),
+                SandboxStore.ContentTypeForPath(_sandboxFilePath));
         }
         else
         {
-            resource = _sandboxStore.ReadResource(id, relativePath);
+            resource = _sandboxStore.ReadResource(id, resolvedPath);
         }
         if (resource == null)
         {
-            return false;
+            SetSandboxErrorResponse(e, 404, "Not Found", $"Sandbox resource not found: {resolvedPath}");
+            return true;
         }
 
         var stream = new MemoryStream(resource.Content, writable: false);
@@ -958,6 +977,21 @@ public sealed class MainForm : Form
             "Pragma: no-cache\r\n" +
             "X-Content-Type-Options: nosniff");
         return true;
+    }
+
+    private void SetSandboxErrorResponse(
+        CoreWebView2WebResourceRequestedEventArgs e,
+        int statusCode,
+        string reason,
+        string message)
+    {
+        e.Response = _web.CoreWebView2.Environment.CreateWebResourceResponse(
+            new MemoryStream(Encoding.UTF8.GetBytes(message), writable: false),
+            statusCode,
+            reason,
+            "Content-Type: text/plain; charset=utf-8\r\n" +
+            "Cache-Control: no-store, no-cache, must-revalidate\r\n" +
+            "X-Content-Type-Options: nosniff");
     }
 
     private void ShowSandboxEditor()
@@ -999,7 +1033,18 @@ public sealed class MainForm : Form
         if (_agentHarness == null || _agentHarness.IsDisposed)
         {
             _agentHarness = new AgentHarnessForm(Icon, _env, _webRoot, _sandboxStore);
-            _agentHarness.ProjectChanged += (_, _) => RefreshSavedPages();
+            _agentHarness.ProjectChanged += (_, e) => SyncSandboxFromAgent(e);
+            _agentHarness.FileOpenRequested += async (id, path) =>
+            {
+                ShowSandboxEditor();
+                await OpenSandboxFileAsync(id, path);
+            };
+            _agentHarness.NavigateRequested += (id, path) =>
+            {
+                ReleasePointer();
+                _web.CoreWebView2?.Navigate(SandboxEditorForm.SandboxUrl(id, path));
+                Activate();
+            };
         }
         if (_agentHarness.Visible)
         {
@@ -1009,6 +1054,68 @@ public sealed class MainForm : Form
         {
             _agentHarness.Show(this);
         }
+    }
+
+    private void SyncSandboxFromAgent(AgentProjectChangedEventArgs e)
+    {
+        RefreshSavedPages();
+        var editor = _sandboxEditor;
+        if (_sandboxId != e.ProjectId || editor == null || editor.IsDisposed)
+        {
+            return;
+        }
+        var previousPrefix = e.PreviousPath?.TrimEnd('/') + "/";
+        var activePathAffected = e.IsDirectory
+            ? !string.IsNullOrEmpty(e.PreviousPath) &&
+              _sandboxFilePath.StartsWith(previousPrefix, StringComparison.OrdinalIgnoreCase)
+            : e.PreviousPath?.Equals(_sandboxFilePath, StringComparison.OrdinalIgnoreCase) == true;
+        if (activePathAffected)
+        {
+            if (e.CurrentPath == null)
+            {
+                if (!editor.IsDirty)
+                {
+                    var replacement = _sandboxStore.List()
+                        .FirstOrDefault(project => project.Id == e.ProjectId)?.Files
+                        .FirstOrDefault(file => file.IsHtml);
+                    if (replacement != null && _sandboxStore.Load(e.ProjectId, replacement.Path) is { } replacementPage)
+                    {
+                        _sandboxFilePath = replacementPage.FilePath;
+                        _sandboxHtml = replacementPage.Html;
+                        editor.LoadSandbox(replacementPage.Id, replacementPage.FilePath, replacementPage.Html);
+                        RefreshSavedPages();
+                        return;
+                    }
+                }
+                editor.ReportExternalDeletion(_sandboxFilePath);
+                return;
+            }
+            _sandboxFilePath = e.IsDirectory
+                ? e.CurrentPath.TrimEnd('/') + "/" + _sandboxFilePath[previousPrefix.Length..]
+                : e.CurrentPath;
+            editor.ApplyExternalRename(_sandboxFilePath);
+            if (e.IsDirectory)
+            {
+                RefreshSavedPages();
+                return;
+            }
+        }
+        if (!e.ChangedFiles.Any(path => path.Equals(_sandboxFilePath, StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+        if (editor.IsDirty)
+        {
+            editor.ReportExternalChange(_sandboxFilePath);
+            return;
+        }
+        if (_sandboxStore.Load(e.ProjectId, _sandboxFilePath) is not { } page)
+        {
+            return;
+        }
+        _sandboxHtml = page.Html;
+        editor.LoadSandbox(page.Id, page.FilePath, page.Html);
+        RefreshSavedPages();
     }
 
     private async Task SaveSandboxAsync(bool navigate)
@@ -1022,7 +1129,7 @@ public sealed class MainForm : Form
         {
             _sandboxId ??= Guid.NewGuid();
             _sandboxHtml = await editor.GetHtmlAsync();
-            _sandboxStore.Save(_sandboxId.Value, _sandboxFilePath, _sandboxHtml);
+            var saved = _sandboxStore.Save(_sandboxId.Value, _sandboxFilePath, _sandboxHtml);
             editor.MarkSaved(_sandboxId.Value, _sandboxFilePath);
             _chrome.SandboxActive = true;
             RefreshSavedPages();
@@ -1030,7 +1137,7 @@ public sealed class MainForm : Form
             if (navigate && _web.CoreWebView2 != null)
             {
                 ReleasePointer();
-                _web.CoreWebView2.Navigate(SandboxEditorForm.SandboxUrl(_sandboxId.Value, _sandboxFilePath));
+                _web.CoreWebView2.Navigate(SandboxEditorForm.SandboxUrl(_sandboxId.Value, saved.EntryPath));
             }
         }
         catch (Exception ex)
@@ -1081,18 +1188,25 @@ public sealed class MainForm : Form
             return Task.CompletedTask;
         }
 
-        var page = _sandboxStore.Load(id, path);
-        if (page == null)
+        try
         {
+            var page = _sandboxStore.Load(id, path);
+            if (page == null)
+            {
+                RefreshSavedPages();
+                return Task.CompletedTask;
+            }
+            _sandboxId = page.Id;
+            _sandboxFilePath = page.FilePath;
+            _sandboxHtml = page.Html;
+            _chrome.SandboxActive = true;
+            editor.LoadSandbox(page.Id, page.FilePath, page.Html);
             RefreshSavedPages();
-            return Task.CompletedTask;
         }
-        _sandboxId = page.Id;
-        _sandboxFilePath = page.FilePath;
-        _sandboxHtml = page.Html;
-        _chrome.SandboxActive = true;
-        editor.LoadSandbox(page.Id, page.FilePath, page.Html);
-        RefreshSavedPages();
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            MessageBox.Show(editor, ex.Message, "Open sandbox file failed");
+        }
         return Task.CompletedTask;
     }
 
@@ -1154,6 +1268,7 @@ public sealed class MainForm : Form
     private void RefreshSavedPages()
     {
         _sandboxEditor?.SetSavedPages(_sandboxStore.List(), _sandboxId, _sandboxFilePath);
+        _agentHarness?.RefreshFromStore();
     }
 
     private static bool TryGetSandboxResourcePath(string path, out Guid id, out string relativePath)
