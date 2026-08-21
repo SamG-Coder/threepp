@@ -177,6 +177,7 @@ internal sealed class BrowserChrome : Panel
     internal readonly ChromeButton ReloadButton = MakeIcon('\uE72C', "Reload (Ctrl+R)");
     internal readonly ChromeButton HomeButton = MakeIcon('\uE80F', "Home");
     internal readonly ChromeButton DebugBtn = MakeIcon('\uE9F9', "Debug (FPS)");
+    internal readonly ChromeButton NativeWindowBtn = MakeIcon('\uE8A7', "Open native test window");
     internal readonly ChromeButton VsyncBtn = MakeIcon('\uE895', "Vsync on/off");
     internal readonly ChromeButton NativeBtn = MakeIcon('\uE964', "Native THREE (Ctrl+Shift+N)");
     internal readonly ChromeButton WebGlBtn = MakeIcon('\uE774', "Stock WebGL (Ctrl+Shift+N)");
@@ -211,6 +212,7 @@ internal sealed class BrowserChrome : Panel
     internal event EventHandler? InjectToggled;
     internal event EventHandler? VsyncToggled;
     internal event EventHandler? DebugToggled;
+    internal event EventHandler? NativeWindowRequested;
     internal event EventHandler? BackendChanged;
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
@@ -238,7 +240,7 @@ internal sealed class BrowserChrome : Panel
         _bar = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 9,
+            ColumnCount = 10,
             RowCount = 1,
             Padding = new Padding(6, 0, 6, 0),
             Margin = new Padding(0),
@@ -254,16 +256,19 @@ internal sealed class BrowserChrome : Panel
         _bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
         _bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
         _bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
+        _bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 36));
 
         Place(_bar, BackButton, 0);
         Place(_bar, ForwardButton, 1);
         Place(_bar, ReloadButton, 2);
         Place(_bar, HomeButton, 3);
-        Place(_bar, DebugBtn, 5);
-        Place(_bar, VsyncBtn, 6);
-        Place(_bar, NativeBtn, 7);
-        Place(_bar, WebGlBtn, 8);
+        Place(_bar, NativeWindowBtn, 5);
+        Place(_bar, DebugBtn, 6);
+        Place(_bar, VsyncBtn, 7);
+        Place(_bar, NativeBtn, 8);
+        Place(_bar, WebGlBtn, 9);
         DebugBtn.Click += (_, _) => ToggleDebug();
+        NativeWindowBtn.Click += (_, _) => NativeWindowRequested?.Invoke(this, EventArgs.Empty);
         VsyncBtn.Click += (_, _) => ToggleVsync();
         NativeBtn.Click += (_, _) => SetMode(true);
         WebGlBtn.Click += (_, _) => SetMode(false);
@@ -428,13 +433,16 @@ internal sealed class BrowserChrome : Panel
     private void PaintInject()
     {
         DebugBtn.Visible = _injectOn;
+        NativeWindowBtn.Visible = _injectOn && _debugOn;
         VsyncBtn.Visible = _injectOn;
-        if (_bar.ColumnStyles.Count > 6)
+        if (_bar.ColumnStyles.Count > 7)
         {
-            _bar.ColumnStyles[5].Width = _injectOn ? 36 : 0;
+            _bar.ColumnStyles[5].Width = _injectOn && _debugOn ? 36 : 0;
             _bar.ColumnStyles[6].Width = _injectOn ? 36 : 0;
+            _bar.ColumnStyles[7].Width = _injectOn ? 36 : 0;
         }
         StyleMode(DebugBtn, _debugOn);
+        StyleMode(NativeWindowBtn, false);
         StyleMode(VsyncBtn, _vsyncOn);
         StyleMode(NativeBtn, _injectOn);
         StyleMode(WebGlBtn, !_injectOn);

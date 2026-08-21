@@ -14,6 +14,9 @@ public sealed class MainForm : Form
     private readonly BrowserChrome _chrome = new();
     private readonly WebView2 _web = new();
     private readonly System.Windows.Forms.Timer _debugTimer = new();
+    private Form? _nativePreview;
+    private bool _nativePreviewMayClose;
+    private bool _nativePreviewReturning;
     private string _lastDebugOverlay = "";
     private NativeBridge? _bridge;
     private string _webRoot = "";
@@ -104,7 +107,15 @@ public sealed class MainForm : Form
             _ = SetInjectorAsync(_chrome.InjectEnabled);
         };
         _chrome.VsyncToggled += (_, _) => ApplyNativeVsync();
-        _chrome.DebugToggled += (_, _) => SyncDebugHud();
+        _chrome.DebugToggled += (_, _) =>
+        {
+            SyncDebugHud();
+            if (!_chrome.DebugEnabled)
+            {
+                CloseNativePreview();
+            }
+        };
+        _chrome.NativeWindowRequested += (_, _) => ToggleNativePreview();
         _chrome.BackendChanged += (_, _) => _ = ApplyBackendAsync();
 
         _web.Dock = DockStyle.Fill;
@@ -135,6 +146,7 @@ public sealed class MainForm : Form
         try { NativeWebGpu.tw_reset(); }
         catch (DllNotFoundException) { }
         catch (EntryPointNotFoundException) { }
+        CloseNativePreview();
         _ = Task.Run(() =>
         {
             try { Native.tn_runtime_reset(); }
@@ -475,6 +487,10 @@ public sealed class MainForm : Form
         {
             return;
         }
+        if (_nativePreview is { IsDisposed: false })
+        {
+            return;
+        }
         try
         {
             var sz = _web.ClientSize;
@@ -523,6 +539,148 @@ public sealed class MainForm : Form
         }
         catch (EntryPointNotFoundException)
         {
+        }
+    }
+
+    private void ToggleNativePreview()
+    {
+        if (_nativePreview is { IsDisposed: false } open)
+        {
+            open.Close();
+            return;
+        }
+        if (Volatile.Read(ref _nativeWgpu) == 0)
+        {
+            MessageBox.Show(this,
+                "Native WebGPU is not active on this page yet.",
+                "Native test window",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        var size = _web.ClientSize;
+        var preview = new Form
+        {
+            Text = "ThreeBrowser - Native WebGPU test window",
+            ClientSize = new Size(Math.Max(1, size.Width), Math.Max(1, size.Height)),
+            MinimumSize = new Size(320, 240),
+            FormBorderStyle = FormBorderStyle.FixedSingle,
+            MaximizeBox = false,
+            StartPosition = FormStartPosition.CenterParent,
+            BackColor = Color.Black,
+            ShowIcon = Icon != null,
+            Icon = Icon,
+        };
+        _nativePreview = preview;
+        _nativePreviewMayClose = false;
+        _nativePreviewReturning = false;
+        preview.Shown += (_, _) =>
+        {
+            if (preview.IsDisposed || Volatile.Read(ref _nativeWgpu) == 0)
+            {
+                preview.Close();
+                return;
+            }
+            try
+            {
+                var client = preview.ClientSize;
+                NativeWebGpu.tw_attach_host(preview.Handle, 0, 0,
+                    Math.Max(1, client.Width), Math.Max(1, client.Height));
+            }
+            catch (DllNotFoundException)
+            {
+                preview.Close();
+            }
+            catch (EntryPointNotFoundException)
+            {
+                preview.Close();
+            }
+        };
+        preview.FormClosing += (_, e) =>
+        {
+            if (_nativeStopping || _nativePreviewMayClose)
+            {
+                return;
+            }
+            e.Cancel = true;
+            preview.Hide();
+            _ = ReturnNativePreviewAsync(preview);
+        };
+        preview.FormClosed += (_, _) =>
+        {
+            if (ReferenceEquals(_nativePreview, preview))
+            {
+                _nativePreview = null;
+            }
+            _nativePreviewMayClose = false;
+            _nativePreviewReturning = false;
+            preview.Dispose();
+            if (!IsDisposed && IsHandleCreated && Volatile.Read(ref _nativeWgpu) != 0)
+            {
+                BeginInvoke(EmbedNativeSurface);
+            }
+        };
+        preview.Show(this);
+    }
+
+    private void CloseNativePreview()
+    {
+        var preview = _nativePreview;
+        if (preview == null || preview.IsDisposed)
+        {
+            _nativePreview = null;
+            return;
+        }
+        preview.Close();
+    }
+
+    private async Task ReturnNativePreviewAsync(Form preview)
+    {
+        if (_nativePreviewReturning || preview.IsDisposed)
+        {
+            return;
+        }
+        _nativePreviewReturning = true;
+        try
+        {
+            var size = _web.ClientSize;
+            NativeWebGpu.tw_attach_host(Handle, _web.Left, _web.Top,
+                Math.Max(1, size.Width), Math.Max(1, size.Height));
+
+            // tw_attach_host intentionally queues the cross-thread SetParent.
+            // Keep the temporary parent alive until that operation completes;
+            // destroying a parent also destroys its child HWNDs.
+            for (var attempt = 0; attempt < 100; attempt++)
+            {
+                await Task.Delay(20);
+                if (preview.IsDisposed)
+                {
+                    return;
+                }
+                var native = NativeWebGpu.tw_hwnd();
+                if (native == IntPtr.Zero || GetParent(native) == Handle)
+                {
+                    _nativePreviewMayClose = true;
+                    preview.Close();
+                    return;
+                }
+            }
+            preview.Show(this);
+        }
+        catch (DllNotFoundException)
+        {
+            _nativePreviewMayClose = true;
+            preview.Close();
+        }
+        catch (EntryPointNotFoundException)
+        {
+            _nativePreviewMayClose = true;
+            preview.Close();
+        }
+        finally
+        {
+            _nativePreviewReturning = false;
         }
     }
 
@@ -1009,6 +1167,9 @@ public sealed class MainForm : Form
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SetWindowPos(
         IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetParent(IntPtr hWnd);
 
     private static readonly IntPtr HWND_TOP = IntPtr.Zero;
 }
