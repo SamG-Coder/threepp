@@ -823,6 +823,41 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             markDirty();
             return;
         }
+        case tn::cmd::OP_INST_COUNT: {
+            if (!has(p, end, 8)) return;
+            Slot* slot = getSlot(ru32(p));
+            if (!slot || !slot->object) return;
+            auto inst = std::dynamic_pointer_cast<InstancedMesh>(slot->object);
+            if (!inst) return;
+            inst->setCount(static_cast<size_t>(ru32(p + 4)));
+            inst->boundingSphere.reset();
+            if (inst->count() > 0) inst->computeBoundingSphere();
+            markDirty();
+            return;
+        }
+        case tn::cmd::OP_INST_MATRICES: {
+            if (!has(p, end, 12)) return;
+            Slot* slot = getSlot(ru32(p));
+            if (!slot || !slot->object) return;
+            auto inst = std::dynamic_pointer_cast<InstancedMesh>(slot->object);
+            if (!inst) return;
+            const uint32_t start = ru32(p + 4);
+            const uint32_t count = ru32(p + 8);
+            const size_t bytes = static_cast<size_t>(count) * 64u;
+            if (!has(p, end, 12 + bytes)) return;
+            Matrix4 m;
+            std::array<float, 16> e{};
+            const uint8_t* cur = p + 12;
+            for (uint32_t i = 0; i < count; i++) {
+                std::memcpy(e.data(), cur + static_cast<size_t>(i) * 64u, 64);
+                m.fromArray(e);
+                inst->setMatrixAt(static_cast<size_t>(start + i), m);
+            }
+            inst->instanceMatrix()->needsUpdate();
+            inst->boundingSphere.reset();
+            markDirty();
+            return;
+        }
         default:
             setError("unknown cmd opcode");
             return;

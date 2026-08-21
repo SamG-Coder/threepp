@@ -37,6 +37,35 @@ int tn_instanced_set_matrix_at(uint32_t mesh, int index, const float* elements16
     }
 }
 
+int tn_instanced_set_count(uint32_t mesh, int count) {
+    try {
+        if (count < 0) {
+            setError("instanced setCount needs a non-negative count");
+            return 0;
+        }
+        return onWorker([mesh, count] {
+            Slot* slot = getSlot(mesh);
+            if (!slot || !slot->object) {
+                setError("instanced setCount needs a mesh");
+                return 0;
+            }
+            auto inst = std::dynamic_pointer_cast<InstancedMesh>(slot->object);
+            if (!inst) {
+                setError("handle is not InstancedMesh");
+                return 0;
+            }
+            inst->setCount(static_cast<size_t>(count));
+            inst->boundingSphere.reset();
+            if (inst->count() > 0) inst->computeBoundingSphere();
+            markDirty();
+            return 1;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+}
+
 int tn_instanced_set_color_at(uint32_t mesh, int index, uint32_t hex) {
     try {
         if (index < 0) {

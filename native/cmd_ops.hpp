@@ -86,6 +86,8 @@ constexpr uint32_t OP_LIGHT_SPOT = 94;
 
 constexpr uint32_t OP_INST_MATRIX = 100;
 constexpr uint32_t OP_INST_COLOR = 101;
+constexpr uint32_t OP_INST_COUNT = 102;
+constexpr uint32_t OP_INST_MATRICES = 103;
 
 inline uint32_t align8(uint32_t n) {
     return (n + 7u) & ~7u;

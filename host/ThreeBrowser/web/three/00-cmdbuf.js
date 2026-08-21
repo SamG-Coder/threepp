@@ -62,6 +62,8 @@
     LIGHT_SPOT: 94,
     INST_MATRIX: 100,
     INST_COLOR: 101,
+    INST_COUNT: 102,
+    INST_MATRICES: 103,
   };
 
   // Keep in sync with native/cmd_ops.hpp MAP_SLOT_*
@@ -822,6 +824,29 @@
       wu32(hex);
       wu32(0);
       end(s);
+    },
+    instCount(id, count) {
+      const s = begin(OP.INST_COUNT, 8);
+      wu32(id);
+      wu32(count >>> 0);
+      end(s);
+    },
+    instMatrices(id, start, count, elements) {
+      const src = elements instanceof Float32Array ? elements : new Float32Array(elements);
+      let done = 0;
+      while (done < count) {
+        need(8 + 12 + 64);
+        const room = ab.byteLength - off;
+        const n = Math.min(count - done, Math.max(1, Math.floor((room - 32) / 64)));
+        const payload = 12 + n * 64;
+        const s = begin(OP.INST_MATRICES, payload);
+        wu32(id);
+        wu32((start + done) >>> 0);
+        wu32(n >>> 0);
+        copyBytes(new Uint8Array(src.buffer, src.byteOffset + done * 64, n * 64));
+        end(s);
+        done += n;
+      }
     },
   };
 

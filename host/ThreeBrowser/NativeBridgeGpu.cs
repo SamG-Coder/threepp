@@ -107,6 +107,9 @@ public partial class NativeBridge
     public int InstancedSetColorAt(int mesh, int index, int hex) =>
         Native.tn_instanced_set_color_at((uint)mesh, index, (uint)hex);
 
+    public int InstancedSetCount(int mesh, int count) =>
+        Native.tn_instanced_set_count((uint)mesh, count);
+
     public int LodCreate() => (int)Native.tn_lod_create();
 
     public int LodAddLevel(int lod, int obj, double distance) =>

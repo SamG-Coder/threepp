@@ -517,21 +517,35 @@
 
     render(scene, camera) {
       this.info.render.frame++;
+      TN._renderFrame = this.info.render.frame;
       if (scene && typeof scene.updateMatrixWorld === "function") scene.updateMatrixWorld();
       if (camera && camera.parent === null && typeof camera.updateMatrixWorld === "function") {
         camera.updateMatrixWorld();
       }
       if (scene && typeof scene.traverse === "function") {
         const self = this;
+        const batched = [];
         scene.traverse(function (obj) {
           if (obj && typeof obj.onBeforeRender === "function") {
             try {
               obj.onBeforeRender(self, scene, camera, obj.geometry, obj.material);
+              if (obj.isBatchedMesh) obj._nativeBeforeRenderFailed = false;
             } catch {
-              /* page / addon hook */
+              if (obj && obj.isBatchedMesh) obj._nativeBeforeRenderFailed = true;
             }
           }
+          if (obj && obj.isBatchedMesh) batched.push(obj);
         });
+        for (let i = 0; i < batched.length; i++) {
+          const obj = batched[i];
+          if (typeof obj._syncNativeBatches === "function") {
+            try {
+              obj._syncNativeBatches();
+            } catch {
+              /* native BatchedMesh draw list */
+            }
+          }
+        }
       }
       if (TN.cmd) {
         TN.cmd.flushPoses();

@@ -91,6 +91,9 @@ internal static partial class Native
     public static extern int tn_instanced_set_color_at(uint mesh, int index, uint hex);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int tn_instanced_set_count(uint mesh, int count);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     public static extern uint tn_lod_create();
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]

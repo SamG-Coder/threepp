@@ -137,6 +137,7 @@ TN_API void tn_scene_set_fog_exp2(uint32_t scene, uint32_t color, float density)
 
 TN_API int tn_instanced_set_matrix_at(uint32_t mesh, int index, const float* elements16);
 TN_API int tn_instanced_set_color_at(uint32_t mesh, int index, uint32_t hex);
+TN_API int tn_instanced_set_count(uint32_t mesh, int count);
 
 TN_API uint32_t tn_lod_create(void);
 TN_API int tn_lod_add_level(uint32_t lod, uint32_t object, float distance);
