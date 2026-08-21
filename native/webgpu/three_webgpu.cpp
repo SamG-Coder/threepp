@@ -11,6 +11,7 @@
 #endif
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <windowsx.h>
 
 #include <algorithm>
 #include <cctype>
@@ -116,13 +117,29 @@ struct Runtime {
     std::atomic<int> standaloneUi{0};
     std::atomic<int> fpsOverlay{0};
     std::atomic<int> debugOverlay{0};
+    std::atomic<int> overlayOpen{0};
+    std::atomic<int> overlayDirty{1};
+    std::atomic<int> pointerLocked{0};
+    std::mutex inputMu;
+    std::deque<TWInputEvent> inputEvents;
+    POINT pointerRestore{};
+    bool pointerRestoreValid{false};
 
     HWND hwnd{nullptr};
-    HWND toolbarHwnd{nullptr};
     HWND parent{nullptr};
     bool classRegistered{false};
-    bool toolbarClassRegistered{false};
     bool started{false};
+
+    WGPUTexture overlayTexture{};
+    WGPUTextureView overlayView{};
+    WGPUSampler overlaySampler{};
+    WGPUShaderModule overlayShader{};
+    WGPURenderPipeline overlayPipeline{};
+    WGPUBindGroup overlayBindGroup{};
+    int overlayWidth{0};
+    int overlayHeight{0};
+    int overlayRenderedFps{-1};
+    std::vector<uint8_t> overlayPixels;
 
     WGPUInstance instance{};
     WGPUAdapter adapter{};
@@ -157,134 +174,9 @@ struct Runtime {
 
 Runtime g;
 
-constexpr int kToolbarHeight = 52;
-constexpr wchar_t kToolbarClassName[] = L"ThreeBrowserWebGpuToolbar";
-
 WGPUCommandEncoder ensureEncoder();
 bool acquireSwapchain();
 void requestSurfaceResize(int w, int h);
-
-RECT fpsButtonRect(int width) { return RECT{std::max(210, width - 196), 10, std::max(292, width - 106), 42}; }
-RECT debugButtonRect(int width) { return RECT{std::max(306, width - 98), 10, std::max(388, width - 10), 42}; }
-
-void paintToolbar(HWND hwnd) {
-    PAINTSTRUCT ps{};
-    HDC dc = BeginPaint(hwnd, &ps);
-    RECT client{};
-    GetClientRect(hwnd, &client);
-    HDC memory = CreateCompatibleDC(dc);
-    HBITMAP bitmap = CreateCompatibleBitmap(dc, std::max(1L, client.right), std::max(1L, client.bottom));
-    HGDIOBJ oldBitmap = SelectObject(memory, bitmap);
-    HBRUSH background = CreateSolidBrush(RGB(247, 249, 251));
-    FillRect(memory, &client, background);
-    DeleteObject(background);
-    HPEN divider = CreatePen(PS_SOLID, 1, RGB(214, 219, 226));
-    HGDIOBJ oldPen = SelectObject(memory, divider);
-    MoveToEx(memory, 0, client.bottom - 1, nullptr);
-    LineTo(memory, client.right, client.bottom - 1);
-    SelectObject(memory, oldPen);
-    DeleteObject(divider);
-
-    SetBkMode(memory, TRANSPARENT);
-    HFONT titleFont = CreateFontW(-18, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
-                                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                 CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-    HGDIOBJ oldFont = SelectObject(memory, titleFont);
-    SetTextColor(memory, RGB(22, 29, 38));
-    RECT titleRect{18, 0, 260, client.bottom};
-    DrawTextW(memory, L"ThreeBrowser Runtime", -1, &titleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-    if (g.debugOverlay.load(std::memory_order_relaxed)) {
-        HFONT detailFont = CreateFontW(-14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                      DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                      CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-        SelectObject(memory, detailFont);
-        const int backlog = g.pendingCommandSubmits.load(std::memory_order_relaxed);
-        wchar_t detail[256]{};
-        std::swprintf(detail, std::size(detail), L"%hs  |  %.2f ms GPU  |  queue %d  |  %llu submits",
-                      g.backendName.c_str(), g.statsFrameUs.load(std::memory_order_relaxed) / 1000.0,
-                      backlog, static_cast<unsigned long long>(g.statsCmdSubmits.load(std::memory_order_relaxed)));
-        SetTextColor(memory, RGB(89, 99, 112));
-        RECT detailRect{220, 0, std::max(220L, client.right - 210), client.bottom};
-        DrawTextW(memory, detail, -1, &detailRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-        SelectObject(memory, titleFont);
-        DeleteObject(detailFont);
-    }
-
-    auto drawButton = [&](RECT rect, bool active, const wchar_t* text) {
-        HBRUSH fill = CreateSolidBrush(active ? RGB(226, 238, 255) : RGB(255, 255, 255));
-        HPEN border = CreatePen(PS_SOLID, 1, active ? RGB(33, 111, 219) : RGB(194, 201, 210));
-        HGDIOBJ priorBrush = SelectObject(memory, fill);
-        HGDIOBJ priorPen = SelectObject(memory, border);
-        RoundRect(memory, rect.left, rect.top, rect.right, rect.bottom, 8, 8);
-        SelectObject(memory, priorBrush);
-        SelectObject(memory, priorPen);
-        DeleteObject(fill);
-        DeleteObject(border);
-        SetTextColor(memory, active ? RGB(16, 88, 190) : RGB(48, 57, 68));
-        DrawTextW(memory, text, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    };
-    wchar_t fpsText[32] = L"FPS";
-    if (g.fpsOverlay.load(std::memory_order_relaxed)) {
-        std::swprintf(fpsText, std::size(fpsText), L"FPS %d", g.statsFps.load(std::memory_order_relaxed));
-    }
-    drawButton(fpsButtonRect(client.right), g.fpsOverlay.load(std::memory_order_relaxed) != 0, fpsText);
-    drawButton(debugButtonRect(client.right), g.debugOverlay.load(std::memory_order_relaxed) != 0, L"Debug");
-
-    BitBlt(dc, 0, 0, client.right, client.bottom, memory, 0, 0, SRCCOPY);
-    SelectObject(memory, oldFont);
-    SelectObject(memory, oldBitmap);
-    DeleteObject(titleFont);
-    DeleteObject(bitmap);
-    DeleteDC(memory);
-    EndPaint(hwnd, &ps);
-}
-
-LRESULT CALLBACK toolbarWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    switch (msg) {
-        case WM_PAINT:
-            paintToolbar(hwnd);
-            return 0;
-        case WM_ERASEBKGND:
-            return 1;
-        case WM_LBUTTONUP: {
-            RECT client{};
-            GetClientRect(hwnd, &client);
-            POINT point{static_cast<short>(LOWORD(lp)), static_cast<short>(HIWORD(lp))};
-            const RECT fpsRect = fpsButtonRect(client.right);
-            const RECT debugRect = debugButtonRect(client.right);
-            if (PtInRect(&fpsRect, point)) {
-                g.fpsOverlay.store(!g.fpsOverlay.load(std::memory_order_relaxed), std::memory_order_relaxed);
-            } else if (PtInRect(&debugRect, point)) {
-                const bool enabled = !g.debugOverlay.load(std::memory_order_relaxed);
-                g.debugOverlay.store(enabled, std::memory_order_relaxed);
-                g.statsLog.store(enabled, std::memory_order_relaxed);
-            }
-            InvalidateRect(hwnd, nullptr, FALSE);
-            return 0;
-        }
-        case WM_TIMER:
-            if (g.fpsOverlay.load(std::memory_order_relaxed) || g.debugOverlay.load(std::memory_order_relaxed)) {
-                InvalidateRect(hwnd, nullptr, FALSE);
-            }
-            return 0;
-        case WM_MOUSEACTIVATE:
-            return MA_NOACTIVATE;
-        default:
-            return DefWindowProcW(hwnd, msg, wp, lp);
-    }
-}
-
-void layoutToolbar() {
-    if (!g.hwnd || !g.toolbarHwnd) return;
-    RECT client{};
-    GetClientRect(g.hwnd, &client);
-    POINT origin{0, 0};
-    ClientToScreen(g.hwnd, &origin);
-    SetWindowPos(g.toolbarHwnd, HWND_TOP, origin.x, origin.y,
-                 std::max(1L, client.right), kToolbarHeight,
-                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
-}
 
 void setError(const char* message) {
     std::lock_guard<std::mutex> lock(g.errMu);
@@ -302,28 +194,121 @@ void pumpHwnd() {
     }
 }
 
+int inputModifiers() {
+    int modifiers = 0;
+    if (GetKeyState(VK_SHIFT) & 0x8000) modifiers |= 1;
+    if (GetKeyState(VK_CONTROL) & 0x8000) modifiers |= 2;
+    if (GetKeyState(VK_MENU) & 0x8000) modifiers |= 4;
+    return modifiers;
+}
+
+void queueInput(int type, int code, int x, int y, int movementX = 0, int movementY = 0) {
+    std::lock_guard<std::mutex> lock(g.inputMu);
+    if (g.inputEvents.size() >= 2048) g.inputEvents.pop_front();
+    g.inputEvents.push_back(TWInputEvent{type, code, x, y, movementX, movementY, inputModifiers()});
+}
+
+void setPointerLockOnWindowThread(bool enabled, bool notifyLoss = false) {
+    if (!g.hwnd) return;
+    if (enabled) {
+        if (g.pointerLocked.load(std::memory_order_relaxed)) return;
+        g.pointerRestoreValid = GetCursorPos(&g.pointerRestore) != FALSE;
+        RECT client{};
+        GetClientRect(g.hwnd, &client);
+        POINT topLeft{client.left, client.top};
+        POINT bottomRight{client.right, client.bottom};
+        ClientToScreen(g.hwnd, &topLeft);
+        ClientToScreen(g.hwnd, &bottomRight);
+        RECT clip{topLeft.x, topLeft.y, bottomRight.x, bottomRight.y};
+        ClipCursor(&clip);
+        SetCapture(g.hwnd);
+        while (ShowCursor(FALSE) >= 0) {}
+        g.pointerLocked.store(1, std::memory_order_release);
+    } else {
+        if (!g.pointerLocked.exchange(0, std::memory_order_acq_rel)) return;
+        ReleaseCapture();
+        ClipCursor(nullptr);
+        while (ShowCursor(TRUE) < 0) {}
+        if (g.pointerRestoreValid) SetCursorPos(g.pointerRestore.x, g.pointerRestore.y);
+        g.pointerRestoreValid = false;
+        if (notifyLoss) queueInput(TW_INPUT_POINTER_LOCK_LOST, 0, 0, 0);
+    }
+}
+
 LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_CLOSE:
-            if (g.toolbarHwnd) ShowWindow(g.toolbarHwnd, SW_HIDE);
             ShowWindow(hwnd, SW_HIDE);
             g.open.store(0, std::memory_order_relaxed);
             return 0;
         case WM_DESTROY:
             g.open.store(0, std::memory_order_relaxed);
             return 0;
+        case WM_SETFOCUS:
+            return 0;
+        case WM_KILLFOCUS:
+            setPointerLockOnWindowThread(false, true);
+            return 0;
+        case WM_INPUT: {
+            if (!g.pointerLocked.load(std::memory_order_relaxed)) return 0;
+            UINT size = 0;
+            GetRawInputData(reinterpret_cast<HRAWINPUT>(lp), RID_INPUT, nullptr, &size, sizeof(RAWINPUTHEADER));
+            std::vector<uint8_t> storage(size);
+            if (size && GetRawInputData(reinterpret_cast<HRAWINPUT>(lp), RID_INPUT, storage.data(), &size,
+                                        sizeof(RAWINPUTHEADER)) == size) {
+                const auto* raw = reinterpret_cast<const RAWINPUT*>(storage.data());
+                if (raw->header.dwType == RIM_TYPEMOUSE &&
+                    (raw->data.mouse.lLastX != 0 || raw->data.mouse.lLastY != 0)) {
+                    RECT client{};
+                    GetClientRect(hwnd, &client);
+                    queueInput(TW_INPUT_POINTER_MOVE, 0, client.right / 2, client.bottom / 2,
+                               raw->data.mouse.lLastX, raw->data.mouse.lLastY);
+                }
+            }
+            return 0;
+        }
+        case WM_MOUSEMOVE:
+            if (!g.pointerLocked.load(std::memory_order_relaxed)) {
+                queueInput(TW_INPUT_POINTER_MOVE, 0, GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+            }
+            return 0;
+        case WM_LBUTTONDOWN:
+        case WM_RBUTTONDOWN:
+        case WM_MBUTTONDOWN:
+            SetFocus(hwnd);
+            queueInput(TW_INPUT_POINTER_DOWN,
+                       msg == WM_LBUTTONDOWN ? VK_LBUTTON : msg == WM_RBUTTONDOWN ? VK_RBUTTON : VK_MBUTTON,
+                       GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+            return 0;
+        case WM_LBUTTONUP:
+        case WM_RBUTTONUP:
+        case WM_MBUTTONUP:
+            queueInput(TW_INPUT_POINTER_UP,
+                       msg == WM_LBUTTONUP ? VK_LBUTTON : msg == WM_RBUTTONUP ? VK_RBUTTON : VK_MBUTTON,
+                       GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+            return 0;
         case WM_MOUSEWHEEL:
             g.wheelDelta.fetch_add(GET_WHEEL_DELTA_WPARAM(wp), std::memory_order_relaxed);
+            {
+                POINT point{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+                ScreenToClient(hwnd, &point);
+                queueInput(TW_INPUT_WHEEL, GET_WHEEL_DELTA_WPARAM(wp), point.x, point.y);
+            }
+            return 0;
+        case WM_KEYDOWN:
+        case WM_SYSKEYDOWN:
+            queueInput(TW_INPUT_KEY_DOWN, static_cast<int>(wp), 0, 0);
+            return 0;
+        case WM_KEYUP:
+        case WM_SYSKEYUP:
+            queueInput(TW_INPUT_KEY_UP, static_cast<int>(wp), 0, 0);
             return 0;
         case WM_SIZE:
             if (wp != SIZE_MINIMIZED) {
                 g.statsW.store(std::max(1, static_cast<int>(LOWORD(lp))), std::memory_order_relaxed);
                 g.statsH.store(std::max(1, static_cast<int>(HIWORD(lp))), std::memory_order_relaxed);
-                layoutToolbar();
+                g.overlayDirty.store(1, std::memory_order_relaxed);
             }
-            return 0;
-        case WM_MOVE:
-            layoutToolbar();
             return 0;
         case WM_ERASEBKGND:
             return 1;
@@ -663,28 +648,13 @@ bool createHwnd(HWND parent, int x, int y, int w, int h) {
     g.parent = nullptr;
     g.nativeHwnd.store(g.hwnd);
     g.open.store(1, std::memory_order_relaxed);
-    if (standalone) {
-        if (!g.toolbarClassRegistered) {
-            WNDCLASSEXW toolbarClass{};
-            toolbarClass.cbSize = sizeof(toolbarClass);
-            toolbarClass.style = CS_HREDRAW | CS_VREDRAW;
-            toolbarClass.lpfnWndProc = toolbarWndProc;
-            toolbarClass.hInstance = inst;
-            toolbarClass.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
-            toolbarClass.lpszClassName = kToolbarClassName;
-            if (RegisterClassExW(&toolbarClass) || GetLastError() == ERROR_CLASS_ALREADY_EXISTS) {
-                g.toolbarClassRegistered = true;
-            }
-        }
-        if (g.toolbarClassRegistered) {
-            g.toolbarHwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-                                            kToolbarClassName, L"", WS_POPUP,
-                                            0, 0, w, kToolbarHeight, g.hwnd, nullptr, inst, nullptr);
-            if (g.toolbarHwnd) {
-                SetTimer(g.toolbarHwnd, 1, 250, nullptr);
-                layoutToolbar();
-            }
-        }
+    RAWINPUTDEVICE mouse{};
+    mouse.usUsagePage = 0x01;
+    mouse.usUsage = 0x02;
+    mouse.dwFlags = 0;
+    mouse.hwndTarget = g.hwnd;
+    if (!RegisterRawInputDevices(&mouse, 1, sizeof(mouse))) {
+        logLine("RegisterRawInputDevices failed; pointer lock will use window mouse messages");
     }
     pumpHwnd();
     if (parent) {
@@ -880,9 +850,377 @@ bool requestAdapterAndDevice() {
     return true;
 }
 
+RECT overlayFpsButtonRect(int width) {
+    return RECT{std::max(40, width - 300), 214, std::max(280, width - 60), 266};
+}
+
+RECT overlayDebugButtonRect(int width) {
+    return RECT{std::max(40, width - 300), 278, std::max(280, width - 60), 330};
+}
+
+void releaseOverlayGpu() {
+    if (g.overlayBindGroup) { wgpuBindGroupRelease(g.overlayBindGroup); g.overlayBindGroup = nullptr; }
+    if (g.overlayPipeline) { wgpuRenderPipelineRelease(g.overlayPipeline); g.overlayPipeline = nullptr; }
+    if (g.overlayShader) { wgpuShaderModuleRelease(g.overlayShader); g.overlayShader = nullptr; }
+    if (g.overlaySampler) { wgpuSamplerRelease(g.overlaySampler); g.overlaySampler = nullptr; }
+    if (g.overlayView) { wgpuTextureViewRelease(g.overlayView); g.overlayView = nullptr; }
+    if (g.overlayTexture) { wgpuTextureRelease(g.overlayTexture); g.overlayTexture = nullptr; }
+    g.overlayWidth = 0;
+    g.overlayHeight = 0;
+    g.overlayPixels.clear();
+}
+
+bool createOverlayGpu(int width, int height) {
+    releaseOverlayGpu();
+    if (!g.device || width < 1 || height < 1) return false;
+
+    WGPUTextureDescriptor textureDesc{};
+    textureDesc.label = twSv("ThreeBrowser overlay texture");
+    textureDesc.dimension = WGPUTextureDimension_2D;
+    textureDesc.size = WGPUExtent3D{static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1};
+    textureDesc.format = WGPUTextureFormat_BGRA8Unorm;
+    textureDesc.mipLevelCount = 1;
+    textureDesc.sampleCount = 1;
+    textureDesc.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
+    g.overlayTexture = wgpuDeviceCreateTexture(g.device, &textureDesc);
+    if (!g.overlayTexture) return false;
+    g.overlayView = wgpuTextureCreateView(g.overlayTexture, nullptr);
+
+    WGPUSamplerDescriptor samplerDesc{};
+    samplerDesc.addressModeU = WGPUAddressMode_ClampToEdge;
+    samplerDesc.addressModeV = WGPUAddressMode_ClampToEdge;
+    samplerDesc.addressModeW = WGPUAddressMode_ClampToEdge;
+    samplerDesc.magFilter = WGPUFilterMode_Linear;
+    samplerDesc.minFilter = WGPUFilterMode_Linear;
+    samplerDesc.mipmapFilter = WGPUMipmapFilterMode_Nearest;
+    samplerDesc.maxAnisotropy = 1;
+    g.overlaySampler = wgpuDeviceCreateSampler(g.device, &samplerDesc);
+
+    static constexpr char shaderSource[] = R"WGSL(
+@group(0) @binding(0) var overlayTexture: texture_2d<f32>;
+@group(0) @binding(1) var overlaySampler: sampler;
+struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32> };
+@vertex fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
+  var positions = array<vec2<f32>, 3>(vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
+  var uvs = array<vec2<f32>, 3>(vec2(0.0, 1.0), vec2(2.0, 1.0), vec2(0.0, -1.0));
+  var output: VertexOutput;
+  output.position = vec4(positions[index], 0.0, 1.0);
+  output.uv = uvs[index];
+  return output;
+}
+@fragment fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+  return textureSample(overlayTexture, overlaySampler, input.uv);
+}
+)WGSL";
+    WGPUShaderSourceWGSL wgsl{};
+    wgsl.chain.sType = WGPUSType_ShaderSourceWGSL;
+    wgsl.code = twSv(shaderSource);
+    WGPUShaderModuleDescriptor shaderDesc{};
+    shaderDesc.nextInChain = &wgsl.chain;
+    shaderDesc.label = twSv("ThreeBrowser overlay shader");
+    g.overlayShader = wgpuDeviceCreateShaderModule(g.device, &shaderDesc);
+
+    WGPUBlendState blend{};
+    blend.color.srcFactor = WGPUBlendFactor_SrcAlpha;
+    blend.color.dstFactor = WGPUBlendFactor_OneMinusSrcAlpha;
+    blend.color.operation = WGPUBlendOperation_Add;
+    blend.alpha.srcFactor = WGPUBlendFactor_One;
+    blend.alpha.dstFactor = WGPUBlendFactor_OneMinusSrcAlpha;
+    blend.alpha.operation = WGPUBlendOperation_Add;
+    WGPUColorTargetState target{};
+    target.format = g.surfaceFormat;
+    target.blend = &blend;
+    target.writeMask = WGPUColorWriteMask_All;
+    WGPUFragmentState fragment{};
+    fragment.module = g.overlayShader;
+    fragment.entryPoint = twSv("fs_main");
+    fragment.targetCount = 1;
+    fragment.targets = &target;
+    WGPURenderPipelineDescriptor pipelineDesc{};
+    pipelineDesc.label = twSv("ThreeBrowser overlay pipeline");
+    pipelineDesc.vertex.module = g.overlayShader;
+    pipelineDesc.vertex.entryPoint = twSv("vs_main");
+    pipelineDesc.primitive.topology = WGPUPrimitiveTopology_TriangleList;
+    pipelineDesc.primitive.frontFace = WGPUFrontFace_CCW;
+    pipelineDesc.primitive.cullMode = WGPUCullMode_None;
+    pipelineDesc.multisample.count = 1;
+    pipelineDesc.multisample.mask = 0xffffffffu;
+    pipelineDesc.fragment = &fragment;
+    g.overlayPipeline = wgpuDeviceCreateRenderPipeline(g.device, &pipelineDesc);
+    if (!g.overlayView || !g.overlaySampler || !g.overlayShader || !g.overlayPipeline) {
+        releaseOverlayGpu();
+        return false;
+    }
+
+    WGPUBindGroupLayout layout = wgpuRenderPipelineGetBindGroupLayout(g.overlayPipeline, 0);
+    WGPUBindGroupEntry entries[2]{};
+    entries[0].binding = 0;
+    entries[0].textureView = g.overlayView;
+    entries[1].binding = 1;
+    entries[1].sampler = g.overlaySampler;
+    WGPUBindGroupDescriptor bindDesc{};
+    bindDesc.label = twSv("ThreeBrowser overlay bind group");
+    bindDesc.layout = layout;
+    bindDesc.entryCount = 2;
+    bindDesc.entries = entries;
+    g.overlayBindGroup = wgpuDeviceCreateBindGroup(g.device, &bindDesc);
+    wgpuBindGroupLayoutRelease(layout);
+    g.overlayWidth = width;
+    g.overlayHeight = height;
+    g.overlayDirty.store(1, std::memory_order_relaxed);
+    return g.overlayBindGroup != nullptr;
+}
+
+void buildOverlayPixels(int width, int height) {
+    const int rowBytes = width * 4;
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = width;
+    info.bmiHeader.biHeight = -height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    HDC dc = CreateCompatibleDC(nullptr);
+    HBITMAP bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+    HGDIOBJ oldBitmap = SelectObject(dc, bitmap);
+    std::memset(bits, 0, static_cast<size_t>(rowBytes) * height);
+    SetBkMode(dc, TRANSPARENT);
+
+    const bool menu = g.overlayOpen.load(std::memory_order_relaxed) != 0;
+    if (menu) {
+        RECT full{0, 0, width, height};
+        HBRUSH shade = CreateSolidBrush(RGB(9, 12, 18));
+        FillRect(dc, &full, shade);
+        DeleteObject(shade);
+
+        HFONT title = CreateFontW(-26, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+        HFONT body = CreateFontW(-17, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                 OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+        HFONT label = CreateFontW(-14, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+        HGDIOBJ oldFont = SelectObject(dc, title);
+        SetTextColor(dc, RGB(243, 247, 252));
+        RECT titleRect{72, 48, width - 300, 86};
+        DrawTextW(dc, L"ThreeBrowser", -1, &titleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(dc, body);
+        SetTextColor(dc, RGB(117, 137, 164));
+        RECT hintRect{72, 84, width - 340, 112};
+        DrawTextW(dc, L"IN-GAME OVERLAY", -1, &hintRect, DT_LEFT | DT_SINGLELINE);
+
+        RECT keycap{width - 214, 55, width - 72, 93};
+        HBRUSH keyFill = CreateSolidBrush(RGB(29, 36, 48));
+        HPEN keyBorder = CreatePen(PS_SOLID, 1, RGB(66, 80, 101));
+        HGDIOBJ previousBrush = SelectObject(dc, keyFill);
+        HGDIOBJ previousPen = SelectObject(dc, keyBorder);
+        RoundRect(dc, keycap.left, keycap.top, keycap.right, keycap.bottom, 10, 10);
+        SelectObject(dc, previousBrush);
+        SelectObject(dc, previousPen);
+        DeleteObject(keyFill);
+        DeleteObject(keyBorder);
+        SelectObject(dc, label);
+        SetTextColor(dc, RGB(186, 199, 217));
+        DrawTextW(dc, L"SHIFT + TAB", -1, &keycap, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+        HPEN divider = CreatePen(PS_SOLID, 1, RGB(39, 48, 62));
+        HGDIOBJ oldPen = SelectObject(dc, divider);
+        MoveToEx(dc, 72, 126, nullptr);
+        LineTo(dc, width - 72, 126);
+        SelectObject(dc, oldPen);
+        DeleteObject(divider);
+
+        auto drawCard = [&](RECT rect) {
+            HBRUSH fill = CreateSolidBrush(RGB(23, 29, 39));
+            HPEN border = CreatePen(PS_SOLID, 1, RGB(48, 59, 76));
+            HGDIOBJ priorBrush = SelectObject(dc, fill);
+            HGDIOBJ priorPen = SelectObject(dc, border);
+            RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, 14, 14);
+            SelectObject(dc, priorBrush);
+            SelectObject(dc, priorPen);
+            DeleteObject(fill);
+            DeleteObject(border);
+        };
+
+        const int rightColumnLeft = std::max(520, width - 360);
+        RECT performanceCard{72, 154, rightColumnLeft - 24, 350};
+        drawCard(performanceCard);
+        SelectObject(dc, label);
+        SetTextColor(dc, RGB(112, 202, 255));
+        RECT performanceLabel{96, 176, performanceCard.right - 20, 200};
+        DrawTextW(dc, L"PERFORMANCE", -1, &performanceLabel, DT_LEFT | DT_SINGLELINE);
+
+        SelectObject(dc, title);
+        SetTextColor(dc, RGB(245, 248, 252));
+        wchar_t fpsValue[32]{};
+        std::swprintf(fpsValue, std::size(fpsValue), L"%d", g.statsFps.load(std::memory_order_relaxed));
+        RECT fpsValueRect{96, 218, 210, 260};
+        DrawTextW(dc, fpsValue, -1, &fpsValueRect, DT_LEFT | DT_SINGLELINE);
+        RECT frameValueRect{240, 218, 390, 260};
+        wchar_t frameValue[32]{};
+        std::swprintf(frameValue, std::size(frameValue), L"%.2f ms", g.statsFrameUs.load(std::memory_order_relaxed) / 1000.0);
+        DrawTextW(dc, frameValue, -1, &frameValueRect, DT_LEFT | DT_SINGLELINE);
+        SelectObject(dc, label);
+        SetTextColor(dc, RGB(124, 140, 163));
+        RECT fpsCaption{96, 264, 210, 286};
+        RECT frameCaption{240, 264, 390, 286};
+        DrawTextW(dc, L"FRAMES / SEC", -1, &fpsCaption, DT_LEFT | DT_SINGLELINE);
+        DrawTextW(dc, L"FRAME TIME", -1, &frameCaption, DT_LEFT | DT_SINGLELINE);
+        SelectObject(dc, body);
+        SetTextColor(dc, RGB(178, 190, 207));
+        std::wstring backend(g.backendName.begin(), g.backendName.end());
+        wchar_t detail[256]{};
+        std::swprintf(detail, std::size(detail), L"%ls renderer   |   queue %d   |   %llu frame packets",
+                      backend.c_str(), g.pendingCommandSubmits.load(std::memory_order_relaxed),
+                      static_cast<unsigned long long>(g.statsCmdSubmits.load(std::memory_order_relaxed)));
+        RECT detailRect{96, 312, performanceCard.right - 20, 338};
+        DrawTextW(dc, detail, -1, &detailRect, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+        const RECT fpsRect = overlayFpsButtonRect(width);
+        const RECT debugRect = overlayDebugButtonRect(width);
+        RECT settingsCard{rightColumnLeft, 154, width - 72, 350};
+        drawCard(settingsCard);
+        SelectObject(dc, label);
+        SetTextColor(dc, RGB(112, 202, 255));
+        RECT settingsLabel{settingsCard.left + 24, 176, settingsCard.right - 20, 200};
+        DrawTextW(dc, L"OVERLAY SETTINGS", -1, &settingsLabel, DT_LEFT | DT_SINGLELINE);
+        auto drawToggle = [&](RECT rect, bool active, const wchar_t* text) {
+            HBRUSH fill = CreateSolidBrush(active ? RGB(31, 90, 154) : RGB(31, 38, 50));
+            HPEN border = CreatePen(PS_SOLID, 1, active ? RGB(72, 151, 234) : RGB(55, 67, 85));
+            HGDIOBJ priorBrush = SelectObject(dc, fill);
+            HGDIOBJ priorPen = SelectObject(dc, border);
+            RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, 10, 10);
+            SelectObject(dc, priorBrush);
+            SelectObject(dc, priorPen);
+            DeleteObject(fill);
+            DeleteObject(border);
+            SelectObject(dc, body);
+            SetTextColor(dc, RGB(245, 248, 252));
+            RECT textRect{rect.left + 18, rect.top, rect.right - 52, rect.bottom};
+            DrawTextW(dc, text, -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            HBRUSH stateFill = CreateSolidBrush(active ? RGB(114, 203, 255) : RGB(87, 99, 117));
+            HGDIOBJ priorStateBrush = SelectObject(dc, stateFill);
+            HPEN noBorder = CreatePen(PS_NULL, 0, 0);
+            HGDIOBJ priorStatePen = SelectObject(dc, noBorder);
+            Ellipse(dc, rect.right - 36, rect.top + 18, rect.right - 22, rect.top + 32);
+            SelectObject(dc, priorStateBrush);
+            SelectObject(dc, priorStatePen);
+            DeleteObject(stateFill);
+            DeleteObject(noBorder);
+        };
+        drawToggle(fpsRect, g.fpsOverlay.load(std::memory_order_relaxed) != 0, L"FPS counter");
+        drawToggle(debugRect, g.debugOverlay.load(std::memory_order_relaxed) != 0, L"Diagnostic log");
+
+        RECT inputCard{72, 374, width - 72, 460};
+        drawCard(inputCard);
+        SelectObject(dc, label);
+        SetTextColor(dc, RGB(112, 202, 255));
+        RECT inputLabel{96, 394, 220, 418};
+        DrawTextW(dc, L"GAME INPUT", -1, &inputLabel, DT_LEFT | DT_SINGLELINE);
+        SelectObject(dc, body);
+        SetTextColor(dc, RGB(178, 190, 207));
+        RECT inputText{96, 424, width - 96, 448};
+        DrawTextW(dc, L"Mouse capture is released while this overlay is open and restored when the game requests pointer lock.", -1,
+                  &inputText, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+        SelectObject(dc, label);
+        SetTextColor(dc, RGB(104, 122, 148));
+        RECT footer{72, height - 58, width - 72, height - 34};
+        DrawTextW(dc, L"SHIFT + TAB  OVERLAY      F3  FPS COUNTER      ESC  RELEASE MOUSE", -1,
+                  &footer, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+        SelectObject(dc, oldFont);
+        DeleteObject(title);
+        DeleteObject(body);
+        DeleteObject(label);
+    } else if (g.fpsOverlay.load(std::memory_order_relaxed)) {
+        RECT badge{width - 138, 18, width - 18, 54};
+        HBRUSH fill = CreateSolidBrush(RGB(22, 27, 35));
+        HPEN border = CreatePen(PS_SOLID, 1, RGB(65, 77, 96));
+        HGDIOBJ oldBrush = SelectObject(dc, fill);
+        HGDIOBJ oldPen = SelectObject(dc, border);
+        RoundRect(dc, badge.left, badge.top, badge.right, badge.bottom, 10, 10);
+        SelectObject(dc, oldBrush);
+        SelectObject(dc, oldPen);
+        DeleteObject(fill);
+        DeleteObject(border);
+        HFONT font = CreateFontW(-18, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                 OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+        HGDIOBJ oldFont = SelectObject(dc, font);
+        SetTextColor(dc, RGB(112, 202, 255));
+        wchar_t fps[32]{};
+        std::swprintf(fps, std::size(fps), L"%d FPS", g.statsFps.load(std::memory_order_relaxed));
+        DrawTextW(dc, fps, -1, &badge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(dc, oldFont);
+        DeleteObject(font);
+    }
+
+    const int paddedRowBytes = (rowBytes + 255) & ~255;
+    g.overlayPixels.assign(static_cast<size_t>(paddedRowBytes) * height, 0);
+    const auto* source = static_cast<const uint8_t*>(bits);
+    for (int y = 0; y < height; ++y) {
+        auto* destination = g.overlayPixels.data() + static_cast<size_t>(y) * paddedRowBytes;
+        std::memcpy(destination, source + static_cast<size_t>(y) * rowBytes, rowBytes);
+        for (int x = 0; x < width; ++x) {
+            uint8_t* pixel = destination + x * 4;
+            const int brightness = pixel[0] + pixel[1] + pixel[2];
+            pixel[3] = menu ? static_cast<uint8_t>(brightness > 500 ? 255 : 232)
+                            : static_cast<uint8_t>(brightness == 0 ? 0 : (brightness > 500 ? 255 : 232));
+        }
+    }
+    SelectObject(dc, oldBitmap);
+    DeleteObject(bitmap);
+    DeleteDC(dc);
+}
+
+void renderOverlay() {
+    const bool visible = g.overlayOpen.load(std::memory_order_relaxed) != 0 ||
+                         g.fpsOverlay.load(std::memory_order_relaxed) != 0;
+    if (!visible || !g.currentView || !g.device || !g.queue) return;
+    const int width = g.statsW.load(std::memory_order_relaxed);
+    const int height = g.statsH.load(std::memory_order_relaxed);
+    if (width < 1 || height < 1) return;
+    if (!g.overlayPipeline || g.overlayWidth != width || g.overlayHeight != height) {
+        if (!createOverlayGpu(width, height)) return;
+    }
+    const int fps = g.statsFps.load(std::memory_order_relaxed);
+    if (g.overlayDirty.exchange(0, std::memory_order_acq_rel) || fps != g.overlayRenderedFps) {
+        buildOverlayPixels(width, height);
+        const int rowBytes = (width * 4 + 255) & ~255;
+        WGPUTexelCopyTextureInfo destination{};
+        destination.texture = g.overlayTexture;
+        WGPUTexelCopyBufferLayout layout{};
+        layout.bytesPerRow = static_cast<uint32_t>(rowBytes);
+        layout.rowsPerImage = static_cast<uint32_t>(height);
+        WGPUExtent3D extent{static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1};
+        wgpuQueueWriteTexture(g.queue, &destination, g.overlayPixels.data(), g.overlayPixels.size(), &layout, &extent);
+        g.overlayRenderedFps = fps;
+    }
+
+    WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(g.device, nullptr);
+    WGPURenderPassColorAttachment color{};
+    color.view = g.currentView;
+    color.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+    color.loadOp = WGPULoadOp_Load;
+    color.storeOp = WGPUStoreOp_Store;
+    WGPURenderPassDescriptor passDesc{};
+    passDesc.colorAttachmentCount = 1;
+    passDesc.colorAttachments = &color;
+    WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
+    wgpuRenderPassEncoderSetPipeline(pass, g.overlayPipeline);
+    wgpuRenderPassEncoderSetBindGroup(pass, 0, g.overlayBindGroup, 0, nullptr);
+    wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
+    wgpuRenderPassEncoderEnd(pass);
+    wgpuRenderPassEncoderRelease(pass);
+    WGPUCommandBuffer command = wgpuCommandEncoderFinish(encoder, nullptr);
+    wgpuQueueSubmit(g.queue, 1, &command);
+    wgpuCommandBufferRelease(command);
+    wgpuCommandEncoderRelease(encoder);
+}
+
 void destroyGpu() {
     dropCurrentTexture();
     clearSlots();
+    releaseOverlayGpu();
     if (g.surface && g.surfaceConfigured) {
         wgpuSurfaceUnconfigure(g.surface);
         g.surfaceConfigured = false;
@@ -911,14 +1249,10 @@ void destroyGpu() {
 }
 
 void destroyHwnd() {
+    setPointerLockOnWindowThread(false);
     g.nativeHwnd.store(nullptr);
     g.open.store(0, std::memory_order_relaxed);
     if (g.hwnd) {
-        if (g.toolbarHwnd) {
-            KillTimer(g.toolbarHwnd, 1);
-            DestroyWindow(g.toolbarHwnd);
-            g.toolbarHwnd = nullptr;
-        }
         ShowWindow(g.hwnd, SW_HIDE);
         SetParent(g.hwnd, nullptr);
         DestroyWindow(g.hwnd);
@@ -926,6 +1260,8 @@ void destroyHwnd() {
         g.parent = nullptr;
         pumpHwnd();
     }
+    std::lock_guard<std::mutex> lock(g.inputMu);
+    g.inputEvents.clear();
 }
 
 bool initGpu(WGPUInstanceBackend backends) {
@@ -1157,6 +1493,7 @@ bool implPresent() {
             return false;
         }
     }
+    renderOverlay();
     const bool firstPresent = g.statsPresents.load(std::memory_order_relaxed) == 0;
     wgpuSurfacePresent(g.surface);
     dropCurrentTexture();
@@ -2794,7 +3131,60 @@ int tw_backlog(void) {
 }
 
 int tw_content_offset_y(void) {
-    return g.toolbarHwnd ? kToolbarHeight : 0;
+    return 0;
+}
+
+void tw_set_overlay(int on) {
+    g.overlayOpen.store(on != 0 ? 1 : 0, std::memory_order_relaxed);
+    g.overlayDirty.store(1, std::memory_order_release);
+}
+
+int tw_overlay_open(void) {
+    return g.overlayOpen.load(std::memory_order_relaxed);
+}
+
+void tw_overlay_click(int x, int y) {
+    if (!g.overlayOpen.load(std::memory_order_relaxed)) return;
+    const int width = g.statsW.load(std::memory_order_relaxed);
+    POINT point{x, y};
+    const RECT fps = overlayFpsButtonRect(width);
+    const RECT debug = overlayDebugButtonRect(width);
+    if (PtInRect(&fps, point)) {
+        g.fpsOverlay.store(!g.fpsOverlay.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    } else if (PtInRect(&debug, point)) {
+        const bool enabled = !g.debugOverlay.load(std::memory_order_relaxed);
+        g.debugOverlay.store(enabled, std::memory_order_relaxed);
+        g.statsLog.store(enabled, std::memory_order_relaxed);
+    }
+    g.overlayDirty.store(1, std::memory_order_release);
+}
+
+void tw_toggle_fps_overlay(void) {
+    g.fpsOverlay.store(!g.fpsOverlay.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    g.overlayDirty.store(1, std::memory_order_release);
+}
+
+int tw_set_pointer_lock(int on) {
+    try {
+        return onWorker([on] {
+            setPointerLockOnWindowThread(on != 0);
+            return g.pointerLocked.load(std::memory_order_relaxed);
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+}
+
+int tw_poll_input(TWInputEvent* events, int capacity) {
+    if (!events || capacity <= 0) return 0;
+    std::lock_guard<std::mutex> lock(g.inputMu);
+    int count = 0;
+    while (count < capacity && !g.inputEvents.empty()) {
+        events[count++] = g.inputEvents.front();
+        g.inputEvents.pop_front();
+    }
+    return count;
 }
 
 void tw_stats(int* fps, int* frame_us, int* width, int* height, int* vsync, uint64_t* presents) {

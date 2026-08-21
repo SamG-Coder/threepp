@@ -46,7 +46,7 @@ class Element extends BrowserEventTarget {
   getAttribute(name) { return this[name] ?? null; }
   querySelector() { return null; }
   remove() { if (this.parentNode) this.parentNode.removeChild(this); }
-  requestPointerLock() { document.pointerLockElement = this; document.dispatchEvent(new Event("pointerlockchange")); }
+  requestPointerLock() { return requestNativePointerLock(this); }
 }
 
 class CanvasElement extends Element {
@@ -89,8 +89,26 @@ export const document = Object.assign(documentTarget, {
     if (selector === "canvas") return currentCanvas;
     return null;
   },
-  exitPointerLock() { this.pointerLockElement = null; this.dispatchEvent(new Event("pointerlockchange")); },
+  exitPointerLock() { releaseNativePointerLock(); },
 });
+
+function requestNativePointerLock(element) {
+  if (native.overlayOpen?.()) native.setOverlay(false);
+  if (!native.setPointerLock(true)) {
+    document.dispatchEvent(new Event("pointerlockerror"));
+    return Promise.reject(new Error("Pointer lock could not be acquired"));
+  }
+  document.pointerLockElement = element;
+  document.dispatchEvent(new Event("pointerlockchange"));
+  return Promise.resolve();
+}
+
+function releaseNativePointerLock(fromHost = false) {
+  if (!fromHost) native.setPointerLock(false);
+  if (!document.pointerLockElement) return;
+  document.pointerLockElement = null;
+  document.dispatchEvent(new Event("pointerlockchange"));
+}
 
 let currentCanvas = null;
 const originalCreateElement = document.createElement.bind(document);
@@ -181,19 +199,21 @@ function keyName(code) {
   if (code >= 65 && code <= 90) return String.fromCharCode(code).toLowerCase();
   if (code >= 48 && code <= 57) return String.fromCharCode(code);
   return ({ 27: "Escape", 32: " ", 37: "ArrowLeft", 38: "ArrowUp", 39: "ArrowRight", 40: "ArrowDown",
-    16: "Shift", 17: "Control", 18: "Alt", 13: "Enter" })[code] || `Key${code}`;
+    9: "Tab", 16: "Shift", 17: "Control", 18: "Alt", 13: "Enter", 114: "F3" })[code] || `Key${code}`;
 }
 
 function physicalKeyCode(code) {
   if (code >= 65 && code <= 90) return `Key${String.fromCharCode(code)}`;
   if (code >= 48 && code <= 57) return `Digit${String.fromCharCode(code)}`;
   return ({ 27: "Escape", 32: "Space", 37: "ArrowLeft", 38: "ArrowUp", 39: "ArrowRight", 40: "ArrowDown",
-    16: "ShiftLeft", 17: "ControlLeft", 18: "AltLeft", 13: "Enter" })[code] || `Key${code}`;
+    9: "Tab", 16: "ShiftLeft", 17: "ControlLeft", 18: "AltLeft", 13: "Enter", 114: "F3" })[code] || `Key${code}`;
 }
 
 let mouseButtons = 0;
 let lastMouseX = 0;
 let lastMouseY = 0;
+const pressedKeys = new Set();
+let overlayChordActive = false;
 
 function dispatchToCanvasAndWindow(eventFactory) {
   if (currentCanvas) currentCanvas.dispatchEvent(eventFactory());
@@ -203,7 +223,12 @@ function dispatchToCanvasAndWindow(eventFactory) {
 function dispatchNativeInput() {
   for (const input of native.pollInput()) {
     const target = currentCanvas || windowEvents;
+    if (input.type === "pointerlocklost") {
+      releaseNativePointerLock(true);
+      continue;
+    }
     if (input.type === "wheel") {
+      if (native.overlayOpen?.()) continue;
       dispatchToCanvasAndWindow(() => eventWith("wheel", {
         clientX: input.x, clientY: input.y, deltaX: 0, deltaY: -input.code, deltaZ: 0, deltaMode: 0,
       }));
@@ -214,10 +239,14 @@ function dispatchNativeInput() {
       const bit = button === 0 ? 1 : button === 2 ? 2 : 4;
       if (input.type === "pointerdown") mouseButtons |= bit;
       if (input.type === "pointerup") mouseButtons &= ~bit;
-      const movementX = input.x - lastMouseX;
-      const movementY = input.y - lastMouseY;
+      const movementX = Number.isFinite(input.movementX) ? input.movementX : input.x - lastMouseX;
+      const movementY = Number.isFinite(input.movementY) ? input.movementY : input.y - lastMouseY;
       lastMouseX = input.x;
       lastMouseY = input.y;
+      if (native.overlayOpen?.()) {
+        if (input.type === "pointerup") native.overlayClick(input.x, input.y);
+        continue;
+      }
       const properties = {
         clientX: input.x, clientY: input.y, offsetX: input.x, offsetY: input.y,
         movementX, movementY, button, buttons: mouseButtons, pointerId: 1,
@@ -229,10 +258,42 @@ function dispatchNativeInput() {
       if (input.type === "pointerup" && currentCanvas) currentCanvas.dispatchEvent(eventWith("click", properties));
       continue;
     }
-    const properties = { key: keyName(input.code), code: physicalKeyCode(input.code), keyCode: input.code, repeat: false };
+    if (input.type === "keydown") pressedKeys.add(input.code);
+    const overlayChordDown = pressedKeys.has(9) && pressedKeys.has(16);
+    if (overlayChordDown && !overlayChordActive) {
+      overlayChordActive = true;
+      releaseNativePointerLock();
+      native.setOverlay(!native.overlayOpen());
+    }
+    const consumeOverlayChord = overlayChordActive && (input.code === 9 || input.code === 16);
+    if (input.type === "keyup") {
+      pressedKeys.delete(input.code);
+      if (!pressedKeys.has(9) && !pressedKeys.has(16)) overlayChordActive = false;
+    }
+    if (consumeOverlayChord) {
+      continue;
+    }
+    if (input.type === "keydown" && input.code === 114) {
+      native.toggleFpsOverlay();
+      continue;
+    }
+    if (input.type === "keydown" && input.code === 27) {
+      if (document.pointerLockElement) {
+        releaseNativePointerLock();
+        continue;
+      }
+      if (native.overlayOpen?.()) {
+        native.setOverlay(false);
+        continue;
+      }
+    }
+    if (native.overlayOpen?.()) continue;
+    const properties = {
+      key: keyName(input.code), code: physicalKeyCode(input.code), keyCode: input.code, which: input.code,
+      shiftKey: input.shiftKey, ctrlKey: input.ctrlKey, altKey: input.altKey, repeat: false,
+    };
     if (document.activeElement) document.activeElement.dispatchEvent(eventWith(input.type, properties));
     windowEvents.dispatchEvent(eventWith(input.type, properties));
-    if (input.type === "keydown" && input.code === 27) stop();
   }
 }
 
@@ -284,6 +345,7 @@ export function stop() {
   if (!running && !native.isOpen()) return;
   running = false;
   frameCallbacks.clear();
+  releaseNativePointerLock();
   native.shutdown();
 }
 
