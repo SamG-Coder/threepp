@@ -23,6 +23,7 @@ public sealed class MainForm : Form
     private int _webGpuFps;
     private int _webGpuW;
     private int _webGpuH;
+    private int _webGpuSession = 1;
     private CoreWebView2Environment? _env;
     private CoreWebView2SharedBuffer? _cmdBuffer;
     private IntPtr _cmdView = IntPtr.Zero;
@@ -128,11 +129,14 @@ public sealed class MainForm : Form
     public void ResetNative()
     {
         ClearWebGpuBypass();
+        // Insert the WebGPU reset barrier immediately while NavigationStarting
+        // still owns the document transition. Deferring this call lets the old
+        // and new pages enqueue overlapping handle namespaces.
+        try { NativeWebGpu.tw_reset(); }
+        catch (DllNotFoundException) { }
+        catch (EntryPointNotFoundException) { }
         _ = Task.Run(() =>
         {
-            try { NativeWebGpu.tw_reset(); }
-            catch (DllNotFoundException) { }
-            catch (EntryPointNotFoundException) { }
             try { Native.tn_runtime_reset(); }
             catch (DllNotFoundException) { }
         });
@@ -226,6 +230,8 @@ public sealed class MainForm : Form
     }
 
     internal bool NativeWgpuOn => Volatile.Read(ref _nativeWgpu) != 0;
+
+    internal int WebGpuSession => Volatile.Read(ref _webGpuSession);
 
     public void NoteWebGpuFrame(int fps, int width, int height)
     {
@@ -605,6 +611,7 @@ public sealed class MainForm : Form
                 {
                     return;
                 }
+                Interlocked.Increment(ref _webGpuSession);
                 _chrome.SetLoading(true);
                 ReleasePointer();
                 if (_chrome.InjectEnabled)
@@ -915,6 +922,18 @@ public sealed class MainForm : Form
             return nbytes <= 0 ? 1 : 0;
         }
         return SubmitMappedCmd(NativeWebGpu.tw_cmd_submit, nbytes);
+    }
+
+    internal int SubmitWebGpuCmd(int nbytes, int session)
+    {
+        // MessageChannel callbacks from the document being left can outlive
+        // NavigationStarting. A successful no-op keeps those stale streams
+        // from entering the next document's recycled WebGPU handle namespace.
+        if (session != WebGpuSession)
+        {
+            return 1;
+        }
+        return SubmitWebGpuCmd(nbytes);
     }
 
     private int SubmitMappedCmd(Func<IntPtr, int, int> submit, int nbytes)

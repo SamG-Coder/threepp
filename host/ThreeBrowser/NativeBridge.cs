@@ -66,7 +66,15 @@ public partial class NativeBridge
 
     public int WebGpuIsNative() => NativeWebGpu.IsOpen() ? 1 : 0;
 
-    public int WebGpuCmdSubmit(int nbytes) => _form.SubmitWebGpuCmd(nbytes);
+    // Kept as a safe compatibility endpoint for an already-loaded v2 adapter.
+    // It has no document token, so accepting it across navigation can corrupt
+    // the next page's recycled handle namespace.
+    public int WebGpuCmdSubmit(int nbytes) => 1;
+
+    public int WebGpuSession() => _form.WebGpuSession;
+
+    public int WebGpuCmdSubmitSession(int nbytes, int session) =>
+        _form.SubmitWebGpuCmd(nbytes, session);
 
     public string WebGpuMapRead(int handle, double offset, double size)
     {

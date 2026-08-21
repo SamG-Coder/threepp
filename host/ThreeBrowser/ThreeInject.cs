@@ -180,7 +180,7 @@ internal static class ThreeInject
             "      const n = tbNative();\n" +
             "      const nativeGpu = n && n.WebGpuIsNative && n.WebGpuIsNative();\n" +
             "      if (nativeGpu) {\n" +
-            "        const mod = await import('https://threebrowser.local/three-webgpu-gpu.js?tb-native=2');\n" +
+            "        const mod = await import('https://threebrowser.local/three-webgpu-gpu.js?tb-native=3');\n" +
             "        if (mod && typeof mod.install === 'function') await mod.install();\n" +
             "      }\n" +
             "    } catch (e) {\n" +

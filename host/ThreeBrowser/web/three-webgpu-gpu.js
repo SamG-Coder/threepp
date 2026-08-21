@@ -1,4 +1,4 @@
-import { cmd } from "./three-webgpu-cmd.js";
+import { cmd } from "./three-webgpu-cmd.js?tb-native=3";
 
 const FEATURES = [
   "core-features-and-limits",

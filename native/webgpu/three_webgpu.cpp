@@ -108,6 +108,7 @@ struct Runtime {
     std::atomic<uint64_t> statsPresents{0};
     std::atomic<uint64_t> statsCmdSubmits{0};
     std::atomic<uint64_t> statsCmdBytes{0};
+    std::atomic<uint64_t> commandGeneration{1};
     std::atomic<int> vsync{0};
     std::atomic<int> open{0};
 
@@ -129,12 +130,18 @@ struct Runtime {
     WGPUTexture currentTex{};
     WGPUTextureView currentView{};
     bool surfaceConfigured{false};
+    int pendingResizeW{0};
+    int pendingResizeH{0};
+    int resizeHoldFrames{0};
 
     std::unordered_map<uint32_t, Slot> slots;
     WGPUCommandEncoder currentEncoder{};
     uint32_t currentEncoderHandle{0};
     WGPUComputePassEncoder computePass{};
     WGPURenderPassEncoder renderPass{};
+    bool computePipelineSet{false};
+    bool renderPipelineSet{false};
+    bool skipRenderPass{false};
     bool traceCommands{false};
     int traceRemaining{0};
     bool statsLog{false};
@@ -344,11 +351,14 @@ void endPasses() {
         wgpuComputePassEncoderRelease(g.computePass);
         g.computePass = nullptr;
     }
+    g.computePipelineSet = false;
     if (g.renderPass) {
         wgpuRenderPassEncoderEnd(g.renderPass);
         wgpuRenderPassEncoderRelease(g.renderPass);
         g.renderPass = nullptr;
     }
+    g.renderPipelineSet = false;
+    g.skipRenderPass = false;
 }
 
 void releaseSlot(Slot& s) {
@@ -527,6 +537,12 @@ bool configureSurface(int w, int h) {
     g.statsW.store(w, std::memory_order_relaxed);
     g.statsH.store(h, std::memory_order_relaxed);
     return true;
+}
+
+void requestSurfaceResize(int w, int h) {
+    g.pendingResizeW = std::max(1, w);
+    g.pendingResizeH = std::max(1, h);
+    g.resizeHoldFrames = 3;
 }
 
 bool createSurface() {
@@ -820,8 +836,15 @@ void implAttach(void* parentHwnd, int x, int y, int w, int h) {
         setError("runtime not started");
         return;
     }
+    const bool alreadyAttached = g.parent == parent && GetParent(g.hwnd) == parent;
     applyAttachStyle(g.hwnd, parent, x, y, w, h);
     g.parent = parent;
+    if (alreadyAttached) {
+        // A WinForms resize arrives before the page's resize event. Resize the
+        // child HWND immediately, but leave swapchain configuration ordered
+        // with the page's OP_RESIZE and its replacement depth/MSAA textures.
+        return;
+    }
     // Vulkan/DXGI swapchain is tied to the HWND's parentage. Recreate after
     // SetParent or Present() can abort the process.
     releaseSurfaceOnly();
@@ -929,6 +952,11 @@ bool acquireSwapchain() {
 }
 
 bool implPresent() {
+    if (g.resizeHoldFrames > 0) {
+        --g.resizeHoldFrames;
+        dropCurrentTexture();
+        return true;
+    }
     if (!g.surface || !g.surfaceConfigured) {
         dropCurrentTexture();
         return true;
@@ -1251,7 +1279,9 @@ void execOne(uint32_t op, Reader& r) {
                 SetWindowPos(g.hwnd, nullptr, 0, 0, std::max(1, w), std::max(1, h),
                              SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
             }
-            configureSurface(w, h);
+            // Command streams can split one encoder across several submits.
+            // Never invalidate its acquired surface texture mid-encoder.
+            requestSurfaceResize(w, h);
             return;
         }
         case OP_PRESENT:
@@ -1394,9 +1424,12 @@ void execOne(uint32_t op, Reader& r) {
             vd.arrayLayerCount = layerCount ? layerCount : WGPU_ARRAY_LAYER_COUNT_UNDEFINED;
             Slot s;
             s.kind = Kind::TextureView;
-            s.texW = ts->texW;
-            s.texH = ts->texH;
-            s.texD = ts->texD;
+            const uint32_t actualW = wgpuTextureGetWidth(ts->texture);
+            const uint32_t actualH = wgpuTextureGetHeight(ts->texture);
+            const uint32_t actualD = wgpuTextureGetDepthOrArrayLayers(ts->texture);
+            s.texW = std::max(1u, actualW >> std::min(baseMip, 31u));
+            s.texH = std::max(1u, actualH >> std::min(baseMip, 31u));
+            s.texD = actualD;
             s.texFormat = vd.format;
             s.view = wgpuTextureCreateView(ts->texture, &vd);
             if (!s.view) {
@@ -1861,6 +1894,7 @@ void execOne(uint32_t op, Reader& r) {
             }
             WGPUComputePassDescriptor pd{};
             g.computePass = wgpuCommandEncoderBeginComputePass(encoder, &pd);
+            g.computePipelineSet = false;
             return;
         }
         case OP_COMPUTE_PIPE: {
@@ -1869,9 +1903,11 @@ void execOne(uint32_t op, Reader& r) {
             Slot* s = getSlot(pipe);
             if (!g.computePass || !s || s->kind != Kind::ComputePipeline) {
                 setError("compute pipe: bad state");
+                g.computePipelineSet = false;
                 return;
             }
             wgpuComputePassEncoderSetPipeline(g.computePass, s->cpipe);
+            g.computePipelineSet = true;
             return;
         }
         case OP_COMPUTE_BG: {
@@ -1895,8 +1931,8 @@ void execOne(uint32_t op, Reader& r) {
             const uint32_t x = r.u32();
             const uint32_t y = r.u32();
             const uint32_t z = r.u32();
-            if (!g.computePass) {
-                setError("dispatch: no compute pass");
+            if (!g.computePass || !g.computePipelineSet) {
+                setError("dispatch: no valid compute pipeline");
                 return;
             }
             wgpuComputePassEncoderDispatchWorkgroups(g.computePass, x, y, z);
@@ -1908,8 +1944,11 @@ void execOne(uint32_t op, Reader& r) {
                 wgpuComputePassEncoderRelease(g.computePass);
                 g.computePass = nullptr;
             }
+            g.computePipelineSet = false;
             return;
         case OP_RENDER_BEGIN: {
+            g.renderPipelineSet = false;
+            g.skipRenderPass = false;
             uint32_t colorView = 0;
             uint32_t resolveView = 0xffffffffu;
             uint32_t depthView = 0;
@@ -1950,9 +1989,69 @@ void execOne(uint32_t op, Reader& r) {
                 ca = r.f32();
                 load = r.has(4) ? r.u32() : 0;
             }
+            if (g.resizeHoldFrames > 0) {
+                // A page may record several passes before its next present.
+                // Hold all of them until complete animation frames have
+                // elapsed with a stable canvas size.
+                g.skipRenderPass = true;
+                return;
+            }
             WGPUCommandEncoder encoder = ensureEncoder();
             if (!encoder) {
                 setError("render begin: no encoder");
+                return;
+            }
+            auto viewSize = [](uint32_t handle, uint32_t& width, uint32_t& height) {
+                if (handle == 0) {
+                    width = g.config.width;
+                    height = g.config.height;
+                    return width != 0 && height != 0;
+                }
+                Slot* slot = getSlot(handle);
+                if (!slot || slot->kind != Kind::TextureView || !slot->view) {
+                    return false;
+                }
+                width = slot->texW;
+                height = slot->texH;
+                return width != 0 && height != 0;
+            };
+            uint32_t depthW = 0, depthH = 0;
+            const bool hasDepthSize = depthView != 0 && viewSize(depthView, depthW, depthH);
+            uint32_t colorW = 0, colorH = 0;
+            const bool hasOffscreenColorSize = colorView != 0 && viewSize(colorView, colorW, colorH);
+            uint32_t frameW = hasOffscreenColorSize ? colorW : (hasDepthSize ? depthW : 0);
+            uint32_t frameH = hasOffscreenColorSize ? colorH : (hasDepthSize ? depthH : 0);
+            if (frameW == 0 || frameH == 0) {
+                frameW = g.pendingResizeW > 0 ? static_cast<uint32_t>(g.pendingResizeW) : g.config.width;
+                frameH = g.pendingResizeH > 0 ? static_cast<uint32_t>(g.pendingResizeH) : g.config.height;
+            }
+            const bool usesSwapchain = colorView == 0 ||
+                                       (colorView != 0 && resolveView == 0);
+            if (usesSwapchain && frameW != 0 && frameH != 0 &&
+                (g.config.width != frameW || g.config.height != frameH)) {
+                configureSurface(static_cast<int>(frameW), static_cast<int>(frameH));
+            }
+            if (g.pendingResizeW == static_cast<int>(frameW) &&
+                g.pendingResizeH == static_cast<int>(frameH)) {
+                g.pendingResizeW = 0;
+                g.pendingResizeH = 0;
+            }
+            if (colorView == 0) {
+                colorW = g.config.width;
+                colorH = g.config.height;
+            } else if (!hasOffscreenColorSize) {
+                colorW = g.config.width;
+                colorH = g.config.height;
+            }
+            uint32_t resolveW = 0, resolveH = 0;
+            const bool hasResolveSize = colorView != 0 && resolveView != 0xffffffffu &&
+                                        viewSize(resolveView, resolveW, resolveH);
+            if ((hasDepthSize && (depthW != colorW || depthH != colorH)) ||
+                (hasResolveSize && (resolveW != colorW || resolveH != colorH))) {
+                // A resize can occur between the page rebuilding attachments
+                // and acquiring the swapchain texture. Skip only this frame;
+                // passing mismatched views to wgpu aborts at encoder finish.
+                g.skipRenderPass = true;
                 return;
             }
             WGPUTextureView cv = viewFromHandle(colorView, colorView == 0);
@@ -2017,6 +2116,9 @@ void execOne(uint32_t op, Reader& r) {
         case OP_RENDER_PIPE: {
             r.u32(); // encoder
             const uint32_t pipe = r.u32();
+            if (g.skipRenderPass) {
+                return;
+            }
             Slot* s = getSlot(pipe);
             if (!g.renderPass || !s || s->kind != Kind::RenderPipeline || !s->rpipe) {
                 char buf[128];
@@ -2027,6 +2129,7 @@ void execOne(uint32_t op, Reader& r) {
                 return;
             }
             wgpuRenderPassEncoderSetPipeline(g.renderPass, s->rpipe);
+            g.renderPipelineSet = true;
             return;
         }
         case OP_RENDER_BG: {
@@ -2036,6 +2139,9 @@ void execOne(uint32_t op, Reader& r) {
             const uint32_t dynamicCount = r.u32();
             std::vector<uint32_t> dynamicOffsets(dynamicCount);
             for (uint32_t i = 0; i < dynamicCount; ++i) dynamicOffsets[i] = r.u32();
+            if (g.skipRenderPass) {
+                return;
+            }
             Slot* s = getSlot(bg);
             if (!g.renderPass || !s || s->kind != Kind::BindGroup) {
                 setError("render bg: bad state");
@@ -2052,6 +2158,9 @@ void execOne(uint32_t op, Reader& r) {
             const uint32_t offset32 = r.has(4) ? r.u32() : 0;
             const uint32_t size32 = r.has(4) ? r.u32() : 0;
             const uint64_t offset = offset32;
+            if (g.skipRenderPass) {
+                return;
+            }
             Slot* s = getSlot(buffer);
             if (!g.renderPass || !s || s->kind != Kind::Buffer) {
                 setError("set vertex: bad state");
@@ -2068,6 +2177,9 @@ void execOne(uint32_t op, Reader& r) {
             const uint32_t offset32 = r.has(4) ? r.u32() : 0;
             const uint32_t size32 = r.has(4) ? r.u32() : 0;
             const uint64_t offset = offset32;
+            if (g.skipRenderPass) {
+                return;
+            }
             Slot* s = getSlot(buffer);
             if (!g.renderPass || !s || s->kind != Kind::Buffer) {
                 setError("set index: bad state");
@@ -2084,8 +2196,11 @@ void execOne(uint32_t op, Reader& r) {
             const uint32_t ic = r.has(4) ? r.u32() : 1;
             const uint32_t fv = r.has(4) ? r.u32() : 0;
             const uint32_t fi = r.has(4) ? r.u32() : 0;
-            if (!g.renderPass) {
-                setError("draw: no render pass");
+            if (g.skipRenderPass) {
+                return;
+            }
+            if (!g.renderPass || !g.renderPipelineSet) {
+                setError("draw: no valid render pipeline");
                 return;
             }
             wgpuRenderPassEncoderDraw(g.renderPass, vc, ic ? ic : 1, fv, fi);
@@ -2098,8 +2213,11 @@ void execOne(uint32_t op, Reader& r) {
             const uint32_t first = r.has(4) ? r.u32() : 0;
             const int32_t base = r.has(4) ? static_cast<int32_t>(r.u32()) : 0;
             const uint32_t fi = r.has(4) ? r.u32() : 0;
-            if (!g.renderPass) {
-                setError("draw indexed: no render pass");
+            if (g.skipRenderPass) {
+                return;
+            }
+            if (!g.renderPass || !g.renderPipelineSet) {
+                setError("draw indexed: no valid render pipeline");
                 return;
             }
             wgpuRenderPassEncoderDrawIndexed(g.renderPass, ic, inst ? inst : 1, first, base, fi);
@@ -2147,8 +2265,11 @@ void execOne(uint32_t op, Reader& r) {
             r.u32(); // encoder
             const uint32_t buffer = r.u32();
             const uint64_t offset = r.u32();
+            if (g.skipRenderPass) {
+                return;
+            }
             Slot* s = getSlot(buffer);
-            if (!g.renderPass || !s || s->kind != Kind::Buffer) {
+            if (!g.renderPass || !g.renderPipelineSet || !s || s->kind != Kind::Buffer) {
                 setError("draw indirect: bad state");
                 return;
             }
@@ -2165,6 +2286,8 @@ void execOne(uint32_t op, Reader& r) {
                 wgpuRenderPassEncoderRelease(g.renderPass);
                 g.renderPass = nullptr;
             }
+            g.renderPipelineSet = false;
+            g.skipRenderPass = false;
             return;
         case OP_SUBMIT:
             finishEncoderSubmit();
@@ -2447,7 +2570,7 @@ void tw_set_size(int w, int h) {
                 SetWindowPos(g.hwnd, nullptr, 0, 0, w, h,
                              SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
             }
-            configureSurface(w, h);
+            requestSurfaceResize(w, h);
         });
     } catch (const std::exception& ex) {
         setError(ex.what());
@@ -2490,6 +2613,7 @@ void tw_shutdown(void) {
         if (!g.workerStarted) {
             return;
         }
+        g.commandGeneration.fetch_add(1, std::memory_order_relaxed);
         g.stop = true;
     }
     g.cv.notify_one();
@@ -2502,16 +2626,18 @@ void tw_shutdown(void) {
 
 void tw_reset(void) {
     try {
+        ensureWorker();
         {
             std::lock_guard<std::mutex> lock(g.mu);
-            if (!g.workerStarted || g.stop) {
+            if (g.stop) {
                 return;
             }
+            // Invalidate command jobs already pulled into the worker's local
+            // batch, and insert reset before any command from the next page.
+            g.commandGeneration.fetch_add(1, std::memory_order_relaxed);
+            g.jobs.emplace_back([] { implReset(); });
         }
-        onWorker([] {
-            implReset();
-            return 0;
-        });
+        g.cv.notify_one();
     } catch (const std::exception& ex) {
         setError(ex.what());
     }
@@ -2538,12 +2664,24 @@ int tw_cmd_submit(const uint8_t* data, int nbytes) {
         std::vector<uint8_t> copy(data, data + nbytes);
         const uint64_t submitIndex = g.statsCmdSubmits.fetch_add(1, std::memory_order_relaxed);
         g.statsCmdBytes.fetch_add(static_cast<uint64_t>(nbytes), std::memory_order_relaxed);
-        onWorkerAsync([buf = std::move(copy), submitIndex] {
-            if (submitIndex == 0) {
-                logLine("native WebGPU command stream received");
+        ensureWorker();
+        {
+            std::lock_guard<std::mutex> lock(g.mu);
+            if (g.stop) {
+                return 0;
             }
-            execStream(buf.data(), static_cast<int>(buf.size()));
-        });
+            const uint64_t generation = g.commandGeneration.load(std::memory_order_relaxed);
+            g.jobs.emplace_back([buf = std::move(copy), submitIndex, generation] {
+                if (generation != g.commandGeneration.load(std::memory_order_relaxed)) {
+                    return;
+                }
+                if (submitIndex == 0) {
+                    logLine("native WebGPU command stream received");
+                }
+                execStream(buf.data(), static_cast<int>(buf.size()));
+            });
+        }
+        g.cv.notify_one();
         return 1;
     } catch (const std::exception& ex) {
         setError(ex.what());

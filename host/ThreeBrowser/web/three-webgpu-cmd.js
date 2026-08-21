@@ -213,6 +213,7 @@ let shared = false;
 let pendingSubmit = false;
 let hostCache = null;
 let lastAttached = null;
+let hostSession = 0;
 
 function host() {
   if (hostCache) return hostCache;
@@ -312,13 +313,25 @@ function submitNow() {
     : hostHas(n, "CmdSubmit")
       ? n.CmdSubmit.bind(n)
       : null;
-  if (!submit) {
+  let submittedForSession = false;
+  try {
+    if (hostSession === 0) hostSession = n.WebGpuSession() | 0;
+    if (hostSession !== 0) {
+      n.WebGpuCmdSubmitSession(used, hostSession);
+      submittedForSession = true;
+    }
+  } catch {
+    /* older hosts fall through to the legacy endpoint */
+  }
+  if (!submit && !submittedForSession) {
     off = 0;
     return;
   }
   off = 0;
   pendingSubmit = false;
-  submit(used);
+  if (!submittedForSession) {
+    submit(used);
+  }
 }
 
 function need(bytes) {
