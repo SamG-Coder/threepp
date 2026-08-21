@@ -1,7 +1,8 @@
 (function (TN) {
   "use strict";
 
-  TN.REVISION = "native-threepp";
+  // Numeric prefix so addons can `parseInt(REVISION) >= 166` (three-mesh-bvh).
+  TN.REVISION = "184";
 
   TN.MOUSE = { LEFT: 0, MIDDLE: 1, RIGHT: 2, ROTATE: 0, DOLLY: 1, PAN: 2 };
   TN.TOUCH = { ROTATE: 0, PAN: 1, DOLLY_PAN: 2, DOLLY_ROTATE: 3 };

@@ -1,5 +1,5 @@
 (function (TN) {
-  TN.REVISION = TN.REVISION || "native-threepp";
+  TN.REVISION = TN.REVISION || "184";
   globalThis.THREE = TN;
   if (typeof window !== "undefined") {
     window.__THREE__ = TN.REVISION;
