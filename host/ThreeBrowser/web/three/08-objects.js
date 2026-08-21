@@ -1310,7 +1310,6 @@
   const Box3 = TN.Box3;
   const Color = TN.Color;
   const BufferAttribute = TN.BufferAttribute;
-  const DataTexture = TN.DataTexture;
   const RGBAFormat = TN.RGBAFormat ?? 1023;
   const FloatType = TN.FloatType ?? 1015;
   const RedIntegerFormat = TN.RedIntegerFormat ?? 1029;
@@ -1348,6 +1347,7 @@
       this._multiDrawStarts = new Int32Array(Math.max(1, this._maxInstanceCount));
       this._multiDrawCount = 0;
       this._multiDrawBytesPerElement = 1;
+      this._matrices = new Float32Array(Math.max(16, this._maxInstanceCount * 16));
       this._matricesTexture = null;
       this._indirectTexture = null;
       this._colorsTexture = null;
@@ -1357,27 +1357,40 @@
       this._initIndirectTexture();
       if (TN.cmd) TN.cmd.markPose(this);
     }
+    _dataTexture() {
+      return TN.DataTexture;
+    }
+    _matrixData() {
+      const tex = this._matricesTexture;
+      if (tex && tex.image && tex.image.data) return tex.image.data;
+      if (!this._matrices) this._matrices = new Float32Array(Math.max(16, this._maxInstanceCount * 16));
+      return this._matrices;
+    }
     _initMatricesTexture() {
-      if (!DataTexture) return;
+      const DataTex = this._dataTexture();
       let size = Math.sqrt(this._maxInstanceCount * 4);
       size = Math.ceil(size / 4) * 4;
       size = Math.max(size, 4);
       const matricesArray = new Float32Array(size * size * 4);
-      this._matricesTexture = new DataTexture(matricesArray, size, size, RGBAFormat, FloatType);
+      this._matrices = matricesArray;
+      if (!DataTex) return;
+      this._matricesTexture = new DataTex(matricesArray, size, size, RGBAFormat, FloatType);
     }
     _initIndirectTexture() {
-      if (!DataTexture) return;
+      const DataTex = this._dataTexture();
       let size = Math.ceil(Math.sqrt(this._maxInstanceCount));
       size = Math.max(size, 1);
       const indirectArray = new Uint32Array(size * size);
-      this._indirectTexture = new DataTexture(indirectArray, size, size, RedIntegerFormat, UnsignedIntType);
+      if (!DataTex) return;
+      this._indirectTexture = new DataTex(indirectArray, size, size, RedIntegerFormat, UnsignedIntType);
     }
     _initColorsTexture() {
-      if (!DataTexture) return;
+      const DataTex = this._dataTexture();
       let size = Math.ceil(Math.sqrt(this._maxInstanceCount));
       size = Math.max(size, 1);
       const colorsArray = new Float32Array(size * size * 4).fill(1);
-      this._colorsTexture = new DataTexture(colorsArray, size, size, RGBAFormat, FloatType);
+      if (!DataTex) return;
+      this._colorsTexture = new DataTex(colorsArray, size, size, RGBAFormat, FloatType);
     }
     _initializeGeometry(reference) {
       const geometry = this.geometry;
@@ -1533,10 +1546,9 @@
         drawId = this._instanceInfo.length;
         this._instanceInfo.push(instanceInfo);
       }
-      const matricesTexture = this._matricesTexture;
-      if (matricesTexture && _batchMatrix) {
-        _batchMatrix.identity().toArray(matricesTexture.image.data, drawId * 16);
-        matricesTexture.needsUpdate = true;
+      if (_batchMatrix) {
+        _batchMatrix.identity().toArray(this._matrixData(), drawId * 16);
+        if (this._matricesTexture) this._matricesTexture.needsUpdate = true;
       }
       this._visibilityChanged = true;
       this._nativeBatchesDirty = true;
@@ -1679,20 +1691,17 @@
     }
     setMatrixAt(instanceId, matrix) {
       this.validateInstanceId(instanceId);
-      const matricesTexture = this._matricesTexture;
-      if (matricesTexture && matrix && typeof matrix.toArray === "function") {
-        matrix.toArray(matricesTexture.image.data, instanceId * 16);
-        matricesTexture.needsUpdate = true;
-      } else {
-        writeMatrix(this._matricesTexture ? this._matricesTexture.image.data : this._matrices, instanceId * 16, matrix);
-      }
+      const data = this._matrixData();
+      if (matrix && typeof matrix.toArray === "function") matrix.toArray(data, instanceId * 16);
+      else writeMatrix(data, instanceId * 16, matrix);
+      if (this._matricesTexture) this._matricesTexture.needsUpdate = true;
       this._nativeBatchesDirty = true;
       if (TN.cmd) TN.cmd.markPose(this);
       return this;
     }
     getMatrixAt(instanceId, matrix) {
       this.validateInstanceId(instanceId);
-      const data = this._matricesTexture ? this._matricesTexture.image.data : this._matrices;
+      const data = this._matrixData();
       if (matrix && typeof matrix.fromArray === "function") return matrix.fromArray(data, instanceId * 16);
       return readMatrix(data, instanceId * 16, matrix);
     }
