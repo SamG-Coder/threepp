@@ -12,8 +12,14 @@
 #include "three_native.h"
 #include "three_webgpu.h"
 
+#define STB_IMAGE_STATIC
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+
 #include <array>
 #include <atomic>
+#include <climits>
+#include <cstring>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -132,6 +138,7 @@ napi_value start(napi_env env, napi_callback_info info) {
     const int height = argc > 1 ? static_cast<int>(argNumber(env, argv[1], 720)) : 720;
     const std::string title = argc > 2 ? argString(env, argv[2], "ThreeBrowser Runtime") : "ThreeBrowser Runtime";
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    tn_runtime_set_standalone(1);
     tn_runtime_set_vsync(1);
     const bool ok = tn_runtime_start(width, height, title.c_str()) != 0;
     runtimeActive.store(ok, std::memory_order_release);
@@ -194,6 +201,57 @@ napi_value submit(napi_env env, napi_callback_info info) {
         else if (type == napi_float64_array || type == napi_bigint64_array || type == napi_biguint64_array) size *= 8;
     }
     return boolean(env, tn_cmd_submit(static_cast<const std::uint8_t*>(data), static_cast<int>(size)) != 0);
+}
+
+napi_value decodeImage(napi_env env, napi_callback_info info) {
+    napi_value argv[1]{};
+    std::size_t argc = 1;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (argc == 0) return undefined(env);
+
+    void* data = nullptr;
+    std::size_t size = 0;
+    bool isArrayBuffer = false;
+    napi_is_arraybuffer(env, argv[0], &isArrayBuffer);
+    if (isArrayBuffer) {
+        if (napi_get_arraybuffer_info(env, argv[0], &data, &size) != napi_ok) return undefined(env);
+    } else {
+        napi_typedarray_type type{};
+        std::size_t length = 0;
+        napi_value buffer{};
+        std::size_t offset = 0;
+        if (napi_get_typedarray_info(env, argv[0], &type, &length, &data, &buffer, &offset) != napi_ok ||
+            (type != napi_uint8_array && type != napi_uint8_clamped_array)) {
+            return undefined(env);
+        }
+        size = length;
+    }
+    if (!data || size == 0 || size > static_cast<std::size_t>(INT32_MAX)) return undefined(env);
+
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+    stbi_uc* pixels = stbi_load_from_memory(static_cast<const stbi_uc*>(data), static_cast<int>(size),
+                                            &width, &height, &channels, 4);
+    if (!pixels || width <= 0 || height <= 0) {
+        if (pixels) stbi_image_free(pixels);
+        return undefined(env);
+    }
+    const std::size_t pixelBytes = static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4;
+    void* output = nullptr;
+    napi_value arrayBuffer{};
+    napi_create_arraybuffer(env, pixelBytes, &output, &arrayBuffer);
+    std::memcpy(output, pixels, pixelBytes);
+    stbi_image_free(pixels);
+
+    napi_value typedPixels{};
+    napi_create_typedarray(env, napi_uint8_clamped_array, pixelBytes, arrayBuffer, 0, &typedPixels);
+    napi_value result{};
+    napi_create_object(env, &result);
+    set(env, result, "width", number(env, width));
+    set(env, result, "height", number(env, height));
+    set(env, result, "pixels", typedPixels);
+    return result;
 }
 
 napi_value resize(napi_env env, napi_callback_info info) {
@@ -469,6 +527,7 @@ napi_value init(napi_env env, napi_value exports) {
         {"webGpuSubmit", nullptr, webGpuSubmit, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"webGpuMapRead", nullptr, webGpuMapRead, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"submit", nullptr, submit, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"decodeImage", nullptr, decodeImage, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"resize", nullptr, resize, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"shutdown", nullptr, shutdown, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"isOpen", nullptr, isOpen, nullptr, nullptr, nullptr, napi_default, nullptr},

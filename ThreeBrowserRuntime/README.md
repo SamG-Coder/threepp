@@ -44,11 +44,29 @@ The imported files are stored under `ThreeBrowserRuntime\projects\<name>` with
 a `.threebrowser-project.json` manifest. Running the same import refreshes the
 copied files from the browser web root without editing the originals.
 
+## Pull and unpack a website
+
+From a new empty folder, `pull` downloads a website and walks its Vite/ESM
+dependency graph. JavaScript modules are localized as `.mjs`, referenced chunks
+and assets are copied, available source maps are expanded, and Three.js sources
+inside source maps are separated under `unpacked\three`.
+
+```powershell
+mkdir C:\Sites\pulled-demo
+cd C:\Sites\pulled-demo
+dotnet run --project C:\ThreeBrowser\ThreeBrowserRuntime\ThreeBrowserRuntime.csproj -- pull https://example.com/
+dotnet run --project C:\ThreeBrowser\ThreeBrowserRuntime\ThreeBrowserRuntime.csproj -- .\site-entry.mjs
+```
+
+The command writes `site-entry.mjs` and `threebrowser.pull.json`. It refuses to
+write into a non-empty destination unless `--force` is supplied. `unpack` is an
+alias for `pull`.
+
 Relative ESM imports, `.js` modules, and HTML import maps are supported. The
 bare `three` import resolves to the native ThreeBrowser compatibility API rather
 than stock WebGL; addon paths continue through the page's import map so their
-JavaScript can import that native core. Press Escape in the native window or
-Ctrl+C in the terminal to exit.
+JavaScript can import that native core. Escape releases pointer lock, while
+Ctrl+C in the terminal exits the runtime.
 
 At configure time CMake reads the installed Node version and downloads its
 matching official Node-API headers and Windows import library from nodejs.org.

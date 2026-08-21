@@ -56,8 +56,14 @@ endif ()
 add_library(three_browser_runtime MODULE src/addon.cpp)
 target_compile_definitions(three_browser_runtime PRIVATE
         NAPI_VERSION=10 NODE_GYP_MODULE_NAME=three_browser_runtime WIN32_LEAN_AND_MEAN NOMINMAX)
-target_include_directories(three_browser_runtime PRIVATE "${_node_headers}" "${PROJECT_SOURCE_DIR}/native")
+target_include_directories(three_browser_runtime PRIVATE
+        "${_node_headers}"
+        "${PROJECT_SOURCE_DIR}/native"
+        "${PROJECT_SOURCE_DIR}/src/external/stb")
 target_link_libraries(three_browser_runtime PRIVATE three_native three_webgpu "${_node_lib}" dwmapi user32)
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(three_browser_runtime PRIVATE -Wno-stringop-overflow)
+endif ()
 set_target_properties(three_browser_runtime PROPERTIES
         PREFIX ""
         SUFFIX ".node"

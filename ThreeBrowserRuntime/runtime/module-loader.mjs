@@ -44,13 +44,41 @@ function validExportName(name) {
   ]).has(name);
 }
 
+function moduleExportNames(filePath, visited = new Set()) {
+  const absolute = path.resolve(filePath);
+  if (visited.has(absolute) || !fs.existsSync(absolute)) return [];
+  visited.add(absolute);
+  const source = fs.readFileSync(absolute, "utf8");
+  const names = new Set();
+  for (const match of source.matchAll(/\bexport\s*\{([\s\S]*?)\}(?:\s*from\s*["'][^"']+["'])?\s*;/g)) {
+    for (const item of match[1].split(",")) {
+      const parts = item.trim().split(/\s+as\s+/);
+      const name = parts.at(-1)?.trim();
+      if (name && validExportName(name)) names.add(name);
+    }
+  }
+  for (const match of source.matchAll(/\bexport\s+(?:const|let|var|class|function)\s+([A-Za-z_$][\w$]*)/g)) {
+    if (validExportName(match[1])) names.add(match[1]);
+  }
+  for (const match of source.matchAll(/\bexport\s*\*\s*from\s*["']([^"']+)["']/g)) {
+    const target = path.resolve(path.dirname(absolute), match[1]);
+    for (const name of moduleExportNames(target, visited)) names.add(name);
+  }
+  return [...names];
+}
+
 function facadeURL() {
   if (threeFacadeURL) return threeFacadeURL;
-  const names = Object.keys(globalThis.THREE || {}).filter(validExportName).sort();
+  const stockPath = nodeModules ? path.join(nodeModules, "three", "build", "three.module.js") : null;
+  const names = new Set(Object.keys(globalThis.THREE || {}).filter(validExportName));
+  if (stockPath) for (const name of moduleExportNames(stockPath)) names.add(name);
+  const sortedNames = [...names].sort();
   const source = [
+    ...(stockPath ? [`import * as STOCK from ${JSON.stringify(pathToFileURL(stockPath).href)};`] : ["const STOCK = {};"]),
     "const THREE = globalThis.THREE;",
-    "export default THREE;",
-    ...names.map(name => `export const ${name} = THREE[${JSON.stringify(name)}];`),
+    "const merged = Object.assign({}, STOCK, THREE);",
+    "export default merged;",
+    ...sortedNames.map(name => `export const ${name} = Object.hasOwn(THREE, ${JSON.stringify(name)}) ? THREE[${JSON.stringify(name)}] : STOCK[${JSON.stringify(name)}];`),
   ].join("\n");
   threeFacadeURL = `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
   return threeFacadeURL;
@@ -71,6 +99,9 @@ registerHooks({
     // both the core package and addon-style imports.
     if (specifier === "three") {
       return { url: facadeURL(), shortCircuit: true };
+    }
+    if (/lil-gui(?:\.module(?:\.min)?)?\.(?:m?js)$/i.test(specifier) || specifier === "lil-gui") {
+      return { url: pathToFileURL(path.join(runtimeDirectory, "lil-gui-stub.mjs")).href, shortCircuit: true };
     }
     const packagePath = packageModule(specifier);
     if (packagePath) return { url: pathToFileURL(packagePath).href, shortCircuit: true };

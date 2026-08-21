@@ -15,10 +15,46 @@ if (projectDirectory is null)
 
 var runtimeDirectory = Path.Combine(projectDirectory, "build", "bin");
 var launcher = Path.Combine(runtimeDirectory, "runtime", "launch.mjs");
+var sitePuller = Path.Combine(runtimeDirectory, "runtime", "site-puller.mjs");
 if (!File.Exists(launcher))
 {
     Console.Error.WriteLine("The native runtime is missing. Run 'dotnet build' first.");
     return 1;
+}
+
+if (args.Length > 0 && (args[0].Equals("pull", StringComparison.OrdinalIgnoreCase) ||
+                        args[0].Equals("unpack", StringComparison.OrdinalIgnoreCase)))
+{
+    if (args.Length < 2)
+    {
+        Console.Error.WriteLine("Usage: dotnet run --project <ThreeBrowserRuntime.csproj> -- pull <https://site> [destination] [--force]");
+        return 1;
+    }
+    if (!File.Exists(sitePuller))
+    {
+        Console.Error.WriteLine("The site puller is missing. Run 'dotnet build' first.");
+        return 1;
+    }
+
+    var pull = new ProcessStartInfo("node")
+    {
+        UseShellExecute = false,
+        WorkingDirectory = Environment.CurrentDirectory,
+    };
+    pull.ArgumentList.Add(sitePuller);
+    foreach (var argument in args.Skip(1)) pull.ArgumentList.Add(argument);
+    try
+    {
+        using var process = Process.Start(pull);
+        if (process is null) throw new InvalidOperationException("Could not start Node/V8.");
+        await process.WaitForExitAsync();
+        return process.ExitCode;
+    }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine($"Could not pull website: {error.Message}");
+        return 1;
+    }
 }
 
 static void CopyTree(string source, string destination)

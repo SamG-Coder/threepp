@@ -10,7 +10,9 @@
 #endif
 
 #if defined(_WIN32)
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #define GLFW_INCLUDE_NONE
@@ -198,7 +200,7 @@ int impl_runtime_start(int width, int height, const char* title) {
             .size(width > 0 ? width : 800, height > 0 ? height : 600)
             .antialiasing(2)
             .vsync(g.vsync.load(std::memory_order_relaxed))
-            .headless(true)
+            .headless(!g.standalone.load(std::memory_order_relaxed))
             .exitOnKeyEscape(false);
     g.canvas = std::make_unique<Canvas>(params);
 #ifdef THREEPP_WITH_VULKAN
@@ -467,6 +469,10 @@ void tn_runtime_set_vsync(int enabled) {
     } catch (const std::exception& ex) {
         setError(ex.what());
     }
+}
+
+void tn_runtime_set_standalone(int enabled) {
+    g.standalone.store(enabled != 0, std::memory_order_relaxed);
 }
 
 int tn_runtime_render(uint32_t sceneHandle, uint32_t cameraHandle) {
