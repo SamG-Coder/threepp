@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Offline Agent Harness</title>
+  <style>
+    :root { font-family: "Segoe UI", system-ui, sans-serif; color: #202124; background: #fff; }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    button, select, textarea { font: inherit; }
+    #app { height: 100%; display: grid; grid-template-columns: 260px minmax(0, 1fr); }
+    aside { min-width: 0; display: flex; flex-direction: column; border-right: 1px solid #dadce0; background: #f8f9fa; }
+    .sidebar-head { display: flex; align-items: center; height: 50px; padding: 0 10px 0 15px; }
+    .sidebar-title { flex: 1; color: #3c4043; font-size: 13px; font-weight: 600; }
+    .count { min-width: 22px; margin-right: 5px; padding: 2px 7px; border-radius: 999px; background: #e8eaed; color: #5f6368; font-size: 11px; text-align: center; }
+    .icon-button { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: #3c4043; cursor: pointer; font-size: 17px; }
+    .icon-button:hover { background: #e8eaed; }
+    .sidebar-body { min-height: 0; flex: 1; overflow: auto; padding: 0 9px 12px; }
+    .section { padding: 12px 6px 14px; border-top: 1px solid #e4e6e8; }
+    .section:first-child { border-top: 0; }
+    .section-label { margin-bottom: 8px; color: #5f6368; font-size: 11px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
+    select { width: 100%; height: 34px; padding: 0 9px; border: 1px solid #dadce0; border-radius: 7px; background: #fff; color: #202124; outline: none; }
+    select:focus, textarea:focus { border-color: #1a73e8; box-shadow: 0 0 0 2px rgba(26,115,232,.14); }
+    #project-detail { min-height: 18px; margin-top: 6px; overflow: hidden; color: #80868b; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+    .tools { display: grid; gap: 9px; }
+    .tool { display: flex; align-items: center; gap: 8px; color: #5f6368; font-size: 12px; }
+    .tool-glyph { width: 20px; color: #1a73e8; text-align: center; }
+    .offline { margin-top: auto; padding: 12px 14px; border-top: 1px solid #ceead6; background: #e6f4ea; color: #137333; }
+    .offline-title { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 650; }
+    .offline-copy { margin-top: 5px; font-size: 11px; line-height: 1.45; }
+    main { min-width: 0; display: flex; flex-direction: column; background: #fff; }
+    #timeline { min-height: 0; flex: 1; overflow: auto; padding: 22px max(24px, calc((100% - 760px) / 2)); scroll-behavior: smooth; }
+    .welcome { max-width: 580px; margin: 12vh auto 0; text-align: center; }
+    .welcome-mark { display: grid; place-items: center; width: 46px; height: 46px; margin: 0 auto 14px; border-radius: 12px; background: #e8f0fe; color: #185abc; font-size: 22px; }
+    .welcome h2 { margin: 0 0 7px; font-size: 20px; font-weight: 650; }
+    .welcome p { margin: 0; color: #5f6368; font-size: 13px; line-height: 1.55; }
+    .event { position: relative; margin: 0 0 11px; padding: 11px 13px 11px 38px; border: 1px solid #dadce0; border-radius: 9px; background: #fff; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .event::before { position: absolute; left: 12px; top: 11px; width: 18px; color: #5f6368; text-align: center; }
+    .event.user { margin-left: 60px; border-color: #d2e3fc; background: #f5f8ff; }
+    .event.user::before { content: '›'; color: #1a73e8; font-size: 18px; }
+    .event.tool { background: #f8f9fa; color: #3c4043; font: 12px/1.5 "Cascadia Mono", Consolas, monospace; }
+    .event.tool::before { content: '⚙'; }
+    .event.task::before { content: '◇'; color: #7b1fa2; }
+    .event.answer { border-color: #ceead6; background: #f4fbf6; }
+    .event.answer::before { content: '✓'; color: #188038; }
+    .event.error { border-color: #f6aea9; background: #fce8e6; color: #b3261e; }
+    .event.error::before { content: '!'; }
+    .event.system::before { content: 'i'; color: #1a73e8; }
+    .composer { flex: 0 0 150px; display: flex; gap: 10px; padding: 12px 14px 14px; border-top: 1px solid #dadce0; background: #f8f9fa; box-shadow: 0 -8px 24px rgba(32,33,36,.06); }
+    textarea { min-width: 0; flex: 1; resize: none; padding: 11px 13px; border: 1px solid #dadce0; border-radius: 10px; background: #fff; color: #202124; font: 14px/1.45 "Segoe UI", system-ui, sans-serif; outline: none; }
+    textarea::placeholder { color: #80868b; }
+    .run-actions { display: flex; flex-direction: column; justify-content: flex-end; gap: 7px; }
+    .action-button { height: 34px; min-width: 104px; padding: 0 13px; border: 1px solid #dadce0; border-radius: 8px; background: #fff; color: #3c4043; cursor: pointer; font-weight: 600; }
+    .action-button:hover { background: #f1f3f4; }
+    .action-button.primary { border-color: #1a73e8; background: #1a73e8; color: #fff; }
+    .action-button.primary:hover { background: #185abc; }
+    .action-button:disabled { opacity: .45; cursor: default; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <aside>
+      <div class="sidebar-head">
+        <span class="sidebar-title">Sandbox project</span>
+        <span id="project-count" class="count">0</span>
+        <button id="refresh-projects" class="icon-button" title="Refresh sandbox projects" aria-label="Refresh sandbox projects">↻</button>
+      </div>
+      <div class="sidebar-body">
+        <section class="section">
+          <div class="section-label">Agent workspace</div>
+          <select id="project" aria-label="Sandbox project" disabled></select>
+          <div id="project-detail">Save a sandbox project first.</div>
+        </section>
+        <section class="section">
+          <div class="section-label">Local Ollama model</div>
+          <select id="model" aria-label="Ollama model" disabled></select>
+        </section>
+        <section class="section">
+          <div class="section-label">Allowlisted tools</div>
+          <div class="tools">
+            <div class="tool"><span class="tool-glyph">⌕</span><span>List, read, and grep files</span></div>
+            <div class="tool"><span class="tool-glyph">✎</span><span>Write and exact replace</span></div>
+            <div class="tool"><span class="tool-glyph">◎</span><span>Create and update goals</span></div>
+            <div class="tool"><span class="tool-glyph">◇</span><span>Create tasks and wait</span></div>
+          </div>
+        </section>
+      </div>
+      <section class="offline">
+        <div class="offline-title"><span>●</span><span>Network isolated</span></div>
+        <div class="offline-copy">Only the selected sandbox’s GUID folder is exposed. Ollama is reached through loopback.</div>
+      </section>
+    </aside>
+    <main>
+      <div id="timeline">
+        <div id="welcome" class="welcome">
+          <div class="welcome-mark">◇</div>
+          <h2>Work inside a sandbox project</h2>
+          <p>Select one of your saved Sandbox projects and give the local agent a task. It cannot access other sandboxes, parent folders, or the internet.</p>
+        </div>
+      </div>
+      <div class="composer">
+        <textarea id="prompt" placeholder="Describe the task for the local agent…" aria-label="Agent task"></textarea>
+        <div class="run-actions">
+          <button id="stop" class="action-button" disabled>Stop</button>
+          <button id="run" class="action-button primary" disabled>◇&nbsp; Run task</button>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script>
+    const project = document.getElementById('project');
+    const projectCount = document.getElementById('project-count');
+    const projectDetail = document.getElementById('project-detail');
+    const refreshProjects = document.getElementById('refresh-projects');
+    const model = document.getElementById('model');
+    const timeline = document.getElementById('timeline');
+    const welcome = document.getElementById('welcome');
+    const prompt = document.getElementById('prompt');
+    const run = document.getElementById('run');
+    const stop = document.getElementById('stop');
+    let state = { selectedProject: null, projects: [], models: [], detecting: false, running: false };
+
+    function post(type, extra = {}) { chrome.webview.postMessage({ type, ...extra }); }
+    function replaceOptions(select, values, selected, label) {
+      const current = Array.from(select.options).map(option => option.value);
+      if (current.length !== values.length || current.some((value, index) => value !== values[index].value)) {
+        select.replaceChildren(...values.map(item => {
+          const option = document.createElement('option');
+          option.value = item.value;
+          option.textContent = item.label;
+          return option;
+        }));
+      }
+      if (values.some(item => item.value === selected)) select.value = selected;
+      select.setAttribute('aria-label', label);
+    }
+    function updateControls() {
+      const projects = Array.isArray(state.projects) ? state.projects : [];
+      const models = Array.isArray(state.models) ? state.models : [];
+      replaceOptions(project, projects.map(item => ({ value: item.id, label: item.title })), state.selectedProject, 'Sandbox project');
+      replaceOptions(model, models.map(name => ({ value: name, label: name })), model.value, 'Ollama model');
+      projectCount.textContent = String(projects.length);
+      const selected = projects.find(item => item.id === project.value);
+      projectDetail.textContent = selected
+        ? `${selected.fileCount} file${selected.fileCount === 1 ? '' : 's'} · ${selected.id.slice(0, 8)}`
+        : 'Save a sandbox project first.';
+      const ready = !!selected && !!model.value;
+      project.disabled = state.running || !projects.length;
+      model.disabled = state.detecting || state.running || !models.length;
+      refreshProjects.disabled = state.running;
+      prompt.disabled = state.running;
+      run.disabled = state.running || !ready || !prompt.value.trim();
+      stop.disabled = !state.running;
+    }
+
+    project.addEventListener('change', () => post('select-project', { id: project.value }));
+    refreshProjects.addEventListener('click', () => post('refresh-projects'));
+    prompt.addEventListener('input', updateControls);
+    prompt.addEventListener('keydown', event => {
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !run.disabled) {
+        event.preventDefault();
+        run.click();
+      }
+    });
+    run.addEventListener('click', () => post('run', { prompt: prompt.value, model: model.value }));
+    stop.addEventListener('click', () => post('stop'));
+
+    window.agentHarness = {
+      setState(next) {
+        state = { ...state, ...next };
+        updateControls();
+      },
+      appendEvent(kind, message) {
+        welcome?.remove();
+        const item = document.createElement('div');
+        item.className = `event ${kind}`;
+        item.textContent = message;
+        timeline.append(item);
+        timeline.scrollTop = timeline.scrollHeight;
+      },
+    };
+    updateControls();
+    post('ready');
+  </script>
+</body>
+</html>

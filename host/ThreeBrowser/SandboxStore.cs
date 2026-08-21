@@ -186,6 +186,16 @@ internal sealed partial class SandboxStore
         return true;
     }
 
+    internal string GetProjectDirectory(Guid id)
+    {
+        var directory = PageDirectory(id);
+        if (!Directory.Exists(directory))
+        {
+            throw new DirectoryNotFoundException("The selected sandbox project no longer exists.");
+        }
+        return directory;
+    }
+
     private IReadOnlyList<SandboxFileSummary> ListFiles(Guid id)
     {
         var directory = PageDirectory(id);

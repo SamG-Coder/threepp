@@ -18,6 +18,7 @@ public sealed class MainForm : Form
     private readonly System.Windows.Forms.Timer _debugTimer = new();
     private Form? _nativePreview;
     private SandboxEditorForm? _sandboxEditor;
+    private AgentHarnessForm? _agentHarness;
     private Guid? _sandboxId;
     private string _sandboxFilePath = "index.html";
     private string _sandboxHtml = DefaultSandboxHtml;
@@ -123,6 +124,7 @@ public sealed class MainForm : Form
         };
         _chrome.NativeWindowRequested += (_, _) => ToggleNativePreview();
         _chrome.SandboxRequested += (_, _) => ShowSandboxEditor();
+        _chrome.AgentRequested += (_, _) => ShowAgentHarness();
         _chrome.BackendChanged += (_, _) => _ = ApplyBackendAsync();
 
         _web.Dock = DockStyle.Fill;
@@ -139,6 +141,7 @@ public sealed class MainForm : Form
         FormClosing += (_, _) =>
         {
             _debugTimer.Stop();
+            _agentHarness?.Dispose();
             ShutdownNative();
         };
         KeyDown += OnBrowserKey;
@@ -984,6 +987,27 @@ public sealed class MainForm : Form
         else
         {
             _sandboxEditor.Show(this);
+        }
+    }
+
+    private void ShowAgentHarness()
+    {
+        if (_env == null)
+        {
+            return;
+        }
+        if (_agentHarness == null || _agentHarness.IsDisposed)
+        {
+            _agentHarness = new AgentHarnessForm(Icon, _env, _webRoot, _sandboxStore);
+            _agentHarness.ProjectChanged += (_, _) => RefreshSavedPages();
+        }
+        if (_agentHarness.Visible)
+        {
+            _agentHarness.Activate();
+        }
+        else
+        {
+            _agentHarness.Show(this);
         }
     }
 
