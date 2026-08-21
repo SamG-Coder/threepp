@@ -75,8 +75,19 @@ Node supplies V8; no WebView or browser renderer process is used.
 ## Current compatibility boundary
 
 This milestone is a three.js application runtime, not a general HTML/CSS
-browser. It supports the browser primitives needed by the included native demo.
-HTTP module loading, network `fetch`, images, wheel/text input, import-map
-scopes, rendered HTML/CSS overlays, and broader DOM widgets are the next
-compatibility layers. DOM controls can execute, but this native-only milestone
-does not paint those controls over the GPU surface yet.
+browser. Localized ESM graphs, import maps, local and network `fetch`, image
+decoding, HDR environments, DRACO workers, skeletal animation, pointer/keyboard
+input, and the WebGPU/TSL command path are supported. DOM controls can execute,
+but this native-only milestone does not paint general HTML/CSS widgets over the
+GPU surface yet.
+
+## Visually verified official examples
+
+The following pages have been pulled from `threejs.org`, run in Release mode,
+and visually checked in the native window:
+
+- `webgl_geometry_cube.html` — image decode, textured geometry, animation;
+- `webgl_instancing_performance.html` — 1,000 meshes and pointer orbit;
+- `webgl_loader_gltf.html` — GLB, embedded textures, UltraHDR and PMREM;
+- `webgl_animation_keyframes.html` — DRACO WASM worker and skinned animation;
+- `webgpu_compute_particles.html` — stock WebGPU/TSL compute and rendering.
