@@ -106,6 +106,8 @@ struct Runtime {
     std::atomic<int> statsW{0};
     std::atomic<int> statsH{0};
     std::atomic<uint64_t> statsPresents{0};
+    std::atomic<uint64_t> statsCmdSubmits{0};
+    std::atomic<uint64_t> statsCmdBytes{0};
     std::atomic<int> vsync{0};
     std::atomic<int> open{0};
 
@@ -135,6 +137,8 @@ struct Runtime {
     WGPURenderPassEncoder renderPass{};
     bool traceCommands{false};
     int traceRemaining{0};
+    bool statsLog{false};
+    std::chrono::steady_clock::time_point lastStatsLog{};
 };
 
 Runtime g;
@@ -782,6 +786,12 @@ bool implStart(void* parentHwnd, int x, int y, int w, int h) {
     g.traceCommands = GetEnvironmentVariableA("THREEBROWSER_WGPU_TRACE", traceFlag,
                                                static_cast<DWORD>(sizeof(traceFlag))) > 0;
     g.traceRemaining = g.traceCommands ? 1200 : 0;
+    char statsFlag[8]{};
+    g.statsLog = GetEnvironmentVariableA("THREEBROWSER_WGPU_STATS", statsFlag,
+                                         static_cast<DWORD>(sizeof(statsFlag))) > 0;
+    g.lastStatsLog = {};
+    g.statsCmdSubmits.store(0, std::memory_order_relaxed);
+    g.statsCmdBytes.store(0, std::memory_order_relaxed);
     g.statsW.store(w, std::memory_order_relaxed);
     g.statsH.store(h, std::memory_order_relaxed);
     logLine((std::string("runtime started backend=") + g.backendName).c_str());
@@ -841,6 +851,25 @@ void recordFps(std::chrono::steady_clock::time_point t1, int frameUs) {
         }
         windowFrames = 0;
         windowStart = t1;
+    }
+    if (g.statsLog &&
+        (g.lastStatsLog.time_since_epoch().count() == 0 ||
+         std::chrono::duration<double>(t1 - g.lastStatsLog).count() >= 1.0)) {
+        size_t backlog = 0;
+        {
+            std::lock_guard<std::mutex> lock(g.mu);
+            backlog = g.jobs.size();
+        }
+        char stats[192];
+        std::snprintf(stats, sizeof(stats),
+                      "stats native_fps=%d presents=%llu submits=%llu bytes=%llu backlog=%zu",
+                      g.statsFps.load(std::memory_order_relaxed),
+                      static_cast<unsigned long long>(g.statsPresents.load(std::memory_order_relaxed)),
+                      static_cast<unsigned long long>(g.statsCmdSubmits.load(std::memory_order_relaxed)),
+                      static_cast<unsigned long long>(g.statsCmdBytes.load(std::memory_order_relaxed)),
+                      backlog);
+        logLine(stats);
+        g.lastStatsLog = t1;
     }
 }
 
@@ -911,6 +940,7 @@ bool implPresent() {
             return false;
         }
     }
+    const bool firstPresent = g.statsPresents.load(std::memory_order_relaxed) == 0;
     wgpuSurfacePresent(g.surface);
     dropCurrentTexture();
     if (g.device) {
@@ -922,6 +952,9 @@ bool implPresent() {
     pumpHwnd();
     const auto t1 = std::chrono::steady_clock::now();
     recordFps(t1, static_cast<int>(std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count()));
+    if (firstPresent) {
+        logLine("native Vulkan surface presented first frame");
+    }
     return true;
 }
 
@@ -2503,10 +2536,15 @@ int tw_cmd_submit(const uint8_t* data, int nbytes) {
             return 1;
         }
         std::vector<uint8_t> copy(data, data + nbytes);
-        return onWorker([buf = std::move(copy)] {
+        const uint64_t submitIndex = g.statsCmdSubmits.fetch_add(1, std::memory_order_relaxed);
+        g.statsCmdBytes.fetch_add(static_cast<uint64_t>(nbytes), std::memory_order_relaxed);
+        onWorkerAsync([buf = std::move(copy), submitIndex] {
+            if (submitIndex == 0) {
+                logLine("native WebGPU command stream received");
+            }
             execStream(buf.data(), static_cast<int>(buf.size()));
-            return 1;
         });
+        return 1;
     } catch (const std::exception& ex) {
         setError(ex.what());
         return 0;

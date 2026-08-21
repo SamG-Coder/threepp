@@ -164,14 +164,17 @@ int main() {
         tw_shutdown();
         return 2;
     }
-    const auto t1 = std::chrono::steady_clock::now();
-    const double sec = std::chrono::duration<double>(t1 - t0).count();
-
     int fps = 0, frameUs = 0, width = 0, height = 0, vsync = 0;
     uint64_t presents = 0;
-    tw_stats(&fps, &frameUs, &width, &height, &vsync, &presents);
-    if (sec > 1e-6) {
-        fps = static_cast<int>(kFrames / sec + 0.5);
+    const auto deadline = t0 + std::chrono::seconds(10);
+    do {
+        tw_stats(&fps, &frameUs, &width, &height, &vsync, &presents);
+        if (presents >= kFrames) break;
+        Sleep(1);
+    } while (std::chrono::steady_clock::now() < deadline);
+    const double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    if (sec > 1e-6 && presents > 0) {
+        fps = static_cast<int>(static_cast<double>(presents) / sec + 0.5);
     }
     const char* err = tw_last_error();
     std::cout << "SMOKE OK backend=" << tw_backend_name()
