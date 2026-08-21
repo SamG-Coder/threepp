@@ -90,5 +90,7 @@ and visually checked in the native window:
 - `webgl_instancing_performance.html` — 1,000 meshes and pointer orbit;
 - `webgl_loader_gltf.html` — GLB, embedded textures, UltraHDR and PMREM;
 - `webgl_animation_keyframes.html` — DRACO WASM worker and skinned animation;
-- `webgpu_compute_particles.html` — stock WebGPU/TSL compute and rendering.
-- `webgpu_postprocessing.html` — TSL render pipeline, dot-screen and RGB shift.
+- `webgpu_compute_particles.html` — stock WebGPU/TSL compute and rendering;
+- `webgpu_postprocessing.html` — TSL render pipeline, dot-screen and RGB shift;
+- `webgpu_postprocessing_ssgi.html` — MRT G-buffer passes, comparison samplers,
+  cube texture views, and progressive screen-space global illumination.

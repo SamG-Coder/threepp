@@ -108,6 +108,7 @@ struct Runtime {
     std::atomic<int> statsH{0};
     std::atomic<uint64_t> statsPresents{0};
     std::atomic<uint64_t> statsCmdSubmits{0};
+    std::atomic<uint64_t> validationErrors{0};
     std::atomic<uint64_t> statsCmdBytes{0};
     std::atomic<int> pendingCommandSubmits{0};
     std::atomic<uint64_t> commandGeneration{1};
@@ -377,10 +378,12 @@ void wgpuLog(WGPULogLevel level, WGPUStringView message, void*) {
 }
 
 void onUncaptured(WGPUDevice const*, WGPUErrorType, WGPUStringView message, void*, void*) {
+    g.validationErrors.fetch_add(1, std::memory_order_relaxed);
     if (message.data && message.length) {
         const size_t n = message.length == WGPU_STRLEN ? std::strlen(message.data) : message.length;
         std::string s(message.data, n);
         setError(s.c_str());
+        logLine(s.c_str());
     }
 }
 
@@ -795,6 +798,30 @@ bool requestAdapterAndDevice() {
     };
     WGPUDeviceDescriptor dd{};
     dd.label = twSv("three_webgpu");
+    WGPUSupportedFeatures supported{};
+    wgpuAdapterGetFeatures(g.adapter, &supported);
+    const std::array<WGPUFeatureName, 10> desiredFeatures{
+        WGPUFeatureName_DepthClipControl,
+        WGPUFeatureName_Depth32FloatStencil8,
+        WGPUFeatureName_TextureCompressionBC,
+        WGPUFeatureName_IndirectFirstInstance,
+        WGPUFeatureName_RG11B10UfloatRenderable,
+        WGPUFeatureName_BGRA8UnormStorage,
+        WGPUFeatureName_Float32Filterable,
+        WGPUFeatureName_Float32Blendable,
+        WGPUFeatureName_ClipDistances,
+        WGPUFeatureName_DualSourceBlending,
+    };
+    std::vector<WGPUFeatureName> enabledFeatures;
+    for (const auto desired : desiredFeatures) {
+        if (std::find(supported.features, supported.features + supported.featureCount, desired) !=
+            supported.features + supported.featureCount) {
+            enabledFeatures.push_back(desired);
+        }
+    }
+    wgpuSupportedFeaturesFreeMembers(supported);
+    dd.requiredFeatureCount = enabledFeatures.size();
+    dd.requiredFeatures = enabledFeatures.data();
     dd.deviceLostCallbackInfo.mode = WGPUCallbackMode_AllowSpontaneous;
     dd.deviceLostCallbackInfo.callback = onDeviceLost;
     dd.uncapturedErrorCallbackInfo.callback = onUncaptured;
@@ -1934,7 +1961,6 @@ void execOne(uint32_t op, Reader& r) {
             const uint32_t mipCount = r.u32();
             const uint32_t baseLayer = r.u32();
             const uint32_t layerCount = r.u32();
-            (void)viewDim;
             Slot* ts = getSlot(tex);
             if (!ts || ts->kind != Kind::Texture || !ts->texture) {
                 setError("tex view: bad texture");
@@ -1942,6 +1968,8 @@ void execOne(uint32_t op, Reader& r) {
             }
             WGPUTextureViewDescriptor vd{};
             vd.format = format ? static_cast<WGPUTextureFormat>(format) : ts->texFormat;
+            vd.dimension = viewDim ? static_cast<WGPUTextureViewDimension>(viewDim)
+                                   : WGPUTextureViewDimension_Undefined;
             vd.aspect = aspect ? static_cast<WGPUTextureAspect>(aspect) : WGPUTextureAspect_All;
             vd.baseMipLevel = baseMip;
             vd.mipLevelCount = mipCount ? mipCount : WGPU_MIP_LEVEL_COUNT_UNDEFINED;
@@ -2015,7 +2043,6 @@ void execOne(uint32_t op, Reader& r) {
             const uint32_t aniso = r.has(4) ? r.u32() : 1;
             const float lodMin = r.has(4) ? r.f32() : 0.f;
             const float lodMax = r.has(4) ? r.f32() : 32.f;
-            (void)compare;
             if (!g.device) {
                 return;
             }
@@ -2026,6 +2053,8 @@ void execOne(uint32_t op, Reader& r) {
             sd.addressModeU = addressFrom(au);
             sd.addressModeV = addressFrom(av);
             sd.addressModeW = addressFrom(aw);
+            sd.compare = compare ? static_cast<WGPUCompareFunction>(compare)
+                                 : WGPUCompareFunction_Undefined;
             sd.lodMinClamp = lodMin;
             sd.lodMaxClamp = lodMax;
             sd.maxAnisotropy = static_cast<uint16_t>(std::max(1u, aniso));
@@ -2378,8 +2407,11 @@ void execOne(uint32_t op, Reader& r) {
             bd.entries = entries.data();
             Slot s;
             s.kind = Kind::BindGroup;
+            const uint64_t errorsBefore = g.validationErrors.load(std::memory_order_relaxed);
             s.bg = wgpuDeviceCreateBindGroup(g.device, &bd);
-            if (!s.bg) {
+            if (g.device) wgpuDevicePoll(g.device, 1, nullptr);
+            if (!s.bg || g.validationErrors.load(std::memory_order_relaxed) != errorsBefore) {
+                if (s.bg) wgpuBindGroupRelease(s.bg);
                 setError("bind group failed");
                 return;
             }
@@ -2474,12 +2506,18 @@ void execOne(uint32_t op, Reader& r) {
         case OP_RENDER_BEGIN: {
             g.renderPipelineSet = false;
             g.skipRenderPass = false;
-            uint32_t colorView = 0;
-            uint32_t resolveView = 0xffffffffu;
+            struct ColorInput {
+                uint32_t view = 0;
+                uint32_t resolve = 0xffffffffu;
+                uint32_t load = 2;
+                uint32_t store = 1;
+                float r = 0.f, g = 0.f, b = 0.f, a = 1.f;
+            };
+            std::vector<ColorInput> colorInputs;
             uint32_t depthView = 0;
-            float cr = 0.f, cg = 0.f, cb = 0.f, ca = 1.f;
-            uint32_t load = 2;
-            uint32_t store = 1;
+            uint32_t depthLoad = 2, depthStore = 1;
+            float depthClear = 1.f;
+            uint32_t stencilLoad = 0, stencilStore = 0, stencilClear = 0;
             endPasses();
             if (r.remaining() >= 40) {
                 // JS: encoder, colorCount, depthView, depthLoad, depthStore,
@@ -2488,31 +2526,40 @@ void execOne(uint32_t op, Reader& r) {
                 r.u32(); // encoder
                 const uint32_t colorCount = r.u32();
                 depthView = r.u32();
+                depthLoad = r.u32();
+                depthStore = r.u32();
+                depthClear = r.f32();
+                stencilLoad = r.u32();
+                stencilStore = r.u32();
+                stencilClear = r.u32();
                 r.u32();
-                r.u32();
-                r.f32();
-                r.u32();
-                r.u32();
-                r.u32();
-                r.u32();
-                if (colorCount > 0 && colorCount < 8) {
-                    colorView = r.u32();
-                    resolveView = r.u32();
-                    load = r.u32();
-                    store = r.u32();
-                    cr = r.f32();
-                    cg = r.f32();
-                    cb = r.f32();
-                    ca = r.f32();
+                if (colorCount > 0 && colorCount < 8 && r.remaining() >= colorCount * 32u) {
+                    colorInputs.resize(colorCount);
+                    for (auto& color : colorInputs) {
+                        color.view = r.u32();
+                        color.resolve = r.u32();
+                        color.load = r.u32();
+                        color.store = r.u32();
+                        color.r = r.f32();
+                        color.g = r.f32();
+                        color.b = r.f32();
+                        color.a = r.f32();
+                    }
                 }
             } else {
-                colorView = r.u32();
+                ColorInput color;
+                color.view = r.u32();
                 depthView = r.u32();
-                cr = r.f32();
-                cg = r.f32();
-                cb = r.f32();
-                ca = r.f32();
-                load = r.has(4) ? r.u32() : 0;
+                color.r = r.f32();
+                color.g = r.f32();
+                color.b = r.f32();
+                color.a = r.f32();
+                color.load = r.has(4) ? r.u32() : 0;
+                colorInputs.push_back(color);
+            }
+            if (colorInputs.empty()) {
+                setError("render begin: no color attachments");
+                return;
             }
             if (g.resizeHoldFrames > 0) {
                 // A page may record several passes before its next present.
@@ -2542,16 +2589,18 @@ void execOne(uint32_t op, Reader& r) {
             };
             uint32_t depthW = 0, depthH = 0;
             const bool hasDepthSize = depthView != 0 && viewSize(depthView, depthW, depthH);
+            const uint32_t primaryColorView = colorInputs.front().view;
             uint32_t colorW = 0, colorH = 0;
-            const bool hasOffscreenColorSize = colorView != 0 && viewSize(colorView, colorW, colorH);
+            const bool hasOffscreenColorSize = primaryColorView != 0 && viewSize(primaryColorView, colorW, colorH);
             uint32_t frameW = hasOffscreenColorSize ? colorW : (hasDepthSize ? depthW : 0);
             uint32_t frameH = hasOffscreenColorSize ? colorH : (hasDepthSize ? depthH : 0);
             if (frameW == 0 || frameH == 0) {
                 frameW = g.pendingResizeW > 0 ? static_cast<uint32_t>(g.pendingResizeW) : g.config.width;
                 frameH = g.pendingResizeH > 0 ? static_cast<uint32_t>(g.pendingResizeH) : g.config.height;
             }
-            const bool usesSwapchain = colorView == 0 ||
-                                       (colorView != 0 && resolveView == 0);
+            const bool usesSwapchain = std::any_of(colorInputs.begin(), colorInputs.end(), [](const ColorInput& color) {
+                return color.view == 0 || (color.view != 0 && color.resolve == 0);
+            });
             if (usesSwapchain && frameW != 0 && frameH != 0 &&
                 (g.config.width != frameW || g.config.height != frameH)) {
                 configureSurface(static_cast<int>(frameW), static_cast<int>(frameH));
@@ -2561,70 +2610,62 @@ void execOne(uint32_t op, Reader& r) {
                 g.pendingResizeW = 0;
                 g.pendingResizeH = 0;
             }
-            if (colorView == 0) {
+            if (primaryColorView == 0) {
                 colorW = g.config.width;
                 colorH = g.config.height;
             } else if (!hasOffscreenColorSize) {
                 colorW = g.config.width;
                 colorH = g.config.height;
             }
-            uint32_t resolveW = 0, resolveH = 0;
-            const bool hasResolveSize = colorView != 0 && resolveView != 0xffffffffu &&
-                                        viewSize(resolveView, resolveW, resolveH);
-            if ((hasDepthSize && (depthW != colorW || depthH != colorH)) ||
-                (hasResolveSize && (resolveW != colorW || resolveH != colorH))) {
+            bool attachmentMismatch = hasDepthSize && (depthW != colorW || depthH != colorH);
+            for (const auto& color : colorInputs) {
+                uint32_t width = 0, height = 0;
+                if (color.view != 0 && (!viewSize(color.view, width, height) || width != colorW || height != colorH)) {
+                    attachmentMismatch = true;
+                }
+                if (color.resolve != 0xffffffffu && color.resolve != 0 &&
+                    (!viewSize(color.resolve, width, height) || width != colorW || height != colorH)) {
+                    attachmentMismatch = true;
+                }
+            }
+            if (attachmentMismatch) {
                 // A resize can occur between the page rebuilding attachments
                 // and acquiring the swapchain texture. Skip only this frame;
                 // passing mismatched views to wgpu aborts at encoder finish.
                 g.skipRenderPass = true;
                 return;
             }
-            WGPUTextureView cv = viewFromHandle(colorView, colorView == 0);
-            WGPUTextureView rv = nullptr;
-            if (colorView != 0 && resolveView != 0xffffffffu) {
-                rv = viewFromHandle(resolveView, true);
-                if (rv && cv) {
-                    Slot* colorSlot = getSlot(colorView);
-                    const int sw = g.statsW.load(std::memory_order_relaxed);
-                    const int sh = g.statsH.load(std::memory_order_relaxed);
-                    if (colorSlot && colorSlot->texW && colorSlot->texH &&
-                        (static_cast<int>(colorSlot->texW) != sw ||
-                         static_cast<int>(colorSlot->texH) != sh)) {
-                        rv = nullptr;
-                    }
+            std::vector<WGPURenderPassColorAttachment> colorAttachments(colorInputs.size());
+            for (size_t i = 0; i < colorInputs.size(); ++i) {
+                const auto& input = colorInputs[i];
+                auto& attachment = colorAttachments[i];
+                attachment.view = viewFromHandle(input.view, input.view == 0);
+                if (!attachment.view) {
+                    setError("render begin: no color view");
+                    g.skipRenderPass = true;
+                    return;
                 }
+                if (input.resolve != 0xffffffffu) attachment.resolveTarget = viewFromHandle(input.resolve, input.resolve == 0);
+                attachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+                attachment.loadOp = loadOpFrom(input.load);
+                attachment.storeOp = attachment.resolveTarget ? WGPUStoreOp_Discard :
+                    (input.store ? WGPUStoreOp_Store : WGPUStoreOp_Discard);
+                attachment.clearValue = {input.r, input.g, input.b, input.a};
             }
-            if (!cv) {
-                cv = viewFromHandle(0, true);
-                rv = nullptr;
-            }
-            if (!cv) {
-                setError("render begin: no color view");
-                return;
-            }
-            WGPURenderPassColorAttachment caa{};
-            caa.view = cv;
-            caa.resolveTarget = rv;
-            caa.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-            caa.loadOp = loadOpFrom(load);
-            caa.storeOp = rv ? WGPUStoreOp_Discard : (store ? WGPUStoreOp_Store : WGPUStoreOp_Discard);
-            caa.clearValue.r = cr;
-            caa.clearValue.g = cg;
-            caa.clearValue.b = cb;
-            caa.clearValue.a = ca;
             WGPURenderPassDepthStencilAttachment da{};
             WGPUTextureView dv = viewFromHandle(depthView, false);
             if (dv) {
                 da.view = dv;
-                da.depthLoadOp = WGPULoadOp_Clear;
-                da.depthStoreOp = WGPUStoreOp_Store;
-                da.depthClearValue = 1.f;
-                da.stencilLoadOp = WGPULoadOp_Undefined;
-                da.stencilStoreOp = WGPUStoreOp_Undefined;
+                da.depthLoadOp = loadOpFrom(depthLoad);
+                da.depthStoreOp = depthStore ? WGPUStoreOp_Store : WGPUStoreOp_Discard;
+                da.depthClearValue = depthClear;
+                da.stencilLoadOp = stencilLoad ? loadOpFrom(stencilLoad) : WGPULoadOp_Undefined;
+                da.stencilStoreOp = stencilStore ? WGPUStoreOp_Store : WGPUStoreOp_Undefined;
+                da.stencilClearValue = stencilClear;
             }
             WGPURenderPassDescriptor rd{};
-            rd.colorAttachmentCount = 1;
-            rd.colorAttachments = &caa;
+            rd.colorAttachmentCount = colorAttachments.size();
+            rd.colorAttachments = colorAttachments.data();
             if (dv) {
                 rd.depthStencilAttachment = &da;
             }
@@ -2633,7 +2674,7 @@ void execOne(uint32_t op, Reader& r) {
                 char buf[128];
                 std::snprintf(buf, sizeof(buf),
                               "render begin failed color=%u resolve=%u depth=%u",
-                              colorView, resolveView, depthView);
+                              primaryColorView, colorInputs.front().resolve, depthView);
                 setError(buf);
             }
             return;
@@ -2668,8 +2709,9 @@ void execOne(uint32_t op, Reader& r) {
                 return;
             }
             Slot* s = getSlot(bg);
-            if (!g.renderPass || !s || s->kind != Kind::BindGroup) {
+            if (!g.renderPass || !s || s->kind != Kind::BindGroup || !s->bg) {
                 setError("render bg: bad state");
+                g.skipRenderPass = true;
                 return;
             }
             wgpuRenderPassEncoderSetBindGroup(g.renderPass, index, s->bg,
