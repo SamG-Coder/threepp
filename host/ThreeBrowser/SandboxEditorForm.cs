@@ -25,13 +25,18 @@ internal sealed class SandboxEditorForm : Form
     private bool _promptVisible;
     private readonly List<string> _modelNames = new();
     private string _ollamaStatusText = "Open the AI panel to detect local Ollama.";
+    private IReadOnlyList<SandboxPageSummary> _savedPages = [];
     private Guid? _sandboxId;
+    private string _filePath = "index.html";
     private string _pendingHtml = "";
     private string _eol = "CRLF";
 
     internal event EventHandler? SaveRequested;
     internal event EventHandler? NavigateRequested;
     internal event EventHandler? NewRequested;
+    internal event Action<object?, Guid, string>? FileOpenRequested;
+    internal event Action<object?, Guid>? DeleteRequested;
+    internal event Action<object?, IReadOnlyList<SandboxImportFile>>? ImportRequested;
 
     internal bool IsDirty { get; private set; }
 
@@ -126,9 +131,10 @@ internal sealed class SandboxEditorForm : Form
         _ = InitializeEditorAsync();
     }
 
-    internal void LoadSandbox(Guid? id, string html)
+    internal void LoadSandbox(Guid? id, string filePath, string html)
     {
         _sandboxId = id;
+        _filePath = filePath;
         _pendingHtml = html;
         IsDirty = false;
         _eol = html.Contains("\r\n", StringComparison.Ordinal) ? "CRLF" : "LF";
@@ -146,15 +152,48 @@ internal sealed class SandboxEditorForm : Form
         return JsonSerializer.Deserialize<string>(json) ?? "";
     }
 
-    internal void MarkSaved(Guid id)
+    internal void MarkSaved(Guid id, string filePath)
     {
         _sandboxId = id;
+        _filePath = filePath;
         IsDirty = false;
         UpdateLabels();
     }
 
-    internal static string SandboxUrl(Guid id) =>
-        $"https://sandbox.threebrowser.local/{id:D}/index.html";
+    internal void SetSavedPages(
+        IReadOnlyList<SandboxPageSummary> pages,
+        Guid? activeId,
+        string activeFilePath)
+    {
+        _savedPages = pages;
+        _sandboxId = activeId;
+        _filePath = activeFilePath;
+        if (_ready.Task.IsCompletedSuccessfully)
+        {
+            _ = PushSavedPagesAsync();
+        }
+    }
+
+    internal void ReportImport(int fileCount)
+    {
+        if (_ready.Task.IsCompletedSuccessfully)
+        {
+            _ = _editor.CoreWebView2.ExecuteScriptAsync(
+                $"window.sandboxEditor.finishImport({fileCount})");
+        }
+    }
+
+    internal void ReportImportError(string message)
+    {
+        if (_ready.Task.IsCompletedSuccessfully)
+        {
+            var json = JsonSerializer.Serialize(message);
+            _ = _editor.CoreWebView2.ExecuteScriptAsync($"window.sandboxEditor.failImport({json})");
+        }
+    }
+
+    internal static string SandboxUrl(Guid id, string path = "index.html") =>
+        $"https://sandbox.threebrowser.local/{id:D}/{EscapeUrlPath(path)}";
 
     protected override void OnShown(EventArgs e)
     {
@@ -486,6 +525,7 @@ internal sealed class SandboxEditorForm : Form
                     _ready.TrySetResult();
                     await SetEditorTextAsync(_pendingHtml);
                     await PushPromptStateAsync();
+                    await PushSavedPagesAsync();
                     break;
                 case "changed":
                     IsDirty = true;
@@ -496,6 +536,28 @@ internal sealed class SandboxEditorForm : Form
                     break;
                 case "navigate":
                     NavigateRequested?.Invoke(this, EventArgs.Empty);
+                    break;
+                case "new":
+                    NewRequested?.Invoke(this, EventArgs.Empty);
+                    break;
+                case "file-open":
+                    if (TryReadId(root, out var openId) && TryReadPath(root, out var openPath))
+                    {
+                        FileOpenRequested?.Invoke(this, openId, openPath);
+                    }
+                    break;
+                case "page-delete":
+                    if (TryReadId(root, out var deleteId))
+                    {
+                        DeleteRequested?.Invoke(this, deleteId);
+                    }
+                    break;
+                case "files-import":
+                    var files = ReadImportFiles(root);
+                    if (files.Count > 0)
+                    {
+                        ImportRequested?.Invoke(this, files);
+                    }
                     break;
                 case "prompt-generate":
                 {
@@ -525,8 +587,9 @@ internal sealed class SandboxEditorForm : Form
                     break;
             }
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or FormatException or InvalidDataException)
         {
+            ReportImportError(ex.Message);
         }
     }
 
@@ -536,13 +599,86 @@ internal sealed class SandboxEditorForm : Form
         return _editor.CoreWebView2.ExecuteScriptAsync($"window.sandboxEditor.setValue({json})");
     }
 
+    private Task PushSavedPagesAsync()
+    {
+        if (!_ready.Task.IsCompletedSuccessfully)
+        {
+            return Task.CompletedTask;
+        }
+        var state = new
+        {
+            activeId = _sandboxId?.ToString("D"),
+            activeFile = _filePath,
+            pages = _savedPages.Select(page => new
+            {
+                id = page.Id.ToString("D"),
+                title = page.Title,
+                updatedUtc = page.UpdatedUtc,
+                entryPath = page.EntryPath,
+                url = SandboxUrl(page.Id, page.EntryPath),
+                files = page.Files.Select(file => new
+                {
+                    path = file.Path,
+                    size = file.Size,
+                    isHtml = file.IsHtml,
+                }),
+            }),
+        };
+        var json = JsonSerializer.Serialize(state);
+        return _editor.CoreWebView2.ExecuteScriptAsync($"window.sandboxEditor.setPages({json})");
+    }
+
+    private static bool TryReadId(JsonElement root, out Guid id)
+    {
+        id = Guid.Empty;
+        return root.TryGetProperty("id", out var value) && Guid.TryParse(value.GetString(), out id);
+    }
+
+    private static bool TryReadPath(JsonElement root, out string path)
+    {
+        path = root.TryGetProperty("path", out var value) ? value.GetString() ?? "" : "";
+        return path.Length > 0;
+    }
+
+    private static IReadOnlyList<SandboxImportFile> ReadImportFiles(JsonElement root)
+    {
+        const int maxFileBytes = 25 * 1024 * 1024;
+        const int maxTotalBytes = 75 * 1024 * 1024;
+        if (!root.TryGetProperty("files", out var values) || values.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+        var files = new List<SandboxImportFile>();
+        var total = 0;
+        foreach (var value in values.EnumerateArray())
+        {
+            var path = value.TryGetProperty("path", out var pathValue) ? pathValue.GetString() : null;
+            var base64 = value.TryGetProperty("data", out var dataValue) ? dataValue.GetString() : null;
+            if (string.IsNullOrWhiteSpace(path) || string.IsNullOrEmpty(base64))
+            {
+                continue;
+            }
+            var content = Convert.FromBase64String(base64);
+            if (content.Length > maxFileBytes || total + content.Length > maxTotalBytes)
+            {
+                throw new InvalidDataException("The import is too large. Files are limited to 25 MB each and 75 MB total.");
+            }
+            total += content.Length;
+            files.Add(new SandboxImportFile(path, content));
+        }
+        return files;
+    }
+
+    private static string EscapeUrlPath(string path) =>
+        string.Join('/', path.Replace('\\', '/').Split('/').Select(Uri.EscapeDataString));
+
     private void UpdateLabels()
     {
         var modified = IsDirty ? "  •  Modified" : "";
         if (_sandboxId is Guid id)
         {
-            _identity.Text = id.ToString("D") + modified;
-            _status.Text = SandboxUrl(id) + $"    HTML    {_eol}    UTF-8";
+            _identity.Text = _filePath + modified;
+            _status.Text = SandboxUrl(id, _filePath) + $"    HTML    {_eol}    UTF-8";
         }
         else
         {

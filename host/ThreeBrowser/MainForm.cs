@@ -14,10 +14,12 @@ public sealed class MainForm : Form
 
     private readonly BrowserChrome _chrome = new();
     private readonly WebView2 _web = new();
+    private readonly SandboxStore _sandboxStore = new();
     private readonly System.Windows.Forms.Timer _debugTimer = new();
     private Form? _nativePreview;
     private SandboxEditorForm? _sandboxEditor;
     private Guid? _sandboxId;
+    private string _sandboxFilePath = "index.html";
     private string _sandboxHtml = DefaultSandboxHtml;
     private bool _nativePreviewMayClose;
     private bool _nativePreviewReturning;
@@ -921,21 +923,34 @@ public sealed class MainForm : Form
 
     private bool TryServeSandbox(string? requestedUri, CoreWebView2WebResourceRequestedEventArgs e)
     {
-        if (_sandboxId is not Guid id ||
-            !Uri.TryCreate(requestedUri, UriKind.Absolute, out var uri) ||
+        if (!Uri.TryCreate(requestedUri, UriKind.Absolute, out var uri) ||
             !uri.Host.Equals("sandbox.threebrowser.local", StringComparison.OrdinalIgnoreCase) ||
-            !uri.AbsolutePath.Equals($"/{id:D}/index.html", StringComparison.OrdinalIgnoreCase))
+            !TryGetSandboxResourcePath(uri.AbsolutePath, out var id, out var relativePath))
         {
             return false;
         }
 
-        var bytes = Encoding.UTF8.GetBytes(_sandboxHtml);
-        var stream = new MemoryStream(bytes, writable: false);
+        SandboxResource? resource;
+        if (_sandboxId == id &&
+            relativePath.Equals(_sandboxFilePath, StringComparison.OrdinalIgnoreCase))
+        {
+            resource = new SandboxResource(Encoding.UTF8.GetBytes(_sandboxHtml), "text/html; charset=utf-8");
+        }
+        else
+        {
+            resource = _sandboxStore.ReadResource(id, relativePath);
+        }
+        if (resource == null)
+        {
+            return false;
+        }
+
+        var stream = new MemoryStream(resource.Content, writable: false);
         e.Response = _web.CoreWebView2.Environment.CreateWebResourceResponse(
             stream,
             200,
             "OK",
-            "Content-Type: text/html; charset=utf-8\r\n" +
+            $"Content-Type: {resource.ContentType}\r\n" +
             "Cache-Control: no-store, no-cache, must-revalidate\r\n" +
             "Pragma: no-cache\r\n" +
             "X-Content-Type-Options: nosniff");
@@ -951,11 +966,16 @@ public sealed class MainForm : Form
                 return;
             }
             _sandboxEditor = new SandboxEditorForm(Icon, _env, _webRoot);
-            _sandboxEditor.LoadSandbox(_sandboxId, _sandboxHtml);
+            _sandboxEditor.LoadSandbox(_sandboxId, _sandboxFilePath, _sandboxHtml);
             _sandboxEditor.SaveRequested += async (_, _) => await SaveSandboxAsync(navigate: false);
             _sandboxEditor.NavigateRequested += async (_, _) => await SaveSandboxAsync(navigate: true);
             _sandboxEditor.NewRequested += (_, _) => NewSandbox();
+            _sandboxEditor.FileOpenRequested += async (_, id, path) => await OpenSandboxFileAsync(id, path);
+            _sandboxEditor.DeleteRequested += (_, id) => DeleteSandbox(id);
+            _sandboxEditor.ImportRequested += async (_, files) => await ImportSandboxFilesAsync(files);
         }
+
+        RefreshSavedPages();
 
         if (_sandboxEditor.Visible)
         {
@@ -978,13 +998,15 @@ public sealed class MainForm : Form
         {
             _sandboxId ??= Guid.NewGuid();
             _sandboxHtml = await editor.GetHtmlAsync();
-            editor.MarkSaved(_sandboxId.Value);
+            _sandboxStore.Save(_sandboxId.Value, _sandboxFilePath, _sandboxHtml);
+            editor.MarkSaved(_sandboxId.Value, _sandboxFilePath);
             _chrome.SandboxActive = true;
+            RefreshSavedPages();
 
             if (navigate && _web.CoreWebView2 != null)
             {
                 ReleasePointer();
-                _web.CoreWebView2.Navigate(SandboxEditorForm.SandboxUrl(_sandboxId.Value));
+                _web.CoreWebView2.Navigate(SandboxEditorForm.SandboxUrl(_sandboxId.Value, _sandboxFilePath));
             }
         }
         catch (Exception ex)
@@ -1010,10 +1032,125 @@ public sealed class MainForm : Form
             return;
         }
         _sandboxId = null;
+        _sandboxFilePath = "index.html";
         _sandboxHtml = DefaultSandboxHtml;
         _chrome.SandboxActive = false;
-        editor.LoadSandbox(null, _sandboxHtml);
+        editor.LoadSandbox(null, _sandboxFilePath, _sandboxHtml);
+        RefreshSavedPages();
     }
+
+    private Task OpenSandboxFileAsync(Guid id, string path)
+    {
+        var editor = _sandboxEditor;
+        if (editor == null || editor.IsDisposed ||
+            (_sandboxId == id && _sandboxFilePath.Equals(path, StringComparison.OrdinalIgnoreCase)))
+        {
+            return Task.CompletedTask;
+        }
+        if (editor.IsDirty && MessageBox.Show(
+                editor,
+                "Discard the unsaved changes and open this saved page?",
+                "Open saved page",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question) != DialogResult.Yes)
+        {
+            return Task.CompletedTask;
+        }
+
+        var page = _sandboxStore.Load(id, path);
+        if (page == null)
+        {
+            RefreshSavedPages();
+            return Task.CompletedTask;
+        }
+        _sandboxId = page.Id;
+        _sandboxFilePath = page.FilePath;
+        _sandboxHtml = page.Html;
+        _chrome.SandboxActive = true;
+        editor.LoadSandbox(page.Id, page.FilePath, page.Html);
+        RefreshSavedPages();
+        return Task.CompletedTask;
+    }
+
+    private async Task ImportSandboxFilesAsync(IReadOnlyList<SandboxImportFile> files)
+    {
+        var editor = _sandboxEditor;
+        if (editor == null || editor.IsDisposed || files.Count == 0)
+        {
+            return;
+        }
+        try
+        {
+            _sandboxId ??= Guid.NewGuid();
+            if (editor.IsDirty || !_sandboxStore.List().Any(page => page.Id == _sandboxId))
+            {
+                _sandboxHtml = await editor.GetHtmlAsync();
+                _sandboxStore.Save(_sandboxId.Value, _sandboxFilePath, _sandboxHtml);
+                editor.MarkSaved(_sandboxId.Value, _sandboxFilePath);
+            }
+            _sandboxStore.Import(_sandboxId.Value, files);
+            if (files.Any(file => ImportedPathEquals(file.Path, _sandboxFilePath)) &&
+                _sandboxStore.Load(_sandboxId.Value, _sandboxFilePath) is { } importedPage)
+            {
+                _sandboxHtml = importedPage.Html;
+                editor.LoadSandbox(importedPage.Id, importedPage.FilePath, importedPage.Html);
+            }
+            _chrome.SandboxActive = true;
+            RefreshSavedPages();
+            editor.ReportImport(files.Count);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            editor.ReportImportError(ex.Message);
+            MessageBox.Show(editor, ex.Message, "Sandbox import failed");
+        }
+    }
+
+    private void DeleteSandbox(Guid id)
+    {
+        try
+        {
+            _sandboxStore.Delete(id);
+            if (_sandboxId == id)
+            {
+                _sandboxId = null;
+                _sandboxFilePath = "index.html";
+                _sandboxHtml = DefaultSandboxHtml;
+                _chrome.SandboxActive = false;
+                _sandboxEditor?.LoadSandbox(null, _sandboxFilePath, _sandboxHtml);
+            }
+            RefreshSavedPages();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(_sandboxEditor, ex.Message, "Sandbox delete failed");
+        }
+    }
+
+    private void RefreshSavedPages()
+    {
+        _sandboxEditor?.SetSavedPages(_sandboxStore.List(), _sandboxId, _sandboxFilePath);
+    }
+
+    private static bool TryGetSandboxResourcePath(string path, out Guid id, out string relativePath)
+    {
+        id = Guid.Empty;
+        relativePath = "";
+        var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0 || !Guid.TryParse(parts[0], out id))
+        {
+            return false;
+        }
+        relativePath = parts.Length == 1
+            ? "index.html"
+            : string.Join('/', parts.Skip(1).Select(Uri.UnescapeDataString));
+        return true;
+    }
+
+    private static bool ImportedPathEquals(string importedPath, string activePath) =>
+        importedPath.Replace('\\', '/').Trim('/').Equals(
+            activePath.Replace('\\', '/').Trim('/'),
+            StringComparison.OrdinalIgnoreCase);
 
     private static readonly string DefaultSandboxHtml = """
         <!doctype html>

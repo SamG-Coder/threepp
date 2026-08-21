@@ -9,6 +9,58 @@
     * { box-sizing: border-box; }
     html, body, #app { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #fff; }
     #app { display: flex; flex-direction: column; }
+    #workspace { min-height: 0; flex: 1; display: flex; }
+    #page-sidebar {
+      flex: 0 0 248px; display: flex; flex-direction: column; min-width: 210px;
+      border-right: 1px solid #dadce0; background: #f8f9fa;
+    }
+    .sidebar-head { display: flex; align-items: center; gap: 8px; height: 50px; padding: 0 10px 0 15px; }
+    .sidebar-title { flex: 1; font-size: 13px; font-weight: 600; color: #3c4043; }
+    #page-count {
+      min-width: 22px; padding: 2px 7px; border-radius: 999px; background: #e8eaed;
+      color: #5f6368; font-size: 11px; text-align: center;
+    }
+    #page-list { min-height: 0; flex: 1; overflow: auto; padding: 3px 8px 12px; }
+    .project-card { margin: 4px 0; border: 1px solid transparent; border-radius: 9px; overflow: hidden; color: #3c4043; }
+    .project-card:hover { border-color: #dadce0; background: #fff; }
+    .project-card.active { border-color: #d2e3fc; background: #f5f8ff; }
+    .page-row { position: relative; display: flex; align-items: center; min-height: 58px; color: inherit; }
+    .project-card.active .page-row { background: #e8f0fe; color: #174ea6; }
+    .page-open {
+      min-width: 0; flex: 1; align-self: stretch; display: grid; grid-template-columns: 26px minmax(0, 1fr);
+      grid-template-rows: auto auto; align-content: center; column-gap: 8px; padding: 8px 34px 8px 9px;
+      border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer;
+      font-family: inherit;
+    }
+    .page-icon {
+      grid-row: 1 / 3; display: grid; place-items: center; width: 26px; height: 30px;
+      border-radius: 6px; background: #fff; color: #1a73e8; box-shadow: inset 0 0 0 1px #dadce0;
+      font-size: 14px;
+    }
+    .project-card.active .page-icon { box-shadow: inset 0 0 0 1px #aecbfa; }
+    .page-name { overflow: hidden; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+    .page-meta { overflow: hidden; margin-top: 3px; color: #80868b; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+    .page-delete {
+      position: absolute; right: 6px; top: 15px; opacity: 0; width: 28px; height: 28px; padding: 0;
+      border: 0; border-radius: 50%; background: transparent; color: #5f6368; cursor: pointer; font-size: 16px;
+    }
+    .page-row:hover .page-delete, .page-delete:focus { opacity: 1; }
+    .page-delete:hover { background: #fce8e6; color: #c5221f; }
+    .file-tree { padding: 5px 5px 7px; border-top: 1px solid #d2e3fc; background: #fff; }
+    .tree-row {
+      display: flex; align-items: center; width: 100%; height: 28px; padding: 0 7px;
+      border: 0; border-radius: 5px; background: transparent; color: #3c4043;
+      font: 12px "Segoe UI", system-ui, sans-serif; text-align: left;
+    }
+    button.tree-row { cursor: default; }
+    button.tree-row.html-file { cursor: pointer; }
+    button.tree-row.html-file:hover { background: #f1f3f4; }
+    button.tree-row.selected { background: #e8f0fe; color: #174ea6; }
+    .tree-glyph { flex: 0 0 20px; color: #5f6368; text-align: center; }
+    .tree-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tree-size { margin-left: 6px; color: #9aa0a6; font-size: 10px; }
+    .empty-pages { padding: 30px 18px; color: #80868b; font-size: 12px; line-height: 1.5; text-align: center; }
+    #editor-column { min-width: 0; flex: 1; display: flex; flex-direction: column; }
     #editor { min-height: 0; flex: 1 1 auto; }
     #prompt-drawer {
       flex: 0 0 184px;
@@ -57,29 +109,99 @@
     .action-button.primary { border-color: #1a73e8; background: #1a73e8; color: #fff; }
     .action-button.primary:hover { background: #185abc; }
     .action-button:disabled { opacity: .45; cursor: default; }
+    dialog {
+      width: min(420px, calc(100vw - 40px)); padding: 0; border: 0; border-radius: 13px;
+      background: #fff; color: #202124; box-shadow: 0 18px 56px rgba(32,33,36,.28);
+    }
+    dialog::backdrop { background: rgba(32,33,36,.38); }
+    .dialog-body { padding: 22px 24px 12px; }
+    .dialog-title { margin: 0 0 8px; font-size: 18px; font-weight: 600; }
+    .dialog-copy { margin: 0; color: #5f6368; font-size: 13px; line-height: 1.5; }
+    .dialog-page-name { color: #202124; font-weight: 600; }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px 16px; }
+    .danger-button { border-color: #d93025; background: #d93025; color: #fff; }
+    .danger-button:hover { background: #b3261e; }
+    #import-dialog { width: min(580px, calc(100vw - 40px)); }
+    .drop-zone {
+      display: grid; place-items: center; min-height: 190px; margin-top: 16px; padding: 24px;
+      border: 2px dashed #bdc1c6; border-radius: 12px; background: #f8f9fa; text-align: center;
+      transition: border-color .15s, background .15s;
+    }
+    .drop-zone.dragging { border-color: #1a73e8; background: #e8f0fe; }
+    .drop-icon { margin-bottom: 8px; color: #1a73e8; font-size: 30px; }
+    .drop-title { font-size: 15px; font-weight: 600; }
+    .drop-copy { margin-top: 5px; color: #5f6368; font-size: 12px; line-height: 1.5; }
+    .choose-row { display: flex; justify-content: center; gap: 8px; margin-top: 16px; }
+    #import-status { min-height: 18px; margin-top: 10px; color: #5f6368; font-size: 12px; }
   </style>
 </head>
 <body>
   <div id="app">
-    <div id="editor"></div>
-    <section id="prompt-drawer" aria-label="AI website generator">
-      <div class="prompt-head">
-        <span class="ollama-mark" aria-hidden="true">✦</span>
-        <span class="prompt-title">Create with Ollama</span>
-        <select id="model-select" aria-label="Ollama model" disabled></select>
-        <span id="ollama-status">Detecting local Ollama…</span>
-        <button id="retry-button" class="icon-button" title="Detect Ollama again" aria-label="Detect Ollama again">↻</button>
-        <button id="close-prompt" class="icon-button" title="Close prompt" aria-label="Close prompt">×</button>
-      </div>
-      <div class="composer">
-        <textarea id="website-prompt" aria-label="Website prompt" placeholder="Describe the website you want to create or the change you want to make…"></textarea>
-        <div class="prompt-actions">
-          <button id="stop-button" class="action-button" disabled>Stop</button>
-          <button id="generate-button" class="action-button primary" disabled>✦&nbsp; Generate</button>
+    <div id="workspace">
+      <aside id="page-sidebar" aria-label="Saved pages">
+        <div class="sidebar-head">
+          <span class="sidebar-title">Saved pages</span>
+          <span id="page-count">0</span>
+          <button id="sidebar-import" class="icon-button" title="Add files" aria-label="Add files">⇧</button>
+          <button id="sidebar-new" class="icon-button" title="New sandbox" aria-label="New sandbox">＋</button>
+        </div>
+        <div id="page-list"></div>
+      </aside>
+      <main id="editor-column">
+        <div id="editor"></div>
+        <section id="prompt-drawer" aria-label="AI website generator">
+          <div class="prompt-head">
+            <span class="ollama-mark" aria-hidden="true">✦</span>
+            <span class="prompt-title">Create with Ollama</span>
+            <select id="model-select" aria-label="Ollama model" disabled></select>
+            <span id="ollama-status">Detecting local Ollama…</span>
+            <button id="retry-button" class="icon-button" title="Detect Ollama again" aria-label="Detect Ollama again">↻</button>
+            <button id="close-prompt" class="icon-button" title="Close prompt" aria-label="Close prompt">×</button>
+          </div>
+          <div class="composer">
+            <textarea id="website-prompt" aria-label="Website prompt" placeholder="Describe the website you want to create or the change you want to make…"></textarea>
+            <div class="prompt-actions">
+              <button id="stop-button" class="action-button" disabled>Stop</button>
+              <button id="generate-button" class="action-button primary" disabled>✦&nbsp; Generate</button>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+  <dialog id="delete-dialog">
+    <div class="dialog-body">
+      <h2 class="dialog-title">Delete saved page?</h2>
+      <p class="dialog-copy"><span id="delete-page-name" class="dialog-page-name"></span> will be permanently removed from this computer.</p>
+    </div>
+    <div class="dialog-actions">
+      <button id="cancel-delete" class="action-button">Cancel</button>
+      <button id="confirm-delete" class="action-button danger-button">Delete</button>
+    </div>
+  </dialog>
+  <dialog id="import-dialog">
+    <div class="dialog-body">
+      <h2 class="dialog-title">Add project files</h2>
+      <p class="dialog-copy">Files keep their folder structure inside the active sandbox. Double-click any HTML file in the sidebar to edit it.</p>
+      <div id="drop-zone" class="drop-zone">
+        <div>
+          <div class="drop-icon" aria-hidden="true">⇩</div>
+          <div class="drop-title">Drop files or folders here</div>
+          <div class="drop-copy">HTML, CSS, JavaScript, images, fonts, WASM, and other local assets are supported.</div>
+          <div class="choose-row">
+            <button id="choose-files" class="action-button">Choose files</button>
+            <button id="choose-folder" class="action-button">Choose folder</button>
+          </div>
+          <div id="import-status" role="status"></div>
         </div>
       </div>
-    </section>
-  </div>
+      <input id="file-picker" type="file" multiple hidden>
+      <input id="folder-picker" type="file" webkitdirectory multiple hidden>
+    </div>
+    <div class="dialog-actions">
+      <button id="close-import" class="action-button">Close</button>
+    </div>
+  </dialog>
   <script src="/monaco/vs/loader.js"></script>
   <script>
     require.config({ paths: { vs: '/monaco/vs' } });
@@ -117,6 +239,22 @@
       }
 
       const promptDrawer = document.getElementById('prompt-drawer');
+      const pageList = document.getElementById('page-list');
+      const pageCount = document.getElementById('page-count');
+      const sidebarImport = document.getElementById('sidebar-import');
+      const sidebarNew = document.getElementById('sidebar-new');
+      const deleteDialog = document.getElementById('delete-dialog');
+      const deletePageName = document.getElementById('delete-page-name');
+      const cancelDelete = document.getElementById('cancel-delete');
+      const confirmDelete = document.getElementById('confirm-delete');
+      const importDialog = document.getElementById('import-dialog');
+      const dropZone = document.getElementById('drop-zone');
+      const filePicker = document.getElementById('file-picker');
+      const folderPicker = document.getElementById('folder-picker');
+      const chooseFiles = document.getElementById('choose-files');
+      const chooseFolder = document.getElementById('choose-folder');
+      const closeImport = document.getElementById('close-import');
+      const importStatus = document.getElementById('import-status');
       const modelSelect = document.getElementById('model-select');
       const ollamaStatus = document.getElementById('ollama-status');
       const promptInput = document.getElementById('website-prompt');
@@ -125,6 +263,10 @@
       const stopButton = document.getElementById('stop-button');
       const generateButton = document.getElementById('generate-button');
       let ollamaState = { models: [], detecting: false, generating: false, status: '' };
+      let pagesState = { pages: [], activeId: null, activeFile: 'index.html' };
+      let pendingDelete = null;
+      let importing = false;
+      const expandedProjects = new Set();
 
       function postPrompt(type, extra = {}) {
         chrome.webview.postMessage({ type, ...extra });
@@ -156,6 +298,222 @@
         editor.layout();
         postPrompt('prompt-close');
       });
+      sidebarNew.addEventListener('click', () => postPrompt('new'));
+      sidebarImport.addEventListener('click', () => {
+        importStatus.textContent = '';
+        importDialog.showModal();
+      });
+      cancelDelete.addEventListener('click', () => deleteDialog.close());
+      confirmDelete.addEventListener('click', () => {
+        if (pendingDelete) postPrompt('page-delete', { id: pendingDelete.id });
+        pendingDelete = null;
+        deleteDialog.close();
+      });
+      deleteDialog.addEventListener('close', () => { pendingDelete = null; });
+      closeImport.addEventListener('click', () => importDialog.close());
+      chooseFiles.addEventListener('click', () => filePicker.click());
+      chooseFolder.addEventListener('click', () => folderPicker.click());
+      filePicker.addEventListener('change', () => importFiles(Array.from(filePicker.files || [])));
+      folderPicker.addEventListener('change', () => importFiles(Array.from(folderPicker.files || [])));
+      for (const eventName of ['dragenter', 'dragover']) {
+        dropZone.addEventListener(eventName, event => {
+          event.preventDefault();
+          dropZone.classList.add('dragging');
+        });
+      }
+      for (const eventName of ['dragleave', 'drop']) {
+        dropZone.addEventListener(eventName, event => {
+          event.preventDefault();
+          dropZone.classList.remove('dragging');
+        });
+      }
+      dropZone.addEventListener('drop', async event => {
+        const entries = Array.from(event.dataTransfer?.items || [])
+          .map(item => item.webkitGetAsEntry?.())
+          .filter(Boolean);
+        if (entries.length) {
+          const dropped = [];
+          for (const entry of entries) await collectEntry(entry, '', dropped);
+          await importFiles(dropped);
+        } else {
+          await importFiles(Array.from(event.dataTransfer?.files || []));
+        }
+      });
+
+      async function collectEntry(entry, parentPath, files) {
+        const path = parentPath ? `${parentPath}/${entry.name}` : entry.name;
+        if (entry.isFile) {
+          const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
+          Object.defineProperty(file, 'sandboxPath', { value: path });
+          files.push(file);
+          return;
+        }
+        if (entry.isDirectory) {
+          const reader = entry.createReader();
+          while (true) {
+            const batch = await new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+            if (!batch.length) break;
+            for (const child of batch) await collectEntry(child, path, files);
+          }
+        }
+      }
+
+      function bytesToBase64(buffer) {
+        const bytes = new Uint8Array(buffer);
+        const chunkSize = 0x8000;
+        let binary = '';
+        for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+          binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+        }
+        return btoa(binary);
+      }
+
+      async function importFiles(files) {
+        if (importing || !files.length) return;
+        const total = files.reduce((sum, file) => sum + file.size, 0);
+        if (files.some(file => file.size > 25 * 1024 * 1024) || total > 75 * 1024 * 1024) {
+          importStatus.textContent = 'Files are limited to 25 MB each and 75 MB per import.';
+          return;
+        }
+        importing = true;
+        chooseFiles.disabled = chooseFolder.disabled = true;
+        importStatus.textContent = `Preparing ${files.length} file${files.length === 1 ? '' : 's'}…`;
+        try {
+          const payload = [];
+          for (let index = 0; index < files.length; index++) {
+            const file = files[index];
+            importStatus.textContent = `Reading ${index + 1} of ${files.length}: ${file.name}`;
+            payload.push({
+              path: file.sandboxPath || file.webkitRelativePath || file.name,
+              data: bytesToBase64(await file.arrayBuffer()),
+            });
+          }
+          importStatus.textContent = 'Adding files to the sandbox…';
+          postPrompt('files-import', { files: payload });
+        } catch (error) {
+          importing = false;
+          chooseFiles.disabled = chooseFolder.disabled = false;
+          importStatus.textContent = `Import failed: ${error.message || error}`;
+        } finally {
+          filePicker.value = '';
+          folderPicker.value = '';
+        }
+      }
+
+      function formatUpdated(value) {
+        const date = new Date(value);
+        if (Number.isNaN(date.valueOf())) return '';
+        return new Intl.DateTimeFormat(undefined, {
+          month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+        }).format(date);
+      }
+      function formatSize(bytes) {
+        if (bytes < 1024) return `${bytes} B`;
+        if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+        return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+      }
+      function treeRows(page) {
+        const rows = [];
+        const folders = new Set();
+        for (const file of page.files || []) {
+          const parts = file.path.split('/');
+          for (let depth = 0; depth < parts.length - 1; depth++) {
+            const folderPath = parts.slice(0, depth + 1).join('/');
+            if (folders.has(folderPath)) continue;
+            folders.add(folderPath);
+            const folder = document.createElement('div');
+            folder.className = 'tree-row';
+            folder.style.paddingLeft = `${7 + depth * 14}px`;
+            folder.innerHTML = '<span class="tree-glyph">▾</span>';
+            const label = document.createElement('span');
+            label.className = 'tree-name';
+            label.textContent = parts[depth];
+            folder.append(label);
+            rows.push({ sort: `${folderPath}/`, node: folder });
+          }
+          const button = document.createElement('button');
+          const depth = parts.length - 1;
+          const selected = page.id === pagesState.activeId && file.path === pagesState.activeFile;
+          button.className = 'tree-row' + (file.isHtml ? ' html-file' : '') + (selected ? ' selected' : '');
+          button.style.paddingLeft = `${7 + depth * 14}px`;
+          button.title = file.isHtml ? `Double-click to edit ${file.path}` : file.path;
+          button.setAttribute('aria-label', `${file.isHtml ? 'HTML file' : 'File'} ${file.path}`);
+          const glyph = document.createElement('span');
+          glyph.className = 'tree-glyph';
+          glyph.textContent = file.isHtml ? '<>' : '·';
+          const label = document.createElement('span');
+          label.className = 'tree-name';
+          label.textContent = parts.at(-1);
+          const size = document.createElement('span');
+          size.className = 'tree-size';
+          size.textContent = formatSize(file.size);
+          button.append(glyph, label, size);
+          if (file.isHtml) {
+            button.addEventListener('dblclick', () => postPrompt('file-open', { id: page.id, path: file.path }));
+          }
+          rows.push({ sort: file.path, node: button });
+        }
+        return rows.sort((a, b) => a.sort.localeCompare(b.sort)).map(item => item.node);
+      }
+      function renderPages() {
+        const pages = Array.isArray(pagesState.pages) ? pagesState.pages : [];
+        pageCount.textContent = String(pages.length);
+        if (!pages.length) {
+          const empty = document.createElement('div');
+          empty.className = 'empty-pages';
+          empty.textContent = 'Your saved HTML pages will appear here.';
+          pageList.replaceChildren(empty);
+          return;
+        }
+        pageList.replaceChildren(...pages.map(page => {
+          const project = document.createElement('section');
+          project.className = 'project-card' + (page.id === pagesState.activeId ? ' active' : '');
+          const row = document.createElement('div');
+          row.className = 'page-row';
+
+          const open = document.createElement('button');
+          open.className = 'page-open';
+          open.title = page.url;
+          open.setAttribute('aria-label', `Open ${page.title}`);
+          const icon = document.createElement('span');
+          icon.className = 'page-icon';
+          icon.setAttribute('aria-hidden', 'true');
+          icon.textContent = '</>';
+          const name = document.createElement('span');
+          name.className = 'page-name';
+          name.textContent = page.title;
+          const meta = document.createElement('span');
+          meta.className = 'page-meta';
+          meta.textContent = formatUpdated(page.updatedUtc);
+          open.append(icon, name, meta);
+          open.addEventListener('click', () => {
+            if (expandedProjects.has(page.id)) expandedProjects.delete(page.id);
+            else expandedProjects.add(page.id);
+            renderPages();
+          });
+
+          const remove = document.createElement('button');
+          remove.className = 'page-delete';
+          remove.title = `Delete ${page.title}`;
+          remove.setAttribute('aria-label', `Delete ${page.title}`);
+          remove.textContent = '×';
+          remove.addEventListener('click', event => {
+            event.stopPropagation();
+            pendingDelete = page;
+            deletePageName.textContent = page.title;
+            deleteDialog.showModal();
+          });
+          row.append(open, remove);
+          project.append(row);
+          if (page.id === pagesState.activeId || expandedProjects.has(page.id)) {
+            const tree = document.createElement('div');
+            tree.className = 'file-tree';
+            tree.append(...treeRows(page));
+            project.append(tree);
+          }
+          return project;
+        }));
+      }
 
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => notify('save'));
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => notify('navigate'));
@@ -231,6 +589,21 @@
             if (models.includes(previous)) modelSelect.value = previous;
           }
           updatePromptControls();
+        },
+        setPages(state) {
+          pagesState = { ...pagesState, ...state };
+          if (pagesState.activeId) expandedProjects.add(pagesState.activeId);
+          renderPages();
+        },
+        finishImport(fileCount) {
+          importing = false;
+          chooseFiles.disabled = chooseFolder.disabled = false;
+          importStatus.textContent = `Added ${fileCount} file${fileCount === 1 ? '' : 's'} successfully.`;
+        },
+        failImport(message) {
+          importing = false;
+          chooseFiles.disabled = chooseFolder.disabled = false;
+          importStatus.textContent = `Import failed: ${message}`;
         },
         focus() { editor.focus(); },
       };
