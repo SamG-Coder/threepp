@@ -521,6 +521,18 @@
       if (camera && camera.parent === null && typeof camera.updateMatrixWorld === "function") {
         camera.updateMatrixWorld();
       }
+      if (scene && typeof scene.traverse === "function") {
+        const self = this;
+        scene.traverse(function (obj) {
+          if (obj && typeof obj.onBeforeRender === "function") {
+            try {
+              obj.onBeforeRender(self, scene, camera, obj.geometry, obj.material);
+            } catch {
+              /* page / addon hook */
+            }
+          }
+        });
+      }
       if (TN.cmd) {
         TN.cmd.flushPoses();
         TN.cmd.render(scene?._h || 0, camera?._h || 0);

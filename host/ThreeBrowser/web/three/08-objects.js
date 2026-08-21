@@ -1291,35 +1291,40 @@
     }
   }
 
+  function copyAttributeData(src, target, targetOffset = 0) {
+    const itemSize = target.itemSize;
+    if (!src || !target || !target.array) return;
+    if (src.isInterleavedBufferAttribute || !src.array || src.array.constructor !== target.array.constructor) {
+      const vertexCount = src.count;
+      for (let i = 0; i < vertexCount; i++) {
+        for (let c = 0; c < itemSize; c++) {
+          target.setComponent(i + targetOffset, c, src.getComponent(i, c));
+        }
+      }
+    } else {
+      target.array.set(src.array, targetOffset * itemSize);
+    }
+    target.needsUpdate = true;
+  }
+
+  const Box3 = TN.Box3;
+  const Color = TN.Color;
+  const BufferAttribute = TN.BufferAttribute;
+  const DataTexture = TN.DataTexture;
+  const RGBAFormat = TN.RGBAFormat ?? 1023;
+  const FloatType = TN.FloatType ?? 1015;
+  const RedIntegerFormat = TN.RedIntegerFormat ?? 1029;
+  const UnsignedIntType = TN.UnsignedIntType ?? 1014;
+  const _batchMatrix = Matrix4 ? new Matrix4() : null;
+  const _batchBox = Box3 ? new Box3() : null;
+  const _batchSphere = Sphere ? new Sphere() : null;
+  const _batchVec = Vector3 ? new Vector3() : null;
+
   class BatchedMesh extends Mesh {
     constructor(maxInstanceCount, maxVertexCount, maxIndexCount, material) {
       if (maxIndexCount === undefined) maxIndexCount = maxVertexCount * 2;
-      const geometry = TN.BufferGeometry ? new TN.BufferGeometry() : { attributes: {}, _h: 0 };
-      const n = native();
-      let handle = 0;
-      try {
-        if (n && typeof n.BatchedMeshCreate === "function") {
-          handle = n.BatchedMeshCreate(
-            maxInstanceCount,
-            maxVertexCount,
-            maxIndexCount,
-            materialHandle(material)
-          ) || 0;
-        } else {
-          warnOnce(
-            "BatchedMesh",
-            "ThreeBrowser: BatchedMesh native methods are not available"
-          );
-          handle = nativeMeshHandle(geometry, material);
-        }
-      } catch {
-        warnOnce(
-          "BatchedMesh",
-          "ThreeBrowser: BatchedMesh native methods are not available"
-        );
-        handle = nativeMeshHandle(geometry, material);
-      }
-      super(geometry, material, handle);
+      const geometry = TN.BufferGeometry ? new TN.BufferGeometry() : { attributes: {}, index: null, _h: 0 };
+      super(geometry, material, nativeGroupHandle());
       this.isBatchedMesh = true;
       this.type = "BatchedMesh";
       this.perObjectFrustumCulled = true;
@@ -1327,9 +1332,9 @@
       this.boundingBox = null;
       this.boundingSphere = null;
       this.customSort = null;
-      this._maxInstanceCount = maxInstanceCount;
-      this._maxVertexCount = maxVertexCount;
-      this._maxIndexCount = maxIndexCount;
+      this._maxInstanceCount = maxInstanceCount | 0;
+      this._maxVertexCount = maxVertexCount | 0;
+      this._maxIndexCount = maxIndexCount | 0;
       this._instanceInfo = [];
       this._geometryInfo = [];
       this._availableInstanceIds = [];
@@ -1337,9 +1342,83 @@
       this._nextIndexStart = 0;
       this._nextVertexStart = 0;
       this._geometryCount = 0;
-      this._matrices = new Float32Array(Math.max(1, maxInstanceCount) * 16);
-      this._colors = null;
-      for (let i = 0; i < maxInstanceCount; i++) this._matrices.set(_identity, i * 16);
+      this._visibilityChanged = true;
+      this._geometryInitialized = false;
+      this._multiDrawCounts = new Int32Array(Math.max(1, this._maxInstanceCount));
+      this._multiDrawStarts = new Int32Array(Math.max(1, this._maxInstanceCount));
+      this._multiDrawCount = 0;
+      this._multiDrawBytesPerElement = 1;
+      this._matricesTexture = null;
+      this._indirectTexture = null;
+      this._colorsTexture = null;
+      this._nativeBatches = [];
+      this._nativeBatchesDirty = true;
+      this._initMatricesTexture();
+      this._initIndirectTexture();
+      if (TN.cmd) TN.cmd.markPose(this);
+    }
+    _initMatricesTexture() {
+      if (!DataTexture) return;
+      let size = Math.sqrt(this._maxInstanceCount * 4);
+      size = Math.ceil(size / 4) * 4;
+      size = Math.max(size, 4);
+      const matricesArray = new Float32Array(size * size * 4);
+      this._matricesTexture = new DataTexture(matricesArray, size, size, RGBAFormat, FloatType);
+    }
+    _initIndirectTexture() {
+      if (!DataTexture) return;
+      let size = Math.ceil(Math.sqrt(this._maxInstanceCount));
+      size = Math.max(size, 1);
+      const indirectArray = new Uint32Array(size * size);
+      this._indirectTexture = new DataTexture(indirectArray, size, size, RedIntegerFormat, UnsignedIntType);
+    }
+    _initColorsTexture() {
+      if (!DataTexture) return;
+      let size = Math.ceil(Math.sqrt(this._maxInstanceCount));
+      size = Math.max(size, 1);
+      const colorsArray = new Float32Array(size * size * 4).fill(1);
+      this._colorsTexture = new DataTexture(colorsArray, size, size, RGBAFormat, FloatType);
+    }
+    _initializeGeometry(reference) {
+      const geometry = this.geometry;
+      if (this._geometryInitialized || !reference || !geometry || !BufferAttribute) return;
+      const attrs = reference.attributes || {};
+      for (const attributeName in attrs) {
+        const srcAttribute = typeof reference.getAttribute === "function"
+          ? reference.getAttribute(attributeName)
+          : attrs[attributeName];
+        if (!srcAttribute || !srcAttribute.array) continue;
+        const dstArray = new srcAttribute.array.constructor(this._maxVertexCount * srcAttribute.itemSize);
+        geometry.setAttribute(
+          attributeName,
+          new BufferAttribute(dstArray, srcAttribute.itemSize, srcAttribute.normalized)
+        );
+      }
+      const srcIndex = typeof reference.getIndex === "function" ? reference.getIndex() : reference.index;
+      if (srcIndex) {
+        const indexArray =
+          this._maxVertexCount > 65535
+            ? new Uint32Array(this._maxIndexCount)
+            : new Uint16Array(this._maxIndexCount);
+        geometry.setIndex(new BufferAttribute(indexArray, 1));
+      }
+      this._geometryInitialized = true;
+    }
+    _validateGeometry(geometry) {
+      const batchGeometry = this.geometry;
+      const srcIndex = typeof geometry.getIndex === "function" ? geometry.getIndex() : geometry.index;
+      const dstIndex = typeof batchGeometry.getIndex === "function" ? batchGeometry.getIndex() : batchGeometry.index;
+      if (Boolean(srcIndex) !== Boolean(dstIndex)) {
+        throw new Error('THREE.BatchedMesh: All geometries must consistently have "index".');
+      }
+      const attrs = batchGeometry.attributes || {};
+      for (const attributeName in attrs) {
+        if (typeof geometry.hasAttribute === "function") {
+          if (!geometry.hasAttribute(attributeName)) {
+            throw new Error('THREE.BatchedMesh: Added geometry missing "' + attributeName + '".');
+          }
+        }
+      }
     }
     get maxInstanceCount() {
       return this._maxInstanceCount;
@@ -1353,77 +1432,176 @@
     get unusedIndexCount() {
       return this._maxIndexCount - this._nextIndexStart;
     }
-    validateInstanceId() {}
-    validateGeometryId() {}
+    validateInstanceId(instanceId) {
+      const instanceInfo = this._instanceInfo;
+      if (instanceId < 0 || instanceId >= instanceInfo.length || instanceInfo[instanceId].active === false) {
+        throw new Error("THREE.BatchedMesh: Invalid instanceId " + instanceId + ".");
+      }
+    }
+    validateGeometryId(geometryId) {
+      const geometryInfoList = this._geometryInfo;
+      if (geometryId < 0 || geometryId >= geometryInfoList.length || geometryInfoList[geometryId].active === false) {
+        throw new Error("THREE.BatchedMesh: Invalid geometryId " + geometryId + ".");
+      }
+    }
     setCustomSort(func) {
       this.customSort = func;
       return this;
     }
-    computeBoundingBox() {}
-    computeBoundingSphere() {}
-    addGeometry(geometry, reservedVertexCount = -1, reservedIndexCount = -1) {
-      const n = native();
-      if (this._h && n && typeof n.BatchedMeshAddGeometry === "function") {
-        return n.BatchedMeshAddGeometry(
-          this._h,
-          geometry?._h || 0,
-          reservedVertexCount,
-          reservedIndexCount
-        );
+    computeBoundingBox() {
+      if (!this.boundingBox && Box3) this.boundingBox = new Box3();
+      if (!this.boundingBox) return;
+      this.boundingBox.makeEmpty();
+      for (let i = 0, l = this._instanceInfo.length; i < l; i++) {
+        if (this._instanceInfo[i].active === false) continue;
+        if (!this.getBoundingBoxAt(this._instanceInfo[i].geometryIndex, _batchBox)) continue;
+        this.getMatrixAt(i, _batchMatrix);
+        _batchBox.applyMatrix4(_batchMatrix);
+        this.boundingBox.union(_batchBox);
       }
-      const pos = geometry?.attributes?.position;
-      const vcount = pos ? pos.count : 0;
-      const icount = geometry?.index ? geometry.index.count : 0;
+    }
+    computeBoundingSphere() {
+      if (!this.boundingSphere && Sphere) this.boundingSphere = new Sphere();
+      if (!this.boundingSphere) return;
+      this.boundingSphere.makeEmpty();
+      for (let i = 0, l = this._instanceInfo.length; i < l; i++) {
+        if (this._instanceInfo[i].active === false) continue;
+        if (!this.getBoundingSphereAt(this._instanceInfo[i].geometryIndex, _batchSphere)) continue;
+        this.getMatrixAt(i, _batchMatrix);
+        _batchSphere.applyMatrix4(_batchMatrix);
+        this.boundingSphere.union(_batchSphere);
+      }
+    }
+    addGeometry(geometry, reservedVertexCount = -1, reservedIndexCount = -1) {
+      this._initializeGeometry(geometry);
+      this._validateGeometry(geometry);
+      const pos = geometry.getAttribute ? geometry.getAttribute("position") : geometry.attributes.position;
+      const index = geometry.getIndex ? geometry.getIndex() : geometry.index;
       const geometryInfo = {
         vertexStart: this._nextVertexStart,
-        vertexCount: vcount,
-        reservedVertexCount: reservedVertexCount === -1 ? vcount : reservedVertexCount,
-        indexStart: this._nextIndexStart,
-        indexCount: icount,
-        reservedIndexCount: reservedIndexCount === -1 ? icount : reservedIndexCount,
-        start: icount ? this._nextIndexStart : this._nextVertexStart,
-        count: icount || vcount,
+        vertexCount: pos ? pos.count : 0,
+        reservedVertexCount: reservedVertexCount === -1 ? (pos ? pos.count : 0) : reservedVertexCount,
+        indexStart: -1,
+        indexCount: -1,
+        reservedIndexCount: -1,
+        start: -1,
+        count: -1,
         boundingBox: null,
         boundingSphere: null,
         active: true,
-        geometry,
+        sourceGeometry: geometry,
       };
+      if (index) {
+        geometryInfo.indexStart = this._nextIndexStart;
+        geometryInfo.reservedIndexCount = reservedIndexCount === -1 ? index.count : reservedIndexCount;
+      }
+      if (
+        (geometryInfo.indexStart !== -1 &&
+          geometryInfo.indexStart + geometryInfo.reservedIndexCount > this._maxIndexCount) ||
+        geometryInfo.vertexStart + geometryInfo.reservedVertexCount > this._maxVertexCount
+      ) {
+        throw new Error("THREE.BatchedMesh: Reserved space request exceeds the maximum buffer size.");
+      }
       let geometryId;
       if (this._availableGeometryIds.length) {
-        geometryId = this._availableGeometryIds.pop();
+        this._availableGeometryIds.sort((a, b) => a - b);
+        geometryId = this._availableGeometryIds.shift();
         this._geometryInfo[geometryId] = geometryInfo;
       } else {
         geometryId = this._geometryCount++;
         this._geometryInfo.push(geometryInfo);
       }
-      this._nextVertexStart += geometryInfo.reservedVertexCount;
-      this._nextIndexStart += geometryInfo.reservedIndexCount;
+      this.setGeometryAt(geometryId, geometry);
+      this._nextIndexStart = geometryInfo.indexStart === -1
+        ? this._nextIndexStart
+        : geometryInfo.indexStart + geometryInfo.reservedIndexCount;
+      this._nextVertexStart = geometryInfo.vertexStart + geometryInfo.reservedVertexCount;
+      this._nativeBatchesDirty = true;
       return geometryId;
     }
     addInstance(geometryId) {
-      const n = native();
-      if (this._h && n && typeof n.BatchedMeshAddInstance === "function") {
-        return n.BatchedMeshAddInstance(this._h, geometryId);
+      if (this._instanceInfo.length >= this.maxInstanceCount && this._availableInstanceIds.length === 0) {
+        throw new Error("THREE.BatchedMesh: Maximum item count reached.");
       }
-      const info = { visible: true, active: true, geometryIndex: geometryId };
-      let id;
-      if (this._availableInstanceIds.length) {
-        id = this._availableInstanceIds.pop();
-        this._instanceInfo[id] = info;
+      const instanceInfo = { visible: true, active: true, geometryIndex: geometryId };
+      let drawId;
+      if (this._availableInstanceIds.length > 0) {
+        this._availableInstanceIds.sort((a, b) => a - b);
+        drawId = this._availableInstanceIds.shift();
+        this._instanceInfo[drawId] = instanceInfo;
       } else {
-        id = this._instanceInfo.length;
-        this._instanceInfo.push(info);
+        drawId = this._instanceInfo.length;
+        this._instanceInfo.push(instanceInfo);
       }
-      this._matrices.set(_identity, id * 16);
-      return id;
+      const matricesTexture = this._matricesTexture;
+      if (matricesTexture && _batchMatrix) {
+        _batchMatrix.identity().toArray(matricesTexture.image.data, drawId * 16);
+        matricesTexture.needsUpdate = true;
+      }
+      this._visibilityChanged = true;
+      this._nativeBatchesDirty = true;
+      if (TN.cmd) TN.cmd.markPose(this);
+      return drawId;
     }
     setGeometryAt(geometryId, geometry) {
-      const n = native();
-      if (this._h && n && typeof n.BatchedMeshSetGeometryAt === "function") {
-        return n.BatchedMeshSetGeometryAt(this._h, geometryId, geometry?._h || 0);
+      if (geometryId >= this._geometryCount) {
+        throw new Error("THREE.BatchedMesh: Maximum geometry count reached.");
       }
-      const info = this._geometryInfo[geometryId];
-      if (info) info.geometry = geometry;
+      this._validateGeometry(geometry);
+      const batchGeometry = this.geometry;
+      const hasIndex = (batchGeometry.getIndex ? batchGeometry.getIndex() : batchGeometry.index) !== null;
+      const dstIndex = batchGeometry.getIndex ? batchGeometry.getIndex() : batchGeometry.index;
+      const srcIndex = geometry.getIndex ? geometry.getIndex() : geometry.index;
+      const geometryInfo = this._geometryInfo[geometryId];
+      const srcPos = geometry.getAttribute ? geometry.getAttribute("position") : geometry.attributes.position;
+      if (
+        (hasIndex && srcIndex && srcIndex.count > geometryInfo.reservedIndexCount) ||
+        (srcPos && srcPos.count > geometryInfo.reservedVertexCount)
+      ) {
+        throw new Error("THREE.BatchedMesh: Reserved space not large enough for provided geometry.");
+      }
+      const vertexStart = geometryInfo.vertexStart;
+      const reservedVertexCount = geometryInfo.reservedVertexCount;
+      geometryInfo.vertexCount = srcPos ? srcPos.count : 0;
+      geometryInfo.sourceGeometry = geometry;
+      const attrs = batchGeometry.attributes || {};
+      for (const attributeName in attrs) {
+        const srcAttribute = geometry.getAttribute
+          ? geometry.getAttribute(attributeName)
+          : geometry.attributes[attributeName];
+        const dstAttribute = attrs[attributeName];
+        if (!srcAttribute || !dstAttribute) continue;
+        copyAttributeData(srcAttribute, dstAttribute, vertexStart);
+        const itemSize = srcAttribute.itemSize;
+        for (let i = srcAttribute.count; i < reservedVertexCount; i++) {
+          const index = vertexStart + i;
+          for (let c = 0; c < itemSize; c++) dstAttribute.setComponent(index, c, 0);
+        }
+        dstAttribute.needsUpdate = true;
+        if (typeof dstAttribute.addUpdateRange === "function") {
+          dstAttribute.addUpdateRange(vertexStart * itemSize, reservedVertexCount * itemSize);
+        }
+      }
+      if (hasIndex && srcIndex && dstIndex) {
+        const indexStart = geometryInfo.indexStart;
+        geometryInfo.indexCount = srcIndex.count;
+        for (let i = 0; i < srcIndex.count; i++) {
+          dstIndex.setX(indexStart + i, vertexStart + srcIndex.getX(i));
+        }
+        for (let i = srcIndex.count; i < geometryInfo.reservedIndexCount; i++) {
+          dstIndex.setX(indexStart + i, vertexStart);
+        }
+        dstIndex.needsUpdate = true;
+        if (typeof dstIndex.addUpdateRange === "function") {
+          dstIndex.addUpdateRange(indexStart, geometryInfo.reservedIndexCount);
+        }
+      }
+      geometryInfo.start = hasIndex ? geometryInfo.indexStart : geometryInfo.vertexStart;
+      geometryInfo.count = hasIndex ? geometryInfo.indexCount : geometryInfo.vertexCount;
+      geometryInfo.boundingBox = geometry.boundingBox ? geometry.boundingBox.clone() : null;
+      geometryInfo.boundingSphere = geometry.boundingSphere ? geometry.boundingSphere.clone() : null;
+      this._visibilityChanged = true;
+      this._nativeBatchesDirty = true;
       return geometryId;
     }
     deleteGeometry(geometryId) {
@@ -1436,6 +1614,8 @@
       }
       info.active = false;
       this._availableGeometryIds.push(geometryId);
+      this._visibilityChanged = true;
+      this._nativeBatchesDirty = true;
       return this;
     }
     deleteInstance(instanceId) {
@@ -1443,33 +1623,92 @@
       if (!info || !info.active) return this;
       info.active = false;
       this._availableInstanceIds.push(instanceId);
+      this._visibilityChanged = true;
+      this._nativeBatchesDirty = true;
       return this;
     }
     optimize() {
       return this;
     }
-    getBoundingBoxAt() {
-      return null;
+    getBoundingBoxAt(geometryId, target) {
+      if (!target || geometryId >= this._geometryCount) return null;
+      const geometry = this.geometry;
+      const geometryInfo = this._geometryInfo[geometryId];
+      if (!geometryInfo) return null;
+      if (geometryInfo.boundingBox === null && Box3 && _batchVec) {
+        const box = new Box3();
+        const index = geometry.getIndex ? geometry.getIndex() : geometry.index;
+        const position = geometry.attributes && geometry.attributes.position;
+        if (position) {
+          for (let i = geometryInfo.start, l = geometryInfo.start + geometryInfo.count; i < l; i++) {
+            const iv = index ? index.getX(i) : i;
+            box.expandByPoint(_batchVec.fromBufferAttribute(position, iv));
+          }
+        }
+        geometryInfo.boundingBox = box;
+      }
+      if (!geometryInfo.boundingBox) return null;
+      target.copy(geometryInfo.boundingBox);
+      return target;
     }
-    getBoundingSphereAt() {
-      return null;
+    getBoundingSphereAt(geometryId, target) {
+      if (!target || geometryId >= this._geometryCount) return null;
+      const geometryInfo = this._geometryInfo[geometryId];
+      if (!geometryInfo) return null;
+      if (geometryInfo.boundingSphere === null && Sphere && _batchVec && _batchBox) {
+        const sphere = new Sphere();
+        this.getBoundingBoxAt(geometryId, _batchBox);
+        _batchBox.getCenter(sphere.center);
+        const geometry = this.geometry;
+        const index = geometry.getIndex ? geometry.getIndex() : geometry.index;
+        const position = geometry.attributes && geometry.attributes.position;
+        let maxRadiusSq = 0;
+        if (position) {
+          for (let i = geometryInfo.start, l = geometryInfo.start + geometryInfo.count; i < l; i++) {
+            const iv = index ? index.getX(i) : i;
+            _batchVec.fromBufferAttribute(position, iv);
+            maxRadiusSq = Math.max(maxRadiusSq, sphere.center.distanceToSquared(_batchVec));
+          }
+        }
+        sphere.radius = Math.sqrt(maxRadiusSq);
+        geometryInfo.boundingSphere = sphere;
+      }
+      if (!geometryInfo.boundingSphere) return null;
+      target.copy(geometryInfo.boundingSphere);
+      return target;
     }
     setMatrixAt(instanceId, matrix) {
-      writeMatrix(this._matrices, instanceId * 16, matrix);
+      this.validateInstanceId(instanceId);
+      const matricesTexture = this._matricesTexture;
+      if (matricesTexture && matrix && typeof matrix.toArray === "function") {
+        matrix.toArray(matricesTexture.image.data, instanceId * 16);
+        matricesTexture.needsUpdate = true;
+      } else {
+        writeMatrix(this._matricesTexture ? this._matricesTexture.image.data : this._matrices, instanceId * 16, matrix);
+      }
+      this._nativeBatchesDirty = true;
+      if (TN.cmd) TN.cmd.markPose(this);
       return this;
     }
     getMatrixAt(instanceId, matrix) {
-      return readMatrix(this._matrices, instanceId * 16, matrix);
+      this.validateInstanceId(instanceId);
+      const data = this._matricesTexture ? this._matricesTexture.image.data : this._matrices;
+      if (matrix && typeof matrix.fromArray === "function") return matrix.fromArray(data, instanceId * 16);
+      return readMatrix(data, instanceId * 16, matrix);
     }
     setColorAt(instanceId, color) {
-      if (!this._colors) this._colors = new Float32Array(this._maxInstanceCount * 4).fill(1);
-      writeColor(this._colors, instanceId * 4, color);
-      if (color && color.a != null) this._colors[instanceId * 4 + 3] = color.a;
+      this.validateInstanceId(instanceId);
+      if (this._colorsTexture === null) this._initColorsTexture();
+      if (this._colorsTexture && color && typeof color.toArray === "function") {
+        color.toArray(this._colorsTexture.image.data, instanceId * 4);
+        this._colorsTexture.needsUpdate = true;
+      }
       return this;
     }
     getColorAt(instanceId, color) {
+      this.validateInstanceId(instanceId);
       if (!color) return color;
-      if (!this._colors) {
+      if (this._colorsTexture === null) {
         if (typeof color.setRGB === "function") return color.setRGB(1, 1, 1);
         color.r = 1;
         color.g = 1;
@@ -1477,30 +1716,39 @@
         return color;
       }
       return color.fromArray
-        ? color.fromArray(this._colors, instanceId * 4)
+        ? color.fromArray(this._colorsTexture.image.data, instanceId * 4)
         : color.setRGB?.(
-            this._colors[instanceId * 4],
-            this._colors[instanceId * 4 + 1],
-            this._colors[instanceId * 4 + 2]
+            this._colorsTexture.image.data[instanceId * 4],
+            this._colorsTexture.image.data[instanceId * 4 + 1],
+            this._colorsTexture.image.data[instanceId * 4 + 2]
           );
     }
     setVisibleAt(instanceId, visible) {
-      if (this._instanceInfo[instanceId]) this._instanceInfo[instanceId].visible = visible;
+      this.validateInstanceId(instanceId);
+      if (this._instanceInfo[instanceId].visible === visible) return this;
+      this._instanceInfo[instanceId].visible = visible;
+      this._visibilityChanged = true;
       return this;
     }
     getVisibleAt(instanceId) {
-      return this._instanceInfo[instanceId]?.visible ?? false;
+      this.validateInstanceId(instanceId);
+      return this._instanceInfo[instanceId].visible;
     }
     setGeometryIdAt(instanceId, geometryId) {
-      if (this._instanceInfo[instanceId]) this._instanceInfo[instanceId].geometryIndex = geometryId;
+      this.validateInstanceId(instanceId);
+      this.validateGeometryId(geometryId);
+      this._instanceInfo[instanceId].geometryIndex = geometryId;
+      this._visibilityChanged = true;
+      this._nativeBatchesDirty = true;
       return this;
     }
     getGeometryIdAt(instanceId) {
-      return this._instanceInfo[instanceId]?.geometryIndex ?? -1;
+      this.validateInstanceId(instanceId);
+      return this._instanceInfo[instanceId].geometryIndex;
     }
     getGeometryRangeAt(geometryId, target = {}) {
+      this.validateGeometryId(geometryId);
       const info = this._geometryInfo[geometryId];
-      if (!info) return target;
       target.vertexStart = info.vertexStart;
       target.vertexCount = info.vertexCount;
       target.reservedVertexCount = info.reservedVertexCount;
@@ -1513,6 +1761,13 @@
     }
     setInstanceCount(maxInstanceCount) {
       this._maxInstanceCount = maxInstanceCount;
+      this._multiDrawCounts = new Int32Array(maxInstanceCount);
+      this._multiDrawStarts = new Int32Array(maxInstanceCount);
+      if (this._matricesTexture) this._matricesTexture.dispose();
+      this._initMatricesTexture();
+      if (this._indirectTexture) this._indirectTexture.dispose();
+      this._initIndirectTexture();
+      this._nativeBatchesDirty = true;
       return this;
     }
     setGeometrySize(maxVertexCount, maxIndexCount) {
@@ -1520,10 +1775,73 @@
       this._maxIndexCount = maxIndexCount;
       return this;
     }
-    onBeforeRender() {}
-    onBeforeShadow() {}
+    _syncNativeBatches() {
+      if (!this._nativeBatchesDirty) return;
+      this._nativeBatchesDirty = false;
+      const prev = this._nativeBatches;
+      this._nativeBatches = [];
+      for (let i = 0; i < prev.length; i++) {
+        const child = prev[i];
+        this.remove(child);
+        if (child && typeof child.dispose === "function") child.dispose();
+      }
+      const groups = [];
+      for (let i = 0, l = this._instanceInfo.length; i < l; i++) {
+        const info = this._instanceInfo[i];
+        if (!info || !info.active || info.visible === false) continue;
+        const gid = info.geometryIndex;
+        if (!groups[gid]) groups[gid] = [];
+        groups[gid].push(i);
+      }
+      const mat4 = _batchMatrix || (Matrix4 ? new Matrix4() : null);
+      if (!mat4) return;
+      for (let gid = 0; gid < groups.length; gid++) {
+        const ids = groups[gid];
+        if (!ids || !ids.length) continue;
+        const src = this._geometryInfo[gid] && this._geometryInfo[gid].sourceGeometry;
+        if (!src) continue;
+        const mesh = new InstancedMesh(src, this.material, ids.length);
+        const color = Color ? new Color() : null;
+        for (let i = 0; i < ids.length; i++) {
+          this.getMatrixAt(ids[i], mat4);
+          mesh.setMatrixAt(i, mat4);
+          if (this._colorsTexture && color) {
+            this.getColorAt(ids[i], color);
+            mesh.setColorAt(i, color);
+          }
+        }
+        this.add(mesh);
+        this._nativeBatches.push(mesh);
+      }
+    }
+    flushSelf() {
+      this._syncNativeBatches();
+      if (typeof Object.getPrototypeOf(Mesh.prototype).flushSelf === "function") {
+        return Object.getPrototypeOf(Mesh.prototype).flushSelf.call(this);
+      }
+      return this;
+    }
+    onBeforeShadow(renderer, object, camera, shadowCamera, geometry, depthMaterial) {
+      if (typeof this.onBeforeRender === "function") {
+        this.onBeforeRender(renderer, null, shadowCamera, geometry, depthMaterial);
+      }
+    }
     dispose() {
       super.dispose();
+      if (this.geometry && typeof this.geometry.dispose === "function") this.geometry.dispose();
+      if (this._matricesTexture) this._matricesTexture.dispose();
+      if (this._indirectTexture) this._indirectTexture.dispose();
+      if (this._colorsTexture) this._colorsTexture.dispose();
+      this._matricesTexture = null;
+      this._indirectTexture = null;
+      this._colorsTexture = null;
+      const prev = this._nativeBatches;
+      this._nativeBatches = [];
+      for (let i = 0; i < prev.length; i++) {
+        const child = prev[i];
+        this.remove(child);
+        if (child && typeof child.dispose === "function") child.dispose();
+      }
     }
   }
 
