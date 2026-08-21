@@ -18,13 +18,20 @@ public sealed class MainForm : Form
     private NativeBridge? _bridge;
     private string _webRoot = "";
     private bool _nativeStopping;
+    private int _webGpuOn;
+    private int _nativeWgpu;
+    private int _webGpuFps;
+    private int _webGpuW;
+    private int _webGpuH;
     private CoreWebView2Environment? _env;
     private CoreWebView2SharedBuffer? _cmdBuffer;
     private IntPtr _cmdView = IntPtr.Zero;
+    private readonly string _startupAddress;
     internal const int CmdBufferBytes = 8 * 1024 * 1024;
 
-    public MainForm()
+    public MainForm(string? startupAddress = null)
     {
+        _startupAddress = string.IsNullOrWhiteSpace(startupAddress) ? HomeUrl : startupAddress;
         Text = "ThreeBrowser";
         Width = 1280;
         Height = 840;
@@ -50,7 +57,7 @@ public sealed class MainForm : Form
             /* keep the WinForms default */
         }
 
-        _chrome.Address.Text = HomeUrl;
+        _chrome.Address.Text = _startupAddress;
         _chrome.Address.GotFocus += (_, _) =>
         {
             ReleasePointer();
@@ -120,11 +127,120 @@ public sealed class MainForm : Form
 
     public void ResetNative()
     {
+        ClearWebGpuBypass();
         _ = Task.Run(() =>
         {
+            try { NativeWebGpu.tw_reset(); }
+            catch (DllNotFoundException) { }
+            catch (EntryPointNotFoundException) { }
             try { Native.tn_runtime_reset(); }
             catch (DllNotFoundException) { }
         });
+    }
+
+    public bool TryStartNativeWebGpu()
+    {
+        bool Start()
+        {
+            if (!IsHandleCreated)
+            {
+                return false;
+            }
+            var sz = _web.ClientSize;
+            var w = Math.Max(1, sz.Width);
+            var h = Math.Max(1, sz.Height);
+            try
+            {
+                return NativeWebGpu.tw_start(IntPtr.Zero, 0, 0, w, h) != 0;
+            }
+            catch (DllNotFoundException)
+            {
+                return false;
+            }
+            catch (EntryPointNotFoundException)
+            {
+                return false;
+            }
+        }
+
+        if (IsDisposed)
+        {
+            return false;
+        }
+        if (InvokeRequired)
+        {
+            try
+            {
+                return (bool)Invoke(Start);
+            }
+            catch (ObjectDisposedException)
+            {
+                return false;
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
+        }
+        return Start();
+    }
+
+    public Size WebClientSize()
+    {
+        Size Read()
+        {
+            var sz = _web.ClientSize;
+            if (sz.Width > 0 && sz.Height > 0)
+            {
+                return sz;
+            }
+            return new Size(1280, 720);
+        }
+
+        if (IsDisposed)
+        {
+            return new Size(1280, 720);
+        }
+        if (InvokeRequired)
+        {
+            try
+            {
+                return (Size)Invoke(Read);
+            }
+            catch (ObjectDisposedException)
+            {
+                return new Size(1280, 720);
+            }
+            catch (InvalidOperationException)
+            {
+                return new Size(1280, 720);
+            }
+        }
+        return Read();
+    }
+
+    public void BeginWebGpuBypass(bool nativeWgpu = false)
+    {
+        Interlocked.Exchange(ref _webGpuOn, 1);
+        Interlocked.Exchange(ref _nativeWgpu, nativeWgpu ? 1 : 0);
+    }
+
+    internal bool NativeWgpuOn => Volatile.Read(ref _nativeWgpu) != 0;
+
+    public void NoteWebGpuFrame(int fps, int width, int height)
+    {
+        Interlocked.Exchange(ref _webGpuFps, fps);
+        Interlocked.Exchange(ref _webGpuW, width);
+        Interlocked.Exchange(ref _webGpuH, height);
+    }
+
+    private void ClearWebGpuBypass()
+    {
+        Interlocked.Exchange(ref _webGpuOn, 0);
+        Interlocked.Exchange(ref _nativeWgpu, 0);
+        Interlocked.Exchange(ref _webGpuFps, 0);
+        Interlocked.Exchange(ref _webGpuW, 0);
+        Interlocked.Exchange(ref _webGpuH, 0);
     }
 
     public void ReleasePointer()
@@ -154,7 +270,13 @@ public sealed class MainForm : Form
         _nativeStopping = true;
         try
         {
-            var done = Task.Run(() => Native.tn_runtime_shutdown());
+            var done = Task.Run(() =>
+            {
+                try { NativeWebGpu.tw_shutdown(); }
+                catch (DllNotFoundException) { }
+                catch (EntryPointNotFoundException) { }
+                Native.tn_runtime_shutdown();
+            });
             while (!done.Wait(15))
             {
                 Application.DoEvents();
@@ -165,11 +287,22 @@ public sealed class MainForm : Form
 
     public void ApplyNativeVsync()
     {
+        var enabled = _chrome.VsyncEnabled ? 1 : 0;
         try
         {
-            Native.tn_runtime_set_vsync(_chrome.VsyncEnabled ? 1 : 0);
+            Native.tn_runtime_set_vsync(enabled);
         }
         catch (DllNotFoundException)
+        {
+        }
+        try
+        {
+            NativeWebGpu.tw_set_vsync(enabled);
+        }
+        catch (DllNotFoundException)
+        {
+        }
+        catch (EntryPointNotFoundException)
         {
         }
     }
@@ -232,18 +365,50 @@ public sealed class MainForm : Form
         string overlay;
         try
         {
-            Native.tn_runtime_stats(out var fps, out var frameUs, out var w, out var h, out var vsync, out _);
-            var ms = frameUs / 1000.0;
-            var backend = Native.BackendName();
-            if (string.IsNullOrEmpty(backend))
+            if (Volatile.Read(ref _nativeWgpu) != 0 && NativeWebGpu.IsOpen())
             {
-                backend = "OpenGL";
+                NativeWebGpu.tw_stats(out var fps, out var frameUs, out var w, out var h, out var vsync, out _);
+                var backend = NativeWebGpu.BackendName();
+                if (string.IsNullOrEmpty(backend))
+                {
+                    backend = "WebGPU";
+                }
+                var label = backend.StartsWith("WebGPU", StringComparison.OrdinalIgnoreCase)
+                    ? backend
+                    : "WebGPU · " + backend;
+                var ms = frameUs / 1000.0;
+                overlay =
+                    $"{Math.Max(fps, 0)} fps\n" +
+                    $"{ms:0.0} ms\n" +
+                    $"{Math.Max(w, 0)} × {Math.Max(h, 0)}\n" +
+                    $"{label} · vsync {(vsync != 0 ? "on" : "off")}";
             }
-            overlay =
-                $"{fps} fps\n" +
-                $"{ms:0.0} ms\n" +
-                $"{Math.Max(w, 0)} × {Math.Max(h, 0)}\n" +
-                $"{backend} · vsync {(vsync != 0 ? "on" : "off")}";
+            else if (Volatile.Read(ref _webGpuOn) != 0)
+            {
+                var fps = Math.Max(0, Volatile.Read(ref _webGpuFps));
+                var w = Math.Max(0, Volatile.Read(ref _webGpuW));
+                var h = Math.Max(0, Volatile.Read(ref _webGpuH));
+                overlay =
+                    $"{fps} fps\n" +
+                    $"{w} × {h}\n" +
+                    "WebGPU · Dawn\n" +
+                    "threepp bypass";
+            }
+            else
+            {
+                Native.tn_runtime_stats(out var fps, out var frameUs, out var w, out var h, out var vsync, out _);
+                var ms = frameUs / 1000.0;
+                var backend = Native.BackendName();
+                if (string.IsNullOrEmpty(backend))
+                {
+                    backend = "OpenGL";
+                }
+                overlay =
+                    $"{fps} fps\n" +
+                    $"{ms:0.0} ms\n" +
+                    $"{Math.Max(w, 0)} × {Math.Max(h, 0)}\n" +
+                    $"{backend} · vsync {(vsync != 0 ? "on" : "off")}";
+            }
         }
         catch (Exception)
         {
@@ -306,23 +471,51 @@ public sealed class MainForm : Form
         }
         try
         {
-            if (Native.tn_runtime_hwnd() == IntPtr.Zero)
+            var sz = _web.ClientSize;
+            if (sz.Width <= 0 || sz.Height <= 0)
             {
                 return;
             }
-            var sz = _web.ClientSize;
-            if (sz.Width <= 0 || sz.Height <= 0)
+            var w = Math.Max(1, sz.Width);
+            var h = Math.Max(1, sz.Height);
+            if (Volatile.Read(ref _nativeWgpu) != 0)
+            {
+                var twHwnd = IntPtr.Zero;
+                try
+                {
+                    twHwnd = NativeWebGpu.tw_hwnd();
+                }
+                catch (DllNotFoundException)
+                {
+                }
+                catch (EntryPointNotFoundException)
+                {
+                }
+                if (twHwnd != IntPtr.Zero)
+                {
+                    NativeWebGpu.tw_attach_host(Handle, _web.Left, _web.Top, w, h);
+                    SetWindowPos(_web.Handle, HWND_TOP, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpNoActivate);
+                }
+                return;
+            }
+            if (Volatile.Read(ref _webGpuOn) != 0)
+            {
+                return;
+            }
+            if (Native.tn_runtime_hwnd() == IntPtr.Zero)
             {
                 return;
             }
             // Child of the form: coords are the form client area, not the
             // outer window. PointToScreen/PointToClient was adding the caption
             // height to Y, so raycasts (clientY / innerHeight) sat too low.
-            Native.tn_runtime_attach_host(
-                Handle, _web.Left, _web.Top, Math.Max(1, sz.Width), Math.Max(1, sz.Height));
+            Native.tn_runtime_attach_host(Handle, _web.Left, _web.Top, w, h);
             SetWindowPos(_web.Handle, HWND_TOP, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpNoActivate);
         }
         catch (DllNotFoundException)
+        {
+        }
+        catch (EntryPointNotFoundException)
         {
         }
     }
@@ -394,9 +587,9 @@ public sealed class MainForm : Form
                 "*three.module.js*",
                 "*three.module.min.js*",
                 "*three.min.js*",
-                "*three.core.js*",
-                "*three.core.min.js*",
                 "*/build/three.js*",
+                "*three.webgpu.js*",
+                "*three.webgpu.min.js*",
             })
             {
                 _web.CoreWebView2.AddWebResourceRequestedFilter(
@@ -502,7 +695,7 @@ public sealed class MainForm : Form
                 })();
                 """);
 
-            _web.CoreWebView2.Navigate(HomeUrl);
+            NavigateTo(_startupAddress);
         }
         catch (Exception ex)
         {
@@ -517,13 +710,24 @@ public sealed class MainForm : Form
             return;
         }
         var uri = e.Request?.Uri;
-        if (!ThreeInject.IsThreeCoreLibrary(uri))
+        if (ThreeInject.IsPassthrough(uri))
         {
             return;
         }
 
         try
         {
+            if (ThreeInject.IsThreeWebGpuLibrary(uri))
+            {
+                e.Response = ThreeInject.CreateResponse(
+                    _web.CoreWebView2.Environment,
+                    ThreeInject.WebGpuShimSource(uri!));
+                return;
+            }
+            if (!ThreeInject.IsThreeCoreLibrary(uri))
+            {
+                return;
+            }
             var esm = ThreeInject.IsEsmLibrary(uri!);
             var body = esm ? ThreeInject.EsmSource(_webRoot) : ThreeInject.ClassicSource(_webRoot);
             e.Response = ThreeInject.CreateResponse(_web.CoreWebView2.Environment, body);
@@ -697,6 +901,24 @@ public sealed class MainForm : Form
 
     internal int SubmitCmd(int nbytes)
     {
+        if (Volatile.Read(ref _nativeWgpu) != 0)
+        {
+            return SubmitWebGpuCmd(nbytes);
+        }
+        return SubmitMappedCmd(Native.tn_cmd_submit, nbytes);
+    }
+
+    internal int SubmitWebGpuCmd(int nbytes)
+    {
+        if (!NativeWebGpu.IsOpen())
+        {
+            return nbytes <= 0 ? 1 : 0;
+        }
+        return SubmitMappedCmd(NativeWebGpu.tw_cmd_submit, nbytes);
+    }
+
+    private int SubmitMappedCmd(Func<IntPtr, int, int> submit, int nbytes)
+    {
         if (nbytes <= 0)
         {
             return 1;
@@ -705,26 +927,37 @@ public sealed class MainForm : Form
         {
             return 0;
         }
-        if (_cmdView != IntPtr.Zero)
+        try
         {
-            return Native.tn_cmd_submit(_cmdView, nbytes);
+            if (_cmdView != IntPtr.Zero)
+            {
+                return submit(_cmdView, nbytes);
+            }
+            if (_cmdBuffer == null)
+            {
+                return 0;
+            }
+            using var stream = _cmdBuffer.OpenStream();
+            stream.Position = 0;
+            var copy = new byte[nbytes];
+            var got = stream.Read(copy, 0, nbytes);
+            var pin = GCHandle.Alloc(copy, GCHandleType.Pinned);
+            try
+            {
+                return submit(pin.AddrOfPinnedObject(), got);
+            }
+            finally
+            {
+                pin.Free();
+            }
         }
-        if (_cmdBuffer == null)
+        catch (DllNotFoundException)
         {
             return 0;
         }
-        using var stream = _cmdBuffer.OpenStream();
-        stream.Position = 0;
-        var copy = new byte[nbytes];
-        var got = stream.Read(copy, 0, nbytes);
-        var pin = System.Runtime.InteropServices.GCHandle.Alloc(copy, System.Runtime.InteropServices.GCHandleType.Pinned);
-        try
+        catch (EntryPointNotFoundException)
         {
-            return Native.tn_cmd_submit(pin.AddrOfPinnedObject(), got);
-        }
-        finally
-        {
-            pin.Free();
+            return 0;
         }
     }
 

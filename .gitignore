@@ -50,6 +50,13 @@ temp/
 
 #folder used locally for capturing screenshots of the rendered output, not needed in the repo
 aaa_caps
+threebrowser-webgpu-*.png
+
+# Redundant wgpu-native release artifacts; the vendored runtime uses only the
+# headers, DLL, and GNU import library.
+third_party/wgpu-native/wgpu-windows-*-release.zip
+third_party/wgpu-native/lib/libwgpu_native.a
+third_party/wgpu-native/wgpu-native-meta/
 
 # Local planning / strategy scratch docs — kept on disk, not tracked
 plans/

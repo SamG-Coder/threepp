@@ -3,7 +3,7 @@ namespace ThreeBrowser;
 internal static class Program
 {
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
         var log = Path.Combine(Path.GetTempPath(), "ThreeBrowser-crash.log");
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
@@ -11,6 +11,6 @@ internal static class Program
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
             File.WriteAllText(log, e.ExceptionObject?.ToString() ?? "unknown");
         ApplicationConfiguration.Initialize();
-        Application.Run(new MainForm());
+        Application.Run(new MainForm(args.FirstOrDefault()));
     }
 }

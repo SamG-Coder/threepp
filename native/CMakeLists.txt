@@ -50,3 +50,44 @@ if (MINGW)
     target_link_options(three_native_smoke PRIVATE -static -static-libgcc -static-libstdc++)
     target_link_options(three_native_cubes PRIVATE -static -static-libgcc -static-libstdc++)
 endif ()
+
+# Sibling WebGPU present DLL. Independent of three_native / threepp GL.
+if (WIN32)
+    include("${CMAKE_SOURCE_DIR}/cmake/FetchWebGPU.cmake")
+    add_library(three_webgpu SHARED
+            webgpu/three_webgpu.cpp
+    )
+    target_include_directories(three_webgpu PUBLIC
+            "${CMAKE_CURRENT_SOURCE_DIR}/webgpu"
+            PRIVATE
+            "${WGPU_INCLUDE_DIR}"
+    )
+    if (DEFINED WGPU_INCLUDE_DIR2)
+        target_include_directories(three_webgpu PRIVATE "${WGPU_INCLUDE_DIR2}")
+    endif ()
+    target_compile_definitions(three_webgpu PRIVATE THREE_WEBGPU_EXPORT WGPU_SHARED_LIBRARY)
+    target_link_libraries(three_webgpu PRIVATE "${WGPU_NATIVE_LIB}" user32 gdi32)
+    set_target_properties(three_webgpu PROPERTIES
+            PREFIX ""
+            OUTPUT_NAME "three_webgpu"
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    )
+    if (MINGW)
+        target_link_options(three_webgpu PRIVATE -static -static-libgcc -static-libstdc++)
+    endif ()
+    add_custom_command(TARGET three_webgpu POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${WGPU_NATIVE_DLL}" "$<TARGET_FILE_DIR:three_webgpu>/wgpu_native.dll"
+            COMMENT "Copy wgpu_native.dll next to three_webgpu.dll")
+
+    add_executable(three_webgpu_smoke webgpu/three_webgpu_smoke.cpp)
+    target_include_directories(three_webgpu_smoke PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/webgpu")
+    target_link_libraries(three_webgpu_smoke PRIVATE three_webgpu)
+    set_target_properties(three_webgpu_smoke PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    )
+    if (MINGW)
+        target_link_options(three_webgpu_smoke PRIVATE -static -static-libgcc -static-libstdc++)
+    endif ()
+endif ()

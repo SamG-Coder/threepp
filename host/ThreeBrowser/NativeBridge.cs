@@ -33,6 +33,94 @@ public partial class NativeBridge
         return ok;
     }
 
+    // three/webgpu: prefer three_webgpu.dll command-ring present. If the DLL is
+    // missing or tw_start fails, stock WebGPURenderer still presents through
+    // Chromium Dawn. The GL HWND overlay stays off in both cases.
+    public int RuntimeStartWebGpu()
+    {
+        var native = false;
+        try
+        {
+            native = _form.TryStartNativeWebGpu();
+        }
+        catch (DllNotFoundException)
+        {
+        }
+        catch (EntryPointNotFoundException)
+        {
+        }
+
+        _form.BeginWebGpuBypass(native);
+        if (native)
+        {
+            _form.ApplyNativeVsync();
+            _form.BeginInvoke((MethodInvoker)(() => _form.EmbedNativeSurface()));
+        }
+        return 1;
+    }
+
+    public void WebGpuFrame(int fps, int width, int height)
+    {
+        _form.NoteWebGpuFrame(fps, width, height);
+    }
+
+    public int WebGpuIsNative() => NativeWebGpu.IsOpen() ? 1 : 0;
+
+    public int WebGpuCmdSubmit(int nbytes) => _form.SubmitWebGpuCmd(nbytes);
+
+    public string WebGpuMapRead(int handle, double offset, double size)
+    {
+        if (handle == 0 ||
+            double.IsNaN(offset) || double.IsInfinity(offset) || offset < 0 ||
+            double.IsNaN(size) || double.IsInfinity(size) || size <= 0)
+        {
+            return "";
+        }
+        var n = (long)size;
+        if (n <= 0 || n > 64L * 1024 * 1024)
+        {
+            return "";
+        }
+        var buf = new byte[(int)n];
+        try
+        {
+            var got = NativeWebGpu.tw_map_read(handle, (ulong)offset, (ulong)n, buf, buf.Length);
+            if (got <= 0)
+            {
+                return "";
+            }
+            if (got > 0 && got < buf.Length)
+            {
+                return Convert.ToBase64String(buf, 0, got);
+            }
+            return Convert.ToBase64String(buf);
+        }
+        catch (DllNotFoundException)
+        {
+            return "";
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return "";
+        }
+    }
+
+    public void WebGpuSetSize(int w, int h)
+    {
+        try
+        {
+            NativeWebGpu.tw_set_size(Math.Max(1, w), Math.Max(1, h));
+        }
+        catch (DllNotFoundException)
+        {
+        }
+        catch (EntryPointNotFoundException)
+        {
+        }
+    }
+
+    public string WebGpuBackendName() => NativeWebGpu.BackendName();
+
     public int RuntimeIsOpen() => Native.tn_runtime_is_open();
 
     public void RuntimeSetSize(int width, int height) =>

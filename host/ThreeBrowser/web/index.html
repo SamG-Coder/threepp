@@ -147,7 +147,7 @@
   <body>
     <main>
       <h1>ThreeBrowser</h1>
-      <p class="lead">A desktop browser for stock three.js pages. With Native on, injected <code>THREE</code> draws through a threepp GL surface instead of WebGL. Toggle it from the toolbar or press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd>.</p>
+      <p class="lead">A desktop browser for stock three.js pages. With Native on, injected <code>THREE</code> draws through a threepp GL surface instead of WebGL. <code>three/webgpu</code> is a separate track: Native leaves the stock WebGPURenderer on Chromium Dawn (Vulkan/D3D12) and does not route it through threepp. Toggle Native from the toolbar or press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd>.</p>
       <p class="note">Native THREE does not run inside iframes, and it does not work on sites that merge three.js with other libraries in one bundle. Open the example HTML itself, not a gallery frame.</p>
       <div class="grid">
         <a class="card" href="https://threejs.org/examples/webgl_interactive_cubes.html">
@@ -245,6 +245,20 @@
             <span class="file">webgl_animation_skinning_ik.html</span>
           </span>
         </a>
+        <a class="card" href="https://threebrowser.local/demos/poseidon/index.html">
+          <span class="icon" style="background:#0277bd" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+              <path d="M2 16c2-2 4 2 6 0s4 2 6 0 4 2 6 0 2-2 2-2"/>
+              <path d="M2 20c2-2 4 2 6 0s4 2 6 0 4 2 6 0 2-2 2-2"/>
+              <path d="M4 10c3-4 7-6 8-6s5 2 8 6"/>
+            </svg>
+          </span>
+          <span class="body">
+            <strong>Poseidon ocean</strong>
+            <span class="desc">Local Tessendorf FFT sea in three.js WebGPU / TSL compute. Native intercepts <code>three/webgpu</code> as stock Dawn, not threepp. No WebGL fallback.</span>
+            <span class="file">demos/poseidon</span>
+          </span>
+        </a>
         <a class="card" href="https://threejs.org/examples/webgl_geometry_terrain_raycast.html">
           <span class="icon" style="background:#6d4c41" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
@@ -264,12 +278,15 @@
       <section class="notices" aria-label="How it works and third-party notice">
         <h2>How it works</h2>
         <p>
-          Page JavaScript stays stock three.js. ThreeBrowser intercepts
+          Page JavaScript stays stock three.js. For WebGL pages, ThreeBrowser intercepts
           <code>three.js</code> / <code>three.module.js</code>, injects a native
           <code>window.THREE</code>, and packs scene updates into a binary command ring.
           <code>three_native.dll</code> (C++) runs a threepp OpenGL renderer on a worker
-          thread and presents to an HWND composited behind the WebView. Toggle Native off
-          to fall back to the page’s own WebGL.
+          thread and presents to an HWND composited behind the WebView.
+          WebGPU pages (<code>three.webgpu.js</code> / <code>three/webgpu</code>) skip that
+          path: WebGPU is a GPU API over Vulkan/D3D12, not a threepp scene graph, so Native
+          re-exports stock <code>WebGPURenderer</code> onto Chromium Dawn and never swaps
+          <code>three.core.js</code>. Toggle Native off to fall back to the page’s own WebGL.
         </p>
 
         <h2>Third-party notice</h2>
@@ -301,7 +318,8 @@
           </li>
           <li>
             <a href="https://developer.microsoft.com/microsoft-edge/webview2/">Microsoft Edge WebView2</a>
-            — the HTML/JS surface.
+            — the HTML/JS surface. WebGPU pages present through Chromium
+            <a href="https://dawn.googlesource.com/dawn">Dawn</a> (D3D12/Vulkan), not threepp.
           </li>
         </ul>
         <p>
@@ -309,6 +327,13 @@
           <a href="https://github.com/agargaro/batched-mesh-extensions">@three.ez/batched-mesh-extensions</a>
           and <a href="https://github.com/gkjohnson/three-mesh-bvh">three-mesh-bvh</a> from the example page itself.
           Native THREE does not relicense those packages.
+        </p>
+        <p>
+          <strong>Poseidon</strong> is a bundled local demo (MIT) — a Tessendorf FFT ocean
+          using three.js WebGPU / TSL compute. Its <code>src/</code> is served unchanged;
+          sky panoramas live under <code>/sky/</code>. It is not an official three.js example.
+          Native does not translate its compute FFT into threepp; it runs the stock
+          <code>WebGPURenderer</code> on Dawn.
         </p>
       </section>
     </main>

@@ -575,7 +575,7 @@
     constructor(options = {}) {
       if (!webgpuWarned) {
         webgpuWarned = true;
-        console.warn("ThreeBrowser: WebGPURenderer is not available; calls are no-ops.");
+        console.warn("ThreeBrowser: WebGPURenderer on the WebGL/threepp path is a no-op. Import from 'three/webgpu' — Native intercepts that as stock Dawn, not threepp.");
       }
       const doc = globalThis.document;
       this.isWebGPURenderer = true;

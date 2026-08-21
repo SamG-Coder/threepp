@@ -16,7 +16,19 @@ public partial class NativeBridge
         var pin = GCHandle.Alloc(bytes, GCHandleType.Pinned);
         try
         {
+            if (_form.NativeWgpuOn)
+            {
+                return NativeWebGpu.tw_cmd_submit(pin.AddrOfPinnedObject(), bytes.Length);
+            }
             return Native.tn_cmd_submit(pin.AddrOfPinnedObject(), bytes.Length);
+        }
+        catch (DllNotFoundException)
+        {
+            return 0;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return 0;
         }
         finally
         {
