@@ -21,9 +21,9 @@
         font: 14px/1.45 "Segoe UI", system-ui, sans-serif;
       }
       main {
-        max-width: 720px;
+        max-width: 760px;
         margin: 0 auto;
-        padding: 72px 24px 48px;
+        padding: 64px 24px 48px;
       }
       h1 {
         margin: 0 0 8px;
@@ -38,8 +38,8 @@
         color: var(--mute);
       }
       p.note {
-        margin: 0 auto 36px;
-        max-width: 34em;
+        margin: 0 auto 32px;
+        max-width: 36em;
         text-align: center;
         color: var(--mute);
         font-size: 13px;
@@ -50,11 +50,13 @@
         gap: 12px;
       }
       a.card {
-        display: block;
+        display: flex;
+        gap: 14px;
+        align-items: flex-start;
         background: var(--card);
         border: 1px solid var(--line);
         border-radius: 16px;
-        padding: 16px 18px;
+        padding: 16px;
         color: inherit;
         text-decoration: none;
         box-shadow: 0 1px 2px rgba(60, 64, 67, 0.08);
@@ -64,8 +66,42 @@
         border-color: var(--accent);
         box-shadow: 0 4px 16px rgba(26, 115, 232, 0.12);
       }
-      a.card strong { display: block; font-size: 15px; margin-bottom: 4px; }
-      a.card span { color: var(--mute); font-size: 12px; }
+      .icon {
+        flex: 0 0 44px;
+        width: 44px;
+        height: 44px;
+        border-radius: 12px;
+        display: grid;
+        place-items: center;
+        color: #fff;
+      }
+      .icon svg {
+        width: 24px;
+        height: 24px;
+        display: block;
+      }
+      .body { min-width: 0; }
+      a.card strong {
+        display: block;
+        font-size: 15px;
+        font-weight: 600;
+        margin: 1px 0 4px;
+      }
+      a.card .desc {
+        display: block;
+        color: var(--mute);
+        font-size: 12.5px;
+        line-height: 1.4;
+      }
+      a.card .file {
+        display: block;
+        margin-top: 6px;
+        font: 11px/1.3 ui-monospace, Consolas, monospace;
+        color: #80868b;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
       kbd, code {
         font: 11px/1 ui-monospace, Consolas, monospace;
         background: #eef1f4;
@@ -79,6 +115,33 @@
         color: var(--mute);
         font-size: 12px;
       }
+      .notices {
+        margin-top: 40px;
+        padding-top: 24px;
+        border-top: 1px solid var(--line);
+        color: var(--mute);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      .notices h2 {
+        margin: 0 0 8px;
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--ink);
+      }
+      .notices h2 + h2 { margin-top: 20px; }
+      .notices p { margin: 0 0 10px; }
+      .notices ul {
+        margin: 0 0 10px;
+        padding-left: 1.2em;
+      }
+      .notices li { margin: 0 0 6px; }
+      .notices a { color: var(--accent); text-decoration: none; }
+      .notices a:hover { text-decoration: underline; }
+      @media (max-width: 640px) {
+        .grid { grid-template-columns: 1fr; }
+        main { padding-top: 40px; }
+      }
     </style>
   </head>
   <body>
@@ -88,39 +151,166 @@
       <p class="note">Native THREE does not run inside iframes, and it does not work on sites that merge three.js with other libraries in one bundle. Open the example HTML itself, not a gallery frame.</p>
       <div class="grid">
         <a class="card" href="https://threejs.org/examples/webgl_interactive_cubes.html">
-          <strong>Interactive cubes</strong>
-          <span>2000 meshes · the speed check</span>
+          <span class="icon" style="background:#1a73e8" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+              <rect x="3" y="3" width="8" height="8" rx="1.2"/>
+              <rect x="13" y="3" width="8" height="8" rx="1.2"/>
+              <rect x="3" y="13" width="8" height="8" rx="1.2"/>
+              <rect x="13" y="13" width="8" height="8" rx="1.2"/>
+            </svg>
+          </span>
+          <span class="body">
+            <strong>Interactive cubes</strong>
+            <span class="desc">Click through 2000 rotating meshes. The native draw-call speed check.</span>
+            <span class="file">webgl_interactive_cubes.html</span>
+          </span>
         </a>
         <a class="card" href="https://threejs.org/examples/webgl_instancing_performance.html">
-          <strong>Instancing performance</strong>
-          <span>InstancedMesh count slider · dispose unloads native GPU</span>
+          <span class="icon" style="background:#00897b" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <circle cx="6" cy="6" r="2"/><circle cx="12" cy="6" r="2"/><circle cx="18" cy="6" r="2"/>
+              <circle cx="6" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="18" cy="12" r="2"/>
+              <circle cx="6" cy="18" r="2"/><circle cx="12" cy="18" r="2"/><circle cx="18" cy="18" r="2"/>
+            </svg>
+          </span>
+          <span class="body">
+            <strong>Instancing performance</strong>
+            <span class="desc">One InstancedMesh with a live count slider. Changing the count unloads native GPU objects.</span>
+            <span class="file">webgl_instancing_performance.html</span>
+          </span>
         </a>
         <a class="card" href="https://threejs.org/examples/webgl_batch_lod_bvh.html">
-          <strong>Batch LOD · BVH</strong>
-          <span>500k BatchedMesh instances · frustum cull and LOD</span>
+          <span class="icon" style="background:#7b1fa2" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+              <path d="M4 17l8 4 8-4"/>
+              <path d="M4 12l8 4 8-4"/>
+              <path d="M4 7l8 4 8-4"/>
+            </svg>
+          </span>
+          <span class="body">
+            <strong>Batch LOD · BVH</strong>
+            <span class="desc">500k BatchedMesh torus knots. Distance LOD, frustum culling, and a BVH for picking.</span>
+            <span class="file">webgl_batch_lod_bvh.html</span>
+          </span>
         </a>
         <a class="card" href="https://threejs.org/examples/webgl_interactive_cubes_ortho.html">
-          <strong>Cubes · orthographic</strong>
-          <span>Same scene, ortho camera</span>
+          <span class="icon" style="background:#3949ab" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+              <rect x="4" y="6" width="16" height="12" rx="1"/>
+              <path d="M8 10h3v3H8zM13 10h3v3h-3zM8 15h8"/>
+            </svg>
+          </span>
+          <span class="body">
+            <strong>Cubes · orthographic</strong>
+            <span class="desc">The same 2000 cubes, viewed with an orthographic camera instead of perspective.</span>
+            <span class="file">webgl_interactive_cubes_ortho.html</span>
+          </span>
         </a>
         <a class="card" href="https://threejs.org/examples/webgl_geometry_cube.html">
-          <strong>Geometry cube</strong>
-          <span>Use the example HTML, not the gallery iframe</span>
+          <span class="icon" style="background:#ef6c00" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+              <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/>
+              <path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/>
+            </svg>
+          </span>
+          <span class="body">
+            <strong>Geometry cube</strong>
+            <span class="desc">A single textured cube. Open this HTML file directly, not the examples gallery iframe.</span>
+            <span class="file">webgl_geometry_cube.html</span>
+          </span>
         </a>
         <a class="card" href="https://threejs.org/examples/webgl_animation_keyframes.html">
-          <strong>Animation keyframes</strong>
-          <span>glTF clip playback</span>
+          <span class="icon" style="background:#c2185b" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+              <rect x="3" y="6" width="18" height="12" rx="2"/>
+              <path d="M10 9.5l6 2.5-6 2.5v-5z" fill="currentColor" stroke="none"/>
+            </svg>
+          </span>
+          <span class="body">
+            <strong>Animation keyframes</strong>
+            <span class="desc">Littlest Tokyo glTF scene with a playing animation clip and orbit controls.</span>
+            <span class="file">webgl_animation_keyframes.html</span>
+          </span>
         </a>
         <a class="card" href="https://threejs.org/examples/webgl_animation_skinning_ik.html">
-          <strong>Skinning IK</strong>
-          <span>CCD IK · skinned mesh · cube-camera sphere</span>
+          <span class="icon" style="background:#2e7d32" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="5" r="2.2"/>
+              <path d="M12 7.5v5M8 22l4-9.5L16 22M7 14h10"/>
+            </svg>
+          </span>
+          <span class="body">
+            <strong>Skinning IK</strong>
+            <span class="desc">CCD inverse kinematics on a skinned mesh, with a reflective cube-camera sphere.</span>
+            <span class="file">webgl_animation_skinning_ik.html</span>
+          </span>
         </a>
         <a class="card" href="https://threejs.org/examples/webgl_geometry_terrain_raycast.html">
-          <strong>Terrain raycast</strong>
-          <span>Perlin heightmap · pointer pick on the mesh</span>
+          <span class="icon" style="background:#6d4c41" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+              <path d="M2 18l6.5-8 4 5 3-4L22 18H2z"/>
+              <circle cx="17" cy="7" r="2"/>
+            </svg>
+          </span>
+          <span class="body">
+            <strong>Terrain raycast</strong>
+            <span class="desc">A Perlin-noise heightmap. Move the pointer to pick a point on the mesh.</span>
+            <span class="file">webgl_geometry_terrain_raycast.html</span>
+          </span>
         </a>
       </div>
       <footer>Address bar accepts a URL or a Google search · Back / Forward / Reload work like a desktop browser</footer>
+
+      <section class="notices" aria-label="How it works and third-party notice">
+        <h2>How it works</h2>
+        <p>
+          Page JavaScript stays stock three.js. ThreeBrowser intercepts
+          <code>three.js</code> / <code>three.module.js</code>, injects a native
+          <code>window.THREE</code>, and packs scene updates into a binary command ring.
+          <code>three_native.dll</code> (C++) runs a threepp OpenGL renderer on a worker
+          thread and presents to an HWND composited behind the WebView. Toggle Native off
+          to fall back to the page’s own WebGL.
+        </p>
+
+        <h2>Third-party notice</h2>
+        <p>
+          ThreeBrowser is a Windows host on top of <strong>threepp</strong>, a C++20 port
+          of the three.js scene graph. The examples above are the official three.js
+          reference pages; they are not bundled here.
+        </p>
+        <ul>
+          <li>
+            <a href="https://threejs.org/">three.js</a>
+            — JavaScript 3D library. Copyright © 2010–2026
+            <a href="https://github.com/mrdoob/three.js">three.js authors</a> (Ricardo Cabello / mrdoob and contributors). MIT License.
+            Example pages, screenshots, and addons on threejs.org remain their authors’ work.
+          </li>
+          <li>
+            <a href="https://github.com/markaren/threepp">threepp</a>
+            — C++ scene graph, materials, loaders, and <code>GLRenderer</code>.
+            Copyright © 2021–2026 Lars Ivar Hatledal and threepp contributors. MIT License.
+            API and shaders are a derivative of three.js.
+          </li>
+          <li>
+            <strong>three_native</strong> — this fork’s C++ command ring
+            (<code>native/three_native.cpp</code> and friends) that maps injected
+            <code>THREE</code> calls onto threepp objects.
+          </li>
+          <li>
+            <a href="https://www.glfw.org/">GLFW</a> — native window and OpenGL context (zlib/libpng).
+          </li>
+          <li>
+            <a href="https://developer.microsoft.com/microsoft-edge/webview2/">Microsoft Edge WebView2</a>
+            — the HTML/JS surface.
+          </li>
+        </ul>
+        <p>
+          Batch LOD · BVH also loads
+          <a href="https://github.com/agargaro/batched-mesh-extensions">@three.ez/batched-mesh-extensions</a>
+          and <a href="https://github.com/gkjohnson/three-mesh-bvh">three-mesh-bvh</a> from the example page itself.
+          Native THREE does not relicense those packages.
+        </p>
+      </section>
     </main>
   </body>
 </html>
