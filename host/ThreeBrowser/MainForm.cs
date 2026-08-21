@@ -1045,6 +1045,7 @@ public sealed class MainForm : Form
                 _web.CoreWebView2?.Navigate(SandboxEditorForm.SandboxUrl(id, path));
                 Activate();
             };
+            _agentHarness.DeleteProjectRequested += DeleteSandbox;
         }
         if (_agentHarness.Visible)
         {
@@ -1249,6 +1250,7 @@ public sealed class MainForm : Form
         try
         {
             _sandboxStore.Delete(id);
+            _agentHarness?.NotifyProjectDeleted(id);
             if (_sandboxId == id)
             {
                 _sandboxId = null;
@@ -1256,6 +1258,7 @@ public sealed class MainForm : Form
                 _sandboxHtml = DefaultSandboxHtml;
                 _chrome.SandboxActive = false;
                 _sandboxEditor?.LoadSandbox(null, _sandboxFilePath, _sandboxHtml);
+                _sandboxEditor?.Hide();
             }
             RefreshSavedPages();
         }

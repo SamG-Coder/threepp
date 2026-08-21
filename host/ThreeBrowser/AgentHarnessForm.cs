@@ -49,6 +49,7 @@ internal sealed class AgentHarnessForm : Form
     internal event EventHandler<AgentProjectChangedEventArgs>? ProjectChanged;
     internal event Action<Guid, string>? FileOpenRequested;
     internal event Action<Guid, string>? NavigateRequested;
+    internal event Action<Guid>? DeleteProjectRequested;
 
     internal void RefreshFromStore()
     {
@@ -63,6 +64,22 @@ internal sealed class AgentHarnessForm : Form
         }
         RefreshProjects();
         _ = PushStateAsync();
+    }
+
+    internal void NotifyProjectDeleted(Guid projectId)
+    {
+        if (IsDisposed || _projectId != projectId)
+        {
+            return;
+        }
+        _projectId = null;
+        ClearChangedFiles();
+        RefreshProjects();
+        _ = PushStateAsync();
+        if (_ready.Task.IsCompletedSuccessfully)
+        {
+            _ = _view.CoreWebView2.ExecuteScriptAsync("window.agentHarness.clearConversation()");
+        }
     }
 
     internal AgentHarnessForm(
@@ -279,6 +296,12 @@ internal sealed class AgentHarnessForm : Form
                         await PushStateAsync();
                     }
                     break;
+                case "delete-project":
+                    if (_runCancellation == null && _projectId is Guid deleteProjectId)
+                    {
+                        DeleteProjectRequested?.Invoke(deleteProjectId);
+                    }
+                    break;
                 case "new-file":
                     if (_runCancellation == null && _projectId is Guid newFileProjectId)
                     {
@@ -389,6 +412,24 @@ internal sealed class AgentHarnessForm : Form
                         ? modelValue.GetString() ?? ""
                         : "";
                     await RunAsync(prompt, model);
+                    break;
+                case "queue-message":
+                    if (_runCancellation != null && _harness != null)
+                    {
+                        var queueId = ReadMessageString(root, "id");
+                        var queueText = ReadMessageString(root, "prompt").Trim();
+                        if (_harness.QueueMessage(queueId, queueText))
+                        {
+                            await AppendEventAsync("queued", JsonSerializer.Serialize(new
+                            {
+                                id = queueId,
+                                text = queueText,
+                            }));
+                        }
+                    }
+                    break;
+                case "delete-queued":
+                    _harness?.RemoveQueuedMessage(ReadMessageString(root, "id"));
                     break;
                 case "stop":
                     _runCancellation?.Cancel();

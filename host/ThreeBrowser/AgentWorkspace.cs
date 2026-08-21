@@ -77,9 +77,23 @@ internal sealed class AgentWorkspace
         var path = ResolveFile(relativePath, mustExist: true);
         var content = File.ReadAllText(path);
         var count = CountOccurrences(content, oldText);
+        var normalized = false;
         if (count == 0)
         {
-            throw new InvalidDataException("old_text was not found in the file.");
+            var eol = content.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+            var decodedOld = NormalizeLineEndings(DecodeToolEscapes(oldText), eol);
+            var decodedNew = NormalizeLineEndings(DecodeToolEscapes(newText), eol);
+            count = CountOccurrences(content, decodedOld);
+            if (count > 0)
+            {
+                oldText = decodedOld;
+                newText = decodedNew;
+                normalized = true;
+            }
+            else
+            {
+                throw new InvalidDataException("old_text was not found in the file, including after escaped-newline normalization. Read the file again before retrying.");
+            }
         }
         if (!replaceAll && count != 1)
         {
@@ -94,8 +108,19 @@ internal sealed class AgentWorkspace
         }
         File.WriteAllText(path, updated);
         FileChanged?.Invoke(DisplayPath(path));
-        return new { path = DisplayPath(path), replacements = replaceAll ? count : 1 };
+        return new { path = DisplayPath(path), replacements = replaceAll ? count : 1, normalized };
     }
+
+    private static string DecodeToolEscapes(string value) => value
+        .Replace("\\r\\n", "\n", StringComparison.Ordinal)
+        .Replace("\\n", "\n", StringComparison.Ordinal)
+        .Replace("\\r", "\n", StringComparison.Ordinal)
+        .Replace("\\t", "\t", StringComparison.Ordinal);
+
+    private static string NormalizeLineEndings(string value, string eol) => value
+        .Replace("\r\n", "\n", StringComparison.Ordinal)
+        .Replace("\r", "\n", StringComparison.Ordinal)
+        .Replace("\n", eol, StringComparison.Ordinal);
 
     internal object CreateDirectory(string relativePath)
     {

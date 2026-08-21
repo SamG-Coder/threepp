@@ -80,6 +80,23 @@
     .event.thinking::before { content: '◇'; color: #1a73e8; animation: think-pulse 1.2s ease-in-out infinite; }
     .event.activity { width: fit-content; min-width: 210px; border-color: #d2e3fc; background: #f5f8ff; color: #3c4043; }
     .event.activity::before { content: '◇'; color: #1a73e8; animation: think-pulse 1.2s ease-in-out infinite; }
+    .code-card { margin: 0 0 9px; overflow: hidden; border: 1px solid #d2e3fc; border-radius: 9px; background: #fff; }
+    .code-head { display: flex; align-items: center; min-height: 34px; gap: 8px; padding: 0 11px; border-bottom: 1px solid #e8eaed; background: #f5f8ff; color: #3c4043; font-size: 12px; }
+    .code-operation { color: #185abc; font-weight: 600; }
+    .code-path { min-width: 0; flex: 1; overflow: hidden; font-family: "Cascadia Mono", Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .code-language { padding: 2px 6px; border-radius: 999px; background: #e8f0fe; color: #185abc; font-size: 10px; text-transform: uppercase; }
+    .code-window { max-height: 168px; margin: 0; overflow: auto; padding: 10px 12px 14px; background: #f8f9fa; color: #202124; font: 12px/1.55 "Cascadia Mono", Consolas, monospace; tab-size: 2; white-space: pre; }
+    .code-truncated { padding: 6px 11px; border-top: 1px solid #e8eaed; background: #f1f3f4; color: #5f6368; font-size: 10px; }
+    .event.user, .event.tool, .event.change, .event.result, .event.answer, .event.error, .event.system, .event.task, .event.thinking, .event.activity, .event.queued { border-color: #dadce0; background: #fff; color: #3c4043; }
+    .event.error { border-left: 3px solid #d93025; color: #b3261e; }
+    .event.answer { border-left: 3px solid #188038; }
+    .event.change { border-left: 3px solid #1a73e8; }
+    .event.activity, .event.thinking { border-left: 3px solid #1a73e8; }
+    .event.queued { display: flex; align-items: center; gap: 8px; border-left: 3px solid #f9ab00; }
+    .event.queued::before { content: '↪'; color: #b06000; }
+    .queued-copy { min-width: 0; flex: 1; white-space: pre-wrap; }
+    .queued-delete { flex: 0 0 26px; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: #5f6368; cursor: pointer; font-size: 16px; }
+    .queued-delete:hover { background: #fce8e6; color: #b3261e; }
     .thinking-dots { display: inline-flex; width: 23px; justify-content: space-between; margin-left: 6px; vertical-align: middle; }
     .thinking-dots span { width: 4px; height: 4px; border-radius: 50%; background: #5f6368; animation: think-dot 1.2s ease-in-out infinite; }
     .thinking-dots span:nth-child(2) { animation-delay: .16s; }
@@ -123,8 +140,9 @@
           <select id="project" aria-label="Sandbox project" disabled></select>
           <div id="project-detail">Save a sandbox project first.</div>
           <div class="project-actions">
-            <button id="run-project" class="link-button" disabled>▶ Run index page</button>
-            <button id="rename-project" class="link-button" disabled>Rename project</button>
+            <button id="run-project" class="link-button" disabled>▶ Run</button>
+            <button id="rename-project" class="link-button" disabled>Rename</button>
+            <button id="delete-project" class="link-button" disabled>Delete</button>
           </div>
         </section>
         <section class="section">
@@ -217,6 +235,7 @@
     const newProject = document.getElementById('new-project');
     const renameProject = document.getElementById('rename-project');
     const runProject = document.getElementById('run-project');
+    const deleteProject = document.getElementById('delete-project');
     const newFile = document.getElementById('new-file');
     const newDirectory = document.getElementById('new-directory');
     const renameFile = document.getElementById('rename-file');
@@ -394,12 +413,14 @@
       newProject.disabled = state.running;
       renameProject.disabled = state.running || !selected;
       runProject.disabled = state.running || !selected;
+      deleteProject.disabled = state.running || !selected;
       newFile.disabled = state.running || !selected;
       newDirectory.disabled = state.running || !selected;
       renameFile.disabled = state.running || !selected || (!selectedFile && !selectedDirectory);
       deleteFile.disabled = state.running || !selected || (!selectedFile && !selectedDirectory) || (!!selectedFile && selected.files.length <= 1);
-      prompt.disabled = state.running;
-      run.disabled = state.running || !ready || !prompt.value.trim();
+      prompt.disabled = !selected;
+      run.disabled = !ready || !prompt.value.trim();
+      run.innerHTML = state.running ? '↪&nbsp; Queue / steer' : '◇&nbsp; Run task';
       stop.disabled = !state.running;
     }
 
@@ -423,6 +444,13 @@
       if (selected) openNameDialog('rename-project', 'Rename project', 'Save a display name for this sandbox solution.', selected.title);
     });
     runProject.addEventListener('click', () => post('navigate-project'));
+    deleteProject.addEventListener('click', () => {
+      const selected = state.projects.find(item => item.id === project.value);
+      if (!selected) return;
+      deleteCopy.textContent = `Delete the entire ${selected.title} workspace and all files inside it? This cannot be undone.`;
+      deleteDialog.dataset.project = 'true';
+      deleteDialog.showModal();
+    });
     newFile.addEventListener('click', () => openNameDialog('new-file', 'Create file', 'Enter a path inside this solution, such as pages/about.html or styles/site.css.', 'new-file.html'));
     newDirectory.addEventListener('click', () => openNameDialog('new-directory', 'Create folder', 'Enter a folder path inside this solution, such as pages or assets/images.', 'new-folder'));
     renameFile.addEventListener('click', () => {
@@ -433,6 +461,7 @@
       const selectedPath = selectedFile || selectedDirectory;
       if (!selectedPath) return;
       deleteCopy.textContent = `Delete ${selectedPath}${selectedDirectory ? ' and everything inside it' : ''} from this sandbox project? This cannot be undone.`;
+      deleteDialog.dataset.project = '';
       deleteDialog.showModal();
     });
     dialogCancel.addEventListener('click', () => nameDialog.close());
@@ -451,6 +480,12 @@
     });
     deleteCancel.addEventListener('click', () => deleteDialog.close());
     deleteConfirm.addEventListener('click', () => {
+      if (deleteDialog.dataset.project === 'true') {
+        post('delete-project');
+        deleteDialog.dataset.project = '';
+        deleteDialog.close();
+        return;
+      }
       if (selectedFile) post('delete-file', { path: selectedFile });
       if (selectedDirectory) post('delete-directory', { path: selectedDirectory });
       selectedFile = null;
@@ -468,9 +503,15 @@
     run.addEventListener('click', () => {
       const message = prompt.value.trim();
       if (!message) return;
-      post('run', { prompt: message, model: model.value });
+      if (state.running) {
+        const id = crypto.randomUUID();
+        post('queue-message', { id, prompt: message });
+      } else {
+        post('run', { prompt: message, model: model.value });
+      }
       prompt.value = '';
       updateControls();
+      prompt.focus();
     });
     stop.addEventListener('click', () => post('stop'));
 
@@ -490,6 +531,33 @@
       },
       appendEvent(kind, message) {
         welcome?.remove();
+        if (kind === 'queue-consumed') {
+          document.getElementById(`queued-${CSS.escape(message)}`)?.remove();
+          return;
+        }
+        if (kind === 'queued') {
+          let queued;
+          try { queued = JSON.parse(message); } catch { return; }
+          const item = document.createElement('div');
+          item.id = `queued-${queued.id}`;
+          item.className = 'event queued';
+          const copy = document.createElement('span');
+          copy.className = 'queued-copy';
+          copy.textContent = `Queued: ${queued.text}`;
+          const remove = document.createElement('button');
+          remove.className = 'queued-delete';
+          remove.title = 'Delete queued message';
+          remove.setAttribute('aria-label', 'Delete queued message');
+          remove.textContent = '×';
+          remove.addEventListener('click', () => {
+            post('delete-queued', { id: queued.id });
+            item.remove();
+          });
+          item.append(copy, remove);
+          timeline.append(item);
+          timeline.scrollTop = timeline.scrollHeight;
+          return;
+        }
         if (kind === 'activity') {
           document.getElementById('agent-thinking')?.remove();
           let activity = document.getElementById('agent-activity');
@@ -512,6 +580,38 @@
         }
         document.getElementById('agent-thinking')?.remove();
         document.getElementById('agent-activity')?.remove();
+        if (kind === 'code') {
+          let preview;
+          try { preview = JSON.parse(message); } catch { preview = { path: 'untitled.txt', code: message, operation: 'Code preview' }; }
+          const card = document.createElement('section');
+          card.className = 'code-card';
+          const head = document.createElement('div');
+          head.className = 'code-head';
+          const operation = document.createElement('span');
+          operation.className = 'code-operation';
+          operation.textContent = preview.operation || 'Code preview';
+          const path = document.createElement('span');
+          path.className = 'code-path';
+          path.textContent = preview.path || 'untitled.txt';
+          path.title = path.textContent;
+          const language = document.createElement('span');
+          language.className = 'code-language';
+          language.textContent = String(preview.path || '').split('.').at(-1) || 'text';
+          const code = document.createElement('pre');
+          code.className = 'code-window';
+          code.textContent = preview.code || '';
+          head.append(operation, path, language);
+          card.append(head, code);
+          if (preview.truncated) {
+            const note = document.createElement('div');
+            note.className = 'code-truncated';
+            note.textContent = 'Preview truncated — the complete content was still written.';
+            card.append(note);
+          }
+          timeline.append(card);
+          timeline.scrollTop = timeline.scrollHeight;
+          return;
+        }
         const item = document.createElement('div');
         item.className = `event ${kind}`;
         if (kind === 'thinking') {
@@ -527,6 +627,20 @@
         }
         timeline.append(item);
         timeline.scrollTop = timeline.scrollHeight;
+      },
+      clearConversation() {
+        timeline.replaceChildren();
+        const empty = document.createElement('div');
+        empty.className = 'welcome';
+        const mark = document.createElement('div');
+        mark.className = 'welcome-mark';
+        mark.textContent = '◇';
+        const title = document.createElement('h2');
+        title.textContent = 'Choose or create a sandbox project';
+        const copy = document.createElement('p');
+        copy.textContent = 'The deleted workspace and its conversation have been cleared.';
+        empty.append(mark, title, copy);
+        timeline.append(empty);
       },
     };
     updateControls();

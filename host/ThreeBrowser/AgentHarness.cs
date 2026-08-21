@@ -18,6 +18,8 @@ internal sealed class AgentHarness : IDisposable
         Timeout = Timeout.InfiniteTimeSpan,
     };
     private readonly ConcurrentDictionary<string, Task<string>> _tasks = new();
+    private readonly ConcurrentDictionary<string, string> _queuedMessages = new();
+    private readonly ConcurrentQueue<string> _queuedOrder = new();
     private readonly SemaphoreSlim _taskSlots = new(3);
     private int _nextTaskId;
 
@@ -33,6 +35,19 @@ internal sealed class AgentHarness : IDisposable
         Action<string, string> emit,
         CancellationToken cancellationToken) =>
         RunLoopAsync(prompt, allowTasks: true, emit, cancellationToken);
+
+    internal bool QueueMessage(string id, string message)
+    {
+        message = message.Trim();
+        if (id.Length == 0 || message.Length == 0 || !_queuedMessages.TryAdd(id, message))
+        {
+            return false;
+        }
+        _queuedOrder.Enqueue(id);
+        return true;
+    }
+
+    internal bool RemoveQueuedMessage(string id) => _queuedMessages.TryRemove(id, out _);
 
     public void Dispose()
     {
@@ -54,6 +69,7 @@ internal sealed class AgentHarness : IDisposable
         for (var turn = 0; turn < MaxTurns; turn++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            DrainQueuedMessages(messages, emit);
             emit("activity", turn == 0
                 ? "Planning the work"
                 : "Reviewing results and planning the next step");
@@ -101,6 +117,11 @@ internal sealed class AgentHarness : IDisposable
                     emit("system", $"Waiting for {outstanding.Length} outstanding task{(outstanding.Length == 1 ? "" : "s")}…");
                     await Task.WhenAll(outstanding).WaitAsync(cancellationToken);
                 }
+                messages.Add(assistant);
+                if (DrainQueuedMessages(messages, emit) > 0)
+                {
+                    continue;
+                }
                 var result = string.IsNullOrWhiteSpace(content) ? "Task completed." : content.Trim();
                 if (waitedForOutstandingTasks)
                 {
@@ -122,11 +143,18 @@ internal sealed class AgentHarness : IDisposable
                     ? args
                     : EmptyArguments;
                 emit("tool", DescribeTool(name, arguments));
+                if (CreateCodePreview(name, arguments) is { } codePreview)
+                {
+                    emit("code", codePreview);
+                }
                 string result;
                 try
                 {
                     var value = await ExecuteToolAsync(name, arguments, emit, cancellationToken);
-                    emit("result", DescribeToolCompletion(name, arguments));
+                    if (name is not ("write_file" or "replace_in_file" or "create_directory"))
+                    {
+                        emit("result", DescribeToolCompletion(name, arguments));
+                    }
                     result = JsonSerializer.Serialize(new { ok = true, result = value });
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
@@ -144,6 +172,29 @@ internal sealed class AgentHarness : IDisposable
             }
         }
         throw new InvalidOperationException("The agent reached its 40-turn safety limit.");
+    }
+
+    private int DrainQueuedMessages(
+        List<Dictionary<string, object?>> messages,
+        Action<string, string> emit)
+    {
+        var count = 0;
+        while (_queuedOrder.TryDequeue(out var id))
+        {
+            if (!_queuedMessages.TryRemove(id, out var text))
+            {
+                continue;
+            }
+            messages.Add(new Dictionary<string, object?>
+            {
+                ["role"] = "user",
+                ["content"] = text,
+            });
+            emit("queue-consumed", id);
+            emit("user", "Steer: " + text);
+            count++;
+        }
+        return count;
     }
 
     private async Task<object> ExecuteToolAsync(
@@ -295,6 +346,39 @@ internal sealed class AgentHarness : IDisposable
             _ => $"Completed {name}",
         };
     }
+
+    private static string? CreateCodePreview(string name, JsonElement arguments)
+    {
+        var code = name switch
+        {
+            "write_file" => String(arguments, "content", ""),
+            "replace_in_file" => DecodePreviewEscapes(String(arguments, "new_text", "")),
+            _ => "",
+        };
+        if (code.Length == 0)
+        {
+            return null;
+        }
+        const int previewLimit = 12000;
+        var truncated = code.Length > previewLimit;
+        if (truncated)
+        {
+            code = code[..previewLimit];
+        }
+        return JsonSerializer.Serialize(new
+        {
+            path = String(arguments, "path", "untitled.txt"),
+            code,
+            truncated,
+            operation = name == "write_file" ? "Writing file" : "Replacement text",
+        });
+    }
+
+    private static string DecodePreviewEscapes(string value) => value
+        .Replace("\\r\\n", "\n", StringComparison.Ordinal)
+        .Replace("\\n", "\n", StringComparison.Ordinal)
+        .Replace("\\r", "\n", StringComparison.Ordinal)
+        .Replace("\\t", "\t", StringComparison.Ordinal);
 
     private static string RequiredString(JsonElement arguments, string name)
     {

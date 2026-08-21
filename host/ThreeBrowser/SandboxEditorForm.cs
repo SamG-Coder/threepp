@@ -613,10 +613,12 @@ internal sealed class SandboxEditorForm : Form
         }
     }
 
-    private Task SetEditorTextAsync(string html)
+    private Task SetEditorTextAsync(string text)
     {
-        var json = JsonSerializer.Serialize(html);
-        return _editor.CoreWebView2.ExecuteScriptAsync($"window.sandboxEditor.setValue({json})");
+        var pathJson = JsonSerializer.Serialize(_filePath);
+        var textJson = JsonSerializer.Serialize(text);
+        return _editor.CoreWebView2.ExecuteScriptAsync(
+            $"window.sandboxEditor.setFile({pathJson}, {textJson})");
     }
 
     private Task PushSavedPagesAsync()
@@ -696,15 +698,20 @@ internal sealed class SandboxEditorForm : Form
     private void UpdateLabels()
     {
         var modified = IsDirty ? "  •  Modified" : "";
+        var language = Path.GetExtension(_filePath).TrimStart('.').ToUpperInvariant();
+        if (language.Length == 0)
+        {
+            language = "TEXT";
+        }
         if (_sandboxId is Guid id)
         {
             _identity.Text = _filePath + modified;
-            _status.Text = SandboxUrl(id, _filePath) + $"    TEXT    {_eol}    UTF-8";
+            _status.Text = SandboxUrl(id, _filePath) + $"    {language}    {_eol}    UTF-8";
         }
         else
         {
             _identity.Text = "New sandbox" + modified;
-            _status.Text = $"GUID is created on first save    TEXT    {_eol}    UTF-8";
+            _status.Text = $"GUID is created on first save    {language}    {_eol}    UTF-8";
         }
     }
 

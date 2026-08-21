@@ -537,19 +537,44 @@
       });
       model.onDidChangeOptions(() => notify('eol'));
 
+      function languageForPath(path) {
+        const name = String(path || '').toLowerCase();
+        const extension = name.includes('.') ? name.slice(name.lastIndexOf('.')) : '';
+        return ({
+          '.html': 'html', '.htm': 'html', '.css': 'css', '.scss': 'scss', '.less': 'less',
+          '.js': 'javascript', '.mjs': 'javascript', '.cjs': 'javascript', '.jsx': 'javascript',
+          '.ts': 'typescript', '.tsx': 'typescript', '.json': 'json', '.jsonc': 'json',
+          '.md': 'markdown', '.markdown': 'markdown', '.xml': 'xml', '.svg': 'xml',
+          '.yaml': 'yaml', '.yml': 'yaml', '.py': 'python', '.cs': 'csharp',
+          '.cpp': 'cpp', '.cc': 'cpp', '.cxx': 'cpp', '.c': 'c', '.h': 'cpp', '.hpp': 'cpp',
+          '.java': 'java', '.kt': 'kotlin', '.kts': 'kotlin', '.php': 'php', '.rb': 'ruby',
+          '.rs': 'rust', '.go': 'go', '.sql': 'sql', '.sh': 'shell', '.bash': 'shell',
+          '.ps1': 'powershell', '.bat': 'bat', '.cmd': 'bat', '.ini': 'ini',
+          '.glsl': 'cpp', '.vert': 'cpp', '.frag': 'cpp', '.wgsl': 'cpp',
+        })[extension] || (name.endsWith('dockerfile') ? 'dockerfile' : 'plaintext');
+      }
+
+      function loadValue(value) {
+        loading = true;
+        const text = String(value ?? '');
+        model.setValue(text);
+        model.setEOL(text.includes('\r\n')
+          ? monaco.editor.EndOfLineSequence.CRLF
+          : monaco.editor.EndOfLineSequence.LF);
+        loading = false;
+        editor.setPosition({ lineNumber: 1, column: 1 });
+        editor.revealLine(1);
+        editor.focus();
+        notify('loaded');
+      }
+
       window.sandboxEditor = {
         setValue(value) {
-          loading = true;
-          const text = String(value ?? '');
-          model.setValue(text);
-          model.setEOL(text.includes('\r\n')
-            ? monaco.editor.EndOfLineSequence.CRLF
-            : monaco.editor.EndOfLineSequence.LF);
-          loading = false;
-          editor.setPosition({ lineNumber: 1, column: 1 });
-          editor.revealLine(1);
-          editor.focus();
-          notify('loaded');
+          loadValue(value);
+        },
+        setFile(path, value) {
+          monaco.editor.setModelLanguage(model, languageForPath(path));
+          loadValue(value);
         },
         getValue() {
           return model.getValue(monaco.editor.EndOfLinePreference.TextDefined, true);
