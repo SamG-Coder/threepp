@@ -1,0 +1,8 @@
+{
+  "name": "threebrowser-runtime-js",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "three": "0.184.0"
+  }
+}

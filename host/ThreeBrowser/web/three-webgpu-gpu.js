@@ -353,7 +353,7 @@ class GPUBuffer {
     return new Promise((resolve, reject) => {
       try {
         if (read) {
-          cmd.submitNow();
+          cmd.submitNow(true);
           this._mapped = mapReadNative(this._h, offset, size);
         } else {
           this._mapped = new ArrayBuffer(size);

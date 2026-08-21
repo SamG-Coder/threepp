@@ -16,6 +16,7 @@ option(THREEPP_WITH_RLTOOLS "Fetch RLtools (header-only deep RL) for the reinfor
 
 option(THREEPP_WITH_PYTHON "Build the pybind11 Python bindings (threepp module)" OFF)
 option(THREEPP_WITH_JS_HOST "Build the C ABI used by the C# WebView2 host (window.THREE)" ON)
+option(THREEPP_BUILD_RUNTIME "Build the headless V8/Node native browser runtime" OFF)
 
 option(THREEPP_TREAT_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
 option(THREEPP_WITH_VULKAN "Build with Vulkan backend (requires Vulkan SDK)" OFF)
@@ -135,6 +136,13 @@ endif ()
 
 if (THREEPP_WITH_JS_HOST)
     add_subdirectory(native)
+endif ()
+
+if (THREEPP_BUILD_RUNTIME)
+    if (NOT THREEPP_WITH_JS_HOST)
+        message(FATAL_ERROR "THREEPP_BUILD_RUNTIME requires THREEPP_WITH_JS_HOST")
+    endif ()
+    add_subdirectory(ThreeBrowserRuntime)
 endif ()
 
 # Example/test assets live in a separate

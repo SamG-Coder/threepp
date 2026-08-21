@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>ThreeBrowserRuntime import-map demo</title>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three/build/three.module.js",
+        "demo/": "./"
+      }
+    }
+  </script>
+</head>
+<body>
+  <script type="module">
+    import { startImportedCubes } from "demo/imported-cubes.js";
+    startImportedCubes();
+  </script>
+</body>
+</html>

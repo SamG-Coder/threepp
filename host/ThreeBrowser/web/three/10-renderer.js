@@ -481,7 +481,7 @@
       }
       if (!cb) return;
       const self = this;
-      if (typeof MessageChannel === "function") {
+      if (!globalThis.__threeBrowserNativeRuntime && typeof MessageChannel === "function") {
         const ch = new MessageChannel();
         this._animPort = ch.port1;
         const loop = () => {

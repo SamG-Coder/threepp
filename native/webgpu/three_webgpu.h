@@ -17,10 +17,14 @@ extern "C" {
 #endif
 
 TW_API int tw_start(void* parent_hwnd, int x, int y, int w, int h);
+TW_API void tw_set_standalone_ui(int on);
 TW_API int tw_attach_host(void* parent_hwnd, int x, int y, int w, int h);
 TW_API void tw_set_size(int w, int h);
 TW_API void tw_set_vsync(int on);
 TW_API void* tw_hwnd(void);
+TW_API int tw_take_wheel_delta(void);
+TW_API int tw_backlog(void);
+TW_API int tw_content_offset_y(void);
 TW_API void tw_stats(int* fps, int* frame_us, int* width, int* height, int* vsync, uint64_t* presents);
 TW_API int tw_is_open(void);
 TW_API void tw_shutdown(void);

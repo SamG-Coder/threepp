@@ -1,0 +1,6 @@
+build/
+bin/
+obj/
+node_modules/
+projects/
+.vs/

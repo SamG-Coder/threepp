@@ -211,6 +211,7 @@ let off = 0;
 let nextId = 1;
 let shared = false;
 let pendingSubmit = false;
+let deferredSubmit = false;
 let hostCache = null;
 let lastAttached = null;
 let hostSession = 0;
@@ -277,8 +278,21 @@ function utf8(str) {
   return new TextEncoder().encode(str || "");
 }
 
-function submitNow() {
+function submitNow(force = false) {
   if (off <= 0) return;
+  if (globalThis.__threeBrowserNativeRuntime && !force) {
+    if (!deferredSubmit) {
+      deferredSubmit = true;
+      const flush = () => {
+        deferredSubmit = false;
+        submitNow(true);
+      };
+      if (typeof setImmediate === "function") setImmediate(flush);
+      else setTimeout(flush, 0);
+    }
+    return;
+  }
+  deferredSubmit = false;
   const n = host();
   const used = off;
   if (!shared) {
@@ -337,7 +351,7 @@ function submitNow() {
 function need(bytes) {
   bytes = align8(bytes);
   if (off + bytes <= ab.byteLength) return;
-  submitNow();
+  submitNow(true);
   if (off + bytes > ab.byteLength) {
     throw new Error("ThreeBrowser WebGPU cmd buffer overflow");
   }
@@ -382,7 +396,7 @@ function attach(buffer) {
   if (!buffer || !(buffer instanceof ArrayBuffer)) return;
   if (buffer === lastAttached) {
     shared = true;
-    if (pendingSubmit) submitNow();
+    if (pendingSubmit) submitNow(true);
     return;
   }
   if (off > 0 && buffer.byteLength >= off) {
@@ -392,7 +406,7 @@ function attach(buffer) {
   lastAttached = buffer;
   views();
   shared = true;
-  if (pendingSubmit) submitNow();
+  if (pendingSubmit) submitNow(true);
 }
 
 function maxPayload() {

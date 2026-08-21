@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>ThreeBrowserRuntime</AssemblyName>
+    <RootNamespace>ThreeBrowserRuntime</RootNamespace>
+    <Configuration>Release</Configuration>
+    <Optimize>true</Optimize>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+
+  <Target Name="RestoreThreeBrowserJavaScript" AfterTargets="Build" BeforeTargets="BuildThreeBrowserNativeRuntime"
+          Inputs="$(MSBuildProjectDirectory)\package.json"
+          Outputs="$(MSBuildProjectDirectory)\node_modules\three\package.json">
+    <Exec WorkingDirectory="$(MSBuildProjectDirectory)"
+          Command="npm install --no-audit --no-fund --ignore-scripts" />
+  </Target>
+
+  <Target Name="BuildThreeBrowserNativeRuntime" AfterTargets="RestoreThreeBrowserJavaScript">
+    <Exec Command="pwsh -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\build.ps1&quot;" />
+  </Target>
+</Project>

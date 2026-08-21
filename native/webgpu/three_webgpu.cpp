@@ -108,13 +108,20 @@ struct Runtime {
     std::atomic<uint64_t> statsPresents{0};
     std::atomic<uint64_t> statsCmdSubmits{0};
     std::atomic<uint64_t> statsCmdBytes{0};
+    std::atomic<int> pendingCommandSubmits{0};
     std::atomic<uint64_t> commandGeneration{1};
     std::atomic<int> vsync{0};
     std::atomic<int> open{0};
+    std::atomic<int> wheelDelta{0};
+    std::atomic<int> standaloneUi{0};
+    std::atomic<int> fpsOverlay{0};
+    std::atomic<int> debugOverlay{0};
 
     HWND hwnd{nullptr};
+    HWND toolbarHwnd{nullptr};
     HWND parent{nullptr};
     bool classRegistered{false};
+    bool toolbarClassRegistered{false};
     bool started{false};
 
     WGPUInstance instance{};
@@ -144,14 +151,140 @@ struct Runtime {
     bool skipRenderPass{false};
     bool traceCommands{false};
     int traceRemaining{0};
-    bool statsLog{false};
+    std::atomic_bool statsLog{false};
     std::chrono::steady_clock::time_point lastStatsLog{};
 };
 
 Runtime g;
 
+constexpr int kToolbarHeight = 52;
+constexpr wchar_t kToolbarClassName[] = L"ThreeBrowserWebGpuToolbar";
+
 WGPUCommandEncoder ensureEncoder();
 bool acquireSwapchain();
+void requestSurfaceResize(int w, int h);
+
+RECT fpsButtonRect(int width) { return RECT{std::max(210, width - 196), 10, std::max(292, width - 106), 42}; }
+RECT debugButtonRect(int width) { return RECT{std::max(306, width - 98), 10, std::max(388, width - 10), 42}; }
+
+void paintToolbar(HWND hwnd) {
+    PAINTSTRUCT ps{};
+    HDC dc = BeginPaint(hwnd, &ps);
+    RECT client{};
+    GetClientRect(hwnd, &client);
+    HDC memory = CreateCompatibleDC(dc);
+    HBITMAP bitmap = CreateCompatibleBitmap(dc, std::max(1L, client.right), std::max(1L, client.bottom));
+    HGDIOBJ oldBitmap = SelectObject(memory, bitmap);
+    HBRUSH background = CreateSolidBrush(RGB(247, 249, 251));
+    FillRect(memory, &client, background);
+    DeleteObject(background);
+    HPEN divider = CreatePen(PS_SOLID, 1, RGB(214, 219, 226));
+    HGDIOBJ oldPen = SelectObject(memory, divider);
+    MoveToEx(memory, 0, client.bottom - 1, nullptr);
+    LineTo(memory, client.right, client.bottom - 1);
+    SelectObject(memory, oldPen);
+    DeleteObject(divider);
+
+    SetBkMode(memory, TRANSPARENT);
+    HFONT titleFont = CreateFontW(-18, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+                                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                 CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+    HGDIOBJ oldFont = SelectObject(memory, titleFont);
+    SetTextColor(memory, RGB(22, 29, 38));
+    RECT titleRect{18, 0, 260, client.bottom};
+    DrawTextW(memory, L"ThreeBrowser Runtime", -1, &titleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    if (g.debugOverlay.load(std::memory_order_relaxed)) {
+        HFONT detailFont = CreateFontW(-14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                      DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                      CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+        SelectObject(memory, detailFont);
+        const int backlog = g.pendingCommandSubmits.load(std::memory_order_relaxed);
+        wchar_t detail[256]{};
+        std::swprintf(detail, std::size(detail), L"%hs  |  %.2f ms GPU  |  queue %d  |  %llu submits",
+                      g.backendName.c_str(), g.statsFrameUs.load(std::memory_order_relaxed) / 1000.0,
+                      backlog, static_cast<unsigned long long>(g.statsCmdSubmits.load(std::memory_order_relaxed)));
+        SetTextColor(memory, RGB(89, 99, 112));
+        RECT detailRect{220, 0, std::max(220L, client.right - 210), client.bottom};
+        DrawTextW(memory, detail, -1, &detailRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        SelectObject(memory, titleFont);
+        DeleteObject(detailFont);
+    }
+
+    auto drawButton = [&](RECT rect, bool active, const wchar_t* text) {
+        HBRUSH fill = CreateSolidBrush(active ? RGB(226, 238, 255) : RGB(255, 255, 255));
+        HPEN border = CreatePen(PS_SOLID, 1, active ? RGB(33, 111, 219) : RGB(194, 201, 210));
+        HGDIOBJ priorBrush = SelectObject(memory, fill);
+        HGDIOBJ priorPen = SelectObject(memory, border);
+        RoundRect(memory, rect.left, rect.top, rect.right, rect.bottom, 8, 8);
+        SelectObject(memory, priorBrush);
+        SelectObject(memory, priorPen);
+        DeleteObject(fill);
+        DeleteObject(border);
+        SetTextColor(memory, active ? RGB(16, 88, 190) : RGB(48, 57, 68));
+        DrawTextW(memory, text, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    };
+    wchar_t fpsText[32] = L"FPS";
+    if (g.fpsOverlay.load(std::memory_order_relaxed)) {
+        std::swprintf(fpsText, std::size(fpsText), L"FPS %d", g.statsFps.load(std::memory_order_relaxed));
+    }
+    drawButton(fpsButtonRect(client.right), g.fpsOverlay.load(std::memory_order_relaxed) != 0, fpsText);
+    drawButton(debugButtonRect(client.right), g.debugOverlay.load(std::memory_order_relaxed) != 0, L"Debug");
+
+    BitBlt(dc, 0, 0, client.right, client.bottom, memory, 0, 0, SRCCOPY);
+    SelectObject(memory, oldFont);
+    SelectObject(memory, oldBitmap);
+    DeleteObject(titleFont);
+    DeleteObject(bitmap);
+    DeleteDC(memory);
+    EndPaint(hwnd, &ps);
+}
+
+LRESULT CALLBACK toolbarWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+        case WM_PAINT:
+            paintToolbar(hwnd);
+            return 0;
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_LBUTTONUP: {
+            RECT client{};
+            GetClientRect(hwnd, &client);
+            POINT point{static_cast<short>(LOWORD(lp)), static_cast<short>(HIWORD(lp))};
+            const RECT fpsRect = fpsButtonRect(client.right);
+            const RECT debugRect = debugButtonRect(client.right);
+            if (PtInRect(&fpsRect, point)) {
+                g.fpsOverlay.store(!g.fpsOverlay.load(std::memory_order_relaxed), std::memory_order_relaxed);
+            } else if (PtInRect(&debugRect, point)) {
+                const bool enabled = !g.debugOverlay.load(std::memory_order_relaxed);
+                g.debugOverlay.store(enabled, std::memory_order_relaxed);
+                g.statsLog.store(enabled, std::memory_order_relaxed);
+            }
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        case WM_TIMER:
+            if (g.fpsOverlay.load(std::memory_order_relaxed) || g.debugOverlay.load(std::memory_order_relaxed)) {
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
+        case WM_MOUSEACTIVATE:
+            return MA_NOACTIVATE;
+        default:
+            return DefWindowProcW(hwnd, msg, wp, lp);
+    }
+}
+
+void layoutToolbar() {
+    if (!g.hwnd || !g.toolbarHwnd) return;
+    RECT client{};
+    GetClientRect(g.hwnd, &client);
+    POINT origin{0, 0};
+    ClientToScreen(g.hwnd, &origin);
+    SetWindowPos(g.toolbarHwnd, HWND_TOP, origin.x, origin.y,
+                 std::max(1L, client.right), kToolbarHeight,
+                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
+}
 
 void setError(const char* message) {
     std::lock_guard<std::mutex> lock(g.errMu);
@@ -172,11 +305,25 @@ void pumpHwnd() {
 LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_CLOSE:
+            if (g.toolbarHwnd) ShowWindow(g.toolbarHwnd, SW_HIDE);
             ShowWindow(hwnd, SW_HIDE);
             g.open.store(0, std::memory_order_relaxed);
             return 0;
         case WM_DESTROY:
             g.open.store(0, std::memory_order_relaxed);
+            return 0;
+        case WM_MOUSEWHEEL:
+            g.wheelDelta.fetch_add(GET_WHEEL_DELTA_WPARAM(wp), std::memory_order_relaxed);
+            return 0;
+        case WM_SIZE:
+            if (wp != SIZE_MINIMIZED) {
+                g.statsW.store(std::max(1, static_cast<int>(LOWORD(lp))), std::memory_order_relaxed);
+                g.statsH.store(std::max(1, static_cast<int>(HIWORD(lp))), std::memory_order_relaxed);
+                layoutToolbar();
+            }
+            return 0;
+        case WM_MOVE:
+            layoutToolbar();
             return 0;
         case WM_ERASEBKGND:
             return 1;
@@ -447,7 +594,7 @@ void applyAttachStyle(HWND child, HWND parent, int x, int y, int width, int heig
     SetWindowLongPtrW(child, GWL_STYLE, style);
     LONG_PTR ex = GetWindowLongPtrW(child, GWL_EXSTYLE);
     ex &= ~(WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_DLGMODALFRAME |
-            WS_EX_STATICEDGE | WS_EX_OVERLAPPEDWINDOW);
+            WS_EX_STATICEDGE | WS_EX_OVERLAPPEDWINDOW | WS_EX_APPWINDOW);
     ex |= WS_EX_NOACTIVATE | WS_EX_TRANSPARENT;
     SetWindowLongPtrW(child, GWL_EXSTYLE, ex);
     if (GetParent(child) != parent) {
@@ -498,10 +645,16 @@ bool createHwnd(HWND parent, int x, int y, int w, int h) {
     // Always create on this worker thread with no parent. Creating WS_CHILD
     // of the UI form while the UI thread is blocked in tw_start() deadlocks
     // (WM_PARENTNOTIFY). Same pattern as GL: start unparented, attach later.
-    DWORD style = WS_POPUP;
-    DWORD ex = WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT;
+    const bool standalone = g.standaloneUi.load(std::memory_order_relaxed) != 0;
+    DWORD style = standalone ? WS_OVERLAPPEDWINDOW : WS_POPUP;
+    DWORD ex = standalone ? WS_EX_APPWINDOW : (WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT);
+    RECT windowRect{0, 0, w, h};
+    AdjustWindowRectEx(&windowRect, style, FALSE, ex);
+    const int windowW = windowRect.right - windowRect.left;
+    const int windowH = windowRect.bottom - windowRect.top;
     g.hwnd = CreateWindowExW(ex, kClassName, L"ThreeBrowser WebGPU", style,
-                             0, 0, w, h, nullptr, nullptr, inst, nullptr);
+                             CW_USEDEFAULT, CW_USEDEFAULT, windowW, windowH,
+                             nullptr, nullptr, inst, nullptr);
     if (!g.hwnd) {
         setError("CreateWindowEx failed");
         return false;
@@ -510,11 +663,44 @@ bool createHwnd(HWND parent, int x, int y, int w, int h) {
     g.parent = nullptr;
     g.nativeHwnd.store(g.hwnd);
     g.open.store(1, std::memory_order_relaxed);
+    if (standalone) {
+        if (!g.toolbarClassRegistered) {
+            WNDCLASSEXW toolbarClass{};
+            toolbarClass.cbSize = sizeof(toolbarClass);
+            toolbarClass.style = CS_HREDRAW | CS_VREDRAW;
+            toolbarClass.lpfnWndProc = toolbarWndProc;
+            toolbarClass.hInstance = inst;
+            toolbarClass.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
+            toolbarClass.lpszClassName = kToolbarClassName;
+            if (RegisterClassExW(&toolbarClass) || GetLastError() == ERROR_CLASS_ALREADY_EXISTS) {
+                g.toolbarClassRegistered = true;
+            }
+        }
+        if (g.toolbarClassRegistered) {
+            g.toolbarHwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                                            kToolbarClassName, L"", WS_POPUP,
+                                            0, 0, w, kToolbarHeight, g.hwnd, nullptr, inst, nullptr);
+            if (g.toolbarHwnd) {
+                SetTimer(g.toolbarHwnd, 1, 250, nullptr);
+                layoutToolbar();
+            }
+        }
+    }
     pumpHwnd();
     if (parent) {
         applyAttachStyle(g.hwnd, parent, x, y, w, h);
     }
     return true;
+}
+
+void setHwndClientSize(HWND hwnd, int width, int height) {
+    if (!hwnd) return;
+    const DWORD style = static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_STYLE));
+    const DWORD ex = static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE));
+    RECT rect{0, 0, std::max(1, width), std::max(1, height)};
+    AdjustWindowRectEx(&rect, style, FALSE, ex);
+    SetWindowPos(hwnd, nullptr, 0, 0, rect.right - rect.left, rect.bottom - rect.top,
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
 bool configureSurface(int w, int h) {
@@ -728,6 +914,11 @@ void destroyHwnd() {
     g.nativeHwnd.store(nullptr);
     g.open.store(0, std::memory_order_relaxed);
     if (g.hwnd) {
+        if (g.toolbarHwnd) {
+            KillTimer(g.toolbarHwnd, 1);
+            DestroyWindow(g.toolbarHwnd);
+            g.toolbarHwnd = nullptr;
+        }
         ShowWindow(g.hwnd, SW_HIDE);
         SetParent(g.hwnd, nullptr);
         DestroyWindow(g.hwnd);
@@ -803,11 +994,13 @@ bool implStart(void* parentHwnd, int x, int y, int w, int h) {
                                                static_cast<DWORD>(sizeof(traceFlag))) > 0;
     g.traceRemaining = g.traceCommands ? 1200 : 0;
     char statsFlag[8]{};
-    g.statsLog = GetEnvironmentVariableA("THREEBROWSER_WGPU_STATS", statsFlag,
-                                         static_cast<DWORD>(sizeof(statsFlag))) > 0;
+    g.statsLog.store(GetEnvironmentVariableA("THREEBROWSER_WGPU_STATS", statsFlag,
+                                             static_cast<DWORD>(sizeof(statsFlag))) > 0,
+                     std::memory_order_relaxed);
     g.lastStatsLog = {};
     g.statsCmdSubmits.store(0, std::memory_order_relaxed);
     g.statsCmdBytes.store(0, std::memory_order_relaxed);
+    g.pendingCommandSubmits.store(0, std::memory_order_relaxed);
     g.statsW.store(w, std::memory_order_relaxed);
     g.statsH.store(h, std::memory_order_relaxed);
     logLine((std::string("runtime started backend=") + g.backendName).c_str());
@@ -875,17 +1068,13 @@ void recordFps(std::chrono::steady_clock::time_point t1, int frameUs) {
         windowFrames = 0;
         windowStart = t1;
     }
-    if (g.statsLog &&
+    if (g.statsLog.load(std::memory_order_relaxed) &&
         (g.lastStatsLog.time_since_epoch().count() == 0 ||
          std::chrono::duration<double>(t1 - g.lastStatsLog).count() >= 1.0)) {
-        size_t backlog = 0;
-        {
-            std::lock_guard<std::mutex> lock(g.mu);
-            backlog = g.jobs.size();
-        }
+        const int backlog = g.pendingCommandSubmits.load(std::memory_order_relaxed);
         char stats[192];
         std::snprintf(stats, sizeof(stats),
-                      "stats native_fps=%d presents=%llu submits=%llu bytes=%llu backlog=%zu",
+                      "stats native_fps=%d presents=%llu submits=%llu bytes=%llu backlog=%d",
                       g.statsFps.load(std::memory_order_relaxed),
                       static_cast<unsigned long long>(g.statsPresents.load(std::memory_order_relaxed)),
                       static_cast<unsigned long long>(g.statsCmdSubmits.load(std::memory_order_relaxed)),
@@ -1276,8 +1465,7 @@ void execOne(uint32_t op, Reader& r) {
             const int w = static_cast<int>(r.u32());
             const int h = static_cast<int>(r.u32());
             if (g.hwnd) {
-                SetWindowPos(g.hwnd, nullptr, 0, 0, std::max(1, w), std::max(1, h),
-                             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+                setHwndClientSize(g.hwnd, w, h);
             }
             // Command streams can split one encoder across several submits.
             // Never invalidate its acquired surface texture mid-encoder.
@@ -2567,8 +2755,7 @@ void tw_set_size(int w, int h) {
         g.statsH.store(h, std::memory_order_relaxed);
         onWorkerAsync([w, h] {
             if (g.hwnd) {
-                SetWindowPos(g.hwnd, nullptr, 0, 0, w, h,
-                             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+                setHwndClientSize(g.hwnd, w, h);
             }
             requestSurfaceResize(w, h);
         });
@@ -2592,6 +2779,22 @@ void tw_set_vsync(int on) {
 
 void* tw_hwnd(void) {
     return g.nativeHwnd.load();
+}
+
+void tw_set_standalone_ui(int on) {
+    g.standaloneUi.store(on != 0 ? 1 : 0, std::memory_order_relaxed);
+}
+
+int tw_take_wheel_delta(void) {
+    return g.wheelDelta.exchange(0, std::memory_order_acq_rel);
+}
+
+int tw_backlog(void) {
+    return g.pendingCommandSubmits.load(std::memory_order_relaxed);
+}
+
+int tw_content_offset_y(void) {
+    return g.toolbarHwnd ? kToolbarHeight : 0;
 }
 
 void tw_stats(int* fps, int* frame_us, int* width, int* height, int* vsync, uint64_t* presents) {
@@ -2671,14 +2874,22 @@ int tw_cmd_submit(const uint8_t* data, int nbytes) {
                 return 0;
             }
             const uint64_t generation = g.commandGeneration.load(std::memory_order_relaxed);
+            g.pendingCommandSubmits.fetch_add(1, std::memory_order_relaxed);
             g.jobs.emplace_back([buf = std::move(copy), submitIndex, generation] {
                 if (generation != g.commandGeneration.load(std::memory_order_relaxed)) {
+                    g.pendingCommandSubmits.fetch_sub(1, std::memory_order_relaxed);
                     return;
                 }
-                if (submitIndex == 0) {
-                    logLine("native WebGPU command stream received");
+                try {
+                    if (submitIndex == 0) {
+                        logLine("native WebGPU command stream received");
+                    }
+                    execStream(buf.data(), static_cast<int>(buf.size()));
+                } catch (...) {
+                    g.pendingCommandSubmits.fetch_sub(1, std::memory_order_relaxed);
+                    throw;
                 }
-                execStream(buf.data(), static_cast<int>(buf.size()));
+                g.pendingCommandSubmits.fetch_sub(1, std::memory_order_relaxed);
             });
         }
         g.cv.notify_one();
