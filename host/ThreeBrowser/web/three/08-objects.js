@@ -173,8 +173,42 @@
     }
   }
 
+  function upgradeLegacyGeometry(geo) {
+    if (geo?.attributes?.position || !Array.isArray(geo?.vertices) || !Array.isArray(geo?.faces)) return geo;
+    const positions = [];
+    const normals = [];
+    const uvs = [];
+    const faceUvs = geo.faceVertexUvs?.[0] || [];
+    for (let faceIndex = 0; faceIndex < geo.faces.length; faceIndex++) {
+      const face = geo.faces[faceIndex];
+      if (!face) continue;
+      const indices = [face.a, face.b, face.c];
+      const vertexNormals = face.vertexNormals || [];
+      const uv = faceUvs[faceIndex] || [];
+      for (let corner = 0; corner < 3; corner++) {
+        const vertex = geo.vertices[indices[corner]];
+        if (!vertex) continue;
+        positions.push(vertex.x || 0, vertex.y || 0, vertex.z || 0);
+        const normal = vertexNormals[corner] || face.normal;
+        normals.push(normal?.x || 0, normal?.y || 0, normal?.z || 0);
+        const texcoord = uv[corner];
+        uvs.push(texcoord?.x || 0, texcoord?.y || 0);
+      }
+    }
+    if (!positions.length) return geo;
+    const Attribute = TN.BufferAttribute;
+    geo.attributes = {
+      position: Attribute ? new Attribute(new Float32Array(positions), 3) : { array: new Float32Array(positions), itemSize: 3 },
+      normal: Attribute ? new Attribute(new Float32Array(normals), 3) : { array: new Float32Array(normals), itemSize: 3 },
+      uv: Attribute ? new Attribute(new Float32Array(uvs), 2) : { array: new Float32Array(uvs), itemSize: 2 },
+    };
+    geo.index = null;
+    return geo;
+  }
+
   function ensureNativeGeometry(geo) {
     if (!geo) return 0;
+    upgradeLegacyGeometry(geo);
     if (!geo._h && geo._nativeId) geo._h = geo._nativeId;
     const pos = geo.attributes?.position;
     if (!pos) return geo._h || 0;

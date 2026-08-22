@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { relinkViteChunk } from "./vite-relinker.mjs";
+import { relinkLegacyThreeBundle, relinkViteChunk } from "./vite-relinker.mjs";
 
 const [address, destinationArgument, ...flags] = process.argv.slice(2);
 if (!address) {
@@ -463,7 +463,8 @@ for (const record of successful) {
     // native boundary for WebGPU projects.
     if (moduleLike(record.url, record.contentType, record.hint) &&
         hasThreeRuntimeCode && hasWebGlRenderer && !hasWebGpuRenderer) {
-      const relinked = relinkViteChunk(output, record.localPath);
+      let relinked = relinkViteChunk(output, record.localPath);
+      if (!relinked.changed) relinked = relinkLegacyThreeBundle(output, record.localPath);
       if (relinked.changed) {
         output = relinked.source;
         relinkedFiles.push({

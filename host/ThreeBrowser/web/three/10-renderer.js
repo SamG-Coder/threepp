@@ -489,11 +489,17 @@
     }
 
     getClearColor(target) {
-      if (target && typeof target.set === "function" && typeof this._clearColor === "number") {
+      if (!target && TN.Color) target = new TN.Color();
+      if (target && typeof target.copy === "function" && this._clearColor?.isColor) {
+        target.copy(this._clearColor);
+        return target;
+      }
+      if (target && typeof target.set === "function") {
         target.set(this._clearColor);
         return target;
       }
-      return this._clearColor;
+      const value = typeof this._clearColor === "number" ? this._clearColor : 0;
+      return { getHex: () => value };
     }
 
     getClearAlpha() {

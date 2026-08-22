@@ -32,7 +32,16 @@ const nativeTypes = new Map([
   ["isBufferGeometry", "BufferGeometry"],
   ["isMaterial", "Material"],
   ["isMeshBasicMaterial", "MeshBasicMaterial"],
+  ["isMeshLambertMaterial", "MeshLambertMaterial"],
+  ["isMeshPhongMaterial", "MeshPhongMaterial"],
+  ["isMeshToonMaterial", "MeshToonMaterial"],
   ["isMeshStandardMaterial", "MeshStandardMaterial"],
+  ["isMeshPhysicalMaterial", "MeshPhysicalMaterial"],
+  ["isMeshNormalMaterial", "MeshNormalMaterial"],
+  ["isPointsMaterial", "PointsMaterial"],
+  ["isLineBasicMaterial", "LineBasicMaterial"],
+  ["isLineDashedMaterial", "LineDashedMaterial"],
+  ["isSpriteMaterial", "SpriteMaterial"],
   ["isShaderMaterial", "ShaderMaterial"],
   ["isRawShaderMaterial", "RawShaderMaterial"],
   ["isMeshDepthMaterial", "MeshDepthMaterial"],
@@ -45,13 +54,24 @@ const nativeTypes = new Map([
   ["isDepthTexture", "DepthTexture"],
   ["isCubeTexture", "CubeTexture"],
   ["isMesh", "Mesh"],
+  ["isLine", "Line"],
+  ["isLineSegments", "LineSegments"],
+  ["isPoints", "Points"],
+  ["isSprite", "Sprite"],
+  ["isBone", "Bone"],
+  ["isSkinnedMesh", "SkinnedMesh"],
   ["isLight", "Light"],
   ["isAmbientLight", "AmbientLight"],
   ["isDirectionalLight", "DirectionalLight"],
+  ["isHemisphereLight", "HemisphereLight"],
+  ["isPointLight", "PointLight"],
+  ["isSpotLight", "SpotLight"],
+  ["isRectAreaLight", "RectAreaLight"],
   ["isWebGLRenderTarget", "WebGLRenderTarget"],
   ["isWebGLCubeRenderTarget", "WebGLCubeRenderTarget"],
   ["isWebGLRenderer", "WebGLRenderer"],
 ]);
+const nativeTypeNames = new Set(nativeTypes.values());
 
 function semanticMarker(node) {
   const truthy = node.right?.type === "Literal" && node.right.value === true ||
@@ -140,6 +160,70 @@ export function relinkViteChunk(source, filename = "chunk.mjs") {
     changed: true,
     renderers: replacements.filter(replacement => replacement.nativeType === "WebGLRenderer").map(replacement => replacement.binding),
     types: [...new Set(replacements.map(replacement => replacement.nativeType))],
+    filename,
+  };
+}
+
+// Pre-module Three.js distributions use a UMD factory that fills an exports
+// object near the end of the bundle (for example `l.Scene=jb`).  Rebinding
+// those local constructor variables immediately before the export block lets
+// the rest of the legacy bundle keep its controls/loaders/passes while all
+// scene objects crossing the renderer boundary are created by the native
+// facade.  No website-specific identifiers are assumed here.
+export function relinkLegacyThreeBundle(source, filename = "bundle.js") {
+  if (!source.includes("WebGLRenderer") || source.includes("__TB_relinkLegacy")) {
+    return { source, changed: false, renderers: [], types: [] };
+  }
+
+  let ast;
+  try {
+    ast = parse(source, { ecmaVersion: "latest", sourceType: "script", allowHashBang: true });
+  } catch {
+    return { source, changed: false, renderers: [], types: [] };
+  }
+
+  const groups = new Map();
+  ancestor(ast, {
+    AssignmentExpression(node) {
+      if (node.operator !== "=" || node.left?.type !== "MemberExpression" ||
+          node.left.object?.type !== "Identifier" || node.right?.type !== "Identifier") return;
+      const type = node.left.computed ? node.left.property?.value : node.left.property?.name;
+      if (!nativeTypeNames.has(type)) return;
+      const name = node.left.object.name;
+      const group = groups.get(name) || new Map();
+      group.set(type, { binding: node.right.name, start: node.start });
+      groups.set(name, group);
+    },
+  });
+
+  const candidates = [...groups.entries()]
+    .filter(([, assignments]) => assignments.has("WebGLRenderer"))
+    .sort((left, right) => right[1].size - left[1].size);
+  if (!candidates.length) return { source, changed: false, renderers: [], types: [] };
+
+  const [, assignments] = candidates[0];
+  const selected = new Map();
+  for (const [type, assignment] of assignments) {
+    if (!selected.has(assignment.binding)) selected.set(assignment.binding, { type, ...assignment });
+  }
+  const values = [...selected.values()];
+  const insertion = Math.min(...values.map(value => value.start));
+  const bridge = [
+    "function __TB_relinkLegacy(type,Original){",
+    "const Native=globalThis.__threeBrowserNativeThree?.[type];if(!Native||!Original)return Native||Original;",
+    "function Relinked(...args){const instance=Reflect.construct(Native,args);Object.defineProperties(this,Object.getOwnPropertyDescriptors(instance));}",
+    "Object.setPrototypeOf(Relinked,Native);Relinked.prototype=Object.create(Native.prototype);Object.defineProperty(Relinked.prototype,\"constructor\",{value:Relinked,writable:true,configurable:true});",
+    "for(const key of Reflect.ownKeys(Original.prototype||{})){if(key!==\"constructor\"&&!(key in Relinked.prototype))Object.defineProperty(Relinked.prototype,key,Object.getOwnPropertyDescriptor(Original.prototype,key));}",
+    "for(const key of Reflect.ownKeys(Original)){if(![\"length\",\"name\",\"prototype\"].includes(key)&&!(key in Relinked))Object.defineProperty(Relinked,key,Object.getOwnPropertyDescriptor(Original,key));}",
+    "return Relinked;}",
+    ...values.map(({ binding, type }) => `${binding}=__TB_relinkLegacy(${JSON.stringify(type)},${binding});`),
+    "",
+  ].join("\n");
+  return {
+    source: `${source.slice(0, insertion)}${bridge}${source.slice(insertion)}`,
+    changed: true,
+    renderers: [assignments.get("WebGLRenderer").binding],
+    types: [...new Set(values.map(value => value.type))],
     filename,
   };
 }

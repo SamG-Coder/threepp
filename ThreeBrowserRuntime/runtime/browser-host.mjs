@@ -71,6 +71,7 @@ class Element extends BrowserEventTarget {
       setProperty(name, value) { this[name] = String(value); },
       getPropertyValue(name) { return this[name] ?? ""; },
       removeProperty(name) { const value = this[name] ?? ""; delete this[name]; return value; },
+      removeAttribute(name) { const value = this[name] ?? ""; delete this[name]; return value; },
     };
     this.dataset = {};
     this._attributes = new Map();
@@ -1023,7 +1024,21 @@ globalThis.fetch = async (input, init) => {
   const method = String(init?.method || (input instanceof Request ? input.method : "GET")).toUpperCase();
   if (process.env.THREEBROWSER_TRACE_FETCH) console.error(`ThreeBrowser fetch: ${resolved.href}`);
   if (resolved.protocol !== "file:") {
-    const response = await platformFetch(resolved, init);
+    let response = await platformFetch(resolved, init);
+    // Older demos are often moved beneath a new deployment subdirectory
+    // without updating `../asset` references embedded in their minified JS.
+    // A browser then gets a root-level 404 even though the asset sits beside
+    // the imported page. Retry only that failed parent-relative shape against
+    // the page directory; successful, intentional URLs keep normal semantics.
+    if (!response.ok && pulledSourceURL && !/^(?:[a-z][a-z\d+.-]*:|\/\/|\/)/i.test(raw) &&
+        resolved.origin === pulledSourceURL.origin) {
+      const pageRelative = new URL(raw.replace(/^(?:(?:\.\.?\/)+)/, ""), pulledSourceURL);
+      if (pageRelative.href !== resolved.href) {
+        if (process.env.THREEBROWSER_TRACE_FETCH) console.error(`ThreeBrowser fetch fallback: ${pageRelative.href}`);
+        const fallback = await platformFetch(pageRelative, init);
+        if (fallback.ok) response = fallback;
+      }
+    }
     if (isVirtual && response.ok && method === "GET" && pulledDirectory) {
       const relative = decodeURIComponent(requestURL.pathname).replace(/^\/+/, "").replaceAll("/", path.sep);
       const cachePath = path.resolve(pulledDirectory, relative);
@@ -1071,6 +1086,113 @@ globalThis.fetch = async (input, init) => {
     throw error;
   }
 };
+
+class XMLHttpRequestHost extends BrowserEventTarget {
+  static UNSENT = 0;
+  static OPENED = 1;
+  static HEADERS_RECEIVED = 2;
+  static LOADING = 3;
+  static DONE = 4;
+  constructor() {
+    super();
+    this.readyState = 0;
+    this.status = 0;
+    this.statusText = "";
+    this.responseType = "";
+    this.response = null;
+    this.responseText = "";
+    this.responseURL = "";
+    this.timeout = 0;
+    this.withCredentials = false;
+    this.upload = new BrowserEventTarget();
+    this._headers = new Headers();
+    this._responseHeaders = new Headers();
+    this._method = "GET";
+    this._url = "";
+    this._async = true;
+    this._aborted = false;
+  }
+  _emit(type, properties = {}) {
+    const event = eventWith(type, properties);
+    this.dispatchEvent(event);
+    this[`on${type}`]?.call(this, event);
+  }
+  _setReadyState(value) {
+    this.readyState = value;
+    this._emit("readystatechange");
+  }
+  open(method, url, async = true) {
+    if (async === false) throw new Error("Synchronous XMLHttpRequest is not supported by the native runtime.");
+    this._method = String(method || "GET").toUpperCase();
+    this._url = String(url);
+    this._async = true;
+    this._aborted = false;
+    this._setReadyState(XMLHttpRequestHost.OPENED);
+  }
+  setRequestHeader(name, value) { this._headers.append(String(name), String(value)); }
+  overrideMimeType(value) { this._mimeType = String(value); }
+  getResponseHeader(name) { return this._responseHeaders.get(String(name)); }
+  getAllResponseHeaders() {
+    return [...this._responseHeaders].map(([name, value]) => `${name}: ${value}\r\n`).join("");
+  }
+  abort() {
+    this._aborted = true;
+    this._controller?.abort();
+    this.status = 0;
+    this._setReadyState(XMLHttpRequestHost.UNSENT);
+    this._emit("abort");
+    this._emit("loadend");
+  }
+  async send(body = null) {
+    if (this.readyState !== XMLHttpRequestHost.OPENED) throw new Error("XMLHttpRequest.open() must be called before send().");
+    this._controller = new AbortController();
+    this._emit("loadstart");
+    let timer = null;
+    if (this.timeout > 0) timer = setTimeout(() => this._controller.abort("timeout"), this.timeout);
+    try {
+      const response = await globalThis.fetch(this._url, {
+        method: this._method,
+        headers: this._headers,
+        body: new Set(["GET", "HEAD"]).has(this._method) ? undefined : body,
+        signal: this._controller.signal,
+      });
+      if (this._aborted) return;
+      this.status = response.status;
+      this.statusText = response.statusText;
+      this.responseURL = response.url || new URL(this._url, globalThis.location?.href).href;
+      this._responseHeaders = new Headers(response.headers);
+      this._setReadyState(XMLHttpRequestHost.HEADERS_RECEIVED);
+      const bytes = await response.arrayBuffer();
+      if (this._aborted) return;
+      this._setReadyState(XMLHttpRequestHost.LOADING);
+      this._emit("progress", { lengthComputable: true, loaded: bytes.byteLength, total: bytes.byteLength });
+      const text = new TextDecoder().decode(bytes);
+      this.responseText = text;
+      switch (this.responseType) {
+        case "arraybuffer": this.response = bytes; break;
+        case "blob": this.response = new Blob([bytes], { type: this._mimeType || response.headers.get("content-type") || "" }); break;
+        case "json": this.response = text ? JSON.parse(text) : null; break;
+        default: this.response = text; break;
+      }
+      this._setReadyState(XMLHttpRequestHost.DONE);
+      this._emit("load");
+      this._emit("loadend");
+    } catch (error) {
+      if (this._aborted) return;
+      this.status = 0;
+      this._setReadyState(XMLHttpRequestHost.DONE);
+      if (this._controller.signal.reason === "timeout") this._emit("timeout", { error });
+      else this._emit("error", { error, message: error?.message || String(error) });
+      this._emit("loadend");
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+}
+for (const [name, value] of Object.entries({ UNSENT: 0, OPENED: 1, HEADERS_RECEIVED: 2, LOADING: 3, DONE: 4 })) {
+  XMLHttpRequestHost.prototype[name] = value;
+}
+globalThis.XMLHttpRequest = XMLHttpRequestHost;
 
 const windowEvents = new BrowserEventTarget();
 globalThis.addEventListener = windowEvents.addEventListener.bind(windowEvents);
@@ -1420,6 +1542,9 @@ export function loadThreeShim(directory = path.join(here, "three")) {
   const files = fs.readdirSync(directory).filter(name => /^\d\d-.*\.js$/.test(name)).sort();
   if (!files.length) throw new Error(`No ThreeBrowser shim slices found in ${directory}`);
   for (const file of files) vm.runInThisContext(fs.readFileSync(path.join(directory, file), "utf8"), { filename: file });
+  const snapshot = Object.create(null);
+  Object.defineProperties(snapshot, Object.getOwnPropertyDescriptors(globalThis.THREE));
+  globalThis.__threeBrowserNativeThree = snapshot;
   return globalThis.THREE;
 }
 
