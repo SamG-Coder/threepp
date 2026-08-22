@@ -429,6 +429,58 @@ napi_value backendName(napi_env env, napi_callback_info) {
     return string(env, runtimeMode.load(std::memory_order_acquire) == 2 ? tw_backend_name() : tn_backend_name());
 }
 
+napi_value gpuCapabilities(napi_env env, napi_callback_info) {
+    TWGpuCapabilities capabilities{};
+    capabilities.struct_size = sizeof(capabilities);
+    napi_value object{};
+    napi_create_object(env, &object);
+    if (runtimeMode.load(std::memory_order_acquire) != 2 ||
+        !tw_gpu_capabilities(&capabilities)) return object;
+    auto setNumber = [&](const char* name, double value) {
+        napi_value property{};
+        napi_create_double(env, value, &property);
+        napi_set_named_property(env, object, name, property);
+    };
+    auto setBool = [&](const char* name, bool value) {
+        napi_value property{};
+        napi_get_boolean(env, value, &property);
+        napi_set_named_property(env, object, name, property);
+    };
+    auto setString = [&](const char* name, const char* value) {
+        napi_value property{};
+        napi_create_string_utf8(env, value ? value : "", NAPI_AUTO_LENGTH, &property);
+        napi_set_named_property(env, object, name, property);
+    };
+    setNumber("vendorId", capabilities.vendor_id);
+    setNumber("deviceId", capabilities.device_id);
+    setBool("rtx", capabilities.is_rtx != 0);
+    setBool("streamlinePresent", capabilities.streamline_present != 0);
+    setBool("streamlineInitialized", capabilities.streamline_initialized != 0);
+    setBool("vulkanAttached", capabilities.vulkan_attached != 0);
+    setBool("dlssSuperResolution", capabilities.dlss_super_resolution != 0);
+    setBool("dlssFrameGeneration", capabilities.dlss_frame_generation != 0);
+    setBool("dlssRayReconstruction", capabilities.dlss_ray_reconstruction != 0);
+    setBool("reflex", capabilities.reflex != 0);
+    setString("adapterName", capabilities.adapter_name);
+    setString("status", capabilities.status);
+    return object;
+}
+
+napi_value setReflexMode(napi_env env, napi_callback_info info) {
+    napi_value argv[1]{};
+    std::size_t argc = 1;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    const int mode = argc > 0 ? static_cast<int>(argNumber(env, argv[0], 1)) : 1;
+    return boolean(env, runtimeMode.load(std::memory_order_acquire) == 2 &&
+                            tw_set_reflex_mode(mode) != 0);
+}
+
+napi_value reflexMode(napi_env env, napi_callback_info) {
+    return number(env, runtimeMode.load(std::memory_order_acquire) == 2
+                           ? tw_reflex_mode()
+                           : 0);
+}
+
 napi_value lastError(napi_env env, napi_callback_info) {
     return string(env, runtimeMode.load(std::memory_order_acquire) == 2 ? tw_last_error() : tn_last_error());
 }
@@ -934,6 +986,9 @@ napi_value init(napi_env env, napi_value exports) {
         {"overlayPointerMove", nullptr, overlayPointerMove, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"overlayWheel", nullptr, overlayWheel, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"toggleFpsOverlay", nullptr, toggleFpsOverlay, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"gpuCapabilities", nullptr, gpuCapabilities, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setReflexMode", nullptr, setReflexMode, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"reflexMode", nullptr, reflexMode, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, std::size(properties), properties);
     return exports;

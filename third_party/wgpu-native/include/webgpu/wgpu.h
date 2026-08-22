@@ -1511,6 +1511,20 @@ extern "C"
      * Ownership is retained by wgpu-native; callers must not release or destroy it.
      * Returns NULL when the active backend is not Metal or when the handle is unavailable.
      */
+    typedef struct WGPUVulkanContextInfo {
+        void *instance;
+        void *physicalDevice;
+        void *device;
+        void *queue;
+        uint32_t queueFamilyIndex;
+        uint32_t queueIndex;
+    } WGPUVulkanContextInfo;
+
+    typedef void (*WGPUVulkanCommandBufferCallback)(void *commandBuffer, void *userdata);
+
+    WGPUStatus wgpuDeviceGetNativeVulkanContext(WGPUDevice device, WGPUVulkanContextInfo *info);
+    WGPUStatus wgpuCommandEncoderWithNativeVulkanCommandBuffer(WGPUCommandEncoder commandEncoder, WGPUVulkanCommandBufferCallback callback, void *userdata);
+    void *wgpuTextureGetNativeVulkanImage(WGPUTexture texture);
     void *wgpuDeviceGetNativeMetalDevice(WGPUDevice device);
 
     /**

@@ -61,8 +61,10 @@ endif ()
 # Sibling WebGPU present DLL. Independent of three_native / threepp GL.
 if (WIN32)
     include("${CMAKE_SOURCE_DIR}/cmake/FetchWebGPU.cmake")
+    include("${CMAKE_SOURCE_DIR}/cmake/FetchStreamline.cmake")
     add_library(three_webgpu SHARED
             webgpu/three_webgpu.cpp
+            webgpu/streamline_bridge.cpp
     )
     target_include_directories(three_webgpu PUBLIC
             "${CMAKE_CURRENT_SOURCE_DIR}/webgpu"
@@ -73,6 +75,13 @@ if (WIN32)
         target_include_directories(three_webgpu PRIVATE "${WGPU_INCLUDE_DIR2}")
     endif ()
     target_compile_definitions(three_webgpu PRIVATE THREE_WEBGPU_EXPORT WGPU_SHARED_LIBRARY)
+    if (THREEBROWSER_ENABLE_STREAMLINE)
+        find_package(Vulkan REQUIRED)
+        target_compile_definitions(three_webgpu PRIVATE THREEBROWSER_STREAMLINE=1)
+        target_include_directories(three_webgpu PRIVATE
+            "${STREAMLINE_INCLUDE_DIR}"
+            "${Vulkan_INCLUDE_DIRS}")
+    endif ()
     target_link_libraries(three_webgpu PRIVATE "${WGPU_NATIVE_LIB}" user32 gdi32)
     target_link_libraries(three_native PRIVATE three_webgpu)
     set_target_properties(three_webgpu PROPERTIES
@@ -88,6 +97,16 @@ if (WIN32)
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${WGPU_NATIVE_DLL}" "$<TARGET_FILE_DIR:three_webgpu>/wgpu_native.dll"
             COMMENT "Copy wgpu_native.dll next to three_webgpu.dll")
+    if (THREEBROWSER_ENABLE_STREAMLINE)
+        foreach (_sl_runtime
+                sl.interposer.dll sl.common.dll sl.dlss.dll sl.dlss_g.dll sl.dlss_d.dll
+                sl.reflex.dll sl.pcl.dll NvLowLatencyVk.dll nvngx_dlss.dll nvngx_dlssg.dll
+                nvngx_dlssd.dll)
+            add_custom_command(TARGET three_webgpu POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${STREAMLINE_BIN_DIR}/${_sl_runtime}" "$<TARGET_FILE_DIR:three_webgpu>/${_sl_runtime}")
+        endforeach ()
+    endif ()
 
     add_executable(three_webgpu_smoke webgpu/three_webgpu_smoke.cpp)
     target_include_directories(three_webgpu_smoke PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/webgpu")

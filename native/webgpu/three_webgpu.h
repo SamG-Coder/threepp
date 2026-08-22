@@ -40,6 +40,22 @@ typedef struct TWInputEvent {
     int modifiers;
 } TWInputEvent;
 
+typedef struct TWGpuCapabilities {
+    uint32_t struct_size;
+    uint32_t vendor_id;
+    uint32_t device_id;
+    int is_rtx;
+    int streamline_present;
+    int streamline_initialized;
+    int vulkan_attached;
+    int dlss_super_resolution;
+    int dlss_frame_generation;
+    int dlss_ray_reconstruction;
+    int reflex;
+    char adapter_name[128];
+    char status[256];
+} TWGpuCapabilities;
+
 TW_API int tw_start(void* parent_hwnd, int x, int y, int w, int h);
 TW_API void tw_set_standalone_ui(int on);
 TW_API int tw_attach_host(void* parent_hwnd, int x, int y, int w, int h);
@@ -76,6 +92,9 @@ TW_API void tw_shutdown(void);
 TW_API void tw_reset(void);
 TW_API const char* tw_last_error(void);
 TW_API const char* tw_backend_name(void);
+TW_API int tw_gpu_capabilities(TWGpuCapabilities* capabilities);
+TW_API int tw_set_reflex_mode(int mode);
+TW_API int tw_reflex_mode(void);
 TW_API int tw_cmd_submit(const uint8_t* data, int nbytes);
 TW_API int tw_map_read(uint32_t buffer_handle, uint64_t offset, uint64_t size, void* dst, int dst_bytes);
 

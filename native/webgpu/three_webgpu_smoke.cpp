@@ -84,6 +84,27 @@ int main() {
         ShowWindow(static_cast<HWND>(hwnd), SW_SHOWNOACTIVATE);
     }
     std::cout << "backend=" << tw_backend_name() << '\n';
+    TWGpuCapabilities gpuCapabilities{};
+    gpuCapabilities.struct_size = sizeof(gpuCapabilities);
+    if (!tw_gpu_capabilities(&gpuCapabilities) || gpuCapabilities.adapter_name[0] == '\0') {
+        std::cerr << "GPU capability query failed\n";
+        tw_shutdown();
+        return 13;
+    }
+    if (std::string(tw_backend_name()) == "Vulkan" && gpuCapabilities.streamline_present &&
+        !gpuCapabilities.vulkan_attached) {
+        std::cerr << "Streamline did not attach to the native Vulkan device: "
+                  << gpuCapabilities.status << '\n';
+        tw_shutdown();
+        return 14;
+    }
+    std::cout << "gpu=" << gpuCapabilities.adapter_name
+              << " rtx=" << gpuCapabilities.is_rtx
+              << " dlss=" << gpuCapabilities.dlss_super_resolution
+              << " framegen=" << gpuCapabilities.dlss_frame_generation
+              << " rayreconstruction=" << gpuCapabilities.dlss_ray_reconstruction
+              << " reflex=" << gpuCapabilities.reflex
+              << " status=\"" << gpuCapabilities.status << "\"\n";
 
     if (testExclusiveFullscreen) {
         DEVMODEW mode{};
@@ -248,7 +269,7 @@ int main() {
     int overlayWidth = 0;
     int overlayHeight = 0;
     tw_overlay_bounds(3840, 2160, &overlayLeft, &overlayTop, &overlayWidth, &overlayHeight);
-    if (overlayWidth > 620 || overlayHeight > 430 || overlayWidth < 1 || overlayHeight < 1) {
+    if (overlayWidth > 680 || overlayHeight > 680 || overlayWidth < 1 || overlayHeight < 1) {
         std::cerr << "menu overlay was not bounded to its resident panel texture\n";
         tw_shutdown();
         return 9;
@@ -285,6 +306,14 @@ int main() {
         std::cerr << "static menu overlay rebuilt for changing diagnostics\n";
         tw_shutdown();
         return 10;
+    }
+    tw_overlay_wheel(-120);
+    tw_overlay_raster(3840, 2160, 120, 8000, tw_backend_name(), 0, presents,
+                      &overlayRowBytes);
+    if (tw_overlay_revision() == menuRevision) {
+        std::cerr << "pixel scrolling did not invalidate the menu overlay\n";
+        tw_shutdown();
+        return 12;
     }
     tw_set_overlay(0);
     tw_shutdown();

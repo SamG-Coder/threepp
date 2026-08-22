@@ -97,6 +97,15 @@ coverage, but their React or HTML control panels are still headless. Source maps
 and builds that preserve `three` imports remain preferable because they retain
 more module structure and allow stronger tree-shaking.
 
+On Windows/Vulkan builds, the runtime integrates NVIDIA Streamline 2.12 through
+the signed Vulkan interposer. The Shift+Tab panel reports DLSS Super Resolution,
+Frame Generation, Ray Reconstruction and Reflex independently for the active
+adapter. Reflex is integrated end-to-end (frame pacing plus PCL simulation,
+render-submit and present markers) and offers Off, On and On + Boost modes.
+DLSS rendering features are exposed only when the adapter and Streamline plugin
+support them; a page must still provide the feature's semantic inputs (for
+example depth and motion vectors) before evaluation can be enabled safely.
+
 Framework effects may create their renderer after module evaluation, so the
 runtime keeps the browser event loop alive during a bounded startup window.
 Because the native host deliberately has no CSS layout engine, unmeasured DOM

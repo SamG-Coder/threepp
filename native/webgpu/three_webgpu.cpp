@@ -1,5 +1,6 @@
 #include "three_webgpu.h"
 #include "cmd_ops_webgpu.hpp"
+#include "streamline_bridge.h"
 
 #ifndef WGPU_SHARED_LIBRARY
 #define WGPU_SHARED_LIBRARY
@@ -43,6 +44,12 @@ WGPUStringView twSv(const char* s) {
     v.data = s;
     v.length = s ? WGPU_STRLEN : 0;
     return v;
+}
+
+std::string fromWgpuString(WGPUStringView value) {
+    if (!value.data) return {};
+    const size_t length = value.length == WGPU_STRLEN ? std::strlen(value.data) : value.length;
+    return std::string(value.data, length);
 }
 
 void logLine(const char* message) {
@@ -135,6 +142,7 @@ struct Runtime {
     std::atomic<int> debugOverlay{0};
     std::atomic<int> overlayOpen{0};
     std::atomic<int> overlayDirty{1};
+    std::atomic<int> overlayScrollPx{0};
     std::atomic<uint64_t> overlayRevision{0};
     std::atomic<void*> overlayWindow{nullptr};
     std::atomic<int> fullscreenState{0};
@@ -186,6 +194,12 @@ struct Runtime {
     WGPUTextureFormat overlayDepthFormat{WGPUTextureFormat_Undefined};
     int overlayRenderedFps{-1};
     std::vector<uint8_t> overlayPixels;
+
+    uint32_t gpuVendorId{0};
+    uint32_t gpuDeviceId{0};
+    std::string gpuDeviceName;
+    bool streamlineSimulationEnded{false};
+    bool rtxAdapter{false};
 
     WGPUInstance instance{};
     WGPUAdapter adapter{};
@@ -1314,6 +1328,13 @@ bool requestAdapterAndDevice() {
     WGPUAdapterInfo info{};
     if (wgpuAdapterGetInfo(g.adapter, &info) == WGPUStatus_Success) {
         g.backendType = info.backendType;
+        g.gpuVendorId = info.vendorID;
+        g.gpuDeviceId = info.deviceID;
+        g.gpuDeviceName = fromWgpuString(info.device);
+        std::string adapterNameLower = g.gpuDeviceName;
+        std::transform(adapterNameLower.begin(), adapterNameLower.end(), adapterNameLower.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        g.rtxAdapter = info.vendorID == 0x10de && adapterNameLower.find("rtx") != std::string::npos;
         switch (info.backendType) {
             case WGPUBackendType_Vulkan:
                 g.backendName = "Vulkan";
@@ -1408,6 +1429,25 @@ bool requestAdapterAndDevice() {
         setError("no WebGPU queue");
         return false;
     }
+    if (g.backendType == WGPUBackendType_Vulkan) {
+        WGPUVulkanContextInfo nativeContext{};
+        const WGPUStatus nativeStatus = wgpuDeviceGetNativeVulkanContext(g.device, &nativeContext);
+        if (nativeStatus == WGPUStatus_Success) {
+            if (streamlineAttachVulkan(StreamlineVulkanContext{
+                nativeContext.instance,
+                nativeContext.physicalDevice,
+                nativeContext.device,
+                nativeContext.queue,
+                nativeContext.queueFamilyIndex,
+                nativeContext.queueIndex,
+            })) {
+                streamlineFrameBegin(0);
+                g.streamlineSimulationEnded = false;
+            }
+        } else {
+            logLine("wgpu-native did not expose its Vulkan device context");
+        }
+    }
 
     WGPUSurfaceCapabilities caps{};
     wgpuSurfaceGetCapabilities(g.surface, g.adapter, &caps);
@@ -1445,21 +1485,30 @@ bool requestAdapterAndDevice() {
 struct OverlayLayout {
     int margin{};
     bool wide{};
+    int maxScroll{};
     RECT performance{};
     RECT settings{};
     RECT input{};
+    RECT bodyClip{};
+    RECT scrollTrack{};
+    RECT scrollThumb{};
     RECT resolutionButton{};
     RECT windowedButton{};
     RECT borderlessButton{};
     RECT fullscreenButton{};
     RECT fpsButton{};
     RECT debugButton{};
+    RECT dlssStatus{};
+    RECT dlssSuperResolutionButton{};
+    RECT dlssFrameGenerationButton{};
+    RECT dlssRayReconstructionButton{};
+    RECT reflexButton{};
 };
 
 OverlayLayout overlayLayout(int width, int height) {
     OverlayLayout layout{};
-    const int panelWidth = std::min(620, std::max(340, width - 40));
-    const int panelHeight = std::min(430, std::max(360, height - 40));
+    const int panelWidth = std::min(680, std::max(340, width - 40));
+    const int panelHeight = std::min(680, std::max(360, height - 40));
     const int left = std::max(20, (width - panelWidth) / 2);
     const int top = std::max(20, (height - panelHeight) / 2);
     layout.margin = left;
@@ -1467,17 +1516,44 @@ OverlayLayout overlayLayout(int width, int height) {
     layout.performance = RECT{left, top, left + panelWidth, top + panelHeight};
     layout.settings = layout.performance;
     layout.input = layout.performance;
-    layout.resolutionButton = RECT{left + 24, top + 176, left + panelWidth - 24, top + 224};
+    layout.bodyClip = RECT{left + 1, top + 96, left + panelWidth - 12, top + panelHeight - 20};
+    constexpr int contentHeight = 664;
+    const int bodyHeight = std::max(1L, layout.bodyClip.bottom - layout.bodyClip.top);
+    layout.maxScroll = std::max(0, contentHeight - bodyHeight);
+    const int scroll = std::clamp(g.overlayScrollPx.load(std::memory_order_relaxed), 0,
+                                  layout.maxScroll);
+    const int contentTop = layout.bodyClip.top + 18 - scroll;
+    layout.resolutionButton = RECT{left + 24, contentTop + 25, left + panelWidth - 24, contentTop + 73};
     const int columnGap = 8;
     const int columnWidth = (panelWidth - 48 - columnGap * 2) / 3;
-    layout.windowedButton = RECT{left + 24, top + 234, left + 24 + columnWidth, top + 280};
-    layout.borderlessButton = RECT{layout.windowedButton.right + columnGap, top + 234,
-                                   layout.windowedButton.right + columnGap + columnWidth, top + 280};
-    layout.fullscreenButton = RECT{layout.borderlessButton.right + columnGap, top + 234,
-                                   left + panelWidth - 24, top + 280};
-    layout.fpsButton = RECT{left + 24, top + 320, left + 24 + columnWidth, top + 366};
-    layout.debugButton = RECT{layout.fpsButton.right + columnGap, top + 320,
-                              left + panelWidth - 24, top + 366};
+    layout.windowedButton = RECT{left + 24, contentTop + 83, left + 24 + columnWidth, contentTop + 129};
+    layout.borderlessButton = RECT{layout.windowedButton.right + columnGap, contentTop + 83,
+                                   layout.windowedButton.right + columnGap + columnWidth, contentTop + 129};
+    layout.fullscreenButton = RECT{layout.borderlessButton.right + columnGap, contentTop + 83,
+                                   left + panelWidth - 24, contentTop + 129};
+    layout.fpsButton = RECT{left + 24, contentTop + 182, left + 24 + columnWidth, contentTop + 228};
+    layout.debugButton = RECT{layout.fpsButton.right + columnGap, contentTop + 182,
+                              left + panelWidth - 24, contentTop + 228};
+    layout.dlssStatus = RECT{left + 24, contentTop + 288, left + panelWidth - 24, contentTop + 354};
+    layout.dlssSuperResolutionButton = RECT{left + 24, contentTop + 366,
+                                            left + panelWidth - 24, contentTop + 420};
+    layout.dlssFrameGenerationButton = RECT{left + 24, contentTop + 430,
+                                            left + panelWidth - 24, contentTop + 484};
+    layout.dlssRayReconstructionButton = RECT{left + 24, contentTop + 494,
+                                              left + panelWidth - 24, contentTop + 548};
+    layout.reflexButton = RECT{left + 24, contentTop + 558,
+                               left + panelWidth - 24, contentTop + 612};
+    layout.scrollTrack = RECT{left + panelWidth - 8, layout.bodyClip.top + 6,
+                              left + panelWidth - 4, layout.bodyClip.bottom - 6};
+    const int trackHeight = std::max(1L, layout.scrollTrack.bottom - layout.scrollTrack.top);
+    const int thumbHeight = layout.maxScroll == 0
+        ? trackHeight
+        : std::max(34, trackHeight * bodyHeight / contentHeight);
+    const int thumbTravel = std::max(0, trackHeight - thumbHeight);
+    const int thumbTop = layout.scrollTrack.top +
+        (layout.maxScroll > 0 ? thumbTravel * scroll / layout.maxScroll : 0);
+    layout.scrollThumb = RECT{layout.scrollTrack.left, thumbTop,
+                              layout.scrollTrack.right, thumbTop + thumbHeight};
     return layout;
 }
 
@@ -1852,12 +1928,20 @@ void buildOverlayPixels(int width, int height, bool compactFps = false,
         makeCropLocal(layout.performance);
         makeCropLocal(layout.settings);
         makeCropLocal(layout.input);
+        makeCropLocal(layout.bodyClip);
+        makeCropLocal(layout.scrollTrack);
+        makeCropLocal(layout.scrollThumb);
         makeCropLocal(layout.resolutionButton);
         makeCropLocal(layout.windowedButton);
         makeCropLocal(layout.borderlessButton);
         makeCropLocal(layout.fullscreenButton);
         makeCropLocal(layout.fpsButton);
         makeCropLocal(layout.debugButton);
+        makeCropLocal(layout.dlssStatus);
+        makeCropLocal(layout.dlssSuperResolutionButton);
+        makeCropLocal(layout.dlssFrameGenerationButton);
+        makeCropLocal(layout.dlssRayReconstructionButton);
+        makeCropLocal(layout.reflexButton);
         layout.margin -= cropLeft;
         const RECT panel = layout.performance;
         rounded(panel, RGB(255, 255, 255), RGB(223, 227, 232), 16);
@@ -1886,7 +1970,12 @@ void buildOverlayPixels(int width, int height, bool compactFps = false,
             resolutionDropdown = g.resolutionDropdown;
         }
 
-        RECT displayLabel{panel.left + 24, panel.top + 151, panel.right - 24, panel.top + 174};
+        const int bodyDc = SaveDC(dc);
+        IntersectClipRect(dc, layout.bodyClip.left, layout.bodyClip.top,
+                         layout.bodyClip.right, layout.bodyClip.bottom);
+
+        RECT displayLabel{panel.left + 24, layout.resolutionButton.top - 25,
+                          panel.right - 24, layout.resolutionButton.top - 2};
         drawText(L"DISPLAY", displayLabel, label, RGB(86, 97, 115),
                  DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         rounded(layout.resolutionButton, RGB(255, 255, 255), RGB(207, 213, 221), 9);
@@ -1936,13 +2025,78 @@ void buildOverlayPixels(int width, int height, bool compactFps = false,
             DeleteObject(knob);
             DeleteObject(nullPen);
         };
-        RECT overlayLabel{panel.left + 24, panel.top + 292, panel.right - 24, panel.top + 315};
+        RECT overlayLabel{panel.left + 24, layout.fpsButton.top - 25,
+                          panel.right - 24, layout.fpsButton.top - 2};
         drawText(L"OVERLAYS", overlayLabel, label, RGB(86, 97, 115),
                  DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         drawCompactToggle(layout.fpsButton, g.fpsOverlay.load(std::memory_order_relaxed) != 0, L"FPS counter");
         drawCompactToggle(layout.debugButton, g.debugOverlay.load(std::memory_order_relaxed) != 0, L"Diagnostic log");
 
-        RECT hint{panel.left + 24, panel.bottom - 42, panel.right - 24, panel.bottom - 16};
+        RECT dlssLabel{panel.left + 24, layout.dlssStatus.top - 25,
+                       panel.right - 24, layout.dlssStatus.top - 2};
+        drawText(L"NVIDIA RTX", dlssLabel, label, RGB(86, 97, 115),
+                 DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+        const StreamlineCapabilities streamline = streamlineCapabilities();
+        const bool rtxAvailable = g.rtxAdapter && streamline.vulkanAttached;
+        rounded(layout.dlssStatus,
+                rtxAvailable ? RGB(241, 248, 245) : RGB(248, 249, 251),
+                rtxAvailable ? RGB(183, 220, 199) : RGB(223, 227, 232), 10);
+        std::wstring gpuName = wideFromUtf8(g.gpuDeviceName.c_str());
+        if (gpuName.empty()) gpuName = L"GPU capability unavailable";
+        RECT gpuTitle{layout.dlssStatus.left + 16, layout.dlssStatus.top + 8,
+                      layout.dlssStatus.right - 16, layout.dlssStatus.top + 31};
+        drawText(gpuName.c_str(), gpuTitle, body,
+                 rtxAvailable ? RGB(25, 95, 60) : RGB(86, 97, 115),
+                 DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        RECT gpuStatus{layout.dlssStatus.left + 16, layout.dlssStatus.top + 31,
+                       layout.dlssStatus.right - 16, layout.dlssStatus.bottom - 7};
+        std::wstring streamlineStatus = wideFromUtf8(streamline.status.c_str());
+        if (streamlineStatus.empty()) {
+            streamlineStatus = rtxAvailable
+                ? L"Streamline is connected to the Vulkan device"
+                : L"DLSS controls require a supported NVIDIA RTX adapter";
+        }
+        drawText(streamlineStatus.c_str(),
+                 gpuStatus, label, RGB(104, 113, 130),
+                 DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+        auto drawFeature = [&](RECT rect, const wchar_t* name, const wchar_t* requirement,
+                               bool supported, const wchar_t* badgeText) {
+            rounded(rect, RGB(248, 249, 251), RGB(223, 227, 232), 9);
+            RECT featureName{rect.left + 15, rect.top + 5, rect.right - 170, rect.top + 28};
+            drawText(name, featureName, body, RGB(54, 65, 81),
+                     DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            RECT featureRequirement{rect.left + 15, rect.top + 27, rect.right - 145, rect.bottom - 4};
+            drawText(requirement, featureRequirement, label, RGB(120, 130, 146),
+                     DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            RECT badge{rect.right - 137, rect.top + 12, rect.right - 14, rect.bottom - 12};
+            rounded(badge, RGB(239, 242, 246), RGB(214, 219, 226), 12);
+            drawText(badgeText, badge, label,
+                     supported ? RGB(25, 95, 60) : RGB(104, 113, 130),
+                     DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        };
+        drawFeature(layout.dlssSuperResolutionButton, L"DLSS Super Resolution",
+                    L"Available to pages that provide depth and motion vectors",
+                    streamline.dlssSuperResolution,
+                    streamline.dlssSuperResolution ? L"API READY" : L"UNAVAILABLE");
+        drawFeature(layout.dlssFrameGenerationButton, L"DLSS Frame Generation",
+                    L"Available to pages that provide HUD-less color and motion",
+                    streamline.dlssFrameGeneration,
+                    streamline.dlssFrameGeneration ? L"API READY" : L"UNAVAILABLE");
+        drawFeature(layout.dlssRayReconstructionButton, L"DLSS Ray Reconstruction",
+                    L"Available to pages that provide ray-tracing denoiser inputs",
+                    streamline.dlssRayReconstruction,
+                    streamline.dlssRayReconstruction ? L"API READY" : L"UNAVAILABLE");
+        const int reflexMode = streamlineReflexMode();
+        drawFeature(layout.reflexButton, L"NVIDIA Reflex",
+                    L"Click to cycle Off, On and On + Boost",
+                    streamline.reflex,
+                    !streamline.reflex ? L"UNAVAILABLE" :
+                    reflexMode == 2 ? L"ON + BOOST" : reflexMode == 1 ? L"ON" : L"OFF");
+
+        RECT hint{panel.left + 24, layout.reflexButton.bottom + 12,
+                  panel.right - 24, layout.reflexButton.bottom + 38};
         drawText(L"Esc closes controls  ·  Shift + Tab opens them again", hint, body, RGB(120, 130, 146),
                  DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
@@ -1978,6 +2132,11 @@ void buildOverlayPixels(int width, int height, bool compactFps = false,
                 down.right -= 12;
                 drawText(L"▼", down, label, RGB(86, 97, 115), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
             }
+        }
+        RestoreDC(dc, bodyDc);
+        if (layout.maxScroll > 0) {
+            rounded(layout.scrollTrack, RGB(237, 240, 244), RGB(237, 240, 244), 4);
+            rounded(layout.scrollThumb, RGB(157, 168, 184), RGB(157, 168, 184), 4);
         }
     }
 
@@ -2256,6 +2415,7 @@ void destroyHwnd() {
 }
 
 bool initGpu(WGPUInstanceBackend backends) {
+    if (backends == WGPUInstanceBackend_Vulkan) streamlinePrepare();
     if (!createInstance(backends)) {
         setError("wgpuCreateInstance failed");
         return false;
@@ -2488,7 +2648,9 @@ bool implPresent() {
     }
     if (!g.overlayRecordedForCurrentTexture) renderOverlay();
     const bool firstPresent = g.statsPresents.load(std::memory_order_relaxed) == 0;
+    streamlinePresentBegin();
     wgpuSurfacePresent(g.surface);
+    streamlinePresentEnd();
     dropCurrentTexture();
     if (g.device) {
         wgpuDevicePoll(g.device, 0, nullptr);
@@ -2499,6 +2661,9 @@ bool implPresent() {
     pumpHwnd();
     const auto t1 = std::chrono::steady_clock::now();
     recordFps(t1, static_cast<int>(std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count()));
+    streamlineFrameBegin(static_cast<uint32_t>(
+        g.statsPresents.load(std::memory_order_relaxed)));
+    g.streamlineSimulationEnded = false;
     if (firstPresent) {
         logLine("native Vulkan surface presented first frame");
     }
@@ -2746,7 +2911,13 @@ void finishEncoderSubmit() {
     WGPUCommandBufferDescriptor cbd{};
     WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(g.currentEncoder, &cbd);
     if (cmd) {
+        if (!g.streamlineSimulationEnded) {
+            streamlineSimulationEnd();
+            g.streamlineSimulationEnded = true;
+        }
+        streamlineRenderSubmitBegin();
         wgpuQueueSubmit(g.queue, 1, &cmd);
+        streamlineRenderSubmitEnd();
         wgpuCommandBufferRelease(cmd);
     }
     Slot* s = getSlot(g.currentEncoderHandle);
@@ -4055,6 +4226,10 @@ int implMapRead(uint32_t handle, uint64_t offset, uint64_t size, void* dst, int 
 
 void implShutdown() {
     setLoadingState(false, nullptr);
+    // Streamline must release its feature state while the Vulkan device and
+    // instance are still valid. wgpu-native retains its own module reference
+    // to the interposer until the Vulkan objects are destroyed below.
+    streamlineShutdown();
     destroyGpu();
     destroyHwnd();
     g.started = false;
@@ -4228,6 +4403,7 @@ void tw_set_overlay(int on) {
         g.resolutionDropdown.open = false;
         g.resolutionDropdown.hoverIndex = -1;
     }
+    if (on) g.overlayScrollPx.store(0, std::memory_order_relaxed);
     g.overlayOpen.store(on != 0 ? 1 : 0, std::memory_order_relaxed);
     g.overlayDirty.store(1, std::memory_order_release);
 }
@@ -4250,10 +4426,21 @@ void tw_overlay_click(int x, int y) {
     const int height = g.statsH.load(std::memory_order_relaxed);
     POINT point{x, y};
     const OverlayLayout layout = overlayLayout(width, height);
+    const bool insideBody = PtInRect(&layout.bodyClip, point) != FALSE;
+    if (layout.maxScroll > 0 && PtInRect(&layout.scrollTrack, point)) {
+        const int trackHeight = std::max(1L, layout.scrollTrack.bottom - layout.scrollTrack.top);
+        const int thumbHeight = std::max(1L, layout.scrollThumb.bottom - layout.scrollThumb.top);
+        const int travel = std::max(1, trackHeight - thumbHeight);
+        const int relative = std::clamp(
+            y - static_cast<int>(layout.scrollTrack.top) - thumbHeight / 2, 0, travel);
+        g.overlayScrollPx.store(relative * layout.maxScroll / travel, std::memory_order_relaxed);
+        g.overlayDirty.store(1, std::memory_order_release);
+        return;
+    }
     {
         std::lock_guard<std::mutex> lock(g.displayMu);
         OverlayDropdown& dropdown = g.resolutionDropdown;
-        if (dropdown.open && PtInRect(&layout.resolutionButton, point)) {
+        if (insideBody && dropdown.open && PtInRect(&layout.resolutionButton, point)) {
             dropdown.open = false;
             dropdown.hoverIndex = -1;
             g.overlayDirty.store(1, std::memory_order_release);
@@ -4262,7 +4449,7 @@ void tw_overlay_click(int x, int y) {
         if (dropdown.open) {
             const int index = dropdownHitIndex(dropdown, layout.resolutionButton,
                                                static_cast<int>(g.displayModes.size()), point);
-            if (index >= 0) {
+            if (insideBody && index >= 0) {
                 g.selectedDisplayMode = index;
                 dropdown.open = false;
                 dropdown.hoverIndex = -1;
@@ -4278,14 +4465,14 @@ void tw_overlay_click(int x, int y) {
             dropdown.open = false;
             dropdown.hoverIndex = -1;
         }
-        if (PtInRect(&layout.resolutionButton, point)) {
+        if (insideBody && PtInRect(&layout.resolutionButton, point)) {
             dropdown.open = true;
             dropdown.hoverIndex = -1;
             dropdownReveal(dropdown, g.selectedDisplayMode, static_cast<int>(g.displayModes.size()));
             g.overlayDirty.store(1, std::memory_order_release);
             return;
         }
-        if (PtInRect(&layout.windowedButton, point)) {
+        if (insideBody && PtInRect(&layout.windowedButton, point)) {
             if (g.fullscreenState.load(std::memory_order_relaxed) != 0) {
                 g.displayCommandReady = true;
                 g.displayCommandEnabled = 0;
@@ -4294,7 +4481,7 @@ void tw_overlay_click(int x, int y) {
             g.overlayDirty.store(1, std::memory_order_release);
             return;
         }
-        if (PtInRect(&layout.fullscreenButton, point)) {
+        if (insideBody && PtInRect(&layout.fullscreenButton, point)) {
             if (!g.displayModes.empty()) {
                 const int selected = std::clamp(g.selectedDisplayMode, 0,
                                                 static_cast<int>(g.displayModes.size()) - 1);
@@ -4305,7 +4492,7 @@ void tw_overlay_click(int x, int y) {
             g.overlayDirty.store(1, std::memory_order_release);
             return;
         }
-        if (PtInRect(&layout.borderlessButton, point)) {
+        if (insideBody && PtInRect(&layout.borderlessButton, point)) {
             if (!g.displayModes.empty()) {
                 const int selected = std::clamp(g.selectedDisplayMode, 0,
                                                 static_cast<int>(g.displayModes.size()) - 1);
@@ -4319,12 +4506,17 @@ void tw_overlay_click(int x, int y) {
     }
     const RECT fps = layout.fpsButton;
     const RECT debug = layout.debugButton;
-    if (PtInRect(&fps, point)) {
+    if (insideBody && PtInRect(&fps, point)) {
         g.fpsOverlay.store(!g.fpsOverlay.load(std::memory_order_relaxed), std::memory_order_relaxed);
-    } else if (PtInRect(&debug, point)) {
+    } else if (insideBody && PtInRect(&debug, point)) {
         const bool enabled = !g.debugOverlay.load(std::memory_order_relaxed);
         g.debugOverlay.store(enabled, std::memory_order_relaxed);
         g.statsLog.store(enabled, std::memory_order_relaxed);
+    } else if (insideBody && PtInRect(&layout.reflexButton, point)) {
+        const StreamlineCapabilities capabilities = streamlineCapabilities();
+        if (capabilities.reflex) {
+            streamlineSetReflexMode((streamlineReflexMode() + 1) % 3);
+        }
     }
     g.overlayDirty.store(1, std::memory_order_release);
 }
@@ -4337,8 +4529,10 @@ void tw_overlay_pointer_move(int x, int y) {
     std::lock_guard<std::mutex> lock(g.displayMu);
     OverlayDropdown& dropdown = g.resolutionDropdown;
     if (!dropdown.open) return;
-    const int hovered = dropdownHitIndex(dropdown, layout.resolutionButton,
-                                         static_cast<int>(g.displayModes.size()), point);
+    const int hovered = PtInRect(&layout.bodyClip, point)
+        ? dropdownHitIndex(dropdown, layout.resolutionButton,
+                           static_cast<int>(g.displayModes.size()), point)
+        : -1;
     if (hovered != dropdown.hoverIndex) {
         dropdown.hoverIndex = hovered;
         g.overlayDirty.store(1, std::memory_order_release);
@@ -4347,15 +4541,30 @@ void tw_overlay_pointer_move(int x, int y) {
 
 void tw_overlay_wheel(int delta) {
     if (!g.overlayOpen.load(std::memory_order_relaxed) || delta == 0) return;
-    std::lock_guard<std::mutex> lock(g.displayMu);
-    OverlayDropdown& dropdown = g.resolutionDropdown;
-    if (!dropdown.open) return;
-    const int steps = std::max(1, std::abs(delta) / WHEEL_DELTA);
-    const int next = dropdown.scrollOffset + (delta < 0 ? steps : -steps);
-    const int clamped = std::clamp(next, 0, dropdownMaxOffset(static_cast<int>(g.displayModes.size())));
-    if (clamped != dropdown.scrollOffset) {
-        dropdown.scrollOffset = clamped;
-        dropdown.hoverIndex = -1;
+    {
+        std::lock_guard<std::mutex> lock(g.displayMu);
+        OverlayDropdown& dropdown = g.resolutionDropdown;
+        if (dropdown.open) {
+            const int steps = std::max(1, std::abs(delta) / WHEEL_DELTA);
+            const int next = dropdown.scrollOffset + (delta < 0 ? steps : -steps);
+            const int clamped = std::clamp(
+                next, 0, dropdownMaxOffset(static_cast<int>(g.displayModes.size())));
+            if (clamped != dropdown.scrollOffset) {
+                dropdown.scrollOffset = clamped;
+                dropdown.hoverIndex = -1;
+                g.overlayDirty.store(1, std::memory_order_release);
+            }
+            return;
+        }
+    }
+    const OverlayLayout layout = overlayLayout(g.statsW.load(std::memory_order_relaxed),
+                                               g.statsH.load(std::memory_order_relaxed));
+    const int current = g.overlayScrollPx.load(std::memory_order_relaxed);
+    int pixelDelta = delta / 2;
+    if (pixelDelta == 0) pixelDelta = delta > 0 ? 1 : -1;
+    const int next = std::clamp(current - pixelDelta, 0, layout.maxScroll);
+    if (next != current) {
+        g.overlayScrollPx.store(next, std::memory_order_relaxed);
         g.overlayDirty.store(1, std::memory_order_release);
     }
 }
@@ -4561,6 +4770,35 @@ const char* tw_backend_name(void) {
     thread_local std::string copy;
     copy = g.backendName;
     return copy.c_str();
+}
+
+int tw_gpu_capabilities(TWGpuCapabilities* capabilities) {
+    if (!capabilities || capabilities->struct_size < sizeof(TWGpuCapabilities)) return 0;
+    const auto streamline = streamlineCapabilities();
+    TWGpuCapabilities result{};
+    result.struct_size = sizeof(result);
+    result.vendor_id = g.gpuVendorId;
+    result.device_id = g.gpuDeviceId;
+    result.is_rtx = g.rtxAdapter ? 1 : 0;
+    result.streamline_present = streamline.runtimePresent ? 1 : 0;
+    result.streamline_initialized = streamline.initialized ? 1 : 0;
+    result.vulkan_attached = streamline.vulkanAttached ? 1 : 0;
+    result.dlss_super_resolution = streamline.dlssSuperResolution ? 1 : 0;
+    result.dlss_frame_generation = streamline.dlssFrameGeneration ? 1 : 0;
+    result.dlss_ray_reconstruction = streamline.dlssRayReconstruction ? 1 : 0;
+    result.reflex = streamline.reflex ? 1 : 0;
+    std::snprintf(result.adapter_name, sizeof(result.adapter_name), "%s", g.gpuDeviceName.c_str());
+    std::snprintf(result.status, sizeof(result.status), "%s", streamline.status.c_str());
+    *capabilities = result;
+    return 1;
+}
+
+int tw_set_reflex_mode(int mode) {
+    return streamlineSetReflexMode(mode) ? 1 : 0;
+}
+
+int tw_reflex_mode(void) {
+    return streamlineReflexMode();
 }
 
 int tw_cmd_submit(const uint8_t* data, int nbytes) {

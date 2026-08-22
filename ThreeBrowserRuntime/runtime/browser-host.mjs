@@ -1637,6 +1637,9 @@ function hostObject() {
     WebGpuMapRead: (handle, offset, size) => native.webGpuMapRead(handle, offset, size),
     WebGpuSetSize: (width, height) => native.resize(width, height),
     WebGpuBackendName: () => native.backendName(),
+    WebGpuCapabilities: () => native.gpuCapabilities(),
+    WebGpuSetReflexMode: mode => native.setReflexMode(mode),
+    WebGpuReflexMode: () => native.reflexMode(),
     WebGpuFrame: () => {},
     EnsureCmdBuffer: () => 1,
   };

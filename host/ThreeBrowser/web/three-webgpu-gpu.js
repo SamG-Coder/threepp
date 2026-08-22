@@ -1244,6 +1244,18 @@ export function install() {
 
   ensureConstants();
   const gpu = new GPU();
+  Object.defineProperty(gpu, "threeBrowserRTX", {
+    configurable: false,
+    enumerable: true,
+    value: Object.freeze({
+      get capabilities() { return n.WebGpuCapabilities?.() || {}; },
+      get reflexMode() { return Number(n.WebGpuReflexMode?.() || 0); },
+      setReflexMode(mode) {
+        const normalized = Math.max(0, Math.min(2, Number(mode) | 0));
+        return Boolean(n.WebGpuSetReflexMode?.(normalized));
+      },
+    }),
+  });
   try {
     Object.defineProperty(navigator, "gpu", {
       configurable: true,
