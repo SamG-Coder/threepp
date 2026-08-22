@@ -40,6 +40,8 @@ let hasInterceptableThreeImport = false;
 let hasViteRuntime = false;
 let hasWebGlRenderer = false;
 let hasWebGpuRenderer = false;
+let usesWebGlRenderer = false;
+let usesWebGpuRenderer = false;
 let rootURL = startURL;
 let inlineIndex = 0;
 
@@ -197,6 +199,12 @@ function inspectJavaScript(record, source) {
   }
   const sourceHasWebGlRenderer = /\bWebGLRenderer\b/.test(source);
   const sourceHasWebGpuRenderer = /\bWebGPURenderer\b/.test(source);
+  // Keep runtime-definition detection separate from application usage. The
+  // stock Three.js module contains both class names (and migration comments)
+  // regardless of which renderer the page constructs. Treating any mention as
+  // usage starts an idle WebGPU window before ordinary WebGL pages run.
+  const sourceUsesWebGlRenderer = /\bnew\s+(?:[A-Za-z_$][\w$]*\s*\.\s*)?WebGLRenderer\s*\(/.test(source);
+  const sourceUsesWebGpuRenderer = /\bnew\s+(?:[A-Za-z_$][\w$]*\s*\.\s*)?WebGPURenderer(?:Async)?\s*\(/.test(source);
   for (const pattern of [
     /\bREVISION\s*=\s*["'](\d+)["']/g,
     /\bTHREE\.REVISION\s*=\s*["'](\d+)["']/g,
@@ -208,6 +216,8 @@ function inspectJavaScript(record, source) {
   }
   if (sourceHasWebGlRenderer) hasWebGlRenderer = true;
   if (sourceHasWebGpuRenderer) hasWebGpuRenderer = true;
+  if (sourceUsesWebGlRenderer) usesWebGlRenderer = true;
+  if (sourceUsesWebGpuRenderer) usesWebGpuRenderer = true;
   if (sourceHasWebGlRenderer || sourceHasWebGpuRenderer || /THREE\.REVISION|REVISION\s*=\s*["']\d+/i.test(source)) {
     hasThreeRuntimeCode = true;
     findings.add(`Three.js code detected in ${record.localPath}`);
@@ -531,7 +541,9 @@ const uiMode = uiSignals.has("React UI") || uiSignals.has("scroll-driven UI") ||
 const compatibilityNotes = [];
 if (threeMode === "bundled") compatibilityNotes.push("Three.js is embedded in a production bundle and no safe native renderer binding was found.");
 if (threeMode === "relinked") compatibilityNotes.push("Semantic Three.js scene, camera, geometry, material, texture, light, mesh, and WebGLRenderer bindings were redirected to the native facade.");
-if (hasWebGpuRenderer) compatibilityNotes.push("The bundled Three.js runtime was preserved as one version; WebGPU commands are redirected through the native navigator.gpu adapter.");
+if (usesWebGpuRenderer || importMapEntries.has("three/webgpu") || importMapEntries.has("three/tsl")) {
+  compatibilityNotes.push("The bundled Three.js runtime was preserved as one version; WebGPU commands are redirected through the native navigator.gpu adapter.");
+}
 if (uiMode !== "canvas-only") compatibilityNotes.push("The native runtime does not paint arbitrary HTML/CSS, so visible browser UI will be missing.");
 
 const projectId = crypto.createHash("sha256").update(rootURL.href).digest("hex").slice(0, 16);
@@ -544,7 +556,7 @@ const manifest = {
   source: rootURL.href,
   pulledAt: new Date().toISOString(),
   entry: "site-entry.mjs",
-  requiresWebGPU: hasWebGpuRenderer || importMapEntries.has("three/webgpu") || importMapEntries.has("three/tsl"),
+  requiresWebGPU: usesWebGpuRenderer || importMapEntries.has("three/webgpu") || importMapEntries.has("three/tsl"),
   html: rootRecord.localPath.replaceAll("\\", "/"),
   files: successful.map(record => ({
     url: record.url.href,
@@ -556,7 +568,10 @@ const manifest = {
   compatibility: {
     vite: hasViteRuntime,
     threeMode,
-    rendererCandidates: [hasWebGlRenderer ? "webgl" : null, hasWebGpuRenderer ? "webgpu" : null].filter(Boolean),
+    rendererCandidates: [
+      usesWebGlRenderer ? "webgl" : null,
+      usesWebGpuRenderer || importMapEntries.has("three/webgpu") || importMapEntries.has("three/tsl") ? "webgpu" : null,
+    ].filter(Boolean),
     uiMode,
     visibleHtmlTags: [...visibleHtmlTags].sort(),
     uiSignals: [...uiSignals].sort(),

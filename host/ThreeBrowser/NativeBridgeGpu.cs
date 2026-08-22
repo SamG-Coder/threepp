@@ -145,8 +145,8 @@ public partial class NativeBridge
     public void ShaderUniformVec4(int material, string name, double x, double y, double z, double w) =>
         Native.tn_shader_uniform_vec4((uint)material, name ?? "", (float)x, (float)y, (float)z, (float)w);
 
-    public void ShaderSetFlags(int material, int side, int depthWrite) =>
-        Native.tn_shader_set_flags((uint)material, side, depthWrite);
+    public void ShaderSetFlags(int material, int side, int depthWrite, int lights) =>
+        Native.tn_shader_set_flags((uint)material, side, depthWrite, lights);
 
     public void SceneSetEnvironment(int scene, int texture) =>
         Native.tn_scene_set_environment((uint)scene, (uint)texture);

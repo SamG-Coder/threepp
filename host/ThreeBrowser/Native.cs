@@ -221,7 +221,7 @@ internal static partial class Native
     public static extern void tn_shader_uniform_vec4(uint material, string name, float x, float y, float z, float w);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    public static extern void tn_shader_set_flags(uint material, int side, int depthWrite);
+    public static extern void tn_shader_set_flags(uint material, int side, int depthWrite, int lights);
 
     public static string LastError()
     {

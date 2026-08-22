@@ -1,4 +1,5 @@
 #include "three_native.h"
+#include "webgpu/three_webgpu.h"
 
 #include "threepp/threepp.hpp"
 #include "threepp/animation/AnimationMixer.hpp"
@@ -21,6 +22,7 @@
 #define GLFW_NATIVE_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <GLFW/glfw3native.h>
+#include <glad/glad.h>
 #endif
 
 #include <atomic>
@@ -51,11 +53,16 @@
 using namespace threepp;
 using tn::g;
 
+#if defined(_WIN32)
+namespace { void releaseGlOverlayGpu(); }
+#endif
+
 namespace tn {
 
 void destroySurface() {
 #if defined(_WIN32)
     if (g.canvas) {
+        releaseGlOverlayGpu();
         if (auto* glfwWindow = static_cast<GLFWwindow*>(g.canvas->windowPtr())) {
             if (HWND child = glfwGetWin32Window(glfwWindow)) {
                 ShowWindow(child, SW_HIDE);
@@ -85,6 +92,148 @@ using tn::markDirty;
 using tn::onWorker;
 using tn::onWorkerAsync;
 using tn::setError;
+
+#if defined(_WIN32)
+namespace {
+
+GLuint glOverlayProgram{};
+GLuint glOverlayTexture{};
+GLuint glOverlayVao{};
+int glOverlayWidth{};
+int glOverlayHeight{};
+
+GLuint compileOverlayShader(GLenum type, const char* source) {
+    const GLuint shader = glCreateShader(type);
+    glShaderSource(shader, 1, &source, nullptr);
+    glCompileShader(shader);
+    GLint ok = GL_FALSE;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+    if (!ok) {
+        char message[1024]{};
+        glGetShaderInfoLog(shader, sizeof(message), nullptr, message);
+        setError((std::string("overlay shader compile failed: ") + message).c_str());
+        glDeleteShader(shader);
+        return 0;
+    }
+    return shader;
+}
+
+bool ensureGlOverlayGpu() {
+    if (glOverlayProgram && glOverlayTexture && glOverlayVao) return true;
+    static constexpr const char* vertexSource = R"GLSL(#version 330 core
+out vec2 uv;
+void main() {
+    const vec2 positions[6] = vec2[6](
+        vec2(-1.0,-1.0), vec2( 1.0,-1.0), vec2( 1.0, 1.0),
+        vec2(-1.0,-1.0), vec2( 1.0, 1.0), vec2(-1.0, 1.0));
+    const vec2 texcoords[6] = vec2[6](
+        vec2(0.0,1.0), vec2(1.0,1.0), vec2(1.0,0.0),
+        vec2(0.0,1.0), vec2(1.0,0.0), vec2(0.0,0.0));
+    gl_Position = vec4(positions[gl_VertexID], 0.0, 1.0);
+    uv = texcoords[gl_VertexID];
+})GLSL";
+    static constexpr const char* fragmentSource = R"GLSL(#version 330 core
+in vec2 uv;
+out vec4 color;
+uniform sampler2D overlayTexture;
+void main() { color = texture(overlayTexture, uv); }
+)GLSL";
+    const GLuint vertex = compileOverlayShader(GL_VERTEX_SHADER, vertexSource);
+    const GLuint fragment = compileOverlayShader(GL_FRAGMENT_SHADER, fragmentSource);
+    if (!vertex || !fragment) {
+        if (vertex) glDeleteShader(vertex);
+        if (fragment) glDeleteShader(fragment);
+        return false;
+    }
+    glOverlayProgram = glCreateProgram();
+    glAttachShader(glOverlayProgram, vertex);
+    glAttachShader(glOverlayProgram, fragment);
+    glLinkProgram(glOverlayProgram);
+    glDeleteShader(vertex);
+    glDeleteShader(fragment);
+    GLint ok = GL_FALSE;
+    glGetProgramiv(glOverlayProgram, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        glDeleteProgram(glOverlayProgram);
+        glOverlayProgram = 0;
+        setError("overlay shader link failed");
+        return false;
+    }
+    glGenVertexArrays(1, &glOverlayVao);
+    glGenTextures(1, &glOverlayTexture);
+    glBindTexture(GL_TEXTURE_2D, glOverlayTexture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    return true;
+}
+
+void releaseGlOverlayGpu() {
+    if (glOverlayTexture) glDeleteTextures(1, &glOverlayTexture);
+    if (glOverlayVao) glDeleteVertexArrays(1, &glOverlayVao);
+    if (glOverlayProgram) glDeleteProgram(glOverlayProgram);
+    glOverlayTexture = glOverlayVao = glOverlayProgram = 0;
+    glOverlayWidth = glOverlayHeight = 0;
+}
+
+void renderGlOverlay() {
+    if (!tw_overlay_visible()) return;
+    const int width = std::max(1, g.statsW.load(std::memory_order_relaxed));
+    const int height = std::max(1, g.statsH.load(std::memory_order_relaxed));
+    const int fps = g.statsFps.load(std::memory_order_relaxed);
+    const int frameUs = g.statsFrameUs.load(std::memory_order_relaxed);
+    if (!ensureGlOverlayGpu()) return;
+    int rowBytes = 0;
+    const uint8_t* pixels = tw_overlay_raster(
+        width, height, fps, frameUs, tn_backend_name(), 0,
+        g.statsPresents.load(std::memory_order_relaxed), &rowBytes);
+    if (!pixels || rowBytes < width * 4) return;
+    glBindTexture(GL_TEXTURE_2D, glOverlayTexture);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, rowBytes / 4);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_BGRA, GL_UNSIGNED_BYTE, pixels);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    glOverlayWidth = width;
+    glOverlayHeight = height;
+
+    GLint oldProgram{}, oldVao{}, oldActiveTexture{}, oldTexture{}, viewport[4]{};
+    glGetIntegerv(GL_CURRENT_PROGRAM, &oldProgram);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &oldVao);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &oldActiveTexture);
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &oldTexture);
+    glGetIntegerv(GL_VIEWPORT, viewport);
+    const GLboolean blend = glIsEnabled(GL_BLEND);
+    const GLboolean depth = glIsEnabled(GL_DEPTH_TEST);
+    const GLboolean cull = glIsEnabled(GL_CULL_FACE);
+    const GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
+
+    glViewport(0, 0, width, height);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_SCISSOR_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glUseProgram(glOverlayProgram);
+    glUniform1i(glGetUniformLocation(glOverlayProgram, "overlayTexture"), 0);
+    glBindTexture(GL_TEXTURE_2D, glOverlayTexture);
+    glBindVertexArray(glOverlayVao);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    glBindVertexArray(oldVao);
+    glBindTexture(GL_TEXTURE_2D, oldTexture);
+    glActiveTexture(oldActiveTexture);
+    glUseProgram(oldProgram);
+    if (blend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+    if (depth) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+    if (cull) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
+    if (scissor) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
+    glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+}
+
+}// namespace
+#endif
 
 void tn::renderPendingFrame() {
     tn::applyPendingEnvironment();
@@ -162,7 +311,12 @@ void tn::renderPendingFrame() {
         });
         if (traceMeshes) meshTraceDone = true;
     }
-    g.canvas->animateOnce([&] { g.renderer->render(*scene, *camera); });
+    g.canvas->animateOnce([&] {
+        g.renderer->render(*scene, *camera);
+#if defined(_WIN32)
+        renderGlOverlay();
+#endif
+    });
     for (auto* object : debugHidden) object->visible = true;
 #endif
     const auto t1 = std::chrono::steady_clock::now();
@@ -218,20 +372,25 @@ void tn::workerMain() {
         }
         try {
             renderPendingFrame();
-#if !defined(__ANDROID__)
-            // renderPendingFrame pumps GLFW only when a frame is actually
-            // presented. During initial scene construction there may be no
-            // camera/render call yet, but Windows still requires its message
-            // queue to be serviced or the window becomes "Not Responding".
-            if (g.canvas) {
-                glfwPollEvents();
-            }
-#endif
         } catch (const std::exception& ex) {
             setError(ex.what());
         } catch (...) {
             setError("native worker: render exception");
         }
+#if !defined(__ANDROID__)
+        // Rendering may fail while a page is still constructing or compiling
+        // its scene. Keep servicing the window regardless so close and resize
+        // remain responsive and a later valid frame can recover normally.
+        if (g.canvas) {
+            try {
+                glfwPollEvents();
+            } catch (const std::exception& ex) {
+                setError(ex.what());
+            } catch (...) {
+                setError("native worker: event pump exception");
+            }
+        }
+#endif
         if (g.stop) {
             break;
         }
@@ -242,6 +401,127 @@ void tn::workerMain() {
 }
 
 namespace {
+
+#if !defined(__ANDROID__)
+std::mutex inputMutex;
+std::deque<TNInputEvent> inputEvents;
+
+void queueInput(TNInputEvent event) {
+    if (std::getenv("THREEBROWSER_TRACE_INPUT")) {
+        logLine(("input glfw type=" + std::to_string(event.type) +
+                 " code=" + std::to_string(event.code) +
+                 " xy=" + std::to_string(event.x) + "," + std::to_string(event.y) +
+                 " move=" + std::to_string(event.movement_x) + "," + std::to_string(event.movement_y)).c_str());
+    }
+    std::lock_guard<std::mutex> lock(inputMutex);
+    if (event.type == TN_INPUT_POINTER_MOVE && !inputEvents.empty() &&
+        inputEvents.back().type == TN_INPUT_POINTER_MOVE) {
+        inputEvents.back().movement_x += event.movement_x;
+        inputEvents.back().movement_y += event.movement_y;
+        inputEvents.back().x = event.x;
+        inputEvents.back().y = event.y;
+        return;
+    }
+    if (inputEvents.size() >= 2048) inputEvents.pop_front();
+    inputEvents.push_back(event);
+}
+
+int keyToBrowserCode(Key key) {
+    if (key >= Key::NUM_0 && key <= Key::NUM_9) return '0' + (static_cast<int>(key) - static_cast<int>(Key::NUM_0));
+    if (key >= Key::A && key <= Key::Z) return 'A' + (static_cast<int>(key) - static_cast<int>(Key::A));
+    if (key >= Key::F1 && key <= Key::F12) return 112 + (static_cast<int>(key) - static_cast<int>(Key::F1));
+    switch (key) {
+        case Key::SPACE: return 32;
+        case Key::APOSTROPHE: return 222;
+        case Key::COMMA: return 188;
+        case Key::MINUS: return 189;
+        case Key::PERIOD: return 190;
+        case Key::SLASH: return 191;
+        case Key::SEMICOLON: return 186;
+        case Key::EQUAL: return 187;
+        case Key::LEFT_BRACKET: return 219;
+        case Key::BACKSLASH: return 220;
+        case Key::RIGHT_BRACKET: return 221;
+        case Key::GRAVE_ACCENT: return 192;
+        case Key::ESCAPE: return 27;
+        case Key::ENTER: return 13;
+        case Key::TAB: return 9;
+        case Key::BACKSPACE: return 8;
+        case Key::INSERT: return 45;
+        case Key::DEL: return 46;
+        case Key::RIGHT: return 39;
+        case Key::LEFT: return 37;
+        case Key::DOWN: return 40;
+        case Key::UP: return 38;
+        case Key::PAGE_UP: return 33;
+        case Key::PAGE_DOWN: return 34;
+        case Key::HOME: return 36;
+        case Key::END: return 35;
+        case Key::CAPS_LOCK: return 20;
+        case Key::SCROLL_LOCK: return 145;
+        case Key::NUM_LOCK: return 144;
+        case Key::PRINT_SCREEN: return 44;
+        case Key::PAUSE: return 19;
+        case Key::LEFT_SHIFT: return 16;
+        case Key::LEFT_CONTROL: return 17;
+        case Key::LEFT_ALT: return 18;
+        default: return 0;
+    }
+}
+
+struct RuntimeInputListener final: MouseListener, KeyListener {
+    int lastX{0};
+    int lastY{0};
+    bool hasPosition{false};
+
+    static int mouseCode(int button) {
+        return button == 0 ? 1 : button == 1 ? 2 : button == 2 ? 4 : button == 3 ? 5 : button == 4 ? 6 : 0;
+    }
+
+    void onMouseDown(int button, const Vector2& position) override {
+        queueInput({TN_INPUT_POINTER_DOWN, mouseCode(button), static_cast<int>(position.x), static_cast<int>(position.y), 0, 0, -1});
+    }
+
+    void onMouseUp(int button, const Vector2& position) override {
+        queueInput({TN_INPUT_POINTER_UP, mouseCode(button), static_cast<int>(position.x), static_cast<int>(position.y), 0, 0, -1});
+    }
+
+    void onMouseMove(const Vector2& position) override {
+        const int x = static_cast<int>(position.x);
+        const int y = static_cast<int>(position.y);
+        queueInput({TN_INPUT_POINTER_MOVE, 0, x, y, hasPosition ? x - lastX : 0, hasPosition ? y - lastY : 0, -1});
+        lastX = x;
+        lastY = y;
+        hasPosition = true;
+    }
+
+    void onMouseWheel(const Vector2& delta) override {
+        queueInput({TN_INPUT_WHEEL, static_cast<int>(delta.y * 120.f), lastX, lastY, 0, 0, -1});
+    }
+
+    void onKeyPressed(KeyEvent event) override {
+        queueInput({TN_INPUT_KEY_DOWN, keyToBrowserCode(event.key), lastX, lastY, 0, 0, event.mods});
+    }
+
+    void onKeyReleased(KeyEvent event) override {
+        queueInput({TN_INPUT_KEY_UP, keyToBrowserCode(event.key), lastX, lastY, 0, 0, event.mods});
+    }
+
+    void onKeyRepeat(KeyEvent event) override {
+        queueInput({TN_INPUT_KEY_DOWN, keyToBrowserCode(event.key), lastX, lastY, 0, 0, event.mods});
+    }
+
+    void reset() {
+        lastX = 0;
+        lastY = 0;
+        hasPosition = false;
+        std::lock_guard<std::mutex> lock(inputMutex);
+        inputEvents.clear();
+    }
+};
+
+RuntimeInputListener runtimeInputListener;
+#endif
 
 #if defined(_WIN32)
 LONG WINAPI nativeCrashTrace(EXCEPTION_POINTERS* exception) {
@@ -326,6 +606,19 @@ int impl_runtime_start(int width, int height, const char* title) {
     {
         g.renderer = std::make_unique<GLRenderer>(*g.canvas);
     }
+#if !defined(__ANDROID__)
+    runtimeInputListener.reset();
+    g.canvas->addMouseListener(runtimeInputListener);
+    g.canvas->addKeyListener(runtimeInputListener);
+    g.canvas->onWindowResize([](WindowSize size) {
+        const int resizedWidth = std::max(1, size.width());
+        const int resizedHeight = std::max(1, size.height());
+        g.statsW.store(resizedWidth, std::memory_order_relaxed);
+        g.statsH.store(resizedHeight, std::memory_order_relaxed);
+        if (g.renderer) g.renderer->setSize({resizedWidth, resizedHeight});
+        markDirty();
+    });
+#endif
     g.renderer->sortObjects = false;
     g.renderer->checkShaderErrors = true;
     g.renderer->onShaderError = [](const std::string& msg) { logLine(msg.c_str()); };
@@ -524,6 +817,23 @@ int tn_runtime_is_open(void) {
     } catch (...) {
         return 0;
     }
+}
+
+int tn_poll_input(TNInputEvent* events, int capacity) {
+#if defined(__ANDROID__)
+    (void) events;
+    (void) capacity;
+    return 0;
+#else
+    if (!events || capacity <= 0) return 0;
+    std::lock_guard<std::mutex> lock(inputMutex);
+    int count = 0;
+    while (count < capacity && !inputEvents.empty()) {
+        events[count++] = inputEvents.front();
+        inputEvents.pop_front();
+    }
+    return count;
+#endif
 }
 
 void tn_runtime_set_size(int width, int height) {
@@ -727,6 +1037,40 @@ int tn_runtime_attach_host(void* parentHwnd, int x, int y, int width, int height
 
 void* tn_runtime_hwnd(void) {
     return g.nativeHwnd.load();
+}
+
+void tn_runtime_set_overlay(int enabled) {
+#if defined(_WIN32)
+    tw_set_overlay(enabled);
+    markDirty();
+#else
+    (void) enabled;
+#endif
+}
+
+int tn_runtime_overlay_open(void) {
+#if defined(_WIN32)
+    return tw_overlay_open();
+#else
+    return 0;
+#endif
+}
+
+void tn_runtime_overlay_click(int x, int y) {
+#if defined(_WIN32)
+    tw_overlay_click(x, y);
+    markDirty();
+#else
+    (void) x;
+    (void) y;
+#endif
+}
+
+void tn_runtime_toggle_fps_overlay(void) {
+#if defined(_WIN32)
+    tw_toggle_fps_overlay();
+    markDirty();
+#endif
 }
 
 void tn_runtime_shutdown(void) {

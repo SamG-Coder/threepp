@@ -34,6 +34,32 @@ TN_API void tn_runtime_reset(void);
 TN_API float tn_runtime_aspect(void);
 TN_API int tn_runtime_attach_host(void* parent_hwnd, int x, int y, int width, int height);
 TN_API void* tn_runtime_hwnd(void);
+TN_API void tn_runtime_set_overlay(int enabled);
+TN_API int tn_runtime_overlay_open(void);
+TN_API void tn_runtime_overlay_click(int x, int y);
+TN_API void tn_runtime_toggle_fps_overlay(void);
+
+enum {
+    TN_INPUT_POINTER_MOVE = 1,
+    TN_INPUT_POINTER_DOWN = 2,
+    TN_INPUT_POINTER_UP = 3,
+    TN_INPUT_WHEEL = 4,
+    TN_INPUT_KEY_DOWN = 5,
+    TN_INPUT_KEY_UP = 6,
+    TN_INPUT_RESIZE = 7
+};
+
+typedef struct TNInputEvent {
+    int type;
+    int code;
+    int x;
+    int y;
+    int movement_x;
+    int movement_y;
+    int modifiers;
+} TNInputEvent;
+
+TN_API int tn_poll_input(TNInputEvent* events, int capacity);
 TN_API int tn_cmd_submit(const uint8_t* data, int nbytes);
 TN_API int tn_cmd_submit_async(const uint8_t* data, int nbytes);
 TN_API int tn_frame_info(int* width, int* height, uint64_t* generation);

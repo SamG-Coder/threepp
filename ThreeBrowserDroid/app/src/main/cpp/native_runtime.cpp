@@ -319,7 +319,7 @@ Java_com_threebrowser_droid_NativeRuntime_shaderMaterialCreate(JNIEnv* env, jobj
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_threebrowser_droid_NativeRuntime_shaderSetFlags(JNIEnv*, jobject, jint material, jint side, jint depthWrite) {
-    tn_shader_set_flags(static_cast<std::uint32_t>(material), side, depthWrite);
+    tn_shader_set_flags(static_cast<std::uint32_t>(material), side, depthWrite, 0);
 }
 
 extern "C" JNIEXPORT void JNICALL

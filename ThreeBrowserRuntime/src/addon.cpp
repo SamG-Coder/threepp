@@ -33,6 +33,16 @@ std::atomic_bool pointerLocked{false};
 POINT pointerRestorePosition{};
 bool pointerRestorePositionValid{false};
 
+void releasePointerLock();
+
+void stopActiveRuntime() {
+    releasePointerLock();
+    if (!runtimeActive.exchange(false, std::memory_order_acq_rel)) return;
+    const int mode = runtimeMode.exchange(0, std::memory_order_acq_rel);
+    if (mode == 2) tw_shutdown();
+    else if (mode == 1) tn_runtime_shutdown();
+}
+
 HWND runtimeHwnd() {
     return static_cast<HWND>(runtimeMode.load(std::memory_order_acquire) == 2 ? tw_hwnd() : tn_runtime_hwnd());
 }
@@ -138,6 +148,10 @@ napi_value start(napi_env env, napi_callback_info info) {
     const int width = argc > 0 ? static_cast<int>(argNumber(env, argv[0], 1280)) : 1280;
     const int height = argc > 1 ? static_cast<int>(argNumber(env, argv[1], 720)) : 720;
     const std::string title = argc > 2 ? argString(env, argv[2], "ThreeBrowser Runtime") : "ThreeBrowser Runtime";
+    if (runtimeActive.load(std::memory_order_acquire)) {
+        if (runtimeMode.load(std::memory_order_acquire) == 1) return boolean(env, true);
+        stopActiveRuntime();
+    }
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     tn_runtime_set_standalone(1);
     tn_runtime_set_vsync(1);
@@ -160,6 +174,10 @@ napi_value webGpuStart(napi_env env, napi_callback_info info) {
     napi_get_cb_info(env, info, &argc, argv.data(), nullptr, nullptr);
     const int width = argc > 0 ? static_cast<int>(argNumber(env, argv[0], 1280)) : 1280;
     const int height = argc > 1 ? static_cast<int>(argNumber(env, argv[1], 720)) : 720;
+    if (runtimeActive.load(std::memory_order_acquire)) {
+        if (runtimeMode.load(std::memory_order_acquire) == 2) return boolean(env, true);
+        stopActiveRuntime();
+    }
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     tw_set_standalone_ui(1);
     tw_set_vsync(0);
@@ -290,11 +308,7 @@ napi_value resize(napi_env env, napi_callback_info info) {
 }
 
 napi_value shutdown(napi_env env, napi_callback_info) {
-    releasePointerLock();
-    if (runtimeActive.exchange(false, std::memory_order_acq_rel)) {
-        if (runtimeMode.exchange(0, std::memory_order_acq_rel) == 2) tw_shutdown();
-        else tn_runtime_shutdown();
-    }
+    stopActiveRuntime();
     return undefined(env);
 }
 
@@ -317,29 +331,34 @@ napi_value setOverlay(napi_env env, napi_callback_info info) {
     napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
     bool enabled = false;
     if (argc > 0) napi_get_value_bool(env, argv[0], &enabled);
-    if (runtimeMode.load(std::memory_order_acquire) != 2) return boolean(env, false);
     if (enabled) releasePointerLock();
-    tw_set_overlay(enabled ? 1 : 0);
+    if (runtimeMode.load(std::memory_order_acquire) == 2) tw_set_overlay(enabled ? 1 : 0);
+    else tn_runtime_set_overlay(enabled ? 1 : 0);
     return boolean(env, true);
 }
 
 napi_value overlayOpen(napi_env env, napi_callback_info) {
-    return boolean(env, runtimeMode.load(std::memory_order_acquire) == 2 && tw_overlay_open() != 0);
+    return boolean(env, runtimeMode.load(std::memory_order_acquire) == 2
+        ? tw_overlay_open() != 0
+        : tn_runtime_overlay_open() != 0);
 }
 
 napi_value overlayClick(napi_env env, napi_callback_info info) {
     napi_value argv[2]{};
     std::size_t argc = 2;
     napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-    if (runtimeMode.load(std::memory_order_acquire) == 2 && argc == 2) {
-        tw_overlay_click(static_cast<int>(argNumber(env, argv[0], 0)),
-                         static_cast<int>(argNumber(env, argv[1], 0)));
+    if (argc == 2) {
+        const int x = static_cast<int>(argNumber(env, argv[0], 0));
+        const int y = static_cast<int>(argNumber(env, argv[1], 0));
+        if (runtimeMode.load(std::memory_order_acquire) == 2) tw_overlay_click(x, y);
+        else tn_runtime_overlay_click(x, y);
     }
     return undefined(env);
 }
 
 napi_value toggleFpsOverlay(napi_env env, napi_callback_info) {
     if (runtimeMode.load(std::memory_order_acquire) == 2) tw_toggle_fps_overlay();
+    else tn_runtime_toggle_fps_overlay();
     return undefined(env);
 }
 
@@ -796,44 +815,24 @@ napi_value pollInput(napi_env env, napi_callback_info) {
         return events;
     }
 
-    POINT screenCursor{};
-    GetCursorPos(&screenCursor);
-    POINT cursor = screenCursor;
-    ScreenToClient(hwnd, &cursor);
-    if (pointerLocked.load(std::memory_order_acquire)) {
-        const POINT center = pointerLockCenter(hwnd);
-        const int movementX = screenCursor.x - center.x;
-        const int movementY = screenCursor.y - center.y;
-        POINT clientCenter = center;
-        ScreenToClient(hwnd, &clientCenter);
-        cursor = clientCenter;
-        input.cursor = cursor;
-        if (movementX != 0 || movementY != 0) {
-            napi_set_element(env, events, index++, inputEvent(env, "pointermove", 0, cursor.x, cursor.y, movementX, movementY));
-            SetCursorPos(center.x, center.y);
+    std::array<TNInputEvent, 256> nativeEvents{};
+    const int count = tn_poll_input(nativeEvents.data(), static_cast<int>(nativeEvents.size()));
+    for (int i = 0; i < count; ++i) {
+        const TNInputEvent& source = nativeEvents[static_cast<std::size_t>(i)];
+        const char* type = "";
+        switch (source.type) {
+            case TN_INPUT_POINTER_MOVE: type = "pointermove"; break;
+            case TN_INPUT_POINTER_DOWN: type = "pointerdown"; break;
+            case TN_INPUT_POINTER_UP: type = "pointerup"; break;
+            case TN_INPUT_WHEEL: type = "wheel"; break;
+            case TN_INPUT_KEY_DOWN: type = "keydown"; break;
+            case TN_INPUT_KEY_UP: type = "keyup"; break;
+            default: continue;
         }
-    } else {
-        if (runtimeMode.load(std::memory_order_acquire) == 2 && cursor.y < tw_content_offset_y()) return events;
-        if (cursor.x != input.cursor.x || cursor.y != input.cursor.y) {
-            const int movementX = input.cursor.x < 0 ? 0 : cursor.x - input.cursor.x;
-            const int movementY = input.cursor.y < 0 ? 0 : cursor.y - input.cursor.y;
-            napi_set_element(env, events, index++, inputEvent(env, "pointermove", 0, cursor.x, cursor.y, movementX, movementY));
-            input.cursor = cursor;
-        }
-    }
-
-    for (int key = 1; key < 256; ++key) {
-        const bool down = (GetAsyncKeyState(key) & 0x8000) != 0;
-        if (down == input.keys[static_cast<std::size_t>(key)]) continue;
-        input.keys[static_cast<std::size_t>(key)] = down;
-        const bool mouse = key == VK_LBUTTON || key == VK_RBUTTON || key == VK_MBUTTON;
-        napi_set_element(env, events, index++, inputEvent(
-                env, mouse ? (down ? "pointerdown" : "pointerup") : (down ? "keydown" : "keyup"),
-                key, cursor.x, cursor.y));
-    }
-    if (runtimeMode.load(std::memory_order_acquire) == 2) {
-        const int wheel = tw_take_wheel_delta();
-        if (wheel != 0) napi_set_element(env, events, index++, inputEvent(env, "wheel", wheel, cursor.x, cursor.y));
+        if ((source.type == TN_INPUT_KEY_DOWN || source.type == TN_INPUT_KEY_UP) && source.code == 0) continue;
+        napi_set_element(env, events, index++, inputEvent(env, type, source.code, source.x, source.y,
+                                                          source.movement_x, source.movement_y,
+                                                          source.modifiers));
     }
     return events;
 }

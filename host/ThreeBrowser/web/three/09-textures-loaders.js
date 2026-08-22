@@ -1152,6 +1152,13 @@
 
   function uploadTextureNative(texture) {
     if (!texture || texture._uploadingNative) return;
+    // Render-target textures are allocated and populated by the native GPU.
+    // The headless browser's synthetic 2D canvas can otherwise rasterize the
+    // metadata-only { width, height } image into transparent pixels and upload
+    // those pixels over the render-target handle. For cube targets that also
+    // collapses the six GPU faces into a single CPU image and makes the next
+    // samplerCube bind try to re-upload an invalid CubeTexture.
+    if (texture.isRenderTargetTexture) return;
     const flip = !!texture.flipY;
     const ver = texture.version | 0;
     if (texture._h && texture._nativeFlipY === flip && texture._nativeVersion === ver) {

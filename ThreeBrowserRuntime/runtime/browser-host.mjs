@@ -31,17 +31,27 @@ class BrowserEventTarget {
   }
   dispatchEvent(event) {
     if (!event?.type) throw new TypeError("Event object requires a type");
-    try { Object.defineProperty(event, "target", { configurable: true, value: this }); } catch {}
-    try { Object.defineProperty(event, "currentTarget", { configurable: true, value: this }); } catch {}
-    for (const entry of [...(this._eventListeners.get(String(event.type)) || [])]) {
-      try {
-        if (typeof entry.listener === "function") entry.listener.call(this, event);
-        else entry.listener.handleEvent?.(event);
-      } catch (error) {
-        lastUnhandledEventError = error;
-        console.error(`Unhandled ${event.type} event listener error:`, error);
+    const path = [this];
+    if (event.bubbles) {
+      const visited = new Set(path);
+      for (let parent = this.parentNode; parent && !visited.has(parent); parent = parent.parentNode) {
+        path.push(parent);
+        visited.add(parent);
       }
-      if (entry.once) this.removeEventListener(event.type, entry.listener);
+    }
+    try { Object.defineProperty(event, "target", { configurable: true, value: this }); } catch {}
+    for (const currentTarget of path) {
+      try { Object.defineProperty(event, "currentTarget", { configurable: true, value: currentTarget }); } catch {}
+      for (const entry of [...(currentTarget._eventListeners?.get(String(event.type)) || [])]) {
+        try {
+          if (typeof entry.listener === "function") entry.listener.call(currentTarget, event);
+          else entry.listener.handleEvent?.(event);
+        } catch (error) {
+          lastUnhandledEventError = error;
+          console.error(`Unhandled ${event.type} event listener error:`, error);
+        }
+        if (entry.once) currentTarget.removeEventListener(event.type, entry.listener);
+      }
       if (event.cancelBubble) break;
     }
     return !event.defaultPrevented;
@@ -791,6 +801,9 @@ body.ownerDocument = document;
 head.ownerDocument = document;
 document.documentElement.ownerDocument = document;
 document.documentElement.append(head, body);
+// Maintain the browser event ancestry. Controls such as OrbitControls listen
+// for pointerdown on the canvas, then pointermove/pointerup on ownerDocument.
+document.documentElement.parentNode = document;
 
 function requestNativePointerLock(element) {
   if (native.overlayOpen?.()) native.setOverlay(false);
@@ -1549,6 +1562,7 @@ for (const [name, value] of Object.entries({ UNSENT: 0, OPENED: 1, HEADERS_RECEI
 globalThis.XMLHttpRequest = XMLHttpRequestHost;
 
 const windowEvents = new BrowserEventTarget();
+document.parentNode = windowEvents;
 globalThis.addEventListener = windowEvents.addEventListener.bind(windowEvents);
 globalThis.removeEventListener = windowEvents.removeEventListener.bind(windowEvents);
 globalThis.dispatchEvent = windowEvents.dispatchEvent.bind(windowEvents);
@@ -1688,12 +1702,12 @@ const pressedKeys = new Set();
 let overlayChordActive = false;
 
 function dispatchToCanvasAndWindow(eventFactory) {
-  if (currentCanvas) currentCanvas.dispatchEvent(eventFactory());
-  windowEvents.dispatchEvent(eventFactory());
+  (currentCanvas || windowEvents).dispatchEvent(eventFactory());
 }
 
 function dispatchNativeInput() {
   for (const input of native.pollInput()) {
+    if (process.env.THREEBROWSER_TRACE_INPUT) console.error("input addon", input);
     const defaultTarget = currentCanvas || windowEvents;
     if (input.type === "pointerlocklost") {
       releaseNativePointerLock(true);
@@ -1723,7 +1737,6 @@ function dispatchNativeInput() {
         shiftKey: input.shiftKey, ctrlKey: input.ctrlKey, altKey: input.altKey,
       };
       target.dispatchEvent(eventWith("pointercancel", properties));
-      if (target !== windowEvents) windowEvents.dispatchEvent(eventWith("pointercancel", properties));
       captureTarget?.releasePointerCapture(1);
       mouseButtons = 0;
       continue;
@@ -1777,10 +1790,8 @@ function dispatchNativeInput() {
       const captureTarget = pointerCaptureTargets.get(1);
       const target = captureTarget || defaultTarget;
       target.dispatchEvent(eventWith(pointerType, properties));
-      if (target !== windowEvents) windowEvents.dispatchEvent(eventWith(pointerType, properties));
       const mouseType = pointerType === "pointermove" ? "mousemove" : pointerType === "pointerdown" ? "mousedown" : "mouseup";
       target.dispatchEvent(eventWith(mouseType, properties));
-      if (target !== windowEvents) windowEvents.dispatchEvent(eventWith(mouseType, properties));
       if (pointerType === "pointerup") {
         const clickType = button === 0 ? "click" : "auxclick";
         target.dispatchEvent(eventWith(clickType, properties));
@@ -1798,7 +1809,9 @@ function dispatchNativeInput() {
     if (overlayChordDown && !overlayChordActive) {
       overlayChordActive = true;
       releaseNativePointerLock();
-      native.setOverlay(!native.overlayOpen());
+      const open = !native.overlayOpen();
+      const accepted = native.setOverlay(open);
+      if (process.env.THREEBROWSER_TRACE_INPUT) console.error("overlay chord", { open, accepted, active: native.overlayOpen() });
     }
     const consumeOverlayChord = overlayChordActive && (input.code === 9 || input.code === 16);
     if (input.type === "keyup") {
@@ -1858,7 +1871,11 @@ function pump() {
       setTimeout(pump, 1);
       return;
     }
-    return stop();
+    stop();
+    // Closing the native window is the runtime's equivalent of closing a
+    // browser tab. Page timers must not keep the headless JS process alive.
+    setImmediate(() => process.exit(0));
+    return;
   }
   if (process.env.THREEBROWSER_TRACE_RENDER && performance.now() >= nextTraceFrame) {
     nextTraceFrame = performance.now() + 1000;

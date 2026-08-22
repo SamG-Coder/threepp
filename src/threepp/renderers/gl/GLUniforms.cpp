@@ -531,7 +531,13 @@ void GLUniforms::upload(std::vector<UniformObject*>& seq, UniformMap& values, GL
 
         if (!v.needsUpdate || (v.needsUpdate && v.needsUpdate.value())) {
 
-            u->setValue(v.value(), textures);
+            try {
+                u->setValue(v.value(), textures);
+            } catch (const std::bad_variant_access& error) {
+                throw std::runtime_error(
+                        "uniform '" + u->id + "' has incompatible variant index " +
+                        std::to_string(v.value().index()) + ": " + error.what());
+            }
         }
     }
 }

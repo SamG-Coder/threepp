@@ -106,6 +106,7 @@ namespace {
             case GLFW_KEY_F: return Key::F;
             case GLFW_KEY_G: return Key::G;
             case GLFW_KEY_H: return Key::H;
+            case GLFW_KEY_I: return Key::I;
             case GLFW_KEY_J: return Key::J;
             case GLFW_KEY_K: return Key::K;
             case GLFW_KEY_L: return Key::L;
@@ -142,8 +143,11 @@ namespace {
             case GLFW_KEY_DELETE: return Key::DEL;
 
             case GLFW_KEY_LEFT_SHIFT: return Key::LEFT_SHIFT;
+            case GLFW_KEY_RIGHT_SHIFT: return Key::LEFT_SHIFT;
             case GLFW_KEY_LEFT_CONTROL: return Key::LEFT_CONTROL;
+            case GLFW_KEY_RIGHT_CONTROL: return Key::LEFT_CONTROL;
             case GLFW_KEY_LEFT_ALT: return Key::LEFT_ALT;
+            case GLFW_KEY_RIGHT_ALT: return Key::LEFT_ALT;
 
             default: return Key::UNKNOWN;
 
@@ -542,8 +546,7 @@ bool Canvas::animateOnce(const std::function<void()>& f) {
 }
 
 bool Canvas::isOpen() const {
-
-    return !pimpl_->close_;
+    return !pimpl_->close_ && (!pimpl_->window || !glfwWindowShouldClose(pimpl_->window));
 }
 
 WindowSize Canvas::size() const {

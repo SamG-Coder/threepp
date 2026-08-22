@@ -15,8 +15,12 @@ add_library(three_native SHARED
 )
 target_include_directories(three_native PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
         PRIVATE "${CMAKE_SOURCE_DIR}/src/external/glfw/include"
+                "${CMAKE_SOURCE_DIR}/src/external/glad"
                 "${CMAKE_SOURCE_DIR}/src")
 target_link_libraries(three_native PRIVATE threepp::threepp)
+if (WIN32)
+    target_link_libraries(three_native PRIVATE gdi32)
+endif ()
 target_compile_definitions(three_native PRIVATE THREE_NATIVE_EXPORT)
 if (THREEPP_WITH_VULKAN)
     target_compile_definitions(three_native PRIVATE THREEPP_WITH_VULKAN=1)
@@ -70,6 +74,7 @@ if (WIN32)
     endif ()
     target_compile_definitions(three_webgpu PRIVATE THREE_WEBGPU_EXPORT WGPU_SHARED_LIBRARY)
     target_link_libraries(three_webgpu PRIVATE "${WGPU_NATIVE_LIB}" user32 gdi32)
+    target_link_libraries(three_native PRIVATE three_webgpu)
     set_target_properties(three_webgpu PROPERTIES
             PREFIX ""
             OUTPUT_NAME "three_webgpu"

@@ -53,6 +53,10 @@ TW_API void tw_set_overlay(int on);
 TW_API int tw_overlay_open(void);
 TW_API void tw_overlay_click(int x, int y);
 TW_API void tw_toggle_fps_overlay(void);
+TW_API int tw_overlay_visible(void);
+TW_API const uint8_t* tw_overlay_raster(int width, int height, int fps, int frame_us,
+                                        const char* backend, int backlog, uint64_t packets,
+                                        int* row_bytes);
 TW_API int tw_set_pointer_lock(int on);
 TW_API int tw_poll_input(TWInputEvent* events, int capacity);
 TW_API void tw_stats(int* fps, int* frame_us, int* width, int* height, int* vsync, uint64_t* presents);

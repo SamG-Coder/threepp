@@ -3320,6 +3320,41 @@ void tw_toggle_fps_overlay(void) {
     g.overlayDirty.store(1, std::memory_order_release);
 }
 
+int tw_overlay_visible(void) {
+    return g.overlayOpen.load(std::memory_order_relaxed) != 0 ||
+           g.fpsOverlay.load(std::memory_order_relaxed) != 0;
+}
+
+const uint8_t* tw_overlay_raster(int width, int height, int fps, int frameUs,
+                                 const char* backend, int backlog, uint64_t packets,
+                                 int* rowBytes) {
+    static int cachedWidth = 0;
+    static int cachedHeight = 0;
+    static int cachedFps = -1;
+    static int cachedFrameUs = -1;
+    width = std::max(1, width);
+    height = std::max(1, height);
+    g.statsW.store(width, std::memory_order_relaxed);
+    g.statsH.store(height, std::memory_order_relaxed);
+    g.statsFps.store(fps, std::memory_order_relaxed);
+    g.statsFrameUs.store(frameUs, std::memory_order_relaxed);
+    g.pendingCommandSubmits.store(backlog, std::memory_order_relaxed);
+    g.statsCmdSubmits.store(packets, std::memory_order_relaxed);
+    if (backend && backend[0]) g.backendName = backend;
+    const int stride = (width * 4 + 255) & ~255;
+    if (rowBytes) *rowBytes = stride;
+    if (!tw_overlay_visible()) return nullptr;
+    if (g.overlayDirty.exchange(0, std::memory_order_acq_rel) || cachedWidth != width ||
+        cachedHeight != height || cachedFps != fps || cachedFrameUs != frameUs) {
+        buildOverlayPixels(width, height);
+        cachedWidth = width;
+        cachedHeight = height;
+        cachedFps = fps;
+        cachedFrameUs = frameUs;
+    }
+    return g.overlayPixels.empty() ? nullptr : g.overlayPixels.data();
+}
+
 int tw_set_pointer_lock(int on) {
     try {
         return onWorker([on] {
