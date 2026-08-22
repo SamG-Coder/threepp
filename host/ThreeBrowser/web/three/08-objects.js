@@ -178,13 +178,16 @@
     const positions = [];
     const normals = [];
     const uvs = [];
+    const uvs2 = [];
     const faceUvs = geo.faceVertexUvs?.[0] || [];
+    const faceUvs2 = geo.faceVertexUvs?.[1] || [];
     for (let faceIndex = 0; faceIndex < geo.faces.length; faceIndex++) {
       const face = geo.faces[faceIndex];
       if (!face) continue;
       const indices = [face.a, face.b, face.c];
       const vertexNormals = face.vertexNormals || [];
       const uv = faceUvs[faceIndex] || [];
+      const uv2 = faceUvs2[faceIndex] || uv;
       for (let corner = 0; corner < 3; corner++) {
         const vertex = geo.vertices[indices[corner]];
         if (!vertex) continue;
@@ -193,6 +196,8 @@
         normals.push(normal?.x || 0, normal?.y || 0, normal?.z || 0);
         const texcoord = uv[corner];
         uvs.push(texcoord?.x || 0, texcoord?.y || 0);
+        const texcoord2 = uv2[corner];
+        uvs2.push(texcoord2?.x || 0, texcoord2?.y || 0);
       }
     }
     if (!positions.length) return geo;
@@ -201,6 +206,7 @@
       position: Attribute ? new Attribute(new Float32Array(positions), 3) : { array: new Float32Array(positions), itemSize: 3 },
       normal: Attribute ? new Attribute(new Float32Array(normals), 3) : { array: new Float32Array(normals), itemSize: 3 },
       uv: Attribute ? new Attribute(new Float32Array(uvs), 2) : { array: new Float32Array(uvs), itemSize: 2 },
+      uv2: Attribute ? new Attribute(new Float32Array(uvs2), 2) : { array: new Float32Array(uvs2), itemSize: 2 },
     };
     geo.index = null;
     return geo;

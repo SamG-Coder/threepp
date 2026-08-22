@@ -96,6 +96,7 @@
     aoMap: 4,
     emissiveMap: 5,
     envMap: 6,
+    lightMap: 7,
   };
 
   function applyMapSlot(matId, slot, texId) {
@@ -131,6 +132,44 @@
     for (const key in MAP_SLOTS) {
       bindMap(mat, mat[key], MAP_SLOTS[key]);
     }
+    if (mat.node) {
+      bindMap(mat, unwrapNodeValue(mat.normal), MAP_SLOTS.normalMap);
+      bindMap(mat, unwrapNodeValue(mat.ao), MAP_SLOTS.aoMap);
+      bindMap(mat, unwrapNodeValue(mat.environment), MAP_SLOTS.envMap);
+    }
+  }
+
+  function unwrapNodeValue(value) {
+    let current = value;
+    const seen = new Set();
+    for (let depth = 0; depth < 6 && current && typeof current === "object"; depth++) {
+      if (current.isTexture || current.isCubeTexture || current.isColor) return current;
+      if (seen.has(current)) break;
+      seen.add(current);
+      if (current.value !== undefined) current = current.value;
+      else break;
+    }
+    return current;
+  }
+
+  function isSemanticNodeMaterial(mat) {
+    return !!(
+      mat && mat._nativeKind === "shader" && mat.node &&
+      (unwrapNodeValue(mat.color)?.isColor || unwrapNodeValue(mat.normal)?.isTexture ||
+        unwrapNodeValue(mat.ao)?.isTexture || unwrapNodeValue(mat.environment)?.isTexture)
+    );
+  }
+
+  function semanticNodePbr(mat) {
+    const shininess = Number(unwrapNodeValue(mat.shininess));
+    const roughness = Number.isFinite(shininess)
+      ? Math.max(0.04, Math.min(1, Math.sqrt(2 / (Math.max(0, shininess) + 2))))
+      : 0.35;
+    const specular = unwrapNodeValue(mat.specular);
+    const specularStrength = specular?.isColor
+      ? Math.max(specular.r || 0, specular.g || 0, specular.b || 0)
+      : 0;
+    return { metalness: Math.max(0, Math.min(0.9, specularStrength * 0.85)), roughness };
   }
 
   TN._bindMaterialMaps = bindAllMaps;
@@ -297,22 +336,26 @@
   function bindNative(mat) {
     if (mat.__bound || !mat._nativeKind) return;
     mat.__bound = true;
-    const color = hex(mat.color);
+    const nodeFallback = isSemanticNodeMaterial(mat);
+    const nativeKind = nodeFallback ? "standard" : mat._nativeKind;
+    const color = hex(nodeFallback ? unwrapNodeValue(mat.color) : mat.color);
     let handle = 0;
-    if (TN.cmd && mat._nativeKind !== "shader") {
+    if (TN.cmd && nativeKind !== "shader") {
       handle = TN.cmd.alloc();
-      if (mat._nativeKind === "basic") TN.cmd.matBasic(handle, color);
-      else if (mat._nativeKind === "lambert") TN.cmd.matLambert(handle, color);
-      else if (mat._nativeKind === "normal") TN.cmd.matNormal(handle);
-      else if (mat._nativeKind === "line") TN.cmd.matLine(handle, color, mat.linewidth ?? 1);
-      else if (mat._nativeKind === "points") TN.cmd.matPoints(handle, color, mat.size ?? 1);
-      else if (mat._nativeKind === "sprite") TN.cmd.matSprite(handle, color);
+      if (nativeKind === "basic") TN.cmd.matBasic(handle, color);
+      else if (nativeKind === "lambert") TN.cmd.matLambert(handle, color);
+      else if (nativeKind === "normal") TN.cmd.matNormal(handle);
+      else if (nativeKind === "line") TN.cmd.matLine(handle, color, mat.linewidth ?? 1);
+      else if (nativeKind === "points") TN.cmd.matPoints(handle, color, mat.size ?? 1);
+      else if (nativeKind === "sprite") TN.cmd.matSprite(handle, color);
       else {
-        const metal = mat._nativePbr ? mat._nativePbr.metalness : mat.metalness ?? 0;
-        const rough = mat._nativePbr ? mat._nativePbr.roughness : mat.roughness ?? 1;
+        const nodePbr = nodeFallback ? semanticNodePbr(mat) : null;
+        const metal = nodePbr?.metalness ?? (mat._nativePbr ? mat._nativePbr.metalness : mat.metalness ?? 0);
+        const rough = nodePbr?.roughness ?? (mat._nativePbr ? mat._nativePbr.roughness : mat.roughness ?? 1);
         TN.cmd.matStandard(handle, color, metal, rough);
       }
       if (handle) {
+        mat._nativeNodeFallback = nodeFallback;
         if (mat.side != null) TN.cmd.matSide(handle, mat.side);
         if (typeof TN.cmd.matAlpha === "function") {
           TN.cmd.matAlpha(
@@ -328,6 +371,10 @@
         }
         mat.__h = handle;
         bindAllMaps(mat);
+        const nodeNormalScale = nodeFallback ? unwrapNodeValue(mat.normalScale) : mat.normalScale;
+        if (nodeNormalScale && typeof TN.cmd.matNormalScale === "function") {
+          TN.cmd.matNormalScale(handle, nodeNormalScale.x ?? 1, nodeNormalScale.y ?? 1);
+        }
         bindEmissive(mat);
       }
       return;
@@ -648,7 +695,44 @@
     }
 
     set needsUpdate(value) {
-      if (value === true) this.version++;
+      if (value !== true) return;
+      this.version++;
+
+      // Legacy Three.js commonly assigns maps and render properties directly,
+      // then uses needsUpdate as the single synchronization point. Mirror that
+      // contract for native materials instead of requiring modern setters.
+      const handle = this.__h || 0;
+      if (!handle) return;
+      bindAllMaps(this);
+      if (TN.cmd) {
+        const materialColor = this._nativeNodeFallback ? unwrapNodeValue(this.color) : this.color;
+        if (materialColor && typeof TN.cmd.matColor === "function") {
+          TN.cmd.matColor(handle, hex(materialColor));
+        }
+        if (this.side != null) TN.cmd.matSide(handle, this.side);
+        const normalScale = this._nativeNodeFallback ? unwrapNodeValue(this.normalScale) : this.normalScale;
+        if (normalScale && typeof TN.cmd.matNormalScale === "function") {
+          TN.cmd.matNormalScale(handle, normalScale.x ?? 1, normalScale.y ?? 1);
+        }
+        if (this._nativeKind === "standard" || this._nativeNodeFallback) {
+          const nodePbr = this._nativeNodeFallback ? semanticNodePbr(this) : null;
+          TN.cmd.matPbr(
+            handle,
+            nodePbr?.metalness ?? (this._nativePbr ? this._nativePbr.metalness : this.metalness ?? 0),
+            nodePbr?.roughness ?? (this._nativePbr ? this._nativePbr.roughness : this.roughness ?? 1)
+          );
+        }
+        if (this.emissive) TN.cmd.matEmissive(handle, hex(this.emissive));
+        if (typeof TN.cmd.matAlpha === "function") {
+          TN.cmd.matAlpha(
+            handle,
+            this.opacity ?? 1,
+            this.alphaTest ?? 0,
+            this.transparent ? 1 : 0,
+            this.depthWrite !== false ? 1 : 0
+          );
+        }
+      }
     }
 
     flushNative() {

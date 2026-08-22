@@ -381,7 +381,11 @@
       this._width = width;
       this._height = height;
       this._pixelRatio = 1;
-      this._toneMapping = options.toneMapping ?? TN.NoToneMapping ?? 0;
+      const legacyRevision = Number.parseInt(globalThis.THREE?.REVISION, 10);
+      const defaultToneMapping = Number.isFinite(legacyRevision) && legacyRevision < 110
+        ? (TN.LinearToneMapping ?? 1)
+        : (TN.NoToneMapping ?? 0);
+      this._toneMapping = options.toneMapping ?? defaultToneMapping;
       this._toneMappingExposure = options.toneMappingExposure ?? 1;
       this._outputColorSpace = options.outputColorSpace ?? TN.SRGBColorSpace ?? "srgb";
       this._clearColor = 0x000000;
@@ -486,6 +490,9 @@
     setClearColor(color, alpha) {
       this._clearColor = color;
       if (alpha != null) this._clearAlpha = alpha;
+      if (TN.cmd && typeof TN.cmd.clearColor === "function") {
+        TN.cmd.clearColor(hex(color), this._clearAlpha ?? 1);
+      }
     }
 
     getClearColor(target) {
@@ -508,6 +515,9 @@
 
     setClearAlpha(alpha) {
       this._clearAlpha = alpha;
+      if (TN.cmd && typeof TN.cmd.clearColor === "function") {
+        TN.cmd.clearColor(hex(this._clearColor), this._clearAlpha ?? 1);
+      }
     }
 
     setViewport() {}
@@ -519,7 +529,12 @@
     setRenderTarget(target, activeCubeFace = 0, activeMipmapLevel = 0) {
       const n = native();
       const handle = target?._h || 0;
-      if (TN.hostHas?.(n, "RenderTargetSet")) {
+      // The headless runtime submits a single scene/camera pair per native
+      // frame. Its compatibility path cannot replay a WebGL EffectComposer
+      // pass graph, so binding its intermediate targets would expose those
+      // clears as black/white window frames. Keep the JS render-target state
+      // intact and present only the resolved backbuffer scene in render().
+      if (!globalThis.__threeBrowserNativeRuntime && TN.hostHas?.(n, "RenderTargetSet")) {
         const ok = n.RenderTargetSet(handle, activeCubeFace, activeMipmapLevel);
         if (!ok && handle) throw new Error(n.LastError?.() || "failed to bind native render target");
       }
@@ -598,9 +613,29 @@
       if (typeof raf === "function") raf(loop);
     }
 
-    render(scene, camera) {
+    render(scene, camera, legacyRenderTarget) {
       this.info.render.frame++;
       TN._renderFrame = this.info.render.frame;
+      // Three.js before r110 passed the destination directly to render().
+      // Modern Three.js uses setRenderTarget(). Supporting both is essential
+      // for old EffectComposer builds, otherwise every offscreen pass is
+      // mistaken for a backbuffer presentation.
+      const activeRenderTarget = arguments.length >= 3
+        ? (legacyRenderTarget || null)
+        : this._renderTarget;
+      if (
+        globalThis.__threeBrowserNativeRuntime &&
+        activeRenderTarget &&
+        this._nativeOffscreenToken &&
+        scene === this._lastNativeScene &&
+        camera === this._lastNativeCamera
+      ) {
+        // ManualMSAARenderPass invokes the same full scene many times in one
+        // synchronous composer cycle. Native MSAA is configured on the window;
+        // repeating JS traversal cannot improve it and delays the next input
+        // and animation update.
+        return true;
+      }
       if (!this._traceRendered && globalThis.process?.env?.THREEBROWSER_TRACE_RENDER) {
         this._traceRendered = true;
         const objects = [];
@@ -625,6 +660,44 @@
           meshVisible: firstMesh?.visible,
           parentRotation: firstMesh?.parent?.rotation?.y,
         });
+      }
+      if (globalThis.process?.env?.THREEBROWSER_TRACE_MATERIALS && !this._traceMaterials) {
+        const materials = [];
+        const seen = new Set();
+        scene?.traverse?.((object) => {
+          const list = Array.isArray(object?.material) ? object.material : [object?.material];
+          for (const material of list) {
+            if (!material || seen.has(material)) continue;
+            seen.add(material);
+            materials.push({
+              type: material.type || material.constructor?.name,
+              nativeKind: material._nativeKind || null,
+              handle: material._h || 0,
+              color: material.color?.getHex?.(),
+              map: material.map?._h || 0,
+              mapSource: material.map?.image?.src || material.map?.source?.data?.src || null,
+              lightMap: material.lightMap?._h || 0,
+              lightMapSource: material.lightMap?.image?.src || material.lightMap?.source?.data?.src || null,
+              normalMap: material.normalMap?._h || 0,
+              normalMapSource: material.normalMap?.image?.src || material.normalMap?.source?.data?.src || null,
+              aoMap: material.aoMap?._h || 0,
+              aoMapSource: material.aoMap?.image?.src || material.aoMap?.source?.data?.src || null,
+              envMap: material.envMap?._h || 0,
+              metalness: material.metalness,
+              roughness: material.roughness,
+              opacity: material.opacity,
+              unsupportedKeys: !material._h
+                ? Object.keys(material).filter((key) => !key.startsWith("_")).slice(0, 80)
+                : undefined,
+              vertexShaderLength: material.vertexShader?.length,
+              fragmentShaderLength: material.fragmentShader?.length,
+            });
+          }
+        });
+        if (materials.length >= 8 || this.info.render.frame >= 300) {
+          this._traceMaterials = true;
+          console.error("ThreeBrowser scene materials", materials);
+        }
       }
       if (scene && typeof scene.updateMatrixWorld === "function") scene.updateMatrixWorld();
       if (camera && camera.parent === null && typeof camera.updateMatrixWorld === "function") {
@@ -655,12 +728,57 @@
           }
         }
       }
+      let nativeScene = scene;
+      let nativeCamera = camera;
+      if (globalThis.__threeBrowserNativeRuntime) {
+        let hasNativeDraw = false;
+        scene?.traverse?.((object) => {
+          if (hasNativeDraw || !object?._h) return;
+          const materials = Array.isArray(object.material) ? object.material : [object.material];
+          if (
+            (object.isMesh || object.isLine || object.isLineSegments || object.isPoints || object.isSprite) &&
+            materials.some((material) => material?._h)
+          ) {
+            hasNativeDraw = true;
+          }
+        });
+
+        if (hasNativeDraw && camera?._h) {
+          this._lastNativeScene = scene;
+          this._lastNativeCamera = camera;
+        }
+
+        // Offscreen passes are still evaluated on the JS side, including
+        // callbacks and transforms above, but are not separate presentable
+        // frames in the native renderer.
+        if (activeRenderTarget) {
+          if (hasNativeDraw) {
+            const token = {};
+            this._nativeOffscreenToken = token;
+            const clearToken = () => {
+              if (this._nativeOffscreenToken === token) this._nativeOffscreenToken = null;
+            };
+            if (typeof queueMicrotask === "function") queueMicrotask(clearToken);
+            else Promise.resolve().then(clearToken);
+          }
+          return true;
+        }
+
+        // Legacy EffectComposer commonly finishes with a fullscreen
+        // ShaderMaterial. Until custom GLSL is available natively, resolve
+        // that pass to the latest real scene instead of presenting its empty
+        // clear frame.
+        if (!hasNativeDraw && this._lastNativeScene && this._lastNativeCamera) {
+          nativeScene = this._lastNativeScene;
+          nativeCamera = this._lastNativeCamera;
+        }
+      }
       if (TN.cmd) {
         if (typeof TN.cmd.submitFrame === "function") {
-          TN.cmd.submitFrame(scene?._h || 0, camera?._h || 0);
+          TN.cmd.submitFrame(nativeScene?._h || 0, nativeCamera?._h || 0);
         } else {
           TN.cmd.flushPoses();
-          TN.cmd.render(scene?._h || 0, camera?._h || 0);
+          TN.cmd.render(nativeScene?._h || 0, nativeCamera?._h || 0);
           TN.cmd.submit();
         }
         return true;
@@ -669,7 +787,7 @@
       flushObject(camera);
       const n = native();
       if (!TN.hostHas?.(n, "RuntimeRender")) return false;
-      const keep = n.RuntimeRender(scene?._h || 0, camera?._h || 0);
+      const keep = n.RuntimeRender(nativeScene?._h || 0, nativeCamera?._h || 0);
       if (!keep) {
         const err = n.LastError?.();
         if (err) console.warn(err);

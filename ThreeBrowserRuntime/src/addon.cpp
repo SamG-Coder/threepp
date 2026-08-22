@@ -340,7 +340,9 @@ napi_value isOpen(napi_env env, napi_callback_info) {
 }
 
 napi_value waitFrame(napi_env env, napi_callback_info) {
-    if (runtimeMode.load(std::memory_order_acquire) != 2) DwmFlush();
+    // threepp submissions wait for their native presentation. A second,
+    // unrelated DwmFlush here can land on the following compositor tick and
+    // makes frame pacing alternate between short and long intervals.
     return undefined(env);
 }
 

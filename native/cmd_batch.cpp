@@ -12,6 +12,7 @@
 #include "threepp/materials/SpriteMaterial.hpp"
 #include "threepp/objects/Sprite.hpp"
 #include "threepp/textures/Texture.hpp"
+#include "threepp/textures/CubeTexture.hpp"
 
 #include <algorithm>
 #include <array>
@@ -193,6 +194,11 @@ void applyMaterialMapSlot(Material* material, const std::shared_ptr<Texture>& te
                 m->envMap = texture;
             }
             break;
+        case tn::cmd::MAP_SLOT_LIGHT:
+            if (auto* m = dynamic_cast<MaterialWithLightMap*>(material)) {
+                m->lightMap = texture;
+            }
+            break;
         default:
             if (auto* m = dynamic_cast<MaterialWithMap*>(material)) {
                 m->map = texture;
@@ -229,7 +235,6 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
         case tn::cmd::OP_SCENE_CREATE: {
             if (!has(p, end, 4)) return;
             auto scene = Scene::create();
-            scene->background = Background(Color(0x000000));
             insertObject(ru32(p), Kind::Scene, scene);
             return;
         }
@@ -582,6 +587,54 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             markDirty();
             return;
         }
+        case tn::cmd::OP_CLEAR_COLOR: {
+            if (!has(p, end, 8) || !g.renderer) return;
+            g.renderer->setClearColor(Color(ru32(p)), rf32(p + 4));
+            markDirty();
+            return;
+        }
+        case tn::cmd::OP_TEX_CUBE: {
+            if (!has(p, end, 32)) return;
+            std::vector<Image> images;
+            images.reserve(6);
+            for (int i = 0; i < 6; i++) {
+                Slot* face = findSlot(ru32(p + 4 + i * 4));
+                if (!face || !face->texture || face->texture->images().empty()) {
+                    setError("cube texture needs six uploaded faces");
+                    return;
+                }
+                images.push_back(face->texture->image());
+            }
+            auto cube = CubeTexture::create(images);
+            cube->colorSpace = colorSpaceFromJs(ru32(p + 28));
+            cube->needsUpdate();
+            Slot slot;
+            slot.kind = Kind::Texture;
+            slot.texture = std::move(cube);
+            insertAt(ru32(p), std::move(slot));
+            markDirty();
+            return;
+        }
+        case tn::cmd::OP_MAT_COLOR: {
+            if (!has(p, end, 8)) return;
+            Slot* slot = getSlot(ru32(p));
+            if (!slot || !slot->material) return;
+            if (auto* colored = dynamic_cast<MaterialWithColor*>(slot->material.get())) {
+                colored->color.setHex(ru32(p + 4));
+                markDirty();
+            }
+            return;
+        }
+        case tn::cmd::OP_MAT_NORMAL_SCALE: {
+            if (!has(p, end, 12)) return;
+            Slot* slot = getSlot(ru32(p));
+            if (!slot || !slot->material) return;
+            if (auto* normal = dynamic_cast<MaterialWithNormalMap*>(slot->material.get())) {
+                normal->normalScale.set(rf32(p + 4), rf32(p + 8));
+                markDirty();
+            }
+            return;
+        }
         case tn::cmd::OP_MAT_SIDE: {
             if (!has(p, end, 8)) return;
             Slot* slot = getSlot(ru32(p));
@@ -892,6 +945,10 @@ int tn_cmd_submit(const uint8_t* data, int nbytes) {
         std::vector<uint8_t> copy(data, data + nbytes);
         return onWorker([buf = std::move(copy)] {
             execStream(buf.data(), static_cast<int>(buf.size()));
+            // A frame command is not complete until the renderer has consumed
+            // it. Returning before presentation lets the JS animation loop run
+            // ahead of the native camera and produces visible bursts/stalls.
+            renderPendingFrame();
             return 1;
         });
     } catch (const std::exception& ex) {

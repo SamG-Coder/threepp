@@ -14,6 +14,7 @@ namespace tn::cmd {
 constexpr uint32_t OP_NOP = 0;
 constexpr uint32_t OP_RENDER = 1;
 constexpr uint32_t OP_SET_SIZE = 2;
+constexpr uint32_t OP_CLEAR_COLOR = 3;
 
 constexpr uint32_t OP_SCENE_CREATE = 10;
 constexpr uint32_t OP_SCENE_BG = 11;
@@ -47,7 +48,10 @@ constexpr uint32_t OP_MAT_MAP_SLOT = 50;
 constexpr uint32_t OP_MAT_NORMAL = 51;
 constexpr uint32_t OP_MAT_ALPHA = 52;
 constexpr uint32_t OP_MAT_VISIBLE = 53;
+constexpr uint32_t OP_MAT_COLOR = 54;
+constexpr uint32_t OP_MAT_NORMAL_SCALE = 55;
 constexpr uint32_t OP_TEX_PARAMS = 36;
+constexpr uint32_t OP_TEX_CUBE = 37;
 
 constexpr uint32_t OP_MESH = 60;
 constexpr uint32_t OP_GROUP = 61;
@@ -69,6 +73,7 @@ constexpr uint32_t MAP_SLOT_METALNESS = 3;
 constexpr uint32_t MAP_SLOT_AO = 4;
 constexpr uint32_t MAP_SLOT_EMISSIVE = 5;
 constexpr uint32_t MAP_SLOT_ENV = 6;
+constexpr uint32_t MAP_SLOT_LIGHT = 7;
 
 constexpr uint32_t OP_OBJECT_ADD = 80;
 constexpr uint32_t OP_SET_POSE = 81;

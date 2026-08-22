@@ -109,6 +109,7 @@ Object3D* asObject(uint32_t id);
 Object3D* findObject(uint32_t id);
 void resetIds();
 void onWorkerAsync(std::function<void()> fn);
+void renderPendingFrame();
 void applyPendingEnvironment();
 void destroySlot(uint32_t id);
 #if defined(__ANDROID__)

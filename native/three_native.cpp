@@ -82,7 +82,7 @@ using tn::onWorker;
 using tn::onWorkerAsync;
 using tn::setError;
 
-static void renderPendingFrame() {
+void tn::renderPendingFrame() {
     tn::applyPendingEnvironment();
     const uint32_t sceneHandle = g.drawScene.load();
     const uint32_t cameraHandle = g.drawCamera.load();
@@ -263,6 +263,8 @@ int tn_android_context_create(int width, int height) {
     g.workerId = std::this_thread::get_id();
     return impl_runtime_start(width, height, "ThreeBrowserDroid");
 }
+
+using tn::renderPendingFrame;
 
 void tn_android_context_resize(int width, int height) {
     width = std::max(1, width);
@@ -1449,6 +1451,16 @@ void applyMaterialMapSlot(Material* material, const std::shared_ptr<Texture>& te
         case 5:
             if (auto* m = dynamic_cast<MaterialWithEmissive*>(material)) {
                 m->emissiveMap = texture;
+            }
+            break;
+        case 6:
+            if (auto* m = dynamic_cast<MaterialWithEnvMap*>(material)) {
+                m->envMap = texture;
+            }
+            break;
+        case 7:
+            if (auto* m = dynamic_cast<MaterialWithLightMap*>(material)) {
+                m->lightMap = texture;
             }
             break;
         default:

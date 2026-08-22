@@ -1146,6 +1146,27 @@
   }
 
   function uploadTextureNativeBody(texture, flip, ver) {
+    if (texture.isCubeTexture && Array.isArray(texture.image)) {
+      const images = texture.image.slice(0, 6);
+      if (images.length !== 6 || images.some((image) => !image)) return;
+      if (!TN.cmd || typeof TN.cmd.texCube !== "function") return;
+      const faces = [];
+      for (let i = 0; i < 6; i++) {
+        const face = new Texture(images[i]);
+        face.flipY = false;
+        face.colorSpace = texture.colorSpace;
+        uploadTextureNative(face);
+        if (!face._h) return;
+        faces.push(face._h);
+      }
+      const id = texture._h || TN.cmd.alloc();
+      TN.cmd.texCube(id, faces, textureParams(texture).colorSpace);
+      texture._h = id;
+      texture._nativeFlipY = flip;
+      texture._nativeVersion = ver;
+      bindWaitingMaterials(texture);
+      return;
+    }
     const raster = rasterizeToRgba(texture);
     if (globalThis.process?.env?.THREEBROWSER_TRACE_TEXTURES) {
       console.error(`ThreeBrowser texture: ${texture.image?.data?.constructor?.name || texture.image?.constructor?.name || "unknown"} ${raster?.width || 0}x${raster?.height || 0} existing=${texture._h || 0}`);

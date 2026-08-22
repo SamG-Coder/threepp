@@ -7,6 +7,7 @@
     NOP: 0,
     RENDER: 1,
     SET_SIZE: 2,
+    CLEAR_COLOR: 3,
     SCENE_CREATE: 10,
     SCENE_BG: 11,
     SCENE_FOG: 12,
@@ -23,6 +24,7 @@
     TEX_BEGIN: 34,
     TEX_ROWS: 35,
     TEX_PARAMS: 36,
+    TEX_CUBE: 37,
     MAT_BASIC: 40,
     MAT_LAMBERT: 41,
     MAT_STANDARD: 42,
@@ -37,6 +39,8 @@
     MAT_NORMAL: 51,
     MAT_ALPHA: 52,
     MAT_VISIBLE: 53,
+    MAT_COLOR: 54,
+    MAT_NORMAL_SCALE: 55,
     MESH: 60,
     GROUP: 61,
     INSTANCED: 62,
@@ -75,6 +79,7 @@
     aoMap: 4,
     emissiveMap: 5,
     envMap: 6,
+    lightMap: 7,
   };
 
   const CAP = 8 * 1024 * 1024;
@@ -710,6 +715,33 @@
       const s = begin(OP.MAT_VISIBLE, 8);
       wu32(id);
       wu32(visible ? 1 : 0);
+      end(s);
+    },
+    clearColor(hex, alpha) {
+      const s = begin(OP.CLEAR_COLOR, 8);
+      wu32(hex);
+      wf32(alpha);
+      end(s);
+    },
+    texCube(id, faces, colorSpace) {
+      const s = begin(OP.TEX_CUBE, 32);
+      wu32(id);
+      for (let i = 0; i < 6; i++) wu32(faces?.[i] || 0);
+      wu32(colorSpace || 0);
+      end(s);
+    },
+    matColor(id, hex) {
+      const s = begin(OP.MAT_COLOR, 8);
+      wu32(id);
+      wu32(hex);
+      end(s);
+    },
+    matNormalScale(id, x, y) {
+      const s = begin(OP.MAT_NORMAL_SCALE, 16);
+      wu32(id);
+      wf32(x);
+      wf32(y);
+      wu32(0);
       end(s);
     },
     mesh(id, geo, mat) {
