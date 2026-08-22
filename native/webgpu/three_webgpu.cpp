@@ -82,6 +82,7 @@ struct Slot {
     uint32_t texW{0};
     uint32_t texH{0};
     uint32_t texD{0};
+    uint32_t texSampleCount{1};
     WGPUTextureFormat texFormat{WGPUTextureFormat_Undefined};
     WGPUBufferUsage bufUsage{WGPUBufferUsage_None};
     uint64_t bufSize{0};
@@ -120,6 +121,7 @@ struct Runtime {
     std::atomic<int> debugOverlay{0};
     std::atomic<int> overlayOpen{0};
     std::atomic<int> overlayDirty{1};
+    std::atomic<uint64_t> overlayRevision{0};
     std::atomic<int> loading{0};
     std::atomic<uint32_t> loadingPhase{0};
     std::mutex loadingMu;
@@ -145,6 +147,10 @@ struct Runtime {
     WGPUBindGroup overlayBindGroup{};
     int overlayWidth{0};
     int overlayHeight{0};
+    int overlayLeft{0};
+    int overlayTop{0};
+    uint32_t overlaySampleCount{1};
+    WGPUTextureFormat overlayDepthFormat{WGPUTextureFormat_Undefined};
     int overlayRenderedFps{-1};
     std::vector<uint8_t> overlayPixels;
 
@@ -168,6 +174,11 @@ struct Runtime {
     std::unordered_map<uint32_t, Slot> slots;
     WGPUCommandEncoder currentEncoder{};
     uint32_t currentEncoderHandle{0};
+    bool currentEncoderUsesSurface{false};
+    bool activeRenderPassUsesSurface{false};
+    uint32_t activeRenderPassSampleCount{1};
+    WGPUTextureFormat activeRenderPassDepthFormat{WGPUTextureFormat_Undefined};
+    bool overlayRecordedForCurrentTexture{false};
     WGPUComputePassEncoder computePass{};
     WGPURenderPassEncoder renderPass{};
     bool computePipelineSet{false};
@@ -547,7 +558,10 @@ void dropCurrentTexture() {
         wgpuTextureRelease(g.currentTex);
         g.currentTex = nullptr;
     }
+    g.overlayRecordedForCurrentTexture = false;
 }
+
+bool drawOverlayInPass(WGPURenderPassEncoder pass);
 
 bool beginSwapchainPass(WGPULoadOp load, float cr, float cg, float cb, float ca) {
     WGPUCommandEncoder encoder = ensureEncoder();
@@ -580,6 +594,10 @@ bool beginSwapchainPass(WGPULoadOp load, float cr, float cg, float cb, float ca)
         setError("beginSwapchainPass failed");
         return false;
     }
+    g.activeRenderPassUsesSurface = true;
+    g.currentEncoderUsesSurface = true;
+    g.activeRenderPassSampleCount = 1;
+    g.activeRenderPassDepthFormat = WGPUTextureFormat_Undefined;
     return true;
 }
 
@@ -591,10 +609,16 @@ void endPasses() {
     }
     g.computePipelineSet = false;
     if (g.renderPass) {
+        if (g.activeRenderPassUsesSurface && drawOverlayInPass(g.renderPass)) {
+            g.overlayRecordedForCurrentTexture = true;
+        }
         wgpuRenderPassEncoderEnd(g.renderPass);
         wgpuRenderPassEncoderRelease(g.renderPass);
         g.renderPass = nullptr;
     }
+    g.activeRenderPassUsesSurface = false;
+    g.activeRenderPassSampleCount = 1;
+    g.activeRenderPassDepthFormat = WGPUTextureFormat_Undefined;
     g.renderPipelineSet = false;
     g.skipRenderPass = false;
 }
@@ -1031,10 +1055,13 @@ void releaseOverlayGpu() {
     if (g.overlayTexture) { wgpuTextureRelease(g.overlayTexture); g.overlayTexture = nullptr; }
     g.overlayWidth = 0;
     g.overlayHeight = 0;
+    g.overlaySampleCount = 1;
+    g.overlayDepthFormat = WGPUTextureFormat_Undefined;
     g.overlayPixels.clear();
 }
 
-bool createOverlayGpu(int width, int height) {
+bool createOverlayGpu(int width, int height, uint32_t sampleCount,
+                      WGPUTextureFormat depthFormat) {
     releaseOverlayGpu();
     if (!g.device || width < 1 || height < 1) return false;
 
@@ -1107,9 +1134,23 @@ struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) uv: v
     pipelineDesc.primitive.topology = WGPUPrimitiveTopology_TriangleList;
     pipelineDesc.primitive.frontFace = WGPUFrontFace_CCW;
     pipelineDesc.primitive.cullMode = WGPUCullMode_None;
-    pipelineDesc.multisample.count = 1;
+    pipelineDesc.multisample.count = std::max(1u, sampleCount);
     pipelineDesc.multisample.mask = 0xffffffffu;
     pipelineDesc.fragment = &fragment;
+    WGPUDepthStencilState depthStencil{};
+    if (depthFormat != WGPUTextureFormat_Undefined) {
+        depthStencil.format = depthFormat;
+        depthStencil.depthWriteEnabled = WGPUOptionalBool_False;
+        depthStencil.depthCompare = WGPUCompareFunction_Always;
+        depthStencil.stencilFront.compare = WGPUCompareFunction_Always;
+        depthStencil.stencilFront.failOp = WGPUStencilOperation_Keep;
+        depthStencil.stencilFront.depthFailOp = WGPUStencilOperation_Keep;
+        depthStencil.stencilFront.passOp = WGPUStencilOperation_Keep;
+        depthStencil.stencilBack = depthStencil.stencilFront;
+        depthStencil.stencilReadMask = 0;
+        depthStencil.stencilWriteMask = 0;
+        pipelineDesc.depthStencil = &depthStencil;
+    }
     g.overlayPipeline = wgpuDeviceCreateRenderPipeline(g.device, &pipelineDesc);
     if (!g.overlayView || !g.overlaySampler || !g.overlayShader || !g.overlayPipeline) {
         releaseOverlayGpu();
@@ -1131,11 +1172,13 @@ struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) uv: v
     wgpuBindGroupLayoutRelease(layout);
     g.overlayWidth = width;
     g.overlayHeight = height;
+    g.overlaySampleCount = std::max(1u, sampleCount);
+    g.overlayDepthFormat = depthFormat;
     g.overlayDirty.store(1, std::memory_order_relaxed);
     return g.overlayBindGroup != nullptr;
 }
 
-void buildOverlayPixels(int width, int height) {
+void buildOverlayPixels(int width, int height, bool compactFps = false) {
     const bool loading = g.loading.load(std::memory_order_relaxed) != 0;
     const bool menu = !loading && g.overlayOpen.load(std::memory_order_relaxed) != 0;
     const bool fpsOnly = !loading && !menu && g.fpsOverlay.load(std::memory_order_relaxed) != 0;
@@ -1365,7 +1408,9 @@ void buildOverlayPixels(int width, int height) {
     }
 
     if (!loading && !menu && g.fpsOverlay.load(std::memory_order_relaxed)) {
-        RECT badge{width - 138, 18, width - 18, 54};
+        RECT badge = compactFps
+            ? RECT{4, 4, width - 4, height - 4}
+            : RECT{width - 138, 18, width - 18, 54};
         rounded(badge, RGB(255, 255, 255), RGB(207, 213, 221), 10);
         wchar_t fps[32]{};
         std::swprintf(fps, std::size(fps), L"%d FPS", g.statsFps.load(std::memory_order_relaxed));
@@ -1432,34 +1477,77 @@ void buildOverlayPixels(int width, int height) {
     SelectObject(dc, oldBitmap);
     DeleteObject(bitmap);
     DeleteDC(dc);
+    g.overlayRevision.fetch_add(1, std::memory_order_release);
 }
 
-void renderOverlay() {
+bool prepareOverlay(int& width, int& height, uint32_t sampleCount,
+                    WGPUTextureFormat depthFormat) {
     const bool visible = g.loading.load(std::memory_order_relaxed) != 0 ||
                          g.overlayOpen.load(std::memory_order_relaxed) != 0 ||
                          g.fpsOverlay.load(std::memory_order_relaxed) != 0;
-    if (!visible || !g.currentView || !g.device || !g.queue) return;
-    const int width = g.statsW.load(std::memory_order_relaxed);
-    const int height = g.statsH.load(std::memory_order_relaxed);
-    if (width < 1 || height < 1) return;
-    if (!g.overlayPipeline || g.overlayWidth != width || g.overlayHeight != height) {
-        if (!createOverlayGpu(width, height)) return;
+    if (!visible || !g.currentView || !g.device || !g.queue) return false;
+    width = g.statsW.load(std::memory_order_relaxed);
+    height = g.statsH.load(std::memory_order_relaxed);
+    if (width < 1 || height < 1) return false;
+    const bool loading = g.loading.load(std::memory_order_relaxed) != 0;
+    const bool fpsOnly = !loading && g.overlayOpen.load(std::memory_order_relaxed) == 0 &&
+                         g.fpsOverlay.load(std::memory_order_relaxed) != 0;
+    const int textureWidth = fpsOnly ? std::min(128, width) : width;
+    const int textureHeight = fpsOnly ? std::min(44, height) : height;
+    g.overlayLeft = fpsOnly ? std::max(0, width - textureWidth - 14) : 0;
+    g.overlayTop = fpsOnly ? std::min(14, std::max(0, height - textureHeight)) : 0;
+    if (!g.overlayPipeline || g.overlayWidth != textureWidth || g.overlayHeight != textureHeight ||
+        g.overlaySampleCount != std::max(1u, sampleCount) || g.overlayDepthFormat != depthFormat) {
+        if (!createOverlayGpu(textureWidth, textureHeight, sampleCount, depthFormat)) return false;
     }
-    const int fps = g.statsFps.load(std::memory_order_relaxed);
-    if (g.overlayDirty.exchange(0, std::memory_order_acq_rel) || fps != g.overlayRenderedFps) {
-        buildOverlayPixels(width, height);
-        const int rowBytes = (width * 4 + 255) & ~255;
+    const auto now = std::chrono::steady_clock::now();
+    static thread_local auto lastDiagnosticsRefresh = std::chrono::steady_clock::time_point{};
+    const bool diagnosticsDue = !loading &&
+        (lastDiagnosticsRefresh.time_since_epoch().count() == 0 ||
+         now - lastDiagnosticsRefresh >= std::chrono::milliseconds(250));
+    const bool dirty = g.overlayDirty.exchange(0, std::memory_order_acq_rel) != 0;
+    if (loading || dirty || diagnosticsDue) {
+        buildOverlayPixels(textureWidth, textureHeight, fpsOnly);
+        const int rowBytes = (textureWidth * 4 + 255) & ~255;
         WGPUTexelCopyTextureInfo destination{};
         destination.texture = g.overlayTexture;
         WGPUTexelCopyBufferLayout layout{};
         layout.bytesPerRow = static_cast<uint32_t>(rowBytes);
-        layout.rowsPerImage = static_cast<uint32_t>(height);
-        WGPUExtent3D extent{static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1};
+        layout.rowsPerImage = static_cast<uint32_t>(textureHeight);
+        WGPUExtent3D extent{static_cast<uint32_t>(textureWidth), static_cast<uint32_t>(textureHeight), 1};
         wgpuQueueWriteTexture(g.queue, &destination, g.overlayPixels.data(), g.overlayPixels.size(), &layout, &extent);
-        g.overlayRenderedFps = fps;
+        g.overlayRenderedFps = g.statsFps.load(std::memory_order_relaxed);
+        if (!loading) lastDiagnosticsRefresh = now;
     }
+    return true;
+}
 
-    WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(g.device, nullptr);
+void encodeOverlayDraw(WGPURenderPassEncoder pass, int width, int height) {
+    wgpuRenderPassEncoderSetPipeline(pass, g.overlayPipeline);
+    wgpuRenderPassEncoderSetBindGroup(pass, 0, g.overlayBindGroup, 0, nullptr);
+    const uint32_t left = static_cast<uint32_t>(std::max(0, g.overlayLeft));
+    const uint32_t top = static_cast<uint32_t>(std::max(0, g.overlayTop));
+    const uint32_t drawWidth = static_cast<uint32_t>(std::min(g.overlayWidth, width - static_cast<int>(left)));
+    const uint32_t drawHeight = static_cast<uint32_t>(std::min(g.overlayHeight, height - static_cast<int>(top)));
+    wgpuRenderPassEncoderSetViewport(pass, static_cast<float>(left), static_cast<float>(top),
+                                     static_cast<float>(drawWidth), static_cast<float>(drawHeight), 0.f, 1.f);
+    wgpuRenderPassEncoderSetScissorRect(pass, left, top, drawWidth, drawHeight);
+    wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
+}
+
+bool drawOverlayInPass(WGPURenderPassEncoder pass) {
+    int width = 0;
+    int height = 0;
+    if (!pass || !prepareOverlay(width, height, g.activeRenderPassSampleCount,
+                                 g.activeRenderPassDepthFormat)) return false;
+    encodeOverlayDraw(pass, width, height);
+    return true;
+}
+
+bool recordOverlay(WGPUCommandEncoder encoder) {
+    int width = 0;
+    int height = 0;
+    if (!encoder || !prepareOverlay(width, height, 1, WGPUTextureFormat_Undefined)) return false;
     WGPURenderPassColorAttachment color{};
     color.view = g.currentView;
     color.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
@@ -1469,14 +1557,23 @@ void renderOverlay() {
     passDesc.colorAttachmentCount = 1;
     passDesc.colorAttachments = &color;
     WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
-    wgpuRenderPassEncoderSetPipeline(pass, g.overlayPipeline);
-    wgpuRenderPassEncoderSetBindGroup(pass, 0, g.overlayBindGroup, 0, nullptr);
-    wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
+    if (!pass) return false;
+    encodeOverlayDraw(pass, width, height);
     wgpuRenderPassEncoderEnd(pass);
     wgpuRenderPassEncoderRelease(pass);
-    WGPUCommandBuffer command = wgpuCommandEncoderFinish(encoder, nullptr);
-    wgpuQueueSubmit(g.queue, 1, &command);
-    wgpuCommandBufferRelease(command);
+    return true;
+}
+
+void renderOverlay() {
+    WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(g.device, nullptr);
+    if (!encoder) return;
+    if (recordOverlay(encoder)) {
+        WGPUCommandBuffer command = wgpuCommandEncoderFinish(encoder, nullptr);
+        if (command) {
+            wgpuQueueSubmit(g.queue, 1, &command);
+            wgpuCommandBufferRelease(command);
+        }
+    }
     wgpuCommandEncoderRelease(encoder);
 }
 
@@ -1515,7 +1612,7 @@ void presentLoadingFrame() {
 
     g.loadingPhase.fetch_add(1, std::memory_order_relaxed);
     g.overlayDirty.store(1, std::memory_order_release);
-    renderOverlay();
+    if (!g.overlayRecordedForCurrentTexture) renderOverlay();
     wgpuSurfacePresent(g.surface);
     dropCurrentTexture();
     if (g.device) wgpuDevicePoll(g.device, 0, nullptr);
@@ -1799,7 +1896,7 @@ bool implPresent() {
             return false;
         }
     }
-    renderOverlay();
+    if (!g.overlayRecordedForCurrentTexture) renderOverlay();
     const bool firstPresent = g.statsPresents.load(std::memory_order_relaxed) == 0;
     wgpuSurfacePresent(g.surface);
     dropCurrentTexture();
@@ -2049,6 +2146,10 @@ void finishEncoderSubmit() {
     if (!g.currentEncoder || !g.queue) {
         return;
     }
+    if (g.currentEncoderUsesSurface && !g.overlayRecordedForCurrentTexture &&
+        recordOverlay(g.currentEncoder)) {
+        g.overlayRecordedForCurrentTexture = true;
+    }
     WGPUCommandBufferDescriptor cbd{};
     WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(g.currentEncoder, &cbd);
     if (cmd) {
@@ -2065,6 +2166,7 @@ void finishEncoderSubmit() {
     }
     g.currentEncoder = nullptr;
     g.currentEncoderHandle = 0;
+    g.currentEncoderUsesSurface = false;
 }
 
 WGPUCommandEncoder ensureEncoder() {
@@ -2077,6 +2179,7 @@ WGPUCommandEncoder ensureEncoder() {
     WGPUCommandEncoderDescriptor ed{};
     g.currentEncoder = wgpuDeviceCreateCommandEncoder(g.device, &ed);
     g.currentEncoderHandle = 0;
+    g.currentEncoderUsesSurface = false;
     return g.currentEncoder;
 }
 
@@ -2215,6 +2318,7 @@ void execOne(uint32_t op, Reader& r) {
             s.texW = tdsc.size.width;
             s.texH = tdsc.size.height;
             s.texD = tdsc.size.depthOrArrayLayers;
+            s.texSampleCount = tdsc.sampleCount;
             s.texFormat = tdsc.format;
             if (!s.texture) {
                 setError("texture create failed");
@@ -2264,6 +2368,7 @@ void execOne(uint32_t op, Reader& r) {
             s.texW = std::max(1u, actualW >> std::min(baseMip, 31u));
             s.texH = std::max(1u, actualH >> std::min(baseMip, 31u));
             s.texD = actualD;
+            s.texSampleCount = ts->texSampleCount;
             s.texFormat = vd.format;
             s.view = wgpuTextureCreateView(ts->texture, &vd);
             if (!s.view) {
@@ -2710,6 +2815,7 @@ void execOne(uint32_t op, Reader& r) {
             if (g.currentEncoder && g.currentEncoderHandle != handle) {
                 wgpuCommandEncoderRelease(g.currentEncoder);
                 g.currentEncoder = nullptr;
+                g.currentEncoderUsesSurface = false;
             }
             WGPUCommandEncoderDescriptor ed{};
             Slot s;
@@ -2717,6 +2823,7 @@ void execOne(uint32_t op, Reader& r) {
             s.encoder = wgpuDeviceCreateCommandEncoder(g.device, &ed);
             g.currentEncoder = s.encoder;
             g.currentEncoderHandle = handle;
+            g.currentEncoderUsesSurface = false;
             putSlot(handle, std::move(s));
             return;
         }
@@ -2959,6 +3066,21 @@ void execOne(uint32_t op, Reader& r) {
                               "render begin failed color=%u resolve=%u depth=%u",
                               primaryColorView, colorInputs.front().resolve, depthView);
                 setError(buf);
+            } else if (usesSwapchain) {
+                g.currentEncoderUsesSurface = true;
+                g.activeRenderPassUsesSurface = true;
+                g.activeRenderPassSampleCount = 1;
+                if (primaryColorView != 0) {
+                    if (Slot* colorSlot = getSlot(primaryColorView)) {
+                        g.activeRenderPassSampleCount = std::max(1u, colorSlot->texSampleCount);
+                    }
+                }
+                g.activeRenderPassDepthFormat = WGPUTextureFormat_Undefined;
+                if (depthView != 0) {
+                    if (Slot* depthSlot = getSlot(depthView)) {
+                        g.activeRenderPassDepthFormat = depthSlot->texFormat;
+                    }
+                }
             }
             return;
         }
@@ -3132,10 +3254,16 @@ void execOne(uint32_t op, Reader& r) {
         }
         case OP_RENDER_END:
             if (g.renderPass) {
+                if (g.activeRenderPassUsesSurface && drawOverlayInPass(g.renderPass)) {
+                    g.overlayRecordedForCurrentTexture = true;
+                }
                 wgpuRenderPassEncoderEnd(g.renderPass);
                 wgpuRenderPassEncoderRelease(g.renderPass);
                 g.renderPass = nullptr;
             }
+            g.activeRenderPassUsesSurface = false;
+            g.activeRenderPassSampleCount = 1;
+            g.activeRenderPassDepthFormat = WGPUTextureFormat_Undefined;
             g.renderPipelineSet = false;
             g.skipRenderPass = false;
             return;
@@ -3543,6 +3671,7 @@ const uint8_t* tw_overlay_raster(int width, int height, int fps, int frameUs,
     static int cachedHeight = 0;
     static int cachedFps = -1;
     static int cachedFrameUs = -1;
+    static auto lastDiagnosticsRefresh = std::chrono::steady_clock::time_point{};
     width = std::max(1, width);
     height = std::max(1, height);
     g.statsW.store(width, std::memory_order_relaxed);
@@ -3555,19 +3684,30 @@ const uint8_t* tw_overlay_raster(int width, int height, int fps, int frameUs,
     const int stride = (width * 4 + 255) & ~255;
     if (rowBytes) *rowBytes = stride;
     if (!tw_overlay_visible()) return nullptr;
-    if (g.loading.load(std::memory_order_relaxed)) {
+    const bool loading = g.loading.load(std::memory_order_relaxed) != 0;
+    if (loading) {
         g.loadingPhase.fetch_add(1, std::memory_order_relaxed);
         g.overlayDirty.store(1, std::memory_order_release);
     }
-    if (g.overlayDirty.exchange(0, std::memory_order_acq_rel) || cachedWidth != width ||
-        cachedHeight != height || cachedFps != fps || cachedFrameUs != frameUs) {
+    const auto now = std::chrono::steady_clock::now();
+    const bool sizeChanged = cachedWidth != width || cachedHeight != height;
+    const bool diagnosticsDue = !loading &&
+        (lastDiagnosticsRefresh.time_since_epoch().count() == 0 ||
+         now - lastDiagnosticsRefresh >= std::chrono::milliseconds(250));
+    const bool dirty = g.overlayDirty.exchange(0, std::memory_order_acq_rel) != 0;
+    if (loading || dirty || sizeChanged || diagnosticsDue) {
         buildOverlayPixels(width, height);
         cachedWidth = width;
         cachedHeight = height;
         cachedFps = fps;
         cachedFrameUs = frameUs;
+        if (!loading) lastDiagnosticsRefresh = now;
     }
     return g.overlayPixels.empty() ? nullptr : g.overlayPixels.data();
+}
+
+uint64_t tw_overlay_revision(void) {
+    return g.overlayRevision.load(std::memory_order_acquire);
 }
 
 int tw_set_pointer_lock(int on) {

@@ -102,6 +102,7 @@ GLuint glOverlayTexture{};
 GLuint glOverlayVao{};
 int glOverlayWidth{};
 int glOverlayHeight{};
+uint64_t glOverlayUploadedRevision{};
 
 GLuint compileOverlayShader(GLenum type, const char* source) {
     const GLuint shader = glCreateShader(type);
@@ -176,6 +177,7 @@ void releaseGlOverlayGpu() {
     if (glOverlayProgram) glDeleteProgram(glOverlayProgram);
     glOverlayTexture = glOverlayVao = glOverlayProgram = 0;
     glOverlayWidth = glOverlayHeight = 0;
+    glOverlayUploadedRevision = 0;
 }
 
 void renderGlOverlay() {
@@ -190,15 +192,25 @@ void renderGlOverlay() {
         width, height, fps, frameUs, tn_backend_name(), 0,
         g.statsPresents.load(std::memory_order_relaxed), &rowBytes);
     if (!pixels || rowBytes < width * 4) return;
-    glBindTexture(GL_TEXTURE_2D, glOverlayTexture);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, rowBytes / 4);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_BGRA, GL_UNSIGNED_BYTE, pixels);
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-    glOverlayWidth = width;
-    glOverlayHeight = height;
+    const uint64_t revision = tw_overlay_revision();
+    const bool sizeChanged = glOverlayWidth != width || glOverlayHeight != height;
+    const bool uploadNeeded = sizeChanged || glOverlayUploadedRevision != revision;
+    if (uploadNeeded) {
+        glBindTexture(GL_TEXTURE_2D, glOverlayTexture);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, rowBytes / 4);
+        if (sizeChanged) {
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_BGRA, GL_UNSIGNED_BYTE, pixels);
+        } else {
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_BGRA, GL_UNSIGNED_BYTE, pixels);
+        }
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        glOverlayWidth = width;
+        glOverlayHeight = height;
+        glOverlayUploadedRevision = revision;
+    }
 
-    GLint oldProgram{}, oldVao{}, oldActiveTexture{}, oldTexture{}, viewport[4]{};
+    GLint oldProgram{}, oldVao{}, oldActiveTexture{}, oldTexture{}, viewport[4]{}, scissorBox[4]{};
     glGetIntegerv(GL_CURRENT_PROGRAM, &oldProgram);
     glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &oldVao);
     glGetIntegerv(GL_ACTIVE_TEXTURE, &oldActiveTexture);
@@ -209,11 +221,22 @@ void renderGlOverlay() {
     const GLboolean depth = glIsEnabled(GL_DEPTH_TEST);
     const GLboolean cull = glIsEnabled(GL_CULL_FACE);
     const GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
+    if (scissor) glGetIntegerv(GL_SCISSOR_BOX, scissorBox);
 
     glViewport(0, 0, width, height);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_CULL_FACE);
-    glDisable(GL_SCISSOR_TEST);
+    const bool fpsOnly = !tw_loading_visible() && !tw_overlay_open();
+    if (fpsOnly) {
+        const int left = std::max(0, width - 142);
+        const int right = std::max(0, width - 14);
+        const int top = 14;
+        const int bottom = std::min(height, 58);
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(left, height - bottom, std::max(0, right - left), std::max(0, bottom - top));
+    } else {
+        glDisable(GL_SCISSOR_TEST);
+    }
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glUseProgram(glOverlayProgram);
@@ -229,7 +252,12 @@ void renderGlOverlay() {
     if (blend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
     if (depth) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
     if (cull) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
-    if (scissor) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
+    if (scissor) {
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(scissorBox[0], scissorBox[1], scissorBox[2], scissorBox[3]);
+    } else {
+        glDisable(GL_SCISSOR_TEST);
+    }
     glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
 }
 

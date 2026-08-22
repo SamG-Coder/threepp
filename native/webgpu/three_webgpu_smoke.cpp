@@ -159,6 +159,9 @@ int main() {
     }
 
     const auto t0 = std::chrono::steady_clock::now();
+    // Keep the diagnostics visible while the scene submits so the smoke test
+    // exercises the in-encoder overlay path used by real WebGPU pages.
+    tw_toggle_fps_overlay();
     if (!tw_cmd_submit(s.bytes.data(), static_cast<int>(s.bytes.size()))) {
         std::cerr << "cmd_submit failed: " << tw_last_error() << '\n';
         tw_shutdown();
@@ -191,6 +194,20 @@ int main() {
         tw_shutdown();
         return 3;
     }
+    int overlayRowBytes = 0;
+    if (!tw_overlay_raster(width, height, 120, 8000, tw_backend_name(), 0, presents, &overlayRowBytes)) {
+        std::cerr << "overlay raster failed\n";
+        tw_shutdown();
+        return 4;
+    }
+    const uint64_t firstOverlayRevision = tw_overlay_revision();
+    tw_overlay_raster(width, height, 121, 8100, tw_backend_name(), 0, presents + 1, &overlayRowBytes);
+    if (tw_overlay_revision() != firstOverlayRevision) {
+        std::cerr << "diagnostic overlay rebuilt without its refresh interval elapsing\n";
+        tw_shutdown();
+        return 5;
+    }
+    tw_toggle_fps_overlay();
     tw_shutdown();
     return 0;
 }
