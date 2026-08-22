@@ -159,6 +159,7 @@ napi_value start(napi_env env, napi_callback_info info) {
     runtimeActive.store(ok, std::memory_order_release);
     runtimeMode.store(ok ? 1 : 0, std::memory_order_release);
     if (ok) {
+        tn_runtime_set_loading(1, "Loading project assets");
         if (auto hwnd = static_cast<HWND>(tn_runtime_hwnd())) {
             ShowWindowAsync(hwnd, SW_SHOW);
             SetWindowPos(hwnd, HWND_TOP, 0, 0, width, height,
@@ -185,6 +186,7 @@ napi_value webGpuStart(napi_env env, napi_callback_info info) {
     runtimeActive.store(ok, std::memory_order_release);
     runtimeMode.store(ok ? 2 : 0, std::memory_order_release);
     if (ok) {
+        tw_set_loading(1, "Loading project assets");
         if (auto hwnd = static_cast<HWND>(tw_hwnd())) {
             ShowWindowAsync(hwnd, SW_SHOW);
             SetWindowPos(hwnd, HWND_TOP, 0, 0, width, height,
@@ -335,6 +337,18 @@ napi_value setOverlay(napi_env env, napi_callback_info info) {
     if (runtimeMode.load(std::memory_order_acquire) == 2) tw_set_overlay(enabled ? 1 : 0);
     else tn_runtime_set_overlay(enabled ? 1 : 0);
     return boolean(env, true);
+}
+
+napi_value setLoading(napi_env env, napi_callback_info info) {
+    std::array<napi_value, 2> argv{};
+    std::size_t argc = argv.size();
+    napi_get_cb_info(env, info, &argc, argv.data(), nullptr, nullptr);
+    bool enabled = false;
+    if (argc > 0) napi_get_value_bool(env, argv[0], &enabled);
+    const std::string stage = argc > 1 ? argString(env, argv[1], "") : "";
+    if (runtimeMode.load(std::memory_order_acquire) == 2) tw_set_loading(enabled ? 1 : 0, stage.c_str());
+    else if (runtimeMode.load(std::memory_order_acquire) == 1) tn_runtime_set_loading(enabled ? 1 : 0, stage.c_str());
+    return boolean(env, runtimeActive.load(std::memory_order_acquire));
 }
 
 napi_value overlayOpen(napi_env env, napi_callback_info) {
@@ -882,6 +896,7 @@ napi_value init(napi_env env, napi_value exports) {
         {"stats", nullptr, stats, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"pollInput", nullptr, pollInput, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setPointerLock", nullptr, setPointerLock, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setLoading", nullptr, setLoading, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setOverlay", nullptr, setOverlay, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"overlayOpen", nullptr, overlayOpen, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"overlayClick", nullptr, overlayClick, nullptr, nullptr, nullptr, napi_default, nullptr},

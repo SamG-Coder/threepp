@@ -76,6 +76,7 @@ struct Runtime {
     std::atomic<bool> sceneDirty{false};
     std::atomic<bool> vsync{false};
     std::atomic<bool> standalone{false};
+    std::atomic<bool> open{false};
     std::atomic<void*> nativeHwnd{nullptr};
     std::atomic<int> statsFps{0};
     std::atomic<int> statsFrameUs{0};

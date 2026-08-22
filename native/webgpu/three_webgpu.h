@@ -50,6 +50,8 @@ TW_API int tw_take_wheel_delta(void);
 TW_API int tw_backlog(void);
 TW_API int tw_content_offset_y(void);
 TW_API void tw_set_overlay(int on);
+TW_API void tw_set_loading(int on, const char* stage);
+TW_API int tw_loading_visible(void);
 TW_API int tw_overlay_open(void);
 TW_API void tw_overlay_click(int x, int y);
 TW_API void tw_toggle_fps_overlay(void);

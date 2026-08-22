@@ -60,6 +60,7 @@ namespace { void releaseGlOverlayGpu(); }
 namespace tn {
 
 void destroySurface() {
+    g.open.store(false, std::memory_order_release);
 #if defined(_WIN32)
     if (g.canvas) {
         releaseGlOverlayGpu();
@@ -236,6 +237,24 @@ void renderGlOverlay() {
 #endif
 
 void tn::renderPendingFrame() {
+#if defined(_WIN32)
+    if (tw_loading_visible() && g.renderer && g.canvas) {
+        static thread_local auto lastLoadingFrame = std::chrono::steady_clock::time_point{};
+        const auto now = std::chrono::steady_clock::now();
+        if (lastLoadingFrame.time_since_epoch().count() != 0 &&
+            now - lastLoadingFrame < std::chrono::milliseconds(16)) {
+            return;
+        }
+        lastLoadingFrame = now;
+        g.canvas->animateOnce([&] {
+            glDisable(GL_SCISSOR_TEST);
+            glClearColor(246.f / 255.f, 247.f / 255.f, 249.f / 255.f, 1.f);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+            renderGlOverlay();
+        });
+        return;
+    }
+#endif
     tn::applyPendingEnvironment();
     const uint32_t sceneHandle = g.drawScene.load();
     const uint32_t cameraHandle = g.drawCamera.load();
@@ -341,16 +360,49 @@ void tn::workerMain() {
     // Keep large scene uploads from monopolising the thread which owns the
     // GLFW window.  Production Vite scenes can enqueue thousands of object,
     // material and transform updates before their first render.
-    constexpr std::size_t maxJobsPerTurn = 256;
+    constexpr std::size_t maxJobsPerTurn = 64;
+#if !defined(__ANDROID__)
+    auto pumpRuntimeWindow = [] {
+        if (!g.canvas) return;
+        try {
+            glfwPollEvents();
+            if (!g.canvas->isOpen()) {
+                g.open.store(false, std::memory_order_release);
+#if defined(_WIN32)
+                tw_set_loading(0, nullptr);
+                if (HWND hwnd = static_cast<HWND>(g.nativeHwnd.load(std::memory_order_acquire))) {
+                    ShowWindow(hwnd, SW_HIDE);
+                }
+#endif
+            }
+        } catch (const std::exception& ex) {
+            setError(ex.what());
+        } catch (...) {
+            setError("native worker: event pump exception");
+        }
+    };
+#endif
     while (true) {
+#if !defined(__ANDROID__)
+        pumpRuntimeWindow();
+#endif
         std::vector<std::function<void()>> batch;
         bool stopping = false;
         {
             std::unique_lock<std::mutex> lock(g.mu);
             if (g.jobs.empty() && !g.stop && !g.sceneDirty.load(std::memory_order_relaxed)) {
-                g.cv.wait(lock, [] {
-                    return g.stop || !g.jobs.empty() || g.sceneDirty.load(std::memory_order_relaxed);
-                });
+#if defined(_WIN32)
+                if (tw_loading_visible()) {
+                    g.cv.wait_for(lock, std::chrono::milliseconds(16), [] {
+                        return g.stop || !g.jobs.empty() || g.sceneDirty.load(std::memory_order_relaxed);
+                    });
+                } else
+#endif
+                {
+                    g.cv.wait(lock, [] {
+                        return g.stop || !g.jobs.empty() || g.sceneDirty.load(std::memory_order_relaxed);
+                    });
+                }
             }
             while (!g.jobs.empty() && batch.size() < maxJobsPerTurn) {
                 batch.push_back(std::move(g.jobs.front()));
@@ -361,14 +413,17 @@ void tn::workerMain() {
         if (stopping) {
             break;
         }
-        for (auto& job : batch) {
+        for (std::size_t index = 0; index < batch.size(); ++index) {
             try {
-                job();
+                batch[index]();
             } catch (const std::exception& ex) {
                 setError(ex.what());
             } catch (...) {
                 setError("native worker: unknown exception");
             }
+#if !defined(__ANDROID__)
+            if ((index & 7u) == 7u) pumpRuntimeWindow();
+#endif
         }
         try {
             renderPendingFrame();
@@ -381,15 +436,7 @@ void tn::workerMain() {
         // Rendering may fail while a page is still constructing or compiling
         // its scene. Keep servicing the window regardless so close and resize
         // remain responsive and a later valid frame can recover normally.
-        if (g.canvas) {
-            try {
-                glfwPollEvents();
-            } catch (const std::exception& ex) {
-                setError(ex.what());
-            } catch (...) {
-                setError("native worker: event pump exception");
-            }
-        }
+        pumpRuntimeWindow();
 #endif
         if (g.stop) {
             break;
@@ -633,6 +680,7 @@ int impl_runtime_start(int width, int height, const char* title) {
 #endif
     g.statsW.store(w, std::memory_order_relaxed);
     g.statsH.store(h, std::memory_order_relaxed);
+    g.open.store(true, std::memory_order_release);
     logLine("runtime started");
     return 1;
 }
@@ -808,15 +856,7 @@ int tn_runtime_start(int width, int height, const char* title) {
 }
 
 int tn_runtime_is_open(void) {
-    try {
-#if defined(__ANDROID__)
-        return g.renderer ? 1 : 0;
-#else
-        return onWorker([] { return g.canvas && g.canvas->isOpen() ? 1 : 0; });
-#endif
-    } catch (...) {
-        return 0;
-    }
+    return g.open.load(std::memory_order_acquire) ? 1 : 0;
 }
 
 int tn_poll_input(TNInputEvent* events, int capacity) {
@@ -913,6 +953,9 @@ void tn_runtime_set_standalone(int enabled) {
 }
 
 int tn_runtime_render(uint32_t sceneHandle, uint32_t cameraHandle) {
+#if defined(_WIN32)
+    if (tw_loading_visible()) tw_set_loading(0, nullptr);
+#endif
     g.drawScene.store(sceneHandle);
     g.drawCamera.store(cameraHandle);
     markDirty();
@@ -1039,6 +1082,29 @@ void* tn_runtime_hwnd(void) {
     return g.nativeHwnd.load();
 }
 
+void tn_runtime_set_loading(int enabled, const char* stage) {
+#if defined(_WIN32)
+    tw_set_loading(enabled, stage);
+    markDirty();
+    try {
+        onWorkerAsync([enabled] {
+            if (!g.canvas) return;
+            auto* glfwWindow = static_cast<GLFWwindow*>(g.canvas->windowPtr());
+            HWND hwnd = glfwWindow ? glfwGetWin32Window(glfwWindow) : nullptr;
+            if (!hwnd) return;
+            HCURSOR cursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(enabled ? 32514 : 32512));
+            SetClassLongPtrW(hwnd, GCLP_HCURSOR, reinterpret_cast<LONG_PTR>(cursor));
+            SetCursor(cursor);
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+    }
+#else
+    (void) enabled;
+    (void) stage;
+#endif
+}
+
 void tn_runtime_set_overlay(int enabled) {
 #if defined(_WIN32)
     tw_set_overlay(enabled);
@@ -1074,6 +1140,10 @@ void tn_runtime_toggle_fps_overlay(void) {
 }
 
 void tn_runtime_shutdown(void) {
+    g.open.store(false, std::memory_order_release);
+#if defined(_WIN32)
+    tw_set_loading(0, nullptr);
+#endif
     {
         std::lock_guard<std::mutex> lock(g.mu);
         if (!g.workerStarted) {
