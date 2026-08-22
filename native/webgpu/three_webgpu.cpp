@@ -121,6 +121,8 @@ struct Runtime {
     std::atomic<int> overlayOpen{0};
     std::atomic<int> overlayDirty{1};
     std::atomic<int> pointerLocked{0};
+    int mouseButtons{0};
+    bool trackingMouseLeave{false};
     std::mutex inputMu;
     std::deque<TWInputEvent> inputEvents;
     POINT pointerRestore{};
@@ -248,6 +250,10 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_SETFOCUS:
             return 0;
         case WM_KILLFOCUS:
+            if (g.mouseButtons != 0) {
+                g.mouseButtons = 0;
+                queueInput(TW_INPUT_POINTER_CANCEL, 0, 0, 0);
+            }
             setPointerLockOnWindowThread(false, true);
             return 0;
         case WM_INPUT: {
@@ -270,13 +276,23 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_MOUSEMOVE:
             if (!g.pointerLocked.load(std::memory_order_relaxed)) {
+                if (!g.trackingMouseLeave) {
+                    TRACKMOUSEEVENT tracking{sizeof(TRACKMOUSEEVENT), TME_LEAVE, hwnd, 0};
+                    if (TrackMouseEvent(&tracking)) g.trackingMouseLeave = true;
+                }
                 queueInput(TW_INPUT_POINTER_MOVE, 0, GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
             }
+            return 0;
+        case WM_MOUSELEAVE:
+            g.trackingMouseLeave = false;
+            queueInput(TW_INPUT_POINTER_LEAVE, 0, 0, 0);
             return 0;
         case WM_LBUTTONDOWN:
         case WM_RBUTTONDOWN:
         case WM_MBUTTONDOWN:
             SetFocus(hwnd);
+            if (!g.pointerLocked.load(std::memory_order_relaxed)) SetCapture(hwnd);
+            g.mouseButtons |= msg == WM_LBUTTONDOWN ? 1 : msg == WM_RBUTTONDOWN ? 2 : 4;
             queueInput(TW_INPUT_POINTER_DOWN,
                        msg == WM_LBUTTONDOWN ? VK_LBUTTON : msg == WM_RBUTTONDOWN ? VK_RBUTTON : VK_MBUTTON,
                        GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
@@ -284,9 +300,53 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_LBUTTONUP:
         case WM_RBUTTONUP:
         case WM_MBUTTONUP:
+            g.mouseButtons &= ~(msg == WM_LBUTTONUP ? 1 : msg == WM_RBUTTONUP ? 2 : 4);
             queueInput(TW_INPUT_POINTER_UP,
                        msg == WM_LBUTTONUP ? VK_LBUTTON : msg == WM_RBUTTONUP ? VK_RBUTTON : VK_MBUTTON,
                        GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+            if (g.mouseButtons == 0 && !g.pointerLocked.load(std::memory_order_relaxed) && GetCapture() == hwnd) ReleaseCapture();
+            return 0;
+        case WM_XBUTTONDOWN: {
+            SetFocus(hwnd);
+            if (!g.pointerLocked.load(std::memory_order_relaxed)) SetCapture(hwnd);
+            const bool first = GET_XBUTTON_WPARAM(wp) == XBUTTON1;
+            g.mouseButtons |= first ? 8 : 16;
+            queueInput(TW_INPUT_POINTER_DOWN, first ? VK_XBUTTON1 : VK_XBUTTON2,
+                       GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+            return TRUE;
+        }
+        case WM_XBUTTONUP: {
+            const bool first = GET_XBUTTON_WPARAM(wp) == XBUTTON1;
+            g.mouseButtons &= ~(first ? 8 : 16);
+            queueInput(TW_INPUT_POINTER_UP, first ? VK_XBUTTON1 : VK_XBUTTON2,
+                       GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+            if (g.mouseButtons == 0 && !g.pointerLocked.load(std::memory_order_relaxed) && GetCapture() == hwnd) ReleaseCapture();
+            return TRUE;
+        }
+        case WM_LBUTTONDBLCLK:
+        case WM_RBUTTONDBLCLK:
+        case WM_MBUTTONDBLCLK:
+            SetFocus(hwnd);
+            if (!g.pointerLocked.load(std::memory_order_relaxed)) SetCapture(hwnd);
+            g.mouseButtons |= msg == WM_LBUTTONDBLCLK ? 1 : msg == WM_RBUTTONDBLCLK ? 2 : 4;
+            queueInput(TW_INPUT_POINTER_DOUBLE_CLICK,
+                       msg == WM_LBUTTONDBLCLK ? VK_LBUTTON : msg == WM_RBUTTONDBLCLK ? VK_RBUTTON : VK_MBUTTON,
+                       GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+            return 0;
+        case WM_XBUTTONDBLCLK: {
+            SetFocus(hwnd);
+            if (!g.pointerLocked.load(std::memory_order_relaxed)) SetCapture(hwnd);
+            const bool first = GET_XBUTTON_WPARAM(wp) == XBUTTON1;
+            g.mouseButtons |= first ? 8 : 16;
+            queueInput(TW_INPUT_POINTER_DOUBLE_CLICK, first ? VK_XBUTTON1 : VK_XBUTTON2,
+                       GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+            return TRUE;
+        }
+        case WM_CAPTURECHANGED:
+            if (!g.pointerLocked.load(std::memory_order_relaxed) && g.mouseButtons != 0) {
+                g.mouseButtons = 0;
+                queueInput(TW_INPUT_POINTER_CANCEL, 0, 0, 0);
+            }
             return 0;
         case WM_MOUSEWHEEL:
             g.wheelDelta.fetch_add(GET_WHEEL_DELTA_WPARAM(wp), std::memory_order_relaxed);
@@ -294,6 +354,13 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 POINT point{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
                 ScreenToClient(hwnd, &point);
                 queueInput(TW_INPUT_WHEEL, GET_WHEEL_DELTA_WPARAM(wp), point.x, point.y);
+            }
+            return 0;
+        case WM_MOUSEHWHEEL:
+            {
+                POINT point{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+                ScreenToClient(hwnd, &point);
+                queueInput(TW_INPUT_HORIZONTAL_WHEEL, GET_WHEEL_DELTA_WPARAM(wp), point.x, point.y);
             }
             return 0;
         case WM_KEYDOWN:
@@ -619,7 +686,7 @@ bool createHwnd(HWND parent, int x, int y, int w, int h) {
     if (!g.classRegistered) {
         WNDCLASSEXW wc{};
         wc.cbSize = sizeof(wc);
-        wc.style = CS_OWNDC;
+        wc.style = CS_OWNDC | CS_DBLCLKS;
         wc.lpfnWndProc = wndProc;
         wc.hInstance = inst;
         wc.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));

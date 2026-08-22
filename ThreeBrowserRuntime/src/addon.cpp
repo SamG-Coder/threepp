@@ -598,6 +598,10 @@ napi_value pollInput(napi_env env, napi_callback_info) {
                     type = "pointerlocklost";
                     pointerLocked.store(false, std::memory_order_release);
                     break;
+                case TW_INPUT_POINTER_CANCEL: type = "pointercancel"; break;
+                case TW_INPUT_POINTER_LEAVE: type = "pointerleave"; break;
+                case TW_INPUT_HORIZONTAL_WHEEL: type = "wheelhorizontal"; break;
+                case TW_INPUT_POINTER_DOUBLE_CLICK: type = "pointerdoubleclick"; break;
                 default: continue;
             }
             napi_set_element(env, events, index++, inputEvent(env, type, source.code, source.x, source.y,

@@ -57,6 +57,8 @@ if (typeof globalThis.ProgressEvent === "undefined") {
   };
 }
 
+const pointerCaptureTargets = new Map();
+
 class Element extends BrowserEventTarget {
   constructor(tagName) {
     super();
@@ -127,6 +129,7 @@ class Element extends BrowserEventTarget {
     child.parentNode = this;
     child.ownerDocument ??= this.ownerDocument || globalThis.document || null;
     this.children.push(child);
+    if (child instanceof CanvasElement) promotePresentedCanvas(child, this);
     return child;
   }
   append(...children) { for (const child of children) this.appendChild(child); }
@@ -185,7 +188,9 @@ class Element extends BrowserEventTarget {
       this.dataset[key] = String(value);
     } else this[name] = String(value);
   }
+  setAttributeNS(_namespace, name, value) { this.setAttribute(name, value); }
   getAttribute(name) { return this._attributes.get(String(name).toLowerCase()) ?? null; }
+  getAttributeNS(_namespace, name) { return this.getAttribute(name); }
   hasAttribute(name) { return this._attributes.has(String(name).toLowerCase()); }
   removeAttribute(name) {
     const normalized = String(name).toLowerCase();
@@ -200,12 +205,29 @@ class Element extends BrowserEventTarget {
       delete this.dataset[key];
     } else delete this[name];
   }
+  removeAttributeNS(_namespace, name) { this.removeAttribute(name); }
   toggleAttribute(name, force) {
     const present = this.hasAttribute(name);
     const next = force === undefined ? !present : Boolean(force);
     if (next) this.setAttribute(name, ""); else this.removeAttribute(name);
     return next;
   }
+  setPointerCapture(pointerId) {
+    const id = Number(pointerId);
+    if (!Number.isInteger(id) || id < 0) throw new TypeError("Invalid pointer id");
+    if (pointerCaptureTargets.get(id) === this) return;
+    const previous = pointerCaptureTargets.get(id);
+    pointerCaptureTargets.set(id, this);
+    previous?.dispatchEvent(eventWith("lostpointercapture", { pointerId: id, pointerType: "mouse", isPrimary: true }));
+    this.dispatchEvent(eventWith("gotpointercapture", { pointerId: id, pointerType: "mouse", isPrimary: true }));
+  }
+  releasePointerCapture(pointerId) {
+    const id = Number(pointerId);
+    if (pointerCaptureTargets.get(id) !== this) return;
+    pointerCaptureTargets.delete(id);
+    this.dispatchEvent(eventWith("lostpointercapture", { pointerId: id, pointerType: "mouse", isPrimary: true }));
+  }
+  hasPointerCapture(pointerId) { return pointerCaptureTargets.get(Number(pointerId)) === this; }
   get innerHTML() { return this._innerHTML; }
   set innerHTML(value) {
     this._innerHTML = String(value);
@@ -414,8 +436,6 @@ class CanvasElement extends Element {
     return { left: 0, top: 0, right: this.clientWidth, bottom: this.clientHeight,
       width: this.clientWidth, height: this.clientHeight, x: 0, y: 0 };
   }
-  setPointerCapture() {}
-  releasePointerCapture() {}
   getContext(type) {
     if (String(type).toLowerCase() === "2d") return this.context2d ??= new Canvas2DContext(this);
     return null;
@@ -620,10 +640,27 @@ function releaseNativePointerLock(fromHost = false) {
 }
 
 let currentCanvas = null;
+function promotePresentedCanvas(canvas, parent) {
+  let node = parent;
+  let connected = false;
+  while (node) {
+    if (node === body || node === document.documentElement) { connected = true; break; }
+    node = node.parentNode;
+  }
+  if (!connected) return;
+  const area = Math.max(0, Number(canvas.width) || 0) * Math.max(0, Number(canvas.height) || 0);
+  const currentArea = currentCanvas
+    ? Math.max(0, Number(currentCanvas.width) || 0) * Math.max(0, Number(currentCanvas.height) || 0)
+    : -1;
+  // The canvas presented by Three.js is normally sized to the viewport before
+  // insertion. Auxiliary canvases used for textures, charts, or controls must
+  // not steal native input merely because they were created later.
+  if (!currentCanvas?.parentNode || area > currentArea) currentCanvas = canvas;
+}
 const originalCreateElement = document.createElement.bind(document);
 document.createElement = tag => {
   const result = originalCreateElement(tag);
-  if (result instanceof CanvasElement) currentCanvas = result;
+  if (result instanceof CanvasElement && !currentCanvas) currentCanvas = result;
   return result;
 };
 
@@ -1037,6 +1074,8 @@ function physicalKeyCode(code) {
 let mouseButtons = 0;
 let lastMouseX = 0;
 let lastMouseY = 0;
+let pointerInside = false;
+let doubleClickButton = -1;
 const pressedKeys = new Set();
 let overlayChordActive = false;
 
@@ -1047,40 +1086,103 @@ function dispatchToCanvasAndWindow(eventFactory) {
 
 function dispatchNativeInput() {
   for (const input of native.pollInput()) {
-    const target = currentCanvas || windowEvents;
+    const defaultTarget = currentCanvas || windowEvents;
     if (input.type === "pointerlocklost") {
       releaseNativePointerLock(true);
       continue;
     }
-    if (input.type === "wheel") {
+    if (input.type === "pointerleave") {
+      pointerInside = false;
+      if (!native.overlayOpen?.()) {
+        const properties = {
+          clientX: input.x, clientY: input.y, pageX: input.x, pageY: input.y, x: input.x, y: input.y,
+          button: -1, buttons: mouseButtons, pointerId: 1, pointerType: "mouse", isPrimary: true,
+          shiftKey: input.shiftKey, ctrlKey: input.ctrlKey, altKey: input.altKey,
+        };
+        dispatchToCanvasAndWindow(() => eventWith("pointerout", properties));
+        dispatchToCanvasAndWindow(() => eventWith("pointerleave", properties));
+        dispatchToCanvasAndWindow(() => eventWith("mouseout", properties));
+        dispatchToCanvasAndWindow(() => eventWith("mouseleave", properties));
+      }
+      continue;
+    }
+    if (input.type === "pointercancel") {
+      const captureTarget = pointerCaptureTargets.get(1);
+      const target = captureTarget || defaultTarget;
+      const properties = {
+        clientX: input.x, clientY: input.y, pageX: input.x, pageY: input.y, x: input.x, y: input.y,
+        button: -1, buttons: 0, pointerId: 1, pointerType: "mouse", isPrimary: true,
+        shiftKey: input.shiftKey, ctrlKey: input.ctrlKey, altKey: input.altKey,
+      };
+      target.dispatchEvent(eventWith("pointercancel", properties));
+      if (target !== windowEvents) windowEvents.dispatchEvent(eventWith("pointercancel", properties));
+      captureTarget?.releasePointerCapture(1);
+      mouseButtons = 0;
+      continue;
+    }
+    if (input.type === "wheel" || input.type === "wheelhorizontal") {
       if (native.overlayOpen?.()) continue;
       dispatchToCanvasAndWindow(() => eventWith("wheel", {
-        clientX: input.x, clientY: input.y, deltaX: 0, deltaY: -input.code, deltaZ: 0, deltaMode: 0,
+        clientX: input.x, clientY: input.y, pageX: input.x, pageY: input.y, x: input.x, y: input.y,
+        deltaX: input.type === "wheelhorizontal" ? input.code : 0,
+        deltaY: input.type === "wheel" ? -input.code : 0, deltaZ: 0, deltaMode: 0,
+        buttons: mouseButtons, shiftKey: input.shiftKey, ctrlKey: input.ctrlKey, altKey: input.altKey,
       }));
       continue;
     }
     if (input.type.startsWith("pointer")) {
-      const button = input.code === 1 ? 0 : input.code === 2 ? 2 : 1;
-      const bit = button === 0 ? 1 : button === 2 ? 2 : 4;
-      if (input.type === "pointerdown") mouseButtons |= bit;
-      if (input.type === "pointerup") mouseButtons &= ~bit;
+      const pointerType = input.type === "pointerdoubleclick" ? "pointerdown" : input.type;
+      const button = input.code === 1 ? 0 : input.code === 2 ? 2 : input.code === 4 ? 1 : input.code === 5 ? 3 : input.code === 6 ? 4 : -1;
+      const bit = button === 0 ? 1 : button === 2 ? 2 : button === 1 ? 4 : button === 3 ? 8 : button === 4 ? 16 : 0;
+      if (pointerType === "pointerdown") mouseButtons |= bit;
+      if (pointerType === "pointerup") mouseButtons &= ~bit;
+      if (input.type === "pointerdoubleclick") doubleClickButton = button;
       const movementX = Number.isFinite(input.movementX) ? input.movementX : input.x - lastMouseX;
       const movementY = Number.isFinite(input.movementY) ? input.movementY : input.y - lastMouseY;
       lastMouseX = input.x;
       lastMouseY = input.y;
       if (native.overlayOpen?.()) {
-        if (input.type === "pointerup") native.overlayClick(input.x, input.y);
+        if (pointerType === "pointerup") native.overlayClick(input.x, input.y);
         continue;
       }
+      if (!pointerInside) {
+        pointerInside = true;
+        const enterProperties = {
+          clientX: input.x, clientY: input.y, pageX: input.x, pageY: input.y, x: input.x, y: input.y,
+          button: -1, buttons: mouseButtons, pointerId: 1, pointerType: "mouse", isPrimary: true,
+          shiftKey: input.shiftKey, ctrlKey: input.ctrlKey, altKey: input.altKey,
+        };
+        dispatchToCanvasAndWindow(() => eventWith("pointerover", enterProperties));
+        dispatchToCanvasAndWindow(() => eventWith("pointerenter", enterProperties));
+        dispatchToCanvasAndWindow(() => eventWith("mouseover", enterProperties));
+        dispatchToCanvasAndWindow(() => eventWith("mouseenter", enterProperties));
+      }
       const properties = {
-        clientX: input.x, clientY: input.y, offsetX: input.x, offsetY: input.y,
+        clientX: input.x, clientY: input.y, pageX: input.x, pageY: input.y, x: input.x, y: input.y,
+        screenX: input.x, screenY: input.y, offsetX: input.x, offsetY: input.y,
         movementX, movementY, button, buttons: mouseButtons, pointerId: 1,
-        pointerType: "mouse", isPrimary: true,
+        pointerType: "mouse", isPrimary: true, width: 1, height: 1,
+        pressure: mouseButtons ? 0.5 : 0, tangentialPressure: 0, tiltX: 0, tiltY: 0, twist: 0,
+        detail: input.type === "pointerdoubleclick" || (pointerType === "pointerup" && doubleClickButton === button) ? 2 : 1,
+        shiftKey: input.shiftKey, ctrlKey: input.ctrlKey, altKey: input.altKey,
       };
-      target.dispatchEvent(eventWith(input.type, properties));
-      const mouseType = input.type === "pointermove" ? "mousemove" : input.type === "pointerdown" ? "mousedown" : "mouseup";
-      dispatchToCanvasAndWindow(() => eventWith(mouseType, properties));
-      if (input.type === "pointerup" && currentCanvas) currentCanvas.dispatchEvent(eventWith("click", properties));
+      const captureTarget = pointerCaptureTargets.get(1);
+      const target = captureTarget || defaultTarget;
+      target.dispatchEvent(eventWith(pointerType, properties));
+      if (target !== windowEvents) windowEvents.dispatchEvent(eventWith(pointerType, properties));
+      const mouseType = pointerType === "pointermove" ? "mousemove" : pointerType === "pointerdown" ? "mousedown" : "mouseup";
+      target.dispatchEvent(eventWith(mouseType, properties));
+      if (target !== windowEvents) windowEvents.dispatchEvent(eventWith(mouseType, properties));
+      if (pointerType === "pointerup") {
+        const clickType = button === 0 ? "click" : "auxclick";
+        target.dispatchEvent(eventWith(clickType, properties));
+        if (button === 2) target.dispatchEvent(eventWith("contextmenu", properties));
+        if (doubleClickButton === button) {
+          target.dispatchEvent(eventWith("dblclick", properties));
+          doubleClickButton = -1;
+        }
+        captureTarget?.releasePointerCapture(1);
+      }
       continue;
     }
     if (input.type === "keydown") pressedKeys.add(input.code);
