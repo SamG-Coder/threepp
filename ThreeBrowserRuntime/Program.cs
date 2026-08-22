@@ -3,7 +3,7 @@ using System.Text.Json;
 using ThreeBrowserRuntime;
 
 if (args.Length == 0)
-{
+{    
     NativeConsole.Detach();
 }
 
