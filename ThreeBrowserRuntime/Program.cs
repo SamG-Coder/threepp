@@ -15,13 +15,22 @@ while (projectDirectory is not null && !File.Exists(Path.Combine(projectDirector
 
 if (projectDirectory is null)
 {
-    Console.Error.WriteLine("Could not locate the ThreeBrowserRuntime project directory.");
-    return 1;
+    var packagedDirectory = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
+    projectDirectory = File.Exists(Path.Combine(packagedDirectory, "build", "bin", "runtime", "launch.mjs"))
+        ? packagedDirectory
+        : null;
+    if (projectDirectory is null)
+    {
+        Console.Error.WriteLine("Could not locate the ThreeBrowserRuntime runtime files.");
+        return 1;
+    }
 }
 
 var runtimeDirectory = Path.Combine(projectDirectory, "build", "bin");
 var launcher = Path.Combine(runtimeDirectory, "runtime", "launch.mjs");
 var sitePuller = Path.Combine(runtimeDirectory, "runtime", "site-puller.mjs");
+var bundledNode = Path.Combine(projectDirectory, "node.exe");
+var nodeExecutable = File.Exists(bundledNode) ? bundledNode : "node";
 if (!File.Exists(launcher))
 {
     Console.Error.WriteLine("The native runtime is missing. Run 'dotnet build' first.");
@@ -37,7 +46,8 @@ if (args.Length == 0)
             runtimeDirectory,
             sitePuller,
             launcher,
-            Path.Combine(projectDirectory, "samples")));
+            Path.Combine(projectDirectory, "samples"),
+            nodeExecutable));
     });
     uiThread.SetApartmentState(ApartmentState.STA);
     uiThread.Start();
@@ -59,7 +69,7 @@ if (args.Length > 0 && (args[0].Equals("pull", StringComparison.OrdinalIgnoreCas
         return 1;
     }
 
-    var pull = new ProcessStartInfo("node")
+    var pull = new ProcessStartInfo(nodeExecutable)
     {
         UseShellExecute = false,
         WorkingDirectory = Environment.CurrentDirectory,
@@ -150,7 +160,7 @@ else
         : Path.Combine(runtimeDirectory, "demo", "cubes.mjs");
 }
 
-var startInfo = new ProcessStartInfo("node")
+var startInfo = new ProcessStartInfo(nodeExecutable)
 {
     UseShellExecute = false,
     WorkingDirectory = runtimeDirectory,

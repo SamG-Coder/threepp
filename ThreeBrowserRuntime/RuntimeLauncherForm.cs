@@ -14,6 +14,7 @@ internal sealed class RuntimeLauncherForm : Form
     private readonly string _sitePuller;
     private readonly string _launcher;
     private readonly string _samplesDirectory;
+    private readonly string _nodeExecutable;
     private readonly WebView2 _view = new() { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.FromArgb(247, 248, 250) };
     private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly ConcurrentQueue<(string Text, string Kind)> _pendingLines = new();
@@ -25,12 +26,13 @@ internal sealed class RuntimeLauncherForm : Form
     private bool _flushingLines;
     private string _lastErrorOutput = "";
 
-    internal RuntimeLauncherForm(string runtimeDirectory, string sitePuller, string launcher, string samplesDirectory)
+    internal RuntimeLauncherForm(string runtimeDirectory, string sitePuller, string launcher, string samplesDirectory, string nodeExecutable)
     {
         _runtimeDirectory = runtimeDirectory;
         _sitePuller = sitePuller;
         _launcher = launcher;
         _samplesDirectory = samplesDirectory;
+        _nodeExecutable = nodeExecutable;
         Text = "ThreeBrowser Runtime";
         Width = 1040;
         Height = 720;
@@ -128,7 +130,7 @@ internal sealed class RuntimeLauncherForm : Form
 
         try
         {
-            var exitCode = await RunProcessAsync("node", _runtimeDirectory,
+            var exitCode = await RunProcessAsync(_nodeExecutable, _runtimeDirectory,
                 [_sitePuller, rawAddress, _destination, "--force"], _operation.Token);
             if (exitCode != 0)
             {
@@ -150,7 +152,7 @@ internal sealed class RuntimeLauncherForm : Form
             await AppendAsync("Unpack complete", "success");
             await AppendAsync($"threebrowser launch \"{entry}\"", "command");
             await StatusAsync("Launching native runtime…", "active");
-            var launchExit = await RunProcessAsync("node", _runtimeDirectory, [_launcher, entry], _operation.Token);
+            var launchExit = await RunProcessAsync(_nodeExecutable, _runtimeDirectory, [_launcher, entry], _operation.Token);
             await AppendAsync($"Runtime exited with code {launchExit}.", launchExit == 0 ? "success" : "error");
             if (launchExit != 0)
                 await InvokeUiAsync("showError", string.IsNullOrWhiteSpace(_lastErrorOutput)
@@ -342,7 +344,7 @@ internal sealed class RuntimeLauncherForm : Form
         await AppendAsync($"threebrowser launch \"{entry}\"", "command");
         try
         {
-            var exitCode = await RunProcessAsync("node", _runtimeDirectory, [_launcher, entry], _operation.Token);
+            var exitCode = await RunProcessAsync(_nodeExecutable, _runtimeDirectory, [_launcher, entry], _operation.Token);
             await AppendAsync($"Runtime exited with code {exitCode}.", exitCode == 0 ? "success" : "error");
             if (exitCode != 0)
                 await InvokeUiAsync("showError", string.IsNullOrWhiteSpace(_lastErrorOutput)
