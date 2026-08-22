@@ -10,6 +10,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const addonPath = process.env.THREEBROWSER_RUNTIME_ADDON || path.join(here, "..", "three_browser_runtime.node");
 export const native = require(addonPath);
+let lastUnhandledEventError = null;
 
 class BrowserEventTarget {
   constructor() { this._eventListeners = new Map(); }
@@ -37,6 +38,7 @@ class BrowserEventTarget {
         if (typeof entry.listener === "function") entry.listener.call(this, event);
         else entry.listener.handleEvent?.(event);
       } catch (error) {
+        lastUnhandledEventError = error;
         console.error(`Unhandled ${event.type} event listener error:`, error);
       }
       if (entry.once) this.removeEventListener(event.type, entry.listener);
@@ -1422,6 +1424,7 @@ export function loadThreeShim(directory = path.join(here, "three")) {
 }
 
 export async function loadEntry(entryPath) {
+  lastUnhandledEventError = null;
   const absolute = path.resolve(entryPath);
   globalThis.location = new URL(pathToFileURL(absolute));
   if (!absolute.toLowerCase().endsWith(".html")) {
@@ -1454,6 +1457,12 @@ export async function loadEntry(entryPath) {
         if (basenameCounts.get(basename) === 1) pulledVirtualFiles.set(new URL(basename, pulledVirtualURL).href, file.path);
       }
       globalThis.location = new URL(manifest.html || "index.html", pulledVirtualURL);
+      if (!manifest.requiresWebGPU && manifest.compatibility?.threeMode === "bundled") {
+        throw new Error(
+          "Native launch cannot bind this site's opaque bundled WebGL renderer. " +
+          "Use its source project or source maps, or rebuild it with Three.js externalized."
+        );
+      }
       if (manifest.requiresWebGPU) await enableWebGPU();
     }
     const loaded = await import(pathToFileURL(absolute));
@@ -1461,6 +1470,7 @@ export async function loadEntry(entryPath) {
     document.dispatchEvent(new Event("DOMContentLoaded"));
     document.readyState = "complete";
     globalThis.dispatchEvent(new Event("load"));
+    if (!native.isOpen() && lastUnhandledEventError) throw lastUnhandledEventError;
     return loaded;
   }
   const html = fs.readFileSync(absolute, "utf8");

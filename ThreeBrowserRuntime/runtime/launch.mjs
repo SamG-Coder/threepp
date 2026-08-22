@@ -21,5 +21,5 @@ try {
 } catch (error) {
   console.error(error?.stack || error);
   stop();
-  process.exitCode = 1;
+  process.exit(1);
 }
