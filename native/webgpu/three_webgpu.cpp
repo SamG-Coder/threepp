@@ -822,6 +822,14 @@ bool requestAdapterAndDevice() {
     wgpuSupportedFeaturesFreeMembers(supported);
     dd.requiredFeatureCount = enabledFeatures.size();
     dd.requiredFeatures = enabledFeatures.data();
+    WGPULimits adapterLimits = WGPU_LIMITS_INIT;
+    if (wgpuAdapterGetLimits(g.adapter, &adapterLimits) == WGPUStatus_Success) {
+        // Request the limits that the JavaScript-facing device advertises.
+        // Otherwise wgpu-native creates a device at conservative WebGPU
+        // defaults (notably 64 KiB buffer bindings) even when the adapter can
+        // support substantially larger render and compute workloads.
+        dd.requiredLimits = &adapterLimits;
+    }
     dd.deviceLostCallbackInfo.mode = WGPUCallbackMode_AllowSpontaneous;
     dd.deviceLostCallbackInfo.callback = onDeviceLost;
     dd.uncapturedErrorCallbackInfo.callback = onUncaptured;
@@ -838,6 +846,16 @@ bool requestAdapterAndDevice() {
         return false;
     }
     g.device = device;
+    WGPULimits deviceLimits = WGPU_LIMITS_INIT;
+    if (wgpuDeviceGetLimits(g.device, &deviceLimits) == WGPUStatus_Success) {
+        char limitsMessage[192];
+        std::snprintf(limitsMessage, sizeof(limitsMessage),
+                      "device limits uniform=%llu storage=%llu buffer=%llu",
+                      static_cast<unsigned long long>(deviceLimits.maxUniformBufferBindingSize),
+                      static_cast<unsigned long long>(deviceLimits.maxStorageBufferBindingSize),
+                      static_cast<unsigned long long>(deviceLimits.maxBufferSize));
+        logLine(limitsMessage);
+    }
     g.queue = wgpuDeviceGetQueue(g.device);
     if (!g.queue) {
         setError("no WebGPU queue");

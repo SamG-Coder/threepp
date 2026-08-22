@@ -37,7 +37,10 @@ const LIMITS = {
   maxStorageBuffersPerShaderStage: 10,
   maxStorageTexturesPerShaderStage: 8,
   maxUniformBuffersPerShaderStage: 12,
-  maxUniformBufferBindingSize: 16 * 1024 * 1024,
+  // Match the WebGPU device's portable uniform binding limit. Advertising a
+  // larger synthetic value makes three.js combine per-object uniforms into a
+  // binding that wgpu-native must reject on otherwise capable adapters.
+  maxUniformBufferBindingSize: 64 * 1024,
   maxStorageBufferBindingSize: 1 << 30,
   minUniformBufferOffsetAlignment: 256,
   minStorageBufferOffsetAlignment: 256,
@@ -969,7 +972,7 @@ class GPUDevice extends Emitter {
   createBindGroup(desc) {
     const h = cmd.allocHandle();
     if (globalThis.process?.env?.THREEBROWSER_TRACE_WEBGPU_VIEWS) {
-      console.error("ThreeBrowser WebGPU bind group", JSON.stringify({ handle: h, entries: (desc.entries || []).map(entry => ({ binding: entry.binding, view: entry.resource?._h, texture: entry.resource?._tex?._h, size: entry.resource?._tex ? [entry.resource._tex.width, entry.resource._tex.height, entry.resource._tex.depthOrArrayLayers] : undefined, viewDesc: entry.resource?._desc })) }));
+      console.error("ThreeBrowser WebGPU bind group", JSON.stringify({ handle: h, entries: (desc.entries || []).map(entry => ({ binding: entry.binding, view: entry.resource?._h, texture: entry.resource?._tex?._h, size: entry.resource?._tex ? [entry.resource._tex.width, entry.resource._tex.height, entry.resource._tex.depthOrArrayLayers] : entry.resource?.size, viewDesc: entry.resource?._desc, buffer: entry.resource?.buffer?._h, bufferSize: entry.resource?.buffer?.size, bufferUsage: entry.resource?.buffer?.usage })) }));
     }
     cmd.bgCreate(h, desc.layout._h, bgEntries(desc.entries));
     const g = new GPUBindGroup(h);

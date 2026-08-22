@@ -97,4 +97,6 @@ and visually checked in the native window:
 - `webgpu_postprocessing_ssr.html` — pulled DRACO/GLB assets, PMREM, TSL screen
   background, mip-chain copies, SMAA, and screen-space reflections;
 - `webgpu_postprocessing_traa.html` — temporal history texture copies,
-  reprojection, camera jitter, motion, wireframe, and textured geometry.
+  reprojection, camera jitter, motion, wireframe, and textured geometry;
+- `webgpu_postprocessing_dof.html` — composed cubemap asset URLs, large
+  instanced uniform workloads, reflective spheres, and depth-of-field bokeh.

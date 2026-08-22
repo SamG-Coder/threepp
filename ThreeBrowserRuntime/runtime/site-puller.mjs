@@ -141,6 +141,39 @@ function collectReference(record, value, hint = "asset", allowAssetLiteral = fal
   });
 }
 
+function simpleStringLiteral(source) {
+  const match = /^\s*(['"])([\s\S]*)\1\s*$/.exec(source);
+  if (!match) return null;
+  return match[2]
+    .replace(/\\\\/g, "\\")
+    .replace(/\\'/g, "'")
+    .replace(/\\"/g, '"');
+}
+
+function inspectComposedAssetArrays(record, source) {
+  const constants = new Map();
+  for (const match of source.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(['"])([^\r\n]*?)\2\s*;/g)) {
+    constants.set(match[1], simpleStringLiteral(`${match[2]}${match[3]}${match[2]}`));
+  }
+  const assetPattern = /\.(?:m?js|css|wasm|json|glsl|vert|frag|wgsl|png|jpe?g|webp|gif|svg|hdr|exr|gltf|glb|bin)(?:[?#].*)?$/i;
+  for (const array of source.matchAll(/\b(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*\[([\s\S]*?)\]\s*;/g)) {
+    for (const expression of array[1].split(",")) {
+      let value = "";
+      let valid = true;
+      for (const termSource of expression.split("+")) {
+        const term = termSource.trim();
+        const literal = simpleStringLiteral(term);
+        if (literal !== null) value += literal;
+        else if (constants.has(term)) value += constants.get(term);
+        else { valid = false; break; }
+      }
+      if (valid && assetPattern.test(value)) {
+        collectReference(record, value, "asset", true, record.virtualSource !== undefined);
+      }
+    }
+  }
+}
+
 function inspectJavaScript(record, source) {
   if (/\b__vite__|vitePreload|__vitePreload/.test(source)) findings.add("Vite runtime detected");
   if (/\bWebGLRenderer\b|\bWebGPURenderer\b|THREE\.REVISION|REVISION\s*=\s*["']\d+/i.test(source)) {
@@ -170,6 +203,7 @@ function inspectJavaScript(record, source) {
   for (const match of assetSource.matchAll(assetStrings)) {
     collectReference(record, match[1], "asset", true, record.virtualSource !== undefined);
   }
+  inspectComposedAssetArrays(record, assetSource);
   const sourceMap = /\/\/[#@]\s*sourceMappingURL\s*=\s*([^\s]+)/g;
   for (const match of source.matchAll(sourceMap)) collectReference(record, match[1], "map");
 }
