@@ -309,6 +309,13 @@ function inspectHtml(record, source) {
       record.inlineModules ??= [];
       record.inlineModules.push(inline.url.href);
     }
+    else if ((!type || /^(?:text|application)\/(?:java|ecma)script$/.test(type)) && match[2].trim()) {
+      // Classic inline scripts execute during HTML parsing, before deferred
+      // module scripts. Preserve them as global scripts so route/bootstrap
+      // values established by the document are available to the app.
+      record.inlineScripts ??= [];
+      record.inlineScripts.push(match[2]);
+    }
   }
   for (const match of source.matchAll(/<(?:link|img|source|video|audio)\b[^>]*?\b(?:href|src)\s*=\s*["']([^"']+)["']/gi)) {
     const tag = match[0];
@@ -446,8 +453,13 @@ for (const record of successful) {
     /\.html?$/i.test(record.url.pathname));
   if (isText) {
     let output = rewriteText(record, record.content.toString("utf8")).replaceAll("\r\n", "\n");
+    // A production WebGPU bundle is already a complete, internally versioned
+    // Three.js runtime. Relinking its structural types to the native WebGL
+    // facade mixes two Three.js revisions (notably Texture/Source) and breaks
+    // WebGPU post-processing. Keep that bundle intact; navigator.gpu is the
+    // native boundary for WebGPU projects.
     if (moduleLike(record.url, record.contentType, record.hint) &&
-        hasThreeRuntimeCode && hasWebGlRenderer) {
+        hasThreeRuntimeCode && hasWebGlRenderer && !hasWebGpuRenderer) {
       const relinked = relinkViteChunk(output, record.localPath);
       if (relinked.changed) {
         output = relinked.source;
@@ -479,6 +491,7 @@ const entryLines = [
   `globalThis.__threeBrowserSourceURL = ${JSON.stringify(rootURL.href)};`,
   ...(rootRecord.htmlElements || []).map(element =>
     `{ const element = document.createElement(${JSON.stringify(element.tag)}); element.id = ${JSON.stringify(element.id)}; document.body.appendChild(element); }`),
+  ...(rootRecord.inlineScripts || []).map(script => `(0, eval)(${JSON.stringify(script)});`),
   ...rootModules.map(record => `await import(${JSON.stringify(`./${record.localPath.replaceAll("\\", "/")}`)});`),
   "",
 ];
@@ -492,6 +505,7 @@ const uiMode = uiSignals.has("React UI") || uiSignals.has("scroll-driven UI") ||
 const compatibilityNotes = [];
 if (threeMode === "bundled") compatibilityNotes.push("Three.js is embedded in a production bundle and no safe native renderer binding was found.");
 if (threeMode === "relinked") compatibilityNotes.push("Semantic Three.js scene, camera, geometry, material, texture, light, mesh, and WebGLRenderer bindings were redirected to the native facade.");
+if (hasWebGpuRenderer) compatibilityNotes.push("The bundled Three.js runtime was preserved as one version; WebGPU commands are redirected through the native navigator.gpu adapter.");
 if (uiMode !== "canvas-only") compatibilityNotes.push("The native runtime does not paint arbitrary HTML/CSS, so visible browser UI will be missing.");
 
 const projectId = crypto.createHash("sha256").update(rootURL.href).digest("hex").slice(0, 16);

@@ -129,7 +129,7 @@ class Element extends BrowserEventTarget {
     child.parentNode = this;
     child.ownerDocument ??= this.ownerDocument || globalThis.document || null;
     this.children.push(child);
-    if (child instanceof CanvasElement) promotePresentedCanvas(child, this);
+    promotePresentedCanvasTree(child);
     return child;
   }
   append(...children) { for (const child of children) this.appendChild(child); }
@@ -150,6 +150,7 @@ class Element extends BrowserEventTarget {
     child.parentNode = this;
     child.ownerDocument ??= this.ownerDocument || globalThis.document || null;
     this.children.splice(index, 0, child);
+    promotePresentedCanvasTree(child);
     return child;
   }
   removeChild(child) {
@@ -421,6 +422,22 @@ class Canvas2DContext {
   setLineDash() {}
 }
 
+class WebGLRenderingContextProbe {
+  constructor(canvas) { this.canvas = canvas; }
+  getExtension(name) {
+    const supported = new Set([
+      "OES_texture_float", "OES_texture_float_linear", "OES_texture_half_float",
+      "OES_texture_half_float_linear", "OES_element_index_uint",
+      "EXT_color_buffer_float", "EXT_texture_filter_anisotropic",
+    ]);
+    return supported.has(String(name)) ? {} : null;
+  }
+  getSupportedExtensions() {
+    return ["OES_texture_float", "OES_texture_float_linear", "EXT_color_buffer_float", "EXT_texture_filter_anisotropic"];
+  }
+}
+class WebGL2RenderingContextProbe extends WebGLRenderingContextProbe {}
+
 class CanvasElement extends Element {
   constructor() {
     super("canvas");
@@ -430,6 +447,8 @@ class CanvasElement extends Element {
     this.clientHeight = 720;
     this.tabIndex = 0;
     this.context2d = null;
+    this.contextWebgl = null;
+    this.contextWebgl2 = null;
   }
   focus() { document.activeElement = this; }
   getBoundingClientRect() {
@@ -437,7 +456,10 @@ class CanvasElement extends Element {
       width: this.clientWidth, height: this.clientHeight, x: 0, y: 0 };
   }
   getContext(type) {
-    if (String(type).toLowerCase() === "2d") return this.context2d ??= new Canvas2DContext(this);
+    const name = String(type).toLowerCase();
+    if (name === "2d") return this.context2d ??= new Canvas2DContext(this);
+    if (name === "webgl" || name === "experimental-webgl") return this.contextWebgl ??= new WebGLRenderingContextProbe(this);
+    if (name === "webgl2" || name === "experimental-webgl2") return this.contextWebgl2 ??= new WebGL2RenderingContextProbe(this);
     return null;
   }
 }
@@ -580,6 +602,19 @@ class AudioElement extends Element {
   }
 }
 
+class VideoElement extends AudioElement {
+  constructor(source = "") {
+    super(source);
+    this.tagName = this.nodeName = "VIDEO";
+    this.videoWidth = 0;
+    this.videoHeight = 0;
+    this.playsInline = true;
+  }
+  canPlayType(type) {
+    return /^(?:video\/(?:mp4|ogg|webm)|application\/ogg)/i.test(String(type)) ? "probably" : "";
+  }
+}
+
 const body = new Element("body");
 const head = new Element("head");
 const documentTarget = new BrowserEventTarget();
@@ -599,6 +634,7 @@ export const document = Object.assign(documentTarget, {
     return name === "canvas" ? new CanvasElement() :
       name === "img" ? new ImageElement() :
       name === "audio" ? new AudioElement() :
+      name === "video" ? new VideoElement() :
       new Element(tag);
   },
   createElementNS(_namespace, tag) { return this.createElement(tag); },
@@ -607,6 +643,13 @@ export const document = Object.assign(documentTarget, {
   getElementById(id) {
     const walk = node => node.id === id ? node : node.children.map(walk).find(Boolean);
     return walk(body) || walk(head) || null;
+  },
+  getElementsByTagName(name) {
+    const tag = String(name).toLowerCase();
+    if (tag === "html") return [this.documentElement];
+    if (tag === "head") return [head];
+    if (tag === "body") return [body];
+    return [...head.querySelectorAll(tag), ...body.querySelectorAll(tag)];
   },
   querySelector(selector) {
     if (selector === "canvas") return currentCanvas;
@@ -640,6 +683,41 @@ function releaseNativePointerLock(fromHost = false) {
 }
 
 let currentCanvas = null;
+const mountedCanvases = new Set();
+function canvasIsConnected(canvas) {
+  let node = canvas;
+  while (node) {
+    if (node === body || node === document.documentElement) return true;
+    node = node.parentNode;
+  }
+  return false;
+}
+function canvasStackZ(canvas) {
+  let z = 0;
+  for (let node = canvas; node; node = node.parentNode) {
+    const value = Number.parseFloat(node.style?.zIndex);
+    if (Number.isFinite(value)) z += value;
+  }
+  return z;
+}
+function refreshPresentedCanvas() {
+  const candidates = [...mountedCanvases].filter(canvasIsConnected);
+  currentCanvas = candidates.reduce((best, canvas) => {
+    if (!best) return canvas;
+    const z = canvasStackZ(canvas);
+    const bestZ = canvasStackZ(best);
+    if (z !== bestZ) return z > bestZ ? canvas : best;
+    const area = Math.max(0, Number(canvas.width) || 0) * Math.max(0, Number(canvas.height) || 0);
+    const bestArea = Math.max(0, Number(best.width) || 0) * Math.max(0, Number(best.height) || 0);
+    return area > bestArea ? canvas : best;
+  }, null);
+  return currentCanvas;
+}
+globalThis.__threeBrowserIsPresentedCanvas = canvas => refreshPresentedCanvas() === canvas;
+function promotePresentedCanvasTree(node) {
+  if (node instanceof CanvasElement) promotePresentedCanvas(node, node.parentNode);
+  for (const child of node?.children || []) promotePresentedCanvasTree(child);
+}
 function promotePresentedCanvas(canvas, parent) {
   let node = parent;
   let connected = false;
@@ -648,25 +726,42 @@ function promotePresentedCanvas(canvas, parent) {
     node = node.parentNode;
   }
   if (!connected) return;
-  const area = Math.max(0, Number(canvas.width) || 0) * Math.max(0, Number(canvas.height) || 0);
-  const currentArea = currentCanvas
-    ? Math.max(0, Number(currentCanvas.width) || 0) * Math.max(0, Number(currentCanvas.height) || 0)
-    : -1;
-  // The canvas presented by Three.js is normally sized to the viewport before
-  // insertion. Auxiliary canvases used for textures, charts, or controls must
-  // not steal native input merely because they were created later.
-  if (!currentCanvas?.parentNode || area > currentArea) currentCanvas = canvas;
+  mountedCanvases.add(canvas);
+  refreshPresentedCanvas();
+  if (process.env.THREEBROWSER_TRACE_RENDER) {
+    console.error("ThreeBrowser canvas mounted", {
+      width: canvas.width, height: canvas.height, parent: parent.tagName, parentId: parent.id,
+      zIndex: canvasStackZ(canvas), selected: currentCanvas === canvas,
+    });
+  }
 }
 const originalCreateElement = document.createElement.bind(document);
 document.createElement = tag => {
   const result = originalCreateElement(tag);
   if (result instanceof CanvasElement && !currentCanvas) currentCanvas = result;
+  if (result instanceof CanvasElement && process.env.THREEBROWSER_TRACE_RENDER) {
+    console.error("ThreeBrowser canvas created", { width: result.width, height: result.height });
+  }
   return result;
 };
 
 globalThis.window = globalThis;
 globalThis.self = globalThis;
 globalThis.document = document;
+globalThis.history = {
+  length: 1,
+  state: null,
+  scrollRestoration: "auto",
+  pushState(state, _unused, url) {
+    this.state = state;
+    if (url != null) globalThis.location = new URL(String(url), globalThis.location);
+  },
+  replaceState(state, _unused, url) {
+    this.state = state;
+    if (url != null) globalThis.location = new URL(String(url), globalThis.location);
+  },
+  back() {}, forward() {}, go() {},
+};
 Object.defineProperty(globalThis, "navigator", {
   value: { userAgent: "ThreeBrowserRuntime/0.1 V8", platform: process.platform },
   configurable: true,
@@ -674,6 +769,21 @@ Object.defineProperty(globalThis, "navigator", {
 globalThis.devicePixelRatio = 1;
 globalThis.innerWidth = 1280;
 globalThis.innerHeight = 720;
+const screenOrientation = Object.assign(new BrowserEventTarget(), {
+  angle: 0,
+  type: "landscape-primary",
+  lock: async () => {},
+  unlock: () => {},
+});
+globalThis.screen = {
+  width: globalThis.innerWidth,
+  height: globalThis.innerHeight,
+  availWidth: globalThis.innerWidth,
+  availHeight: globalThis.innerHeight,
+  colorDepth: 24,
+  pixelDepth: 24,
+  orientation: screenOrientation,
+};
 globalThis.__threeBrowserNativeRuntime = true;
 globalThis.__TN_SHARED = new ArrayBuffer(8 * 1024 * 1024);
 globalThis.Node = Element;
@@ -686,11 +796,14 @@ globalThis.HTMLTextAreaElement = Element;
 globalThis.SVGElement = Element;
 globalThis.HTMLCanvasElement = CanvasElement;
 globalThis.CanvasRenderingContext2D = Canvas2DContext;
+globalThis.WebGLRenderingContext = WebGLRenderingContextProbe;
+globalThis.WebGL2RenderingContext = WebGL2RenderingContextProbe;
 globalThis.HTMLImageElement = ImageElement;
 globalThis.Image = ImageElement;
 globalThis.HTMLMediaElement = AudioElement;
 globalThis.HTMLAudioElement = AudioElement;
 globalThis.Audio = AudioElement;
+globalThis.HTMLVideoElement = VideoElement;
 document.defaultView = globalThis;
 globalThis.createImageBitmap = async source => {
   const bytes = source instanceof Blob ? Buffer.from(await source.arrayBuffer()) : Buffer.from(source);
@@ -739,6 +852,12 @@ globalThis.ResizeObserver = class {
     queueMicrotask(() => {
       if (!this.targets.has(target)) return;
       const contentRect = target.getBoundingClientRect();
+      if (process.env.THREEBROWSER_TRACE_RENDER) {
+        console.error("ThreeBrowser ResizeObserver", {
+          tag: target.tagName, id: target.id, className: target.className,
+          width: contentRect.width, height: contentRect.height,
+        });
+      }
       this.callback([{ target, contentRect, contentBoxSize: [{ inlineSize: contentRect.width, blockSize: contentRect.height }] }], this);
     });
   }
@@ -1229,6 +1348,8 @@ function syncWindowSize() {
   if (!state.width || !state.height || (state.width === globalThis.innerWidth && state.height === globalThis.innerHeight)) return;
   globalThis.innerWidth = state.width;
   globalThis.innerHeight = state.height;
+  globalThis.screen.width = globalThis.screen.availWidth = state.width;
+  globalThis.screen.height = globalThis.screen.availHeight = state.height;
   if (currentCanvas) {
     currentCanvas.clientWidth = currentCanvas.width = state.width;
     currentCanvas.clientHeight = currentCanvas.height = state.height;
@@ -1252,7 +1373,7 @@ function pump() {
   }
   if (process.env.THREEBROWSER_TRACE_RENDER && performance.now() >= nextTraceFrame) {
     nextTraceFrame = performance.now() + 1000;
-    console.error("ThreeBrowser render stats", native.stats());
+    console.error("ThreeBrowser render stats", native.stats(), "lastError:", native.lastError());
   }
   native.waitFrame();
   if (webGpuEnabled) {

@@ -760,8 +760,6 @@ bool configureSurface(int w, int h) {
     g.config.presentMode = pickPresentMode(g.vsync.load(std::memory_order_relaxed) != 0);
     wgpuSurfaceConfigure(g.surface, &g.config);
     g.surfaceConfigured = true;
-    g.statsW.store(w, std::memory_order_relaxed);
-    g.statsH.store(h, std::memory_order_relaxed);
     return true;
 }
 
@@ -1538,7 +1536,8 @@ bool acquireSwapchain() {
         return true;
     }
     if (!g.surfaceConfigured) {
-        configureSurface(g.statsW.load(), g.statsH.load());
+        configureSurface(g.config.width ? static_cast<int>(g.config.width) : g.statsW.load(),
+                         g.config.height ? static_cast<int>(g.config.height) : g.statsH.load());
     }
     WGPUSurfaceTexture st{};
     wgpuSurfaceGetCurrentTexture(g.surface, &st);
@@ -1553,7 +1552,8 @@ bool acquireSwapchain() {
             if (st.texture) {
                 wgpuTextureRelease(st.texture);
             }
-            configureSurface(g.statsW.load(), g.statsH.load());
+            configureSurface(g.config.width ? static_cast<int>(g.config.width) : g.statsW.load(),
+                             g.config.height ? static_cast<int>(g.config.height) : g.statsH.load());
             wgpuSurfaceGetCurrentTexture(g.surface, &st);
             if (st.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
                 st.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
@@ -1913,9 +1913,9 @@ void execOne(uint32_t op, Reader& r) {
         case OP_RESIZE: {
             const int w = static_cast<int>(r.u32());
             const int h = static_cast<int>(r.u32());
-            if (g.hwnd) {
-                setHwndClientSize(g.hwnd, w, h);
-            }
+            // This is the WebGPU canvas backing-store size. It can be larger
+            // than the HWND client area when Three.js uses DPR or
+            // supersampling, so resizing the native window here is incorrect.
             // Command streams can split one encoder across several submits.
             // Never invalidate its acquired surface texture mid-encoder.
             requestSurfaceResize(w, h);
@@ -1927,7 +1927,8 @@ void execOne(uint32_t op, Reader& r) {
         case OP_SET_VSYNC: {
             const int on = static_cast<int>(r.u32());
             g.vsync.store(on != 0 ? 1 : 0, std::memory_order_relaxed);
-            configureSurface(g.statsW.load(), g.statsH.load());
+            configureSurface(g.config.width ? static_cast<int>(g.config.width) : g.statsW.load(),
+                             g.config.height ? static_cast<int>(g.config.height) : g.statsH.load());
             return;
         }
         case OP_BUF_CREATE: {
@@ -3260,7 +3261,8 @@ void tw_set_vsync(int on) {
     try {
         onWorkerAsync([] {
             if (g.surfaceConfigured) {
-                configureSurface(g.statsW.load(), g.statsH.load());
+                configureSurface(g.config.width ? static_cast<int>(g.config.width) : g.statsW.load(),
+                                 g.config.height ? static_cast<int>(g.config.height) : g.statsH.load());
             }
         });
     } catch (const std::exception& ex) {

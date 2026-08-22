@@ -59,8 +59,9 @@ target_compile_definitions(three_browser_runtime PRIVATE
 target_include_directories(three_browser_runtime PRIVATE
         "${_node_headers}"
         "${PROJECT_SOURCE_DIR}/native"
-        "${PROJECT_SOURCE_DIR}/src/external/stb")
-target_link_libraries(three_browser_runtime PRIVATE three_native three_webgpu "${_node_lib}" dwmapi user32)
+        "${PROJECT_SOURCE_DIR}/src/external/stb"
+        "${PROJECT_SOURCE_DIR}/src/external/libwebp/src")
+target_link_libraries(three_browser_runtime PRIVATE three_native three_webgpu threepp "${_node_lib}" dwmapi user32)
 if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_options(three_browser_runtime PRIVATE -Wno-stringop-overflow)
 endif ()

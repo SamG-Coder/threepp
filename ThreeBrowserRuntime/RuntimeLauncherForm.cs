@@ -259,7 +259,7 @@ internal sealed class RuntimeLauncherForm : Form
     private async Task RestoreHistoryAsync()
     {
         var history = LoadHistory();
-        await InvokeUiAsync("history", history, history.FirstOrDefault() ?? "");
+        await InvokeUiAsync("history", history, "");
     }
 
     private static string GetDestination(Uri address)

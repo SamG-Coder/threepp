@@ -15,6 +15,7 @@
 #define STB_IMAGE_STATIC
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
+#include "webp/decode.h"
 
 #include <array>
 #include <atomic>
@@ -233,8 +234,17 @@ napi_value decodeImage(napi_env env, napi_callback_info info) {
     int channels = 0;
     stbi_uc* pixels = stbi_load_from_memory(static_cast<const stbi_uc*>(data), static_cast<int>(size),
                                             &width, &height, &channels, 4);
+    bool webpPixels = false;
+    if (!pixels) {
+        pixels = reinterpret_cast<stbi_uc*>(WebPDecodeRGBA(static_cast<const std::uint8_t*>(data), size,
+                                                           &width, &height));
+        webpPixels = pixels != nullptr;
+    }
     if (!pixels || width <= 0 || height <= 0) {
-        if (pixels) stbi_image_free(pixels);
+        if (pixels) {
+            if (webpPixels) WebPFree(pixels);
+            else stbi_image_free(pixels);
+        }
         return undefined(env);
     }
     const std::size_t pixelBytes = static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4;
@@ -242,7 +252,8 @@ napi_value decodeImage(napi_env env, napi_callback_info info) {
     napi_value arrayBuffer{};
     napi_create_arraybuffer(env, pixelBytes, &output, &arrayBuffer);
     std::memcpy(output, pixels, pixelBytes);
-    stbi_image_free(pixels);
+    if (webpPixels) WebPFree(pixels);
+    else stbi_image_free(pixels);
 
     napi_value typedPixels{};
     napi_create_typedarray(env, napi_uint8_clamped_array, pixelBytes, arrayBuffer, 0, &typedPixels);

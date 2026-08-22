@@ -191,6 +191,24 @@
 
   function makeDummyGL() {
     return {
+      DEPTH_BUFFER_BIT: 256,
+      STENCIL_BUFFER_BIT: 1024,
+      COLOR_BUFFER_BIT: 16384,
+      NEVER: 512,
+      LESS: 513,
+      EQUAL: 514,
+      LEQUAL: 515,
+      GREATER: 516,
+      NOTEQUAL: 517,
+      GEQUAL: 518,
+      ALWAYS: 519,
+      KEEP: 7680,
+      REPLACE: 7681,
+      INCR: 7682,
+      DECR: 7683,
+      INVERT: 5386,
+      INCR_WRAP: 34055,
+      DECR_WRAP: 34056,
       TEXTURE_2D: 3553,
       UNSIGNED_BYTE: 5121,
       BYTE: 5120,
@@ -220,6 +238,23 @@
       pixelStorei() {},
       texSubImage2D() {},
       texImage2D() {},
+      getExtension(name) {
+        return new Set([
+          "OES_texture_float",
+          "OES_texture_float_linear",
+          "OES_texture_half_float",
+          "OES_texture_half_float_linear",
+          "OES_element_index_uint",
+          "EXT_color_buffer_float",
+          "EXT_texture_filter_anisotropic",
+        ]).has(String(name)) ? {} : null;
+      },
+      getSupportedExtensions() {
+        return ["OES_texture_float", "OES_texture_float_linear", "EXT_color_buffer_float", "EXT_texture_filter_anisotropic"];
+      },
+      getContextAttributes() {
+        return { alpha: false, antialias: false, depth: true, stencil: false, premultipliedAlpha: true };
+      },
     };
   }
 
@@ -356,6 +391,22 @@
       this._activeMipmapLevel = 0;
       this._anim = null;
       this._dummyContext = makeDummyGL();
+      const bufferState = {
+        setMask() {},
+        setLocked() {},
+        setTest() {},
+        setFunc() {},
+        setOp() {},
+        setClear() {},
+      };
+      this.state = {
+        buffers: {
+          color: { ...bufferState },
+          depth: { ...bufferState },
+          stencil: { ...bufferState },
+        },
+        reset() {},
+      };
       this.extensions = {
         get() {
           return null;
@@ -487,6 +538,8 @@
     compileAsync() {
       return Promise.resolve(this);
     }
+    initTexture() {}
+    initRenderTarget() {}
     clear() {}
     clearColor() {}
     clearDepth() {}

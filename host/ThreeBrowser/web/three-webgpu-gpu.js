@@ -78,6 +78,7 @@ let swapchainAcquired = false;
 let overlayStyled = false;
 let origGetContext = null;
 let origOffscreenGetContext = null;
+let tracedSurfaceSubmits = 0;
 
 function ensureConstants() {
   const g = globalThis;
@@ -142,15 +143,16 @@ function styleHitCanvas(el) {
 }
 
 function canvasSize(el) {
-  // Match the native HWND (CSS client pixels). Ignoring backing-store
-  // pixelRatio avoids MSAA/swapchain size mismatch.
+  // WebGPU presents at the canvas backing-store size, not its CSS size.
+  // Three.js may deliberately render above CSS resolution (DPR / supersampling),
+  // and every attachment in that pass must match the swapchain texture.
   const w = Math.max(
     1,
-    (el && (el.clientWidth || el.width)) || globalThis.innerWidth || 1
+    (el && (el.width || el.clientWidth)) || globalThis.innerWidth || 1
   );
   const h = Math.max(
     1,
-    (el && (el.clientHeight || el.height)) || globalThis.innerHeight || 1
+    (el && (el.height || el.clientHeight)) || globalThis.innerHeight || 1
   );
   return { w: w | 0, h: h | 0 };
 }
@@ -822,6 +824,22 @@ class GPUQueue {
     this.label = "";
   }
   submit(buffers) {
+    if (globalThis.process?.env?.THREEBROWSER_TRACE_RENDER && tracedSurfaceSubmits < 8) {
+      for (const buffer of buffers || []) {
+        const commands = buffer?._commands || [];
+        const surfacePasses = commands.filter(entry => entry[0] === "renderBegin" &&
+          entry[1]?.colorAttachments?.some(attachment => attachment.viewHandle === 0));
+        if (surfacePasses.length) {
+          tracedSurfaceSubmits++;
+          console.error("ThreeBrowser WebGPU surface submit", {
+            passes: surfacePasses.length,
+            draws: commands.filter(entry => entry[0] === "draw" || entry[0] === "drawIndexed" || entry[0] === "drawIndirect"),
+            loadOp: surfacePasses[0][1].colorAttachments[0]?.loadOp,
+            clear: surfacePasses[0][1].colorAttachments[0]?.clearValue,
+          });
+        }
+      }
+    }
     for (const buffer of buffers || []) replayCommandBuffer(buffer);
     if (swapchainAcquired) {
       cmd.present();
@@ -1036,6 +1054,7 @@ class GPUAdapter {
     this.isFallbackAdapter = false;
   }
   requestDevice(desc) {
+    if (globalThis.process?.env?.THREEBROWSER_TRACE_RENDER) console.error("ThreeBrowser WebGPU requestDevice", desc || {});
     desc = desc || {};
     const granted = [];
     const seen = new Set();
@@ -1069,7 +1088,25 @@ class GPUCanvasContext {
     this._tex = null;
     this._configured = false;
   }
+  _isPresented() {
+    const select = globalThis.__threeBrowserIsPresentedCanvas;
+    return typeof select !== "function" || select(this.canvas);
+  }
+  _createTexture(w, h, swapchain) {
+    const desc = {
+      size: { width: w, height: h, depthOrArrayLayers: 1 },
+      format: this._format,
+      usage: this._usage | 0x10,
+      mipLevelCount: 1,
+      sampleCount: 1,
+      dimension: "2d",
+    };
+    return swapchain
+      ? new GPUTexture(0, desc, true)
+      : this._device.createTexture(desc);
+  }
   configure(cfg) {
+    if (globalThis.process?.env?.THREEBROWSER_TRACE_RENDER) console.error("ThreeBrowser WebGPU canvas configure", cfg?.format || "bgra8unorm");
     this._device = cfg.device;
     this._format = cfg.format || "bgra8unorm";
     this._alphaMode = cfg.alphaMode || "opaque";
@@ -1078,19 +1115,9 @@ class GPUCanvasContext {
     injectOverlayStyle();
     styleHitCanvas(this.canvas);
     const { w, h } = canvasSize(this.canvas);
-    ensureStarted(w, h);
-    this._tex = new GPUTexture(
-      0,
-      {
-        size: { width: w, height: h, depthOrArrayLayers: 1 },
-        format: this._format,
-        usage: this._usage | 0x10,
-        mipLevelCount: 1,
-        sampleCount: 1,
-        dimension: "2d",
-      },
-      true
-    );
+    const presented = this._isPresented();
+    if (presented) ensureStarted(w, h);
+    this._tex = this._createTexture(w, h, presented);
   }
   unconfigure() {
     this._configured = false;
@@ -1110,24 +1137,15 @@ class GPUCanvasContext {
   }
   getCurrentTexture() {
     const { w, h } = canvasSize(this.canvas);
-    ensureStarted(w, h);
-    swapchainAcquired = true;
-    if (!this._tex) {
-      this._tex = new GPUTexture(
-        0,
-        {
-          size: { width: w, height: h, depthOrArrayLayers: 1 },
-          format: this._format,
-          usage: this._usage | 0x10,
-          mipLevelCount: 1,
-          sampleCount: 1,
-          dimension: "2d",
-        },
-        true
-      );
-    } else {
-      this._tex.width = w;
-      this._tex.height = h;
+    const presented = this._isPresented();
+    if (presented) {
+      ensureStarted(w, h);
+      swapchainAcquired = true;
+    }
+    if (!this._tex || this._tex._swapchain !== presented ||
+        this._tex.width !== w || this._tex.height !== h) {
+      if (this._tex && !this._tex._swapchain) this._tex.destroy();
+      this._tex = this._createTexture(w, h, presented);
     }
     return this._tex;
   }
@@ -1141,6 +1159,7 @@ function getCanvasContext(canvas) {
   injectOverlayStyle();
   styleHitCanvas(canvas);
   ctx = new GPUCanvasContext(canvas);
+  if (globalThis.process?.env?.THREEBROWSER_TRACE_RENDER) console.error("ThreeBrowser WebGPU canvas context created");
   canvasContexts.set(canvas, ctx);
   return ctx;
 }
@@ -1150,6 +1169,7 @@ class GPU {
     this.wgslLanguageFeatures = new FeatureSet(WGSL_FEATURES);
   }
   requestAdapter() {
+    if (globalThis.process?.env?.THREEBROWSER_TRACE_RENDER) console.error("ThreeBrowser WebGPU requestAdapter");
     return Promise.resolve(new GPUAdapter());
   }
   getPreferredCanvasFormat() {

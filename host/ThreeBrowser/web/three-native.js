@@ -1590,6 +1590,10 @@
         this.domElement = canvas;
         this.shadowMap = { enabled: false, type: 1 };
         this.xr = { enabled: false };
+        this.capabilities = {
+          getMaxAnisotropy: () => 16,
+          isWebGL2: true,
+        };
         this.info = {
           render: { frame: 0, calls: 0, triangles: 0 },
           memory: { geometries: 0, textures: 0 },
@@ -1625,6 +1629,9 @@
         }
       }
       setPixelRatio() {}
+      getContext() {
+        return this.domElement.getContext("webgl2") || this.domElement.getContext("webgl");
+      }
       setClearColor(color) {
         this._clearColor = color;
       }
