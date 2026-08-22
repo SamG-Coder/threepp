@@ -33,7 +33,11 @@ if (args.Length == 0)
     var uiThread = new Thread(() =>
     {
         ApplicationConfiguration.Initialize();
-        Application.Run(new RuntimeLauncherForm(runtimeDirectory, sitePuller, launcher));
+        Application.Run(new RuntimeLauncherForm(
+            runtimeDirectory,
+            sitePuller,
+            launcher,
+            Path.Combine(projectDirectory, "samples")));
     });
     uiThread.SetApartmentState(ApartmentState.STA);
     uiThread.Start();

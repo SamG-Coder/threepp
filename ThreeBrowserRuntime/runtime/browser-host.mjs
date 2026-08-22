@@ -1663,6 +1663,7 @@ const frameCallbacks = new Map();
 let nextFrameId = 1;
 let running = false;
 let startupDeadline = 0;
+let nativeWindowSeen = false;
 let nextWebGpuFrame = 0;
 let nextTraceFrame = 0;
 const webGpuFrameInterval = 1000 / 240;
@@ -1874,7 +1875,7 @@ function pump() {
   // the first pump made production Vite applications disappear before their
   // first effect could construct WebGLRenderer.
   if (!native.isOpen()) {
-    if (performance.now() < startupDeadline) {
+    if (!nativeWindowSeen && performance.now() < startupDeadline) {
       setTimeout(pump, 1);
       return;
     }
@@ -1884,6 +1885,7 @@ function pump() {
     setImmediate(() => process.exit(0));
     return;
   }
+  nativeWindowSeen = true;
   if (process.env.THREEBROWSER_TRACE_RENDER && performance.now() >= nextTraceFrame) {
     nextTraceFrame = performance.now() + 1000;
     console.error("ThreeBrowser render stats", {
@@ -1927,6 +1929,7 @@ function pump() {
 export function start() {
   if (running) return;
   running = true;
+  nativeWindowSeen = false;
   startupDeadline = performance.now() + nativeStartupTimeout;
   setImmediate(pump);
 }
