@@ -742,7 +742,12 @@ class GPUCommandEncoder {
   }
   copyBufferToTexture(source, dest, copySize) {
     this._commands.push(["copyTex", 1,
-      { handle: source.buffer._h, offset: source.offset },
+      {
+        handle: source.buffer._h,
+        offset: source.offset,
+        bytesPerRow: source.bytesPerRow,
+        rowsPerImage: source.rowsPerImage,
+      },
       {
         handle: dest.texture._h,
         origin: origin3(dest.origin),

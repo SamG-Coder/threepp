@@ -2903,46 +2903,71 @@ void execOne(uint32_t op, Reader& r) {
             return;
         }
         case OP_COPY_TEX: {
+            if (r.remaining() < 84) {
+                setError("copy tex: unsupported command payload");
+                return;
+            }
+            const uint32_t encoder = r.u32();
+            const uint32_t kind = r.u32();
             const uint32_t src = r.u32();
             const uint32_t dst = r.u32();
-            const uint32_t sx = r.has(4) ? r.u32() : 0;
-            const uint32_t sy = r.has(4) ? r.u32() : 0;
-            const uint32_t sz = r.has(4) ? r.u32() : 0;
-            const uint32_t dx = r.has(4) ? r.u32() : 0;
-            const uint32_t dy = r.has(4) ? r.u32() : 0;
-            const uint32_t dz = r.has(4) ? r.u32() : 0;
-            const uint32_t cw = r.has(4) ? r.u32() : 0;
-            const uint32_t ch = r.has(4) ? r.u32() : 0;
-            const uint32_t cd = r.has(4) ? r.u32() : 1;
-            const uint32_t smip = r.has(4) ? r.u32() : 0;
-            const uint32_t dmip = r.has(4) ? r.u32() : 0;
+            const uint32_t sx = r.u32();
+            const uint32_t sy = r.u32();
+            const uint32_t sz = r.u32();
+            const uint32_t smip = r.u32();
+            const uint32_t srcAspect = r.u32();
+            const uint32_t dx = r.u32();
+            const uint32_t dy = r.u32();
+            const uint32_t dz = r.u32();
+            const uint32_t dmip = r.u32();
+            const uint32_t dstAspect = r.u32();
+            const uint32_t bufferOffset = r.u32();
+            const uint32_t bytesPerRow = r.u32();
+            const uint32_t rowsPerImage = r.u32();
+            const uint32_t cw = r.u32();
+            const uint32_t ch = r.u32();
+            const uint32_t cd = r.u32();
+            r.u32(); // pad
             Slot* ss = getSlot(src);
             Slot* ds = getSlot(dst);
-            if (!ss || ss->kind != Kind::Texture || !ds || ds->kind != Kind::Texture) {
+            Slot* es = getSlot(encoder);
+            WGPUCommandEncoder enc = es && es->kind == Kind::Encoder ? es->encoder : g.currentEncoder;
+            if (!enc || !ss || !ds) {
                 setError("copy tex: bad handle");
                 return;
             }
-            WGPUCommandEncoder enc = ensureEncoder();
-            if (!enc) {
-                return;
-            }
-            WGPUTexelCopyTextureInfo srcI{};
-            srcI.texture = ss->texture;
-            srcI.mipLevel = smip;
-            srcI.origin.x = sx;
-            srcI.origin.y = sy;
-            srcI.origin.z = sz;
-            WGPUTexelCopyTextureInfo dstI{};
-            dstI.texture = ds->texture;
-            dstI.mipLevel = dmip;
-            dstI.origin.x = dx;
-            dstI.origin.y = dy;
-            dstI.origin.z = dz;
             WGPUExtent3D extent{};
-            extent.width = cw ? cw : ss->texW;
-            extent.height = ch ? ch : ss->texH;
+            extent.width = cw ? cw : (ss->kind == Kind::Texture ? ss->texW : ds->texW);
+            extent.height = ch ? ch : (ss->kind == Kind::Texture ? ss->texH : ds->texH);
             extent.depthOrArrayLayers = cd ? cd : 1;
-            wgpuCommandEncoderCopyTextureToTexture(enc, &srcI, &dstI, &extent);
+            auto textureInfo = [](Slot* slot, uint32_t mip, uint32_t x, uint32_t y, uint32_t z,
+                                  uint32_t aspect) {
+                WGPUTexelCopyTextureInfo info{};
+                info.texture = slot->texture;
+                info.mipLevel = mip;
+                info.origin = {x, y, z};
+                info.aspect = aspect ? static_cast<WGPUTextureAspect>(aspect) : WGPUTextureAspect_All;
+                return info;
+            };
+            WGPUTexelCopyBufferInfo bufferInfo{};
+            bufferInfo.layout.offset = bufferOffset;
+            bufferInfo.layout.bytesPerRow = bytesPerRow ? bytesPerRow : WGPU_COPY_STRIDE_UNDEFINED;
+            bufferInfo.layout.rowsPerImage = rowsPerImage ? rowsPerImage : WGPU_COPY_STRIDE_UNDEFINED;
+            if (kind == 0 && ss->kind == Kind::Texture && ds->kind == Kind::Buffer) {
+                const auto source = textureInfo(ss, smip, sx, sy, sz, srcAspect);
+                bufferInfo.buffer = ds->buffer;
+                wgpuCommandEncoderCopyTextureToBuffer(enc, &source, &bufferInfo, &extent);
+            } else if (kind == 1 && ss->kind == Kind::Buffer && ds->kind == Kind::Texture) {
+                bufferInfo.buffer = ss->buffer;
+                const auto destination = textureInfo(ds, dmip, dx, dy, dz, dstAspect);
+                wgpuCommandEncoderCopyBufferToTexture(enc, &bufferInfo, &destination, &extent);
+            } else if (kind == 2 && ss->kind == Kind::Texture && ds->kind == Kind::Texture) {
+                const auto source = textureInfo(ss, smip, sx, sy, sz, srcAspect);
+                const auto destination = textureInfo(ds, dmip, dx, dy, dz, dstAspect);
+                wgpuCommandEncoderCopyTextureToTexture(enc, &source, &destination, &extent);
+            } else {
+                setError("copy tex: resource kind mismatch");
+            }
             return;
         }
         default:

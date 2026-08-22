@@ -95,4 +95,6 @@ and visually checked in the native window:
 - `webgpu_postprocessing_ssgi.html` — MRT G-buffer passes, comparison samplers,
   cube texture views, and progressive screen-space global illumination;
 - `webgpu_postprocessing_ssr.html` — pulled DRACO/GLB assets, PMREM, TSL screen
-  background, mip-chain copies, SMAA, and screen-space reflections.
+  background, mip-chain copies, SMAA, and screen-space reflections;
+- `webgpu_postprocessing_traa.html` — temporal history texture copies,
+  reprojection, camera jitter, motion, wireframe, and textured geometry.

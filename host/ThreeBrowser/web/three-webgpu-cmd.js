@@ -1041,9 +1041,11 @@ function copyBuf(encoder, src, dst, srcOffset, dstOffset, size) {
 // dstX,Y,Z, dstMip, dstAspect, dstOffset, bytesPerRow, rowsPerImage,
 // width, height, depth
 function copyTex(encoder, kind, src, dst, copySize) {
+  const kindNumber = typeof kind === "number" ? kind : enu(COPY_KIND, kind, 0);
+  const bufferLayout = kindNumber === 1 ? src : dst;
   const s = begin(OP.COPY_TEX, 84);
   wu32(encoder);
-  wu32(typeof kind === "number" ? kind : enu(COPY_KIND, kind, 0));
+  wu32(kindNumber);
   wu32((src.handle ?? src.textureHandle ?? src.bufferHandle ?? 0) >>> 0);
   wu32((dst.handle ?? dst.textureHandle ?? dst.bufferHandle ?? 0) >>> 0);
   wu32(xyz(src.origin, "x", 0));
@@ -1056,9 +1058,9 @@ function copyTex(encoder, kind, src, dst, copySize) {
   wu32(xyz(dst.origin, "z", 2));
   wu32((dst.mipLevel ?? 0) >>> 0);
   wu32(enu(ASPECT, dst.aspect || "all", 1));
-  wu32((dst.offset ?? 0) >>> 0);
-  wu32((dst.bytesPerRow ?? 0) >>> 0);
-  wu32((dst.rowsPerImage ?? 0) >>> 0);
+  wu32((bufferLayout.offset ?? 0) >>> 0);
+  wu32((bufferLayout.bytesPerRow ?? 0) >>> 0);
+  wu32((bufferLayout.rowsPerImage ?? 0) >>> 0);
   wu32(xyz(copySize, "width", 0) >>> 0);
   wu32(xyz(copySize, "height", 1) >>> 0);
   wu32((xyz(copySize, "depthOrArrayLayers", 2) || 1) >>> 0);
