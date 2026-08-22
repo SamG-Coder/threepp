@@ -494,8 +494,13 @@ if (threeMode === "bundled") compatibilityNotes.push("Three.js is embedded in a 
 if (threeMode === "relinked") compatibilityNotes.push("Semantic Three.js scene, camera, geometry, material, texture, light, mesh, and WebGLRenderer bindings were redirected to the native facade.");
 if (uiMode !== "canvas-only") compatibilityNotes.push("The native runtime does not paint arbitrary HTML/CSS, so visible browser UI will be missing.");
 
+const projectId = crypto.createHash("sha256").update(rootURL.href).digest("hex").slice(0, 16);
+const virtualURL = `https://${projectId}.runtime.threebrowser.local/`;
+
 const manifest = {
-  format: 1,
+  format: 2,
+  projectId,
+  virtualURL,
   source: rootURL.href,
   pulledAt: new Date().toISOString(),
   entry: "site-entry.mjs",
@@ -524,6 +529,7 @@ fs.writeFileSync(path.join(destination, "threebrowser.pull.json"), `${JSON.strin
 
 console.log(`\nPulled ${successful.length} files (${(totalBytes / 1024 / 1024).toFixed(1)} MB) into ${destination}`);
 console.log(`Entry: ${path.join(destination, "site-entry.mjs")}`);
+console.log(`Virtual URL: ${virtualURL}`);
 for (const finding of findings) console.log(`Detected: ${finding}`);
 if (!findings.size) console.log("Detected: no explicit Vite or Three.js signature (the preserved module graph can still be launched). ");
 console.log(`Compatibility: Three.js ${threeMode}; UI ${uiMode}`);

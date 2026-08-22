@@ -69,6 +69,7 @@ class Element extends BrowserEventTarget {
       removeProperty(name) { const value = this[name] ?? ""; delete this[name]; return value; },
     };
     this.dataset = {};
+    this._attributes = new Map();
     this.children = [];
     this.parentNode = null;
     Object.defineProperties(this, {
@@ -76,6 +77,9 @@ class Element extends BrowserEventTarget {
       parentElement: { get: () => this.parentNode },
       firstChild: { get: () => this.children[0] ?? null },
       lastChild: { get: () => this.children.at(-1) ?? null },
+      firstElementChild: { get: () => this.children.find(child => child.nodeType === 1) ?? null },
+      lastElementChild: { get: () => this.children.findLast(child => child.nodeType === 1) ?? null },
+      childElementCount: { get: () => this.children.filter(child => child.nodeType === 1).length },
     });
     this.ownerDocument = globalThis.document ?? null;
     this.textContent = "";
@@ -151,8 +155,25 @@ class Element extends BrowserEventTarget {
     child.parentNode = null;
     return child;
   }
+  replaceChildren(...children) {
+    for (const child of this.children) child.parentNode = null;
+    this.children.length = 0;
+    this._innerHTML = "";
+    this.append(...children);
+  }
+  replaceChild(replacement, child) {
+    const index = this.children.indexOf(child);
+    if (index < 0) throw new Error("Node to replace is not a child");
+    if (replacement.parentNode) replacement.parentNode.removeChild(replacement);
+    child.parentNode = null;
+    replacement.parentNode = this;
+    replacement.ownerDocument ??= this.ownerDocument || globalThis.document || null;
+    this.children[index] = replacement;
+    return child;
+  }
   setAttribute(name, value) {
     const normalized = String(name).toLowerCase();
+    this._attributes.set(normalized, String(value));
     if (normalized === "class") this.className = value;
     else if (normalized === "style") {
       for (const declaration of String(value).split(";")) {
@@ -164,7 +185,27 @@ class Element extends BrowserEventTarget {
       this.dataset[key] = String(value);
     } else this[name] = String(value);
   }
-  getAttribute(name) { return this[name] ?? null; }
+  getAttribute(name) { return this._attributes.get(String(name).toLowerCase()) ?? null; }
+  hasAttribute(name) { return this._attributes.has(String(name).toLowerCase()); }
+  removeAttribute(name) {
+    const normalized = String(name).toLowerCase();
+    this._attributes.delete(normalized);
+    if (normalized === "class") this.className = "";
+    else if (normalized === "style") {
+      for (const key of Object.keys(this.style)) {
+        if (typeof this.style[key] !== "function") delete this.style[key];
+      }
+    } else if (normalized.startsWith("data-")) {
+      const key = normalized.slice(5).replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase());
+      delete this.dataset[key];
+    } else delete this[name];
+  }
+  toggleAttribute(name, force) {
+    const present = this.hasAttribute(name);
+    const next = force === undefined ? !present : Boolean(force);
+    if (next) this.setAttribute(name, ""); else this.removeAttribute(name);
+    return next;
+  }
   get innerHTML() { return this._innerHTML; }
   set innerHTML(value) {
     this._innerHTML = String(value);
@@ -419,10 +460,16 @@ class ImageElement extends Element {
   get src() { return this._src; }
   set src(value) {
     this._src = String(value);
+    this.complete = false;
+    const source = this._src;
+    // Begin resolving immediately. Sites commonly revoke a blob URL directly
+    // after assigning it to an image; browsers retain that already-started load.
+    const loadPromise = globalThis.fetch(source);
+    this._loadPromise = loadPromise;
     queueMicrotask(async () => {
       try {
-        const response = await globalThis.fetch(this._src);
-        if (!response.ok) throw new Error(`Image responded with ${response.status}`);
+        const response = await loadPromise;
+        if (!response.ok) throw new Error(`Image ${source} responded with ${response.status}`);
         const bytes = Buffer.from(await response.arrayBuffer());
         const decoded = native.decodeImage(bytes);
         const size = decoded || encodedImageSize(bytes);
@@ -431,7 +478,7 @@ class ImageElement extends Element {
         this.data = decoded?.pixels;
         this.complete = true;
         if (process.env.THREEBROWSER_TRACE_RENDER) {
-          console.error("ThreeBrowser image loaded", this._src, `${size.width}x${size.height}`, decoded ? "decoded" : "metadata-only");
+          console.error("ThreeBrowser image loaded", source, `${size.width}x${size.height}`, decoded ? "decoded" : "metadata-only");
         }
         const event = new Event("load");
         this.dispatchEvent(event);
@@ -439,13 +486,77 @@ class ImageElement extends Element {
       } catch (error) {
         this.complete = true;
         if (process.env.THREEBROWSER_TRACE_RENDER) {
-          console.error("ThreeBrowser image failed", this._src, error?.message || error);
+          console.error("ThreeBrowser image failed", source, error?.message || error);
         }
         const event = eventWith("error", { error, message: error.message });
         this.dispatchEvent(event);
         this.onerror?.(event);
       }
     });
+  }
+  decode() {
+    if (this.complete) {
+      return this.data || (this.naturalWidth > 0 && this.naturalHeight > 0)
+        ? Promise.resolve()
+        : Promise.reject(new Error(`Image could not be decoded: ${this._src}`));
+    }
+    return new Promise((resolve, reject) => {
+      this.addEventListener("load", () => resolve(), { once: true });
+      this.addEventListener("error", event => reject(event.error || new Error(`Image could not be decoded: ${this._src}`)), { once: true });
+    });
+  }
+}
+
+class AudioElement extends Element {
+  constructor(source = "") {
+    super("audio");
+    this._src = "";
+    this.autoplay = false;
+    this.controls = false;
+    this.crossOrigin = null;
+    this.currentTime = 0;
+    this.defaultMuted = false;
+    this.duration = Number.NaN;
+    this.ended = false;
+    this.loop = false;
+    this.muted = false;
+    this.paused = true;
+    this.playbackRate = 1;
+    this.preload = "auto";
+    this.readyState = 0;
+    this.volume = 1;
+    if (source) this.src = source;
+  }
+  get src() { return this._src; }
+  set src(value) {
+    this._src = String(value ?? "");
+    this.readyState = 0;
+    if (this._src) this.load();
+  }
+  get currentSrc() { return this._src; }
+  load() {
+    queueMicrotask(() => {
+      this.readyState = 4;
+      for (const type of ["loadedmetadata", "loadeddata", "canplay", "canplaythrough"]) {
+        this.dispatchEvent(new Event(type));
+      }
+      if (this.autoplay) void this.play();
+    });
+  }
+  play() {
+    this.paused = false;
+    this.ended = false;
+    this.dispatchEvent(new Event("play"));
+    queueMicrotask(() => this.dispatchEvent(new Event("playing")));
+    return Promise.resolve();
+  }
+  pause() {
+    if (this.paused) return;
+    this.paused = true;
+    this.dispatchEvent(new Event("pause"));
+  }
+  canPlayType(type) {
+    return /^(?:audio\/(?:mpeg|mp4|ogg|wav|webm)|application\/ogg)/i.test(String(type)) ? "probably" : "";
   }
 }
 
@@ -465,7 +576,10 @@ export const document = Object.assign(documentTarget, {
   pointerLockElement: null,
   createElement(tag) {
     const name = String(tag).toLowerCase();
-    return name === "canvas" ? new CanvasElement() : name === "img" ? new ImageElement() : new Element(tag);
+    return name === "canvas" ? new CanvasElement() :
+      name === "img" ? new ImageElement() :
+      name === "audio" ? new AudioElement() :
+      new Element(tag);
   },
   createElementNS(_namespace, tag) { return this.createElement(tag); },
   createTextNode(value) { const node = new Element("#text"); node.textContent = String(value); return node; },
@@ -537,6 +651,9 @@ globalThis.HTMLCanvasElement = CanvasElement;
 globalThis.CanvasRenderingContext2D = Canvas2DContext;
 globalThis.HTMLImageElement = ImageElement;
 globalThis.Image = ImageElement;
+globalThis.HTMLMediaElement = AudioElement;
+globalThis.HTMLAudioElement = AudioElement;
+globalThis.Audio = AudioElement;
 document.defaultView = globalThis;
 globalThis.createImageBitmap = async source => {
   const bytes = source instanceof Blob ? Buffer.from(await source.arrayBuffer()) : Buffer.from(source);
@@ -684,15 +801,34 @@ globalThis.Request = class BrowserRequest extends PlatformRequest {
     // Browser Request accepts document-relative URLs; Node's undici Request
     // rejects them before our fetch wrapper gets a chance to resolve them.
     const resolved = typeof input === "string" || input instanceof URL
-      ? new URL(String(input), globalThis.location?.href)
+      ? new URL(String(input), pulledVirtualURL || globalThis.location?.href)
       : input;
     super(resolved, init);
   }
 };
 const platformFetch = globalThis.fetch.bind(globalThis);
+const retainedObjectURLs = new Map();
+const platformCreateObjectURL = URL.createObjectURL?.bind(URL);
+const platformRevokeObjectURL = URL.revokeObjectURL?.bind(URL);
+if (platformCreateObjectURL) {
+  URL.createObjectURL = value => {
+    const url = platformCreateObjectURL(value);
+    retainedObjectURLs.set(url, value);
+    if (retainedObjectURLs.size > 512) retainedObjectURLs.delete(retainedObjectURLs.keys().next().value);
+    return url;
+  };
+  URL.revokeObjectURL = url => {
+    platformRevokeObjectURL?.(url);
+    // Browsers keep an image/media load alive when its object URL is revoked
+    // immediately after assignment. Retain the backing Blob briefly to match.
+    setTimeout(() => retainedObjectURLs.delete(String(url)), 30_000).unref?.();
+  };
+}
 let pulledSourceURL = null;
+let pulledVirtualURL = null;
 let pulledDirectory = null;
 let pulledFiles = new Map();
+let pulledVirtualFiles = new Map();
 const contentTypes = new Map([
   [".json", "application/json"], [".gltf", "model/gltf+json"], [".glb", "model/gltf-binary"],
   [".bin", "application/octet-stream"], [".dat", "application/octet-stream"], [".wasm", "application/wasm"], [".txt", "text/plain"],
@@ -701,19 +837,48 @@ const contentTypes = new Map([
 ]);
 globalThis.fetch = async (input, init) => {
   const raw = input instanceof Request ? input.url : input instanceof URL ? input.href : String(input);
-  let resolved;
+  const retainedBlob = retainedObjectURLs.get(raw);
+  if (retainedBlob) {
+    return new Response(String(init?.method || "GET").toUpperCase() === "HEAD" ? null : retainedBlob, {
+      status: 200,
+      headers: {
+        "content-type": retainedBlob.type || "application/octet-stream",
+        "content-length": String(retainedBlob.size),
+      },
+    });
+  }
+  let resolved, requestURL, isVirtual;
   try {
-    const sourceCandidate = pulledSourceURL ? new URL(raw, pulledSourceURL) : null;
-    sourceCandidate && (sourceCandidate.hash = "");
-    const pulledPath = sourceCandidate ? pulledFiles.get(sourceCandidate.href) : null;
+    requestURL = new URL(raw, pulledVirtualURL || globalThis.location?.href);
+    requestURL.hash = "";
+    isVirtual = pulledVirtualURL && requestURL.origin === pulledVirtualURL.origin;
+    const sourceCandidate = isVirtual && pulledSourceURL
+      ? new URL(`${requestURL.pathname}${requestURL.search}`, pulledSourceURL.origin)
+      : pulledSourceURL ? new URL(raw, pulledSourceURL) : requestURL;
+    sourceCandidate.hash = "";
+    const pulledPath = pulledVirtualFiles.get(requestURL.href) || pulledFiles.get(sourceCandidate.href);
     resolved = pulledPath && pulledDirectory
       ? pathToFileURL(path.join(pulledDirectory, pulledPath))
-      : new URL(raw, globalThis.location?.href);
+      : isVirtual ? sourceCandidate : requestURL;
   }
   catch { return platformFetch(input, init); }
-  if (process.env.THREEBROWSER_TRACE_FETCH) console.error(`ThreeBrowser fetch: ${resolved.href}`);
-  if (resolved.protocol !== "file:") return platformFetch(resolved, init);
   const method = String(init?.method || (input instanceof Request ? input.method : "GET")).toUpperCase();
+  if (process.env.THREEBROWSER_TRACE_FETCH) console.error(`ThreeBrowser fetch: ${resolved.href}`);
+  if (resolved.protocol !== "file:") {
+    const response = await platformFetch(resolved, init);
+    if (isVirtual && response.ok && method === "GET" && pulledDirectory) {
+      const relative = decodeURIComponent(requestURL.pathname).replace(/^\/+/, "").replaceAll("/", path.sep);
+      const cachePath = path.resolve(pulledDirectory, relative);
+      const boundary = `${path.resolve(pulledDirectory)}${path.sep}`;
+      if (cachePath.startsWith(boundary)) {
+        response.clone().arrayBuffer().then(async bytes => {
+          await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });
+          await fs.promises.writeFile(cachePath, Buffer.from(bytes));
+        }).catch(() => {});
+      }
+    }
+    return response;
+  }
   if (method !== "GET" && method !== "HEAD") return new Response(null, { status: 405, statusText: "Method Not Allowed" });
   try {
     const fileURL = new URL(resolved);
@@ -729,6 +894,21 @@ globalThis.fetch = async (input, init) => {
       },
     });
   } catch (error) {
+    if (error?.code === "ENOENT" && pulledDirectory && pulledSourceURL) {
+      const missingPath = fileURLToPath(new URL(resolved));
+      const relative = path.relative(pulledDirectory, missingPath);
+      if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+        const remoteURL = new URL(relative.replaceAll("\\", "/"), pulledSourceURL.origin);
+        const response = await platformFetch(remoteURL, init);
+        if (response.ok && method === "GET") {
+          const bytes = Buffer.from(await response.arrayBuffer());
+          await fs.promises.mkdir(path.dirname(missingPath), { recursive: true });
+          await fs.promises.writeFile(missingPath, bytes);
+          return new Response(bytes, { status: response.status, statusText: response.statusText, headers: response.headers });
+        }
+        return response;
+      }
+    }
     if (error?.code === "ENOENT") return new Response(null, { status: 404, statusText: "Not Found" });
     throw error;
   }
@@ -1028,10 +1208,29 @@ export async function loadEntry(entryPath) {
       let manifest;
       try { manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")); }
       catch (error) { throw new Error(`Invalid pull manifest in ${manifestPath}: ${error.message}`); }
-      if (manifest.html) globalThis.location = new URL(pathToFileURL(path.join(path.dirname(absolute), manifest.html)));
       pulledSourceURL = manifest.source ? new URL(manifest.source) : null;
       pulledDirectory = path.dirname(absolute);
       pulledFiles = new Map((manifest.files || []).map(file => [new URL(file.url).href, file.path]));
+      const fallbackId = path.basename(pulledDirectory).replace(/[^a-z0-9-]/gi, "-").slice(-40).toLowerCase() || "project";
+      pulledVirtualURL = new URL(manifest.virtualURL || `https://${fallbackId}.runtime.threebrowser.local/`);
+      const manifestFiles = manifest.files || [];
+      pulledVirtualFiles = new Map(manifestFiles.map(file => [
+        new URL(String(file.path).replaceAll("\\", "/"), pulledVirtualURL).href,
+        file.path,
+      ]));
+      // Production bundles sometimes retain a document-relative asset string
+      // after Vite moved the actual file beneath /assets. Give unique
+      // basenames a virtual-root alias without changing the downloaded code.
+      const basenameCounts = new Map();
+      for (const file of manifestFiles) {
+        const basename = path.posix.basename(String(file.path).replaceAll("\\", "/"));
+        basenameCounts.set(basename, (basenameCounts.get(basename) || 0) + 1);
+      }
+      for (const file of manifestFiles) {
+        const basename = path.posix.basename(String(file.path).replaceAll("\\", "/"));
+        if (basenameCounts.get(basename) === 1) pulledVirtualFiles.set(new URL(basename, pulledVirtualURL).href, file.path);
+      }
+      globalThis.location = new URL(manifest.html || "index.html", pulledVirtualURL);
       if (manifest.requiresWebGPU) await enableWebGPU();
     }
     const loaded = await import(pathToFileURL(absolute));

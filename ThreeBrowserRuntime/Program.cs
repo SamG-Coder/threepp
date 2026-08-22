@@ -1,5 +1,11 @@
 using System.Diagnostics;
 using System.Text.Json;
+using ThreeBrowserRuntime;
+
+if (args.Length == 0)
+{
+    NativeConsole.Detach();
+}
 
 var projectDirectory = AppContext.BaseDirectory;
 while (projectDirectory is not null && !File.Exists(Path.Combine(projectDirectory, "ThreeBrowserRuntime.csproj")))
@@ -20,6 +26,19 @@ if (!File.Exists(launcher))
 {
     Console.Error.WriteLine("The native runtime is missing. Run 'dotnet build' first.");
     return 1;
+}
+
+if (args.Length == 0)
+{
+    var uiThread = new Thread(() =>
+    {
+        ApplicationConfiguration.Initialize();
+        Application.Run(new RuntimeLauncherForm(runtimeDirectory, sitePuller, launcher));
+    });
+    uiThread.SetApartmentState(ApartmentState.STA);
+    uiThread.Start();
+    uiThread.Join();
+    return 0;
 }
 
 if (args.Length > 0 && (args[0].Equals("pull", StringComparison.OrdinalIgnoreCase) ||
