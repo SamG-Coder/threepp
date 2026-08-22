@@ -154,7 +154,7 @@ napi_value start(napi_env env, napi_callback_info info) {
     }
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     tn_runtime_set_standalone(1);
-    tn_runtime_set_vsync(1);
+    tn_runtime_set_vsync(0);
     const bool ok = tn_runtime_start(width, height, title.c_str()) != 0;
     runtimeActive.store(ok, std::memory_order_release);
     runtimeMode.store(ok ? 1 : 0, std::memory_order_release);

@@ -945,13 +945,6 @@
           TN.cmd.render(nativeScene?._h || 0, nativeCamera?._h || 0);
           TN.cmd.submit();
         }
-        // The command stream synchronizes scene state; the direct render
-        // signal guarantees the latest backbuffer pass is presented even
-        // when a production composer emits many offscreen passes per frame.
-        const commandHost = native();
-        if (TN.hostHas?.(commandHost, "RuntimeRender")) {
-          commandHost.RuntimeRender(nativeScene?._h || 0, nativeCamera?._h || 0);
-        }
         return true;
       }
       flushObject(scene);

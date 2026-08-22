@@ -61,7 +61,7 @@
   }
 
   function applySkeletonInverses(skeleton) {
-    if (!skeleton || !skeleton._h || skeleton._nativeInversesApplied) return;
+    if (!skeleton || !skeleton._h) return;
     const packed = packInversesForNative(skeleton.bones, skeleton.boneInverses);
     if (packedInversesAreIdentity(packed)) return;
     const n = native();
@@ -1414,12 +1414,19 @@
           }
         }
         this._nativeBoundSkeletonHandle = skeletonHandle;
+        // SkinnedMesh::bind() calculates inverses when no explicit bind matrix
+        // is supplied. Several glTF primitives commonly share one Skeleton,
+        // so every later mesh bind would otherwise overwrite the loader's
+        // inverse bind matrices after the first mesh had corrected them.
         applySkeletonInverses(skeleton);
       }
       // Bundled Vite builds can retain their own Bone/Skeleton constructors.
       // Mirror those animated local transforms into the native hierarchy each
       // frame even though their properties do not carry our dirty callbacks.
       if (TN.cmd) {
+        const poseFrame = TN._renderFrame ?? -1;
+        if (skeleton._nativePoseFrame === poseFrame) return;
+        skeleton._nativePoseFrame = poseFrame;
         for (const bone of skeleton.bones || []) {
           if (!bone?._h) continue;
           TN.cmd.setPose(
