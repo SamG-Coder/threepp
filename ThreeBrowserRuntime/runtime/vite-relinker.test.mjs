@@ -14,8 +14,8 @@ test("relinks a mangled class declaration by its semantic renderer marker", () =
   assert.deepEqual(result.renderers, ["a"]);
   assert.deepEqual(result.types, ["WebGLRenderer"]);
   assert.match(result.source, /import \* as __TB_THREE from "three"/);
-  assert.match(result.source, /const a=__TB_THREE\.WebGLRenderer;/);
-  assert.doesNotMatch(result.source, /render\(\)\{return 1\}/);
+  assert.match(result.source, /const a=__TB_relink\("WebGLRenderer",class\{/);
+  assert.match(result.source, /render\(\)\{return 1\}/);
   validModule(result.source);
 });
 
@@ -23,7 +23,7 @@ test("relinks a renderer held in a minified function expression", () => {
   const input = "const x=function(){this.isWebGLRenderer=true;this.render=()=>0};new x;";
   const result = relinkViteChunk(input, "vite-function.mjs");
   assert.equal(result.changed, true);
-  assert.match(result.source, /const x=__TB_THREE\.WebGLRenderer/);
+  assert.match(result.source, /const x=__TB_relink\("WebGLRenderer",function/);
   validModule(result.source);
 });
 
@@ -44,9 +44,9 @@ test("relinks the scene model spine together with the renderer", () => {
     "Object3D", "Scene", "Mesh", "BufferGeometry", "Material",
     "MeshStandardMaterial", "WebGLRenderer",
   ]));
-  assert.match(result.source, /const b=__TB_THREE\.Scene;/);
-  assert.match(result.source, /const c=__TB_THREE\.Mesh;/);
-  assert.match(result.source, /const f=__TB_THREE\.MeshStandardMaterial;/);
+  assert.match(result.source, /const b=__TB_relink\("Scene",class extends a/);
+  assert.match(result.source, /const c=__TB_relink\("Mesh",class extends a/);
+  assert.match(result.source, /const f=__TB_relink\("MeshStandardMaterial",class extends e/);
   validModule(result.source);
 });
 

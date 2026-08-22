@@ -451,6 +451,44 @@ napi_value pmremFromObject(napi_env env, napi_callback_info info) {
                                             static_cast<std::uint32_t>(argNumber(env, argv[1], 0))));
 }
 
+napi_value renderTargetCreate(napi_env env, napi_callback_info info) {
+    napi_value argv[6]{};
+    std::size_t argc = 6;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (!runtimeActive.load(std::memory_order_acquire) || argc != 6) return number(env, 0);
+    return number(env, tn_render_target_create(
+        static_cast<std::uint32_t>(argNumber(env, argv[0], 0)),
+        static_cast<int>(argNumber(env, argv[1], 1)),
+        static_cast<int>(argNumber(env, argv[2], 1)),
+        static_cast<int>(argNumber(env, argv[3], 0)),
+        static_cast<int>(argNumber(env, argv[4], 1)),
+        static_cast<int>(argNumber(env, argv[5], 0))));
+}
+
+napi_value renderTargetSet(napi_env env, napi_callback_info info) {
+    napi_value argv[3]{};
+    std::size_t argc = 3;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (!runtimeActive.load(std::memory_order_acquire) || argc != 3) return boolean(env, false);
+    return boolean(env, tn_render_target_set(
+        static_cast<std::uint32_t>(argNumber(env, argv[0], 0)),
+        static_cast<int>(argNumber(env, argv[1], 0)),
+        static_cast<int>(argNumber(env, argv[2], 0))) != 0);
+}
+
+napi_value renderTargetResize(napi_env env, napi_callback_info info) {
+    napi_value argv[3]{};
+    std::size_t argc = 3;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (runtimeActive.load(std::memory_order_acquire) && argc == 3) {
+        tn_render_target_resize(
+            static_cast<std::uint32_t>(argNumber(env, argv[0], 0)),
+            static_cast<int>(argNumber(env, argv[1], 1)),
+            static_cast<int>(argNumber(env, argv[2], 1)));
+    }
+    return undefined(env);
+}
+
 napi_value boneCreate(napi_env env, napi_callback_info) {
     return number(env, runtimeActive.load(std::memory_order_acquire) ? tn_bone_create() : 0);
 }
@@ -642,6 +680,9 @@ napi_value init(napi_env env, napi_value exports) {
         {"pmremFromSky", nullptr, pmremFromSky, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"pmremFromCubemap", nullptr, pmremFromCubemap, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"pmremFromObject", nullptr, pmremFromObject, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"renderTargetCreate", nullptr, renderTargetCreate, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"renderTargetSet", nullptr, renderTargetSet, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"renderTargetResize", nullptr, renderTargetResize, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"boneCreate", nullptr, boneCreate, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"skeletonCreate", nullptr, skeletonCreate, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"skeletonSetInverses", nullptr, skeletonSetInverses, nullptr, nullptr, nullptr, napi_default, nullptr},

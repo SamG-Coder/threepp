@@ -777,6 +777,11 @@ function hostObject() {
       native.pmremFromSky(id, sunX, sunY, sunZ, turbidity, rayleigh, mieDirectionalG),
     PmremFromCubemap: (id, texture) => native.pmremFromCubemap(id, texture),
     PmremFromObject: (id, object) => native.pmremFromObject(id, object),
+    RenderTargetCreate: (id, width, height, samples, depthBuffer, stencilBuffer) =>
+      native.renderTargetCreate(id, width, height, samples, depthBuffer, stencilBuffer),
+    RenderTargetSet: (id, activeCubeFace, activeMipmapLevel) =>
+      native.renderTargetSet(id, activeCubeFace, activeMipmapLevel),
+    RenderTargetResize: (id, width, height) => native.renderTargetResize(id, width, height),
     BoneCreate: () => native.boneCreate(),
     SkeletonCreate: csv => native.skeletonCreate(Uint32Array.from(String(csv).split(",").filter(Boolean).map(Number))),
     SkeletonSetInverses: (skeleton, encoded) => {

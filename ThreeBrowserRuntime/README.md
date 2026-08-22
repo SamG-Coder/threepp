@@ -103,6 +103,11 @@ Because the native host deliberately has no CSS layout engine, unmeasured DOM
 mounts inherit their parent box and ultimately the viewport; this preserves the
 standard full-window `clientWidth`/`clientHeight` canvas sizing pattern.
 
+Relinked WebGL applications can also create, resize, bind, query, and dispose
+`WebGLRenderTarget` instances. Target changes are synchronous ordering barriers
+around the asynchronous command stream, so an offscreen pass completes before
+the following pass changes its framebuffer or returns to the window surface.
+
 ## Visually verified official examples
 
 The following pages have been pulled from `threejs.org`, run in Release mode,

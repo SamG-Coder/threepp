@@ -351,6 +351,9 @@
       this._outputColorSpace = options.outputColorSpace ?? TN.SRGBColorSpace ?? "srgb";
       this._clearColor = 0x000000;
       this._clearAlpha = 1;
+      this._renderTarget = null;
+      this._activeCubeFace = 0;
+      this._activeMipmapLevel = 0;
       this._anim = null;
       this._dummyContext = makeDummyGL();
       this.extensions = {
@@ -453,6 +456,27 @@
     setViewport() {}
     setScissor() {}
     setScissorTest() {}
+    getRenderTarget() {
+      return this._renderTarget;
+    }
+    setRenderTarget(target, activeCubeFace = 0, activeMipmapLevel = 0) {
+      const n = native();
+      const handle = target?._h || 0;
+      if (TN.hostHas?.(n, "RenderTargetSet")) {
+        const ok = n.RenderTargetSet(handle, activeCubeFace, activeMipmapLevel);
+        if (!ok && handle) throw new Error(n.LastError?.() || "failed to bind native render target");
+      }
+      this._renderTarget = target || null;
+      this._activeCubeFace = activeCubeFace | 0;
+      this._activeMipmapLevel = activeMipmapLevel | 0;
+      return this;
+    }
+    getActiveCubeFace() {
+      return this._activeCubeFace;
+    }
+    getActiveMipmapLevel() {
+      return this._activeMipmapLevel;
+    }
     getContext() {
       return this._dummyContext;
     }
@@ -679,6 +703,20 @@
       this.depthTexture = options.depthTexture ?? null;
       this.samples = options.samples ?? 0;
       this._listeners = {};
+      this._h = 0;
+      const n = native();
+      if (!options._cube && TN.cmd && TN.hostHas?.(n, "RenderTargetCreate")) {
+        const id = TN.cmd.alloc();
+        this._h = n.RenderTargetCreate(
+          id,
+          width,
+          height,
+          this.samples,
+          this.depthBuffer ? 1 : 0,
+          this.stencilBuffer ? 1 : 0
+        ) || 0;
+        if (this._h && this.texture) this.texture._h = this._h;
+      }
     }
     setSize(width, height, depth = 1) {
       this.width = width;
@@ -691,8 +729,16 @@
       }
       if (this.viewport?.set) this.viewport.set(0, 0, width, height);
       if (this.scissor?.set) this.scissor.set(0, 0, width, height);
+      const n = native();
+      if (this._h && TN.hostHas?.(n, "RenderTargetResize")) {
+        n.RenderTargetResize(this._h, width, height);
+      }
     }
-    dispose() {}
+    dispose() {
+      if (this._h && typeof TN.releaseHandle === "function") TN.releaseHandle(this._h);
+      this._h = 0;
+      if (this.texture) this.texture._h = 0;
+    }
     clone() {
       return new this.constructor(this.width, this.height).copy(this);
     }
@@ -710,7 +756,7 @@
 
   class WebGLCubeRenderTarget extends WebGLRenderTarget {
     constructor(size = 1, options = {}) {
-      super(size, size, options);
+      super(size, size, { ...options, _cube: true });
       this.isWebGLCubeRenderTarget = true;
       if (this.texture) this.texture.isCubeTexture = true;
     }

@@ -122,6 +122,10 @@ TN_API int tn_mesh_set_material(uint32_t mesh, uint32_t material);
 TN_API uint32_t tn_cube_rt_create(uint32_t id, int size);
 TN_API void tn_cube_rt_update(
     uint32_t cubeRt, uint32_t scene, float x, float y, float z, float near_plane, float far_plane);
+TN_API uint32_t tn_render_target_create(
+    uint32_t id, int width, int height, int samples, int depth_buffer, int stencil_buffer);
+TN_API int tn_render_target_set(uint32_t id, int active_cube_face, int active_mipmap_level);
+TN_API void tn_render_target_resize(uint32_t id, int width, int height);
 
 TN_API uint32_t tn_axes_helper_create(float size);
 TN_API uint32_t tn_grid_helper_create(float size, int divisions, uint32_t color1, uint32_t color2);

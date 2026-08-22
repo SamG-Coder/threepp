@@ -5,7 +5,16 @@ import { fileURLToPath } from "node:url";
 import { parse } from "acorn";
 import { ancestor } from "acorn-walk";
 
-const nativeThreeImport = 'import * as __TB_THREE from "three";\n';
+const nativeThreeImport = [
+  'import * as __TB_THREE from "three";',
+  'function __TB_relink(type,Original){',
+  'const Native=__TB_THREE[type];if(!Native||!Original)return Native||Original;',
+  'const Relinked=class extends Native{};',
+  'for(const key of Reflect.ownKeys(Original.prototype||{})){if(key!=="constructor"&&!(key in Relinked.prototype))Object.defineProperty(Relinked.prototype,key,Object.getOwnPropertyDescriptor(Original.prototype,key));}',
+  'for(const key of Reflect.ownKeys(Original)){if(!["length","name","prototype"].includes(key)&&!(key in Relinked))Object.defineProperty(Relinked,key,Object.getOwnPropertyDescriptor(Original,key));}',
+  'return Relinked;}',
+  '',
+].join('\n');
 
 // These are structural Three.js types whose identity crosses the native
 // renderer boundary.  Rollup may rename every binding, but Three preserves the
@@ -72,10 +81,14 @@ function rendererDefinition(ancestors) {
 function replacementFor(node, source, nativeType) {
   if (node.type === "ClassDeclaration" || node.type === "FunctionDeclaration") {
     if (!node.id?.name) return null;
-    return { start: node.start, end: node.end, text: `const ${node.id.name}=__TB_THREE.${nativeType};`, binding: node.id.name, nativeType };
+    const original = source.slice(node.start, node.end);
+    const expression = node.type === "ClassDeclaration"
+      ? original.replace(/^class\s+[A-Za-z_$][\w$]*/, "class")
+      : original.replace(/^function\s+[A-Za-z_$][\w$]*/, "function");
+    return { start: node.start, end: node.end, text: `const ${node.id.name}=__TB_relink(${JSON.stringify(nativeType)},${expression});`, binding: node.id.name, nativeType };
   }
   if (node.type === "ClassExpression" || node.type === "FunctionExpression" || node.type === "ArrowFunctionExpression") {
-    return { start: node.start, end: node.end, text: `__TB_THREE.${nativeType}`, binding: source.slice(node.start, Math.min(node.end, node.start + 40)), nativeType };
+    return { start: node.start, end: node.end, text: `__TB_relink(${JSON.stringify(nativeType)},${source.slice(node.start, node.end)})`, binding: source.slice(node.start, Math.min(node.end, node.start + 40)), nativeType };
   }
   return null;
 }

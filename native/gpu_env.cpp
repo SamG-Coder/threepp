@@ -555,6 +555,72 @@ uint32_t tn_cube_rt_create(uint32_t id, int size) {
     }
 }
 
+uint32_t tn_render_target_create(
+        uint32_t id,
+        int width,
+        int height,
+        int samples,
+        int depthBuffer,
+        int stencilBuffer) {
+    try {
+        return onWorker([=] {
+            RenderTarget::Options opts;
+            opts.generateMipmaps = false;
+            opts.minFilter = Filter::Linear;
+            opts.magFilter = Filter::Linear;
+            opts.format = Format::RGBA;
+            opts.samples = static_cast<unsigned int>(std::clamp(samples, 0, 16));
+            opts.depthBuffer = depthBuffer != 0;
+            opts.stencilBuffer = stencilBuffer != 0;
+            auto target = RenderTarget::create(
+                    static_cast<unsigned int>(std::clamp(width, 1, 16384)),
+                    static_cast<unsigned int>(std::clamp(height, 1, 16384)), opts);
+            Slot slot;
+            slot.kind = Kind::Texture;
+            slot.texture = target->texture;
+            slot.renderTarget = std::move(target);
+            return id ? insertAt(id, std::move(slot)) : insert(std::move(slot));
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+}
+
+int tn_render_target_set(uint32_t id, int activeCubeFace, int activeMipmapLevel) {
+    try {
+        return onWorker([=] {
+            auto* gl = dynamic_cast<GLRenderer*>(g.renderer.get());
+            if (!gl) return 0;
+            RenderTarget* target = nullptr;
+            if (id) {
+                Slot* slot = getSlot(id);
+                if (!slot || !slot->renderTarget) return 0;
+                target = slot->renderTarget.get();
+            }
+            gl->setRenderTarget(target, activeCubeFace, activeMipmapLevel);
+            return 1;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+}
+
+void tn_render_target_resize(uint32_t id, int width, int height) {
+    try {
+        onWorker([=] {
+            Slot* slot = getSlot(id);
+            if (!slot || !slot->renderTarget) return;
+            slot->renderTarget->setSize(
+                    static_cast<unsigned int>(std::clamp(width, 1, 16384)),
+                    static_cast<unsigned int>(std::clamp(height, 1, 16384)));
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+    }
+}
+
 void tn_cube_rt_update(
         uint32_t cubeRt,
         uint32_t sceneHandle,
