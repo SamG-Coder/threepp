@@ -6,6 +6,7 @@
 #include <array>
 #include <filesystem>
 #include <mutex>
+#include <string_view>
 
 #include <vulkan/vulkan.h>
 #include <sl.h>
@@ -41,7 +42,20 @@ std::filesystem::path moduleDirectory() {
                        reinterpret_cast<LPCWSTR>(&streamlinePrepare), &self);
     std::array<wchar_t, 32768> path{};
     const DWORD length = GetModuleFileNameW(self, path.data(), static_cast<DWORD>(path.size()));
-    return length ? std::filesystem::path(path.data()).parent_path() : std::filesystem::path{};
+    if (!length) return {};
+
+    // Node loads native addons through an extended-length path. Streamline's
+    // embedded NVIDIA signature verifier expects a regular absolute Win32 path
+    // and rejects otherwise valid signed plugins when given the `\\?\` form.
+    std::wstring normalized(path.data(), length);
+    constexpr std::wstring_view extendedUnc = L"\\\\?\\UNC\\";
+    constexpr std::wstring_view extendedLocal = L"\\\\?\\";
+    if (normalized.starts_with(extendedUnc)) {
+        normalized = L"\\\\" + normalized.substr(extendedUnc.size());
+    } else if (normalized.starts_with(extendedLocal)) {
+        normalized.erase(0, extendedLocal.size());
+    }
+    return std::filesystem::path(normalized).parent_path();
 }
 
 template <typename T>
@@ -141,9 +155,22 @@ bool streamlinePrepare() {
 
 bool streamlineAttachVulkan(const StreamlineVulkanContext& context) {
     std::lock_guard<std::mutex> lock(g.mutex);
-    if (!g.capabilities.initialized || !g.setVulkanInfo || !context.instance ||
-        !context.physicalDevice || !context.device || !context.queue) {
-        g.capabilities.status = "The native Vulkan context was incomplete";
+    if (!g.capabilities.initialized) {
+        if (g.capabilities.status.empty()) {
+            g.capabilities.status = "Streamline was not initialized before Vulkan attachment";
+        }
+        return false;
+    }
+    if (!g.setVulkanInfo) {
+        g.capabilities.status = "Streamline is missing slSetVulkanInfo";
+        return false;
+    }
+    if (!context.instance || !context.physicalDevice || !context.device || !context.queue) {
+        g.capabilities.status = "Native Vulkan handles missing:";
+        if (!context.instance) g.capabilities.status += " instance";
+        if (!context.physicalDevice) g.capabilities.status += " physical-device";
+        if (!context.device) g.capabilities.status += " device";
+        if (!context.queue) g.capabilities.status += " queue";
         return false;
     }
 
