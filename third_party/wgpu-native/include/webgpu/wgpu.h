@@ -1482,6 +1482,15 @@ extern "C"
     void wgpuGenerateReport(WGPUInstance instance, WGPUGlobalReport *report);
     size_t wgpuInstanceEnumerateAdapters(WGPUInstance instance, WGPU_NULLABLE WGPUInstanceEnumerateAdapterOptions const *options, WGPUAdapter *adapters);
 
+    /**
+     * Requests or releases Vulkan exclusive full-screen mode for @p surface.
+     *
+     * @p hmonitor is the Win32 HMONITOR associated with the target display. It
+     * may be NULL when disabling exclusive full-screen mode. Returns an error
+     * when the Vulkan backend is unavailable for the surface.
+     */
+    WGPUStatus wgpuSurfaceSetVulkanExclusiveFullscreen(WGPUSurface surface, WGPUBool enabled, WGPU_NULLABLE void *hmonitor);
+
     WGPUSubmissionIndex wgpuQueueSubmitForIndex(WGPUQueue queue, size_t commandCount, WGPUCommandBuffer const *commands);
     float wgpuQueueGetTimestampPeriod(WGPUQueue queue);
 

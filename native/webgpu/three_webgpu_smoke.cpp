@@ -8,6 +8,7 @@
 #include <windows.h>
 
 #include <chrono>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
@@ -70,6 +71,11 @@ fn fs_main() -> @location(0) vec4f {
 }// namespace
 
 int main() {
+    const bool testExclusiveFullscreen = std::getenv("THREEBROWSER_TEST_EXCLUSIVE_FULLSCREEN") != nullptr;
+    const bool testBorderlessFullscreen = std::getenv("THREEBROWSER_TEST_BORDERLESS_FULLSCREEN") != nullptr;
+    if (testExclusiveFullscreen || testBorderlessFullscreen) {
+        tw_set_standalone_ui(1);
+    }
     if (!tw_start(nullptr, 80, 80, 640, 480)) {
         std::cerr << "start failed: " << tw_last_error() << '\n';
         return 1;
@@ -78,6 +84,23 @@ int main() {
         ShowWindow(static_cast<HWND>(hwnd), SW_SHOWNOACTIVATE);
     }
     std::cout << "backend=" << tw_backend_name() << '\n';
+
+    if (testExclusiveFullscreen) {
+        DEVMODEW mode{};
+        mode.dmSize = sizeof(mode);
+        if (!EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &mode) ||
+            !tw_set_fullscreen(2, static_cast<int>(mode.dmPelsWidth),
+                               static_cast<int>(mode.dmPelsHeight),
+                               static_cast<int>(mode.dmDisplayFrequency))) {
+            std::cerr << "exclusive fullscreen enter failed: " << tw_last_error() << '\n';
+            tw_shutdown();
+            return 6;
+        }
+    } else if (testBorderlessFullscreen && !tw_set_fullscreen(1, 0, 0, 0)) {
+        std::cerr << "borderless fullscreen enter failed: " << tw_last_error() << '\n';
+        tw_shutdown();
+        return 8;
+    }
 
     Stream s;
     const uint32_t shader = 1;
@@ -193,6 +216,12 @@ int main() {
         std::cerr << "no presents\n";
         tw_shutdown();
         return 3;
+    }
+    if ((testExclusiveFullscreen || testBorderlessFullscreen) &&
+        !tw_set_fullscreen(0, 0, 0, 0)) {
+        std::cerr << "fullscreen restore failed: " << tw_last_error() << '\n';
+        tw_shutdown();
+        return 7;
     }
     int overlayRowBytes = 0;
     if (!tw_overlay_raster(width, height, 120, 8000, tw_backend_name(), 0, presents, &overlayRowBytes)) {

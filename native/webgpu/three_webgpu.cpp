@@ -17,6 +17,7 @@
 #include <cctype>
 #include <atomic>
 #include <chrono>
+#include <climits>
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
@@ -89,6 +90,18 @@ struct Slot {
     std::string wgsl;
 };
 
+struct DisplayMode {
+    int width{};
+    int height{};
+    int refreshHz{};
+};
+
+struct OverlayDropdown {
+    bool open{false};
+    int hoverIndex{-1};
+    int scrollOffset{0};
+};
+
 struct Runtime {
     std::mutex mu;
     std::condition_variable cv;
@@ -101,6 +114,7 @@ struct Runtime {
     std::mutex errMu;
     std::string lastError;
     std::string backendName{"WebGPU"};
+    WGPUBackendType backendType{WGPUBackendType_Undefined};
 
     std::atomic<void*> nativeHwnd{nullptr};
     std::atomic<int> statsFps{0};
@@ -122,6 +136,18 @@ struct Runtime {
     std::atomic<int> overlayOpen{0};
     std::atomic<int> overlayDirty{1};
     std::atomic<uint64_t> overlayRevision{0};
+    std::atomic<void*> overlayWindow{nullptr};
+    std::atomic<int> fullscreenState{0};
+    std::mutex displayMu;
+    std::vector<DisplayMode> displayModes;
+    int selectedDisplayMode{0};
+    OverlayDropdown resolutionDropdown{};
+    bool displayCommandReady{false};
+    int displayCommandEnabled{0}; // 0 windowed, 1 borderless, 2 exclusive
+    DisplayMode displayCommandMode{};
+    bool pendingDisplayTransition{false};
+    int pendingDisplayMode{0};
+    DisplayMode pendingDisplayModeDetails{};
     std::atomic<int> loading{0};
     std::atomic<uint32_t> loadingPhase{0};
     std::mutex loadingMu;
@@ -138,6 +164,13 @@ struct Runtime {
     HWND parent{nullptr};
     bool classRegistered{false};
     bool started{false};
+    bool fullscreenActive{false};
+    bool windowedStateSaved{false};
+    bool displayModeChanged{false};
+    WINDOWPLACEMENT windowedPlacement{sizeof(WINDOWPLACEMENT)};
+    LONG_PTR windowedStyle{0};
+    LONG_PTR windowedExStyle{0};
+    std::wstring fullscreenDevice;
 
     WGPUTexture overlayTexture{};
     WGPUTextureView overlayView{};
@@ -194,7 +227,106 @@ Runtime g;
 
 WGPUCommandEncoder ensureEncoder();
 bool acquireSwapchain();
+void tryApplyPendingDisplayTransition();
 void requestSurfaceResize(int w, int h);
+void restoreExclusiveFullscreenOnWindowThread(bool reconfigureSurface);
+void dropdownClamp(OverlayDropdown& dropdown, int itemCount);
+
+bool sameResolution(const DisplayMode& a, const DisplayMode& b) {
+    return a.width == b.width && a.height == b.height;
+}
+
+bool displayInfoForWindow(HWND hwnd, MONITORINFOEXW& info) {
+    if (!hwnd || !IsWindow(hwnd)) return false;
+    info = {};
+    info.cbSize = sizeof(info);
+    const HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    return monitor && GetMonitorInfoW(monitor, &info) != FALSE;
+}
+
+std::vector<DisplayMode> enumerateDisplayModes(HWND hwnd) {
+    MONITORINFOEXW monitor{};
+    if (!displayInfoForWindow(hwnd, monitor)) return {};
+
+    DEVMODEW current{};
+    current.dmSize = sizeof(current);
+    if (!EnumDisplaySettingsExW(monitor.szDevice, ENUM_CURRENT_SETTINGS, &current, 0)) return {};
+    const DisplayMode currentMode{static_cast<int>(current.dmPelsWidth),
+                                  static_cast<int>(current.dmPelsHeight),
+                                  std::max(1, static_cast<int>(current.dmDisplayFrequency))};
+
+    std::vector<DisplayMode> available;
+    for (DWORD index = 0;; ++index) {
+        DEVMODEW mode{};
+        mode.dmSize = sizeof(mode);
+        if (!EnumDisplaySettingsExW(monitor.szDevice, index, &mode, 0)) break;
+        if (mode.dmPelsWidth < 800 || mode.dmPelsHeight < 600 || mode.dmBitsPerPel < 24) continue;
+        const DisplayMode candidate{static_cast<int>(mode.dmPelsWidth),
+                                    static_cast<int>(mode.dmPelsHeight),
+                                    std::max(1, static_cast<int>(mode.dmDisplayFrequency))};
+        auto existing = std::find_if(available.begin(), available.end(), [&](const DisplayMode& value) {
+            return sameResolution(value, candidate);
+        });
+        if (existing == available.end()) available.push_back(candidate);
+        else existing->refreshHz = std::max(existing->refreshHz, candidate.refreshHz);
+    }
+
+    auto findResolution = [&](int width, int height) -> const DisplayMode* {
+        auto found = std::find_if(available.begin(), available.end(), [&](const DisplayMode& value) {
+            return value.width == width && value.height == height;
+        });
+        return found == available.end() ? nullptr : &*found;
+    };
+    std::vector<DisplayMode> choices;
+    auto add = [&](const DisplayMode& mode) {
+        if (std::none_of(choices.begin(), choices.end(), [&](const DisplayMode& value) {
+                return sameResolution(value, mode);
+            })) choices.push_back(mode);
+    };
+    add(currentMode);
+    constexpr int preferred[][2] = {
+        {3840, 2160}, {3440, 1440}, {2560, 1440}, {2560, 1080},
+        {1920, 1200}, {1920, 1080}, {1600, 900}, {1366, 768}, {1280, 720}
+    };
+    for (const auto& resolution : preferred) {
+        if (const DisplayMode* mode = findResolution(resolution[0], resolution[1])) add(*mode);
+        if (choices.size() >= 24) break;
+    }
+    std::sort(available.begin(), available.end(), [](const DisplayMode& a, const DisplayMode& b) {
+        const long long pixelsA = static_cast<long long>(a.width) * a.height;
+        const long long pixelsB = static_cast<long long>(b.width) * b.height;
+        return pixelsA != pixelsB ? pixelsA > pixelsB : a.refreshHz > b.refreshHz;
+    });
+    for (const DisplayMode& mode : available) {
+        if (choices.size() >= 24) break;
+        add(mode);
+    }
+    return choices;
+}
+
+void refreshDisplayModes() {
+    HWND hwnd = static_cast<HWND>(g.overlayWindow.load(std::memory_order_acquire));
+    if (!hwnd || !IsWindow(hwnd)) hwnd = g.hwnd;
+    std::vector<DisplayMode> modes = enumerateDisplayModes(hwnd);
+    if (modes.empty()) return;
+    std::lock_guard<std::mutex> lock(g.displayMu);
+    DisplayMode previous{};
+    if (!g.displayModes.empty() && g.selectedDisplayMode >= 0 &&
+        g.selectedDisplayMode < static_cast<int>(g.displayModes.size())) {
+        previous = g.displayModes[static_cast<size_t>(g.selectedDisplayMode)];
+    }
+    g.displayModes = std::move(modes);
+    g.selectedDisplayMode = 0;
+    if (previous.width > 0) {
+        for (size_t index = 0; index < g.displayModes.size(); ++index) {
+            if (sameResolution(g.displayModes[index], previous)) {
+                g.selectedDisplayMode = static_cast<int>(index);
+                break;
+            }
+        }
+    }
+    dropdownClamp(g.resolutionDropdown, static_cast<int>(g.displayModes.size()));
+}
 
 void setError(const char* message) {
     std::lock_guard<std::mutex> lock(g.errMu);
@@ -281,6 +413,7 @@ void setPointerLockOnWindowThread(bool enabled, bool notifyLoss = false) {
 LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_CLOSE:
+            restoreExclusiveFullscreenOnWindowThread(false);
             ShowWindow(hwnd, SW_HIDE);
             g.open.store(0, std::memory_order_relaxed);
             return 0;
@@ -777,6 +910,7 @@ bool createHwnd(HWND parent, int x, int y, int w, int h) {
     ShowWindow(g.hwnd, SW_HIDE);
     g.parent = nullptr;
     g.nativeHwnd.store(g.hwnd);
+    g.overlayWindow.store(g.hwnd, std::memory_order_release);
     g.open.store(1, std::memory_order_relaxed);
     RAWINPUTDEVICE mouse{};
     mouse.usUsagePage = 0x01;
@@ -829,6 +963,282 @@ void requestSurfaceResize(int w, int h) {
     g.resizeHoldFrames = 3;
 }
 
+void updateWindowSizeAfterDisplayChange() {
+    if (!g.hwnd) return;
+    RECT client{};
+    GetClientRect(g.hwnd, &client);
+    const int width = std::max(1L, client.right - client.left);
+    const int height = std::max(1L, client.bottom - client.top);
+    g.statsW.store(width, std::memory_order_relaxed);
+    g.statsH.store(height, std::memory_order_relaxed);
+    g.overlayDirty.store(1, std::memory_order_release);
+    requestSurfaceResize(width, height);
+}
+
+bool selectExclusiveMode(const wchar_t* device, int width, int height, int refreshHz,
+                         DEVMODEW& selected) {
+    bool found = false;
+    int bestRefreshDistance = INT_MAX;
+    for (DWORD index = 0;; ++index) {
+        DEVMODEW mode{};
+        mode.dmSize = sizeof(mode);
+        if (!EnumDisplaySettingsExW(device, index, &mode, 0)) break;
+        if (static_cast<int>(mode.dmPelsWidth) != width ||
+            static_cast<int>(mode.dmPelsHeight) != height || mode.dmBitsPerPel < 24) continue;
+        const int modeRefresh = std::max(1, static_cast<int>(mode.dmDisplayFrequency));
+        const int distance = refreshHz > 0 ? std::abs(modeRefresh - refreshHz) : -modeRefresh;
+        if (!found || distance < bestRefreshDistance) {
+            selected = mode;
+            bestRefreshDistance = distance;
+            found = true;
+        }
+    }
+    if (!found) return false;
+    selected.dmFields |= DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL | DM_DISPLAYFREQUENCY;
+    return true;
+}
+
+bool usesVulkanBackend() {
+    return g.backendType == WGPUBackendType_Vulkan;
+}
+
+bool displayTransitionIsIdle() {
+    if (!g.currentEncoder && !g.renderPass && !g.computePass &&
+        !g.currentTex && !g.currentView) return true;
+    setError("fullscreen transition requires a completed frame");
+    return false;
+}
+
+bool setVulkanExclusiveRequest(bool enabled, HMONITOR monitor) {
+    if (!usesVulkanBackend()) return true;
+    if (!g.surface) {
+        setError("no Vulkan surface for fullscreen transition");
+        return false;
+    }
+    if (wgpuSurfaceSetVulkanExclusiveFullscreen(g.surface, enabled ? 1 : 0,
+                                                enabled ? monitor : nullptr) !=
+        WGPUStatus_Success) {
+        setError(enabled ? "Vulkan exclusive fullscreen is unavailable"
+                         : "failed to clear Vulkan exclusive fullscreen");
+        return false;
+    }
+    return true;
+}
+
+void unconfigureSurfaceForDisplayTransition() {
+    dropCurrentTexture();
+    if (g.surface && g.surfaceConfigured) {
+        wgpuSurfaceUnconfigure(g.surface);
+        g.surfaceConfigured = false;
+    }
+}
+
+void restoreExclusiveFullscreenOnWindowThread(bool reconfigureSurface) {
+    if (!g.fullscreenActive && !g.displayModeChanged && !g.windowedStateSaved) return;
+    if (reconfigureSurface && usesVulkanBackend() && !displayTransitionIsIdle()) return;
+
+    const bool reconfigureVulkan = usesVulkanBackend() && g.surface && g.device;
+    bool windowedRequestReady = true;
+    if (reconfigureVulkan) {
+        unconfigureSurfaceForDisplayTransition();
+        windowedRequestReady = setVulkanExclusiveRequest(false, nullptr);
+    }
+    if (g.displayModeChanged && !g.fullscreenDevice.empty()) {
+        ChangeDisplaySettingsExW(g.fullscreenDevice.c_str(), nullptr, nullptr, 0, nullptr);
+    }
+    g.displayModeChanged = false;
+    if (g.hwnd && g.windowedStateSaved) {
+        SetWindowLongPtrW(g.hwnd, GWL_STYLE, g.windowedStyle);
+        SetWindowLongPtrW(g.hwnd, GWL_EXSTYLE, g.windowedExStyle);
+        SetWindowPlacement(g.hwnd, &g.windowedPlacement);
+        SetWindowPos(g.hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE |
+                         SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    }
+    g.fullscreenActive = false;
+    g.windowedStateSaved = false;
+    g.fullscreenDevice.clear();
+    updateWindowSizeAfterDisplayChange();
+    if (reconfigureSurface && reconfigureVulkan && windowedRequestReady) {
+        configureSurface(g.statsW.load(std::memory_order_relaxed),
+                         g.statsH.load(std::memory_order_relaxed));
+    }
+    tw_set_fullscreen_state(0, g.statsW.load(std::memory_order_relaxed),
+                            g.statsH.load(std::memory_order_relaxed), 0);
+}
+
+bool applyExclusiveFullscreenOnWindowThread(int width, int height, int refreshHz) {
+    if (!g.hwnd || !IsWindow(g.hwnd) || g.parent ||
+        g.standaloneUi.load(std::memory_order_relaxed) == 0) return false;
+
+    if (g.fullscreenState.load(std::memory_order_relaxed) == 1) {
+        restoreExclusiveFullscreenOnWindowThread(true);
+        if (g.fullscreenActive) return false;
+    }
+
+    const HMONITOR monitorHandle = MonitorFromWindow(g.hwnd, MONITOR_DEFAULTTONEAREST);
+    MONITORINFOEXW monitor{};
+    if (!monitorHandle || !displayInfoForWindow(g.hwnd, monitor)) return false;
+    DEVMODEW mode{};
+    if (!selectExclusiveMode(monitor.szDevice, width, height, refreshHz, mode)) return false;
+    if (ChangeDisplaySettingsExW(monitor.szDevice, &mode, nullptr, CDS_TEST, nullptr) != DISP_CHANGE_SUCCESSFUL) {
+        return false;
+    }
+
+    const bool wasFullscreen = g.fullscreenActive;
+    const int previousWidth = std::max(1, g.statsW.load(std::memory_order_relaxed));
+    const int previousHeight = std::max(1, g.statsH.load(std::memory_order_relaxed));
+    if (!g.fullscreenActive) {
+        g.windowedPlacement = {sizeof(WINDOWPLACEMENT)};
+        if (!GetWindowPlacement(g.hwnd, &g.windowedPlacement)) return false;
+        g.windowedStyle = GetWindowLongPtrW(g.hwnd, GWL_STYLE);
+        g.windowedExStyle = GetWindowLongPtrW(g.hwnd, GWL_EXSTYLE);
+        g.windowedStateSaved = true;
+    }
+
+    if (usesVulkanBackend()) {
+        if (!displayTransitionIsIdle() ||
+            !setVulkanExclusiveRequest(true, monitorHandle)) {
+            if (!wasFullscreen) g.windowedStateSaved = false;
+            return false;
+        }
+        unconfigureSurfaceForDisplayTransition();
+    }
+
+    bool releasedPreviousDisplay = false;
+    if (g.fullscreenActive && g.displayModeChanged && !g.fullscreenDevice.empty() &&
+        g.fullscreenDevice != monitor.szDevice) {
+        ChangeDisplaySettingsExW(g.fullscreenDevice.c_str(), nullptr, nullptr, 0, nullptr);
+        g.displayModeChanged = false;
+        releasedPreviousDisplay = true;
+    }
+
+    if (ChangeDisplaySettingsExW(monitor.szDevice, &mode, nullptr, CDS_FULLSCREEN, nullptr) !=
+        DISP_CHANGE_SUCCESSFUL) {
+        if (usesVulkanBackend()) {
+            if (wasFullscreen && !releasedPreviousDisplay) {
+                configureSurface(previousWidth, previousHeight);
+            } else {
+                restoreExclusiveFullscreenOnWindowThread(true);
+            }
+        } else if (!wasFullscreen) {
+            g.windowedStateSaved = false;
+        }
+        return false;
+    }
+    g.displayModeChanged = true;
+    g.fullscreenDevice = monitor.szDevice;
+
+    LONG_PTR style = g.windowedStyle;
+    style &= ~(WS_OVERLAPPEDWINDOW | WS_CAPTION | WS_THICKFRAME | WS_SYSMENU |
+               WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_BORDER | WS_DLGFRAME);
+    style |= WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
+    LONG_PTR exStyle = g.windowedExStyle;
+    exStyle &= ~(WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_DLGMODALFRAME | WS_EX_STATICEDGE);
+    exStyle |= WS_EX_APPWINDOW;
+    SetWindowLongPtrW(g.hwnd, GWL_STYLE, style);
+    SetWindowLongPtrW(g.hwnd, GWL_EXSTYLE, exStyle);
+
+    DEVMODEW active{};
+    active.dmSize = sizeof(active);
+    EnumDisplaySettingsExW(monitor.szDevice, ENUM_CURRENT_SETTINGS, &active, 0);
+    const int x = static_cast<int>(active.dmPosition.x);
+    const int y = static_cast<int>(active.dmPosition.y);
+    const int activeWidth = std::max(1, static_cast<int>(active.dmPelsWidth));
+    const int activeHeight = std::max(1, static_cast<int>(active.dmPelsHeight));
+    SetWindowPos(g.hwnd, HWND_TOPMOST, x, y, activeWidth, activeHeight,
+                 SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    ShowWindow(g.hwnd, SW_SHOW);
+    SetForegroundWindow(g.hwnd);
+    SetFocus(g.hwnd);
+    g.fullscreenActive = true;
+    updateWindowSizeAfterDisplayChange();
+    if (usesVulkanBackend() && !configureSurface(activeWidth, activeHeight)) {
+        restoreExclusiveFullscreenOnWindowThread(true);
+        return false;
+    }
+    tw_set_fullscreen_state(2, activeWidth, activeHeight,
+                            std::max(1, static_cast<int>(active.dmDisplayFrequency)));
+    return true;
+}
+
+bool applyBorderlessFullscreenOnWindowThread(int width, int height, int refreshHz) {
+    (void) width;
+    (void) height;
+    (void) refreshHz;
+    if (!g.hwnd || !IsWindow(g.hwnd) || g.parent ||
+        g.standaloneUi.load(std::memory_order_relaxed) == 0 ||
+        !displayTransitionIsIdle()) return false;
+
+    if (g.fullscreenActive) {
+        restoreExclusiveFullscreenOnWindowThread(true);
+        if (g.fullscreenActive) return false;
+    }
+
+    const HMONITOR monitorHandle = MonitorFromWindow(g.hwnd, MONITOR_DEFAULTTONEAREST);
+    MONITORINFOEXW monitor{};
+    monitor.cbSize = sizeof(monitor);
+    if (!monitorHandle || !GetMonitorInfoW(monitorHandle, &monitor)) return false;
+
+    g.windowedPlacement = {sizeof(WINDOWPLACEMENT)};
+    if (!GetWindowPlacement(g.hwnd, &g.windowedPlacement)) return false;
+    g.windowedStyle = GetWindowLongPtrW(g.hwnd, GWL_STYLE);
+    g.windowedExStyle = GetWindowLongPtrW(g.hwnd, GWL_EXSTYLE);
+    g.windowedStateSaved = true;
+
+    const bool reconfigureVulkan = usesVulkanBackend() && g.surface && g.device;
+    if (reconfigureVulkan) unconfigureSurfaceForDisplayTransition();
+
+    LONG_PTR style = g.windowedStyle;
+    style &= ~(WS_OVERLAPPEDWINDOW | WS_CAPTION | WS_THICKFRAME | WS_SYSMENU |
+               WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_BORDER | WS_DLGFRAME);
+    style |= WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
+    LONG_PTR exStyle = g.windowedExStyle;
+    exStyle &= ~(WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_DLGMODALFRAME | WS_EX_STATICEDGE);
+    exStyle |= WS_EX_APPWINDOW;
+    SetWindowLongPtrW(g.hwnd, GWL_STYLE, style);
+    SetWindowLongPtrW(g.hwnd, GWL_EXSTYLE, exStyle);
+
+    const RECT bounds = monitor.rcMonitor;
+    const int activeWidth = std::max(1L, bounds.right - bounds.left);
+    const int activeHeight = std::max(1L, bounds.bottom - bounds.top);
+    SetWindowPos(g.hwnd, HWND_TOPMOST, bounds.left, bounds.top, activeWidth, activeHeight,
+                 SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    ShowWindow(g.hwnd, SW_SHOW);
+    SetForegroundWindow(g.hwnd);
+    SetFocus(g.hwnd);
+    g.fullscreenActive = true;
+    updateWindowSizeAfterDisplayChange();
+    if (reconfigureVulkan && !configureSurface(activeWidth, activeHeight)) {
+        restoreExclusiveFullscreenOnWindowThread(true);
+        return false;
+    }
+    tw_set_fullscreen_state(1, activeWidth, activeHeight, 0);
+    return true;
+}
+
+void tryApplyPendingDisplayTransition() {
+    if (!g.pendingDisplayTransition || !displayTransitionIsIdle()) return;
+    const int mode = std::clamp(g.pendingDisplayMode, 0, 2);
+    const DisplayMode details = g.pendingDisplayModeDetails;
+    bool applied = false;
+    if (mode == 0) {
+        restoreExclusiveFullscreenOnWindowThread(true);
+        applied = !g.fullscreenActive;
+    } else if (mode == 1) {
+        applied = applyBorderlessFullscreenOnWindowThread(details.width, details.height,
+                                                           details.refreshHz);
+    } else {
+        applied = applyExclusiveFullscreenOnWindowThread(std::max(1, details.width),
+                                                          std::max(1, details.height),
+                                                          std::max(1, details.refreshHz));
+    }
+    if (applied) {
+        g.pendingDisplayTransition = false;
+        setError("");
+    }
+}
+
 bool createSurface() {
     if (!g.instance || !g.hwnd) {
         setError("no instance/hwnd for surface");
@@ -854,6 +1264,11 @@ bool createInstance(WGPUInstanceBackend backends) {
     extras.chain.sType = static_cast<WGPUSType>(WGPUSType_InstanceExtras);
     extras.backends = backends;
     extras.flags = WGPUInstanceFlag_Empty;
+    // Keep DX12 presentation attached directly to our HWND.  Besides being
+    // the path understood by graphics tooling and Windows game capture, this
+    // avoids the DirectComposition visual swapchain used for transparent UI.
+    // wgpu-native ignores this setting for Vulkan instances.
+    extras.dx12PresentationSystem = WGPUDx12SwapchainKind_DxgiFromHwnd;
     WGPUInstanceDescriptor desc{};
     desc.nextInChain = &extras.chain;
     g.instance = wgpuCreateInstance(&desc);
@@ -892,6 +1307,7 @@ bool requestAdapterAndDevice() {
 
     WGPUAdapterInfo info{};
     if (wgpuAdapterGetInfo(g.adapter, &info) == WGPUStatus_Success) {
+        g.backendType = info.backendType;
         switch (info.backendType) {
             case WGPUBackendType_Vulkan:
                 g.backendName = "Vulkan";
@@ -1026,6 +1442,10 @@ struct OverlayLayout {
     RECT performance{};
     RECT settings{};
     RECT input{};
+    RECT resolutionButton{};
+    RECT windowedButton{};
+    RECT borderlessButton{};
+    RECT fullscreenButton{};
     RECT fpsButton{};
     RECT debugButton{};
 };
@@ -1033,7 +1453,7 @@ struct OverlayLayout {
 OverlayLayout overlayLayout(int width, int height) {
     OverlayLayout layout{};
     const int panelWidth = std::min(620, std::max(340, width - 40));
-    const int panelHeight = std::min(344, std::max(300, height - 40));
+    const int panelHeight = std::min(430, std::max(360, height - 40));
     const int left = std::max(20, (width - panelWidth) / 2);
     const int top = std::max(20, (height - panelHeight) / 2);
     layout.margin = left;
@@ -1041,9 +1461,56 @@ OverlayLayout overlayLayout(int width, int height) {
     layout.performance = RECT{left, top, left + panelWidth, top + panelHeight};
     layout.settings = layout.performance;
     layout.input = layout.performance;
-    layout.fpsButton = RECT{left + 24, top + 174, left + panelWidth - 24, top + 222};
-    layout.debugButton = RECT{left + 24, top + 232, left + panelWidth - 24, top + 280};
+    layout.resolutionButton = RECT{left + 24, top + 176, left + panelWidth - 24, top + 224};
+    const int columnGap = 8;
+    const int columnWidth = (panelWidth - 48 - columnGap * 2) / 3;
+    layout.windowedButton = RECT{left + 24, top + 234, left + 24 + columnWidth, top + 280};
+    layout.borderlessButton = RECT{layout.windowedButton.right + columnGap, top + 234,
+                                   layout.windowedButton.right + columnGap + columnWidth, top + 280};
+    layout.fullscreenButton = RECT{layout.borderlessButton.right + columnGap, top + 234,
+                                   left + panelWidth - 24, top + 280};
+    layout.fpsButton = RECT{left + 24, top + 320, left + 24 + columnWidth, top + 366};
+    layout.debugButton = RECT{layout.fpsButton.right + columnGap, top + 320,
+                              left + panelWidth - 24, top + 366};
     return layout;
+}
+
+constexpr int kDropdownVisibleRows = 6;
+constexpr int kDropdownOptionHeight = 32;
+
+int dropdownMaxOffset(int itemCount) {
+    return std::max(0, itemCount - kDropdownVisibleRows);
+}
+
+void dropdownClamp(OverlayDropdown& dropdown, int itemCount) {
+    dropdown.scrollOffset = std::clamp(dropdown.scrollOffset, 0, dropdownMaxOffset(itemCount));
+    if (dropdown.hoverIndex >= itemCount) dropdown.hoverIndex = -1;
+}
+
+void dropdownReveal(OverlayDropdown& dropdown, int selectedIndex, int itemCount) {
+    dropdownClamp(dropdown, itemCount);
+    if (selectedIndex < dropdown.scrollOffset) dropdown.scrollOffset = selectedIndex;
+    if (selectedIndex >= dropdown.scrollOffset + kDropdownVisibleRows) {
+        dropdown.scrollOffset = selectedIndex - kDropdownVisibleRows + 1;
+    }
+    dropdownClamp(dropdown, itemCount);
+}
+
+RECT dropdownOptionRect(const RECT& button, int visibleRow) {
+    return RECT{button.left,
+                button.bottom + 2 + visibleRow * kDropdownOptionHeight,
+                button.right,
+                button.bottom + 2 + (visibleRow + 1) * kDropdownOptionHeight};
+}
+
+int dropdownHitIndex(const OverlayDropdown& dropdown, const RECT& button, int itemCount, POINT point) {
+    const int visibleCount = std::min(kDropdownVisibleRows,
+                                      std::max(0, itemCount - dropdown.scrollOffset));
+    for (int row = 0; row < visibleCount; ++row) {
+        RECT option = dropdownOptionRect(button, row);
+        if (PtInRect(&option, point)) return dropdown.scrollOffset + row;
+    }
+    return -1;
 }
 
 void releaseOverlayGpu() {
@@ -1380,6 +1847,47 @@ void buildOverlayPixels(int width, int height, bool compactFps = false) {
         drawText(performance, stats, mono, RGB(54, 65, 81),
                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
+        std::vector<DisplayMode> displayModes;
+        int selectedDisplayMode = 0;
+        OverlayDropdown resolutionDropdown{};
+        {
+            std::lock_guard<std::mutex> lock(g.displayMu);
+            displayModes = g.displayModes;
+            selectedDisplayMode = g.selectedDisplayMode;
+            resolutionDropdown = g.resolutionDropdown;
+        }
+
+        RECT displayLabel{panel.left + 24, panel.top + 151, panel.right - 24, panel.top + 174};
+        drawText(L"DISPLAY", displayLabel, label, RGB(86, 97, 115),
+                 DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        rounded(layout.resolutionButton, RGB(255, 255, 255), RGB(207, 213, 221), 9);
+        wchar_t selectedResolution[96]{L"Choose a supported resolution"};
+        if (!displayModes.empty() && selectedDisplayMode >= 0 &&
+            selectedDisplayMode < static_cast<int>(displayModes.size())) {
+            const DisplayMode& mode = displayModes[static_cast<size_t>(selectedDisplayMode)];
+            std::swprintf(selectedResolution, std::size(selectedResolution), L"%d × %d  ·  %d Hz",
+                          mode.width, mode.height, mode.refreshHz);
+        }
+        RECT resolutionText{layout.resolutionButton.left + 15, layout.resolutionButton.top,
+                            layout.resolutionButton.right - 46, layout.resolutionButton.bottom};
+        drawText(selectedResolution, resolutionText, body, RGB(31, 40, 54),
+                 DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        RECT chevron{layout.resolutionButton.right - 40, layout.resolutionButton.top,
+                     layout.resolutionButton.right - 12, layout.resolutionButton.bottom};
+        drawText(resolutionDropdown.open ? L"▴" : L"▾", chevron, body, RGB(86, 97, 115),
+                 DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+        const int fullscreen = std::clamp(g.fullscreenState.load(std::memory_order_relaxed), 0, 2);
+        auto drawModeButton = [&](RECT rect, bool active, const wchar_t* text) {
+            rounded(rect, active ? RGB(238, 245, 255) : RGB(255, 255, 255),
+                    active ? RGB(20, 105, 220) : RGB(207, 213, 221), 9);
+            drawText(text, rect, body, active ? RGB(20, 105, 220) : RGB(54, 65, 81),
+                     DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        };
+        drawModeButton(layout.windowedButton, fullscreen == 0, L"Windowed");
+        drawModeButton(layout.borderlessButton, fullscreen == 1, L"Borderless");
+        drawModeButton(layout.fullscreenButton, fullscreen == 2, L"Exclusive");
+
         auto drawCompactToggle = [&](RECT rect, bool active, const wchar_t* text) {
             rounded(rect, active ? RGB(238, 245, 255) : RGB(255, 255, 255),
                     active ? RGB(185, 210, 248) : RGB(207, 213, 221), 9);
@@ -1399,12 +1907,49 @@ void buildOverlayPixels(int width, int height, bool compactFps = false) {
             DeleteObject(knob);
             DeleteObject(nullPen);
         };
+        RECT overlayLabel{panel.left + 24, panel.top + 292, panel.right - 24, panel.top + 315};
+        drawText(L"OVERLAYS", overlayLabel, label, RGB(86, 97, 115),
+                 DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         drawCompactToggle(layout.fpsButton, g.fpsOverlay.load(std::memory_order_relaxed) != 0, L"FPS counter");
         drawCompactToggle(layout.debugButton, g.debugOverlay.load(std::memory_order_relaxed) != 0, L"Diagnostic log");
 
         RECT hint{panel.left + 24, panel.bottom - 42, panel.right - 24, panel.bottom - 16};
-        drawText(L"Esc releases the mouse", hint, body, RGB(120, 130, 146),
+        drawText(L"Esc closes controls  ·  Shift + Tab opens them again", hint, body, RGB(120, 130, 146),
                  DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+        if (resolutionDropdown.open && !displayModes.empty()) {
+            const int count = std::min(kDropdownVisibleRows,
+                                       static_cast<int>(displayModes.size()) - resolutionDropdown.scrollOffset);
+            for (int row = 0; row < count; ++row) {
+                const int index = resolutionDropdown.scrollOffset + row;
+                RECT option = dropdownOptionRect(layout.resolutionButton, row);
+                const bool selected = index == selectedDisplayMode;
+                const bool hovered = index == resolutionDropdown.hoverIndex;
+                rounded(option, selected ? RGB(238, 245, 255) :
+                                hovered ? RGB(246, 249, 253) : RGB(255, 255, 255),
+                        selected ? RGB(185, 210, 248) :
+                                   hovered ? RGB(207, 221, 242) : RGB(223, 227, 232), 5);
+                wchar_t optionText[96]{};
+                const DisplayMode& mode = displayModes[static_cast<size_t>(index)];
+                std::swprintf(optionText, std::size(optionText), L"%d × %d  ·  %d Hz",
+                              mode.width, mode.height, mode.refreshHz);
+                RECT optionTextRect{option.left + 15, option.top, option.right - 15, option.bottom};
+                drawText(optionText, optionTextRect, body,
+                         selected ? RGB(20, 105, 220) : RGB(31, 40, 54),
+                         DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            }
+            if (resolutionDropdown.scrollOffset > 0) {
+                RECT up{layout.resolutionButton.right - 38, layout.resolutionButton.bottom + 4,
+                        layout.resolutionButton.right - 12, layout.resolutionButton.bottom + 30};
+                drawText(L"▲", up, label, RGB(86, 97, 115), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            }
+            if (resolutionDropdown.scrollOffset < dropdownMaxOffset(static_cast<int>(displayModes.size()))) {
+                RECT down = dropdownOptionRect(layout.resolutionButton, count - 1);
+                down.left = down.right - 38;
+                down.right -= 12;
+                drawText(L"▼", down, label, RGB(86, 97, 115), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            }
+        }
     }
 
     if (!loading && !menu && g.fpsOverlay.load(std::memory_order_relaxed)) {
@@ -1647,9 +2192,11 @@ void destroyGpu() {
         g.instance = nullptr;
     }
     g.backendName = "WebGPU";
+    g.backendType = WGPUBackendType_Undefined;
 }
 
 void destroyHwnd() {
+    restoreExclusiveFullscreenOnWindowThread(false);
     setPointerLockOnWindowThread(false);
     g.nativeHwnd.store(nullptr);
     g.open.store(0, std::memory_order_relaxed);
@@ -1912,6 +2459,9 @@ bool implPresent() {
     if (firstPresent) {
         logLine("native Vulkan surface presented first frame");
     }
+    // Overlay commands can arrive while JavaScript is encoding a frame. Apply
+    // the requested mode only after presentation has released the swapchain.
+    tryApplyPendingDisplayTransition();
     return true;
 }
 
@@ -3618,7 +4168,19 @@ int tw_content_offset_y(void) {
     return 0;
 }
 
+void tw_set_overlay_window(void* hwnd) {
+    g.overlayWindow.store(hwnd, std::memory_order_release);
+    refreshDisplayModes();
+    g.overlayDirty.store(1, std::memory_order_release);
+}
+
 void tw_set_overlay(int on) {
+    if (on) refreshDisplayModes();
+    {
+        std::lock_guard<std::mutex> lock(g.displayMu);
+        g.resolutionDropdown.open = false;
+        g.resolutionDropdown.hoverIndex = -1;
+    }
     g.overlayOpen.store(on != 0 ? 1 : 0, std::memory_order_relaxed);
     g.overlayDirty.store(1, std::memory_order_release);
 }
@@ -3641,6 +4203,73 @@ void tw_overlay_click(int x, int y) {
     const int height = g.statsH.load(std::memory_order_relaxed);
     POINT point{x, y};
     const OverlayLayout layout = overlayLayout(width, height);
+    {
+        std::lock_guard<std::mutex> lock(g.displayMu);
+        OverlayDropdown& dropdown = g.resolutionDropdown;
+        if (dropdown.open && PtInRect(&layout.resolutionButton, point)) {
+            dropdown.open = false;
+            dropdown.hoverIndex = -1;
+            g.overlayDirty.store(1, std::memory_order_release);
+            return;
+        }
+        if (dropdown.open) {
+            const int index = dropdownHitIndex(dropdown, layout.resolutionButton,
+                                               static_cast<int>(g.displayModes.size()), point);
+            if (index >= 0) {
+                g.selectedDisplayMode = index;
+                dropdown.open = false;
+                dropdown.hoverIndex = -1;
+                const int currentMode = g.fullscreenState.load(std::memory_order_relaxed);
+                if (currentMode != 0) {
+                    g.displayCommandReady = true;
+                    g.displayCommandEnabled = currentMode;
+                    g.displayCommandMode = g.displayModes[static_cast<size_t>(index)];
+                }
+                g.overlayDirty.store(1, std::memory_order_release);
+                return;
+            }
+            dropdown.open = false;
+            dropdown.hoverIndex = -1;
+        }
+        if (PtInRect(&layout.resolutionButton, point)) {
+            dropdown.open = true;
+            dropdown.hoverIndex = -1;
+            dropdownReveal(dropdown, g.selectedDisplayMode, static_cast<int>(g.displayModes.size()));
+            g.overlayDirty.store(1, std::memory_order_release);
+            return;
+        }
+        if (PtInRect(&layout.windowedButton, point)) {
+            if (g.fullscreenState.load(std::memory_order_relaxed) != 0) {
+                g.displayCommandReady = true;
+                g.displayCommandEnabled = 0;
+                g.displayCommandMode = {};
+            }
+            g.overlayDirty.store(1, std::memory_order_release);
+            return;
+        }
+        if (PtInRect(&layout.fullscreenButton, point)) {
+            if (!g.displayModes.empty()) {
+                const int selected = std::clamp(g.selectedDisplayMode, 0,
+                                                static_cast<int>(g.displayModes.size()) - 1);
+                g.displayCommandReady = true;
+                g.displayCommandEnabled = 2;
+                g.displayCommandMode = g.displayModes[static_cast<size_t>(selected)];
+            }
+            g.overlayDirty.store(1, std::memory_order_release);
+            return;
+        }
+        if (PtInRect(&layout.borderlessButton, point)) {
+            if (!g.displayModes.empty()) {
+                const int selected = std::clamp(g.selectedDisplayMode, 0,
+                                                static_cast<int>(g.displayModes.size()) - 1);
+                g.displayCommandReady = true;
+                g.displayCommandEnabled = 1;
+                g.displayCommandMode = g.displayModes[static_cast<size_t>(selected)];
+            }
+            g.overlayDirty.store(1, std::memory_order_release);
+            return;
+        }
+    }
     const RECT fps = layout.fpsButton;
     const RECT debug = layout.debugButton;
     if (PtInRect(&fps, point)) {
@@ -3649,6 +4278,68 @@ void tw_overlay_click(int x, int y) {
         const bool enabled = !g.debugOverlay.load(std::memory_order_relaxed);
         g.debugOverlay.store(enabled, std::memory_order_relaxed);
         g.statsLog.store(enabled, std::memory_order_relaxed);
+    }
+    g.overlayDirty.store(1, std::memory_order_release);
+}
+
+void tw_overlay_pointer_move(int x, int y) {
+    if (!g.overlayOpen.load(std::memory_order_relaxed)) return;
+    const OverlayLayout layout = overlayLayout(g.statsW.load(std::memory_order_relaxed),
+                                               g.statsH.load(std::memory_order_relaxed));
+    const POINT point{x, y};
+    std::lock_guard<std::mutex> lock(g.displayMu);
+    OverlayDropdown& dropdown = g.resolutionDropdown;
+    if (!dropdown.open) return;
+    const int hovered = dropdownHitIndex(dropdown, layout.resolutionButton,
+                                         static_cast<int>(g.displayModes.size()), point);
+    if (hovered != dropdown.hoverIndex) {
+        dropdown.hoverIndex = hovered;
+        g.overlayDirty.store(1, std::memory_order_release);
+    }
+}
+
+void tw_overlay_wheel(int delta) {
+    if (!g.overlayOpen.load(std::memory_order_relaxed) || delta == 0) return;
+    std::lock_guard<std::mutex> lock(g.displayMu);
+    OverlayDropdown& dropdown = g.resolutionDropdown;
+    if (!dropdown.open) return;
+    const int steps = std::max(1, std::abs(delta) / WHEEL_DELTA);
+    const int next = dropdown.scrollOffset + (delta < 0 ? steps : -steps);
+    const int clamped = std::clamp(next, 0, dropdownMaxOffset(static_cast<int>(g.displayModes.size())));
+    if (clamped != dropdown.scrollOffset) {
+        dropdown.scrollOffset = clamped;
+        dropdown.hoverIndex = -1;
+        g.overlayDirty.store(1, std::memory_order_release);
+    }
+}
+
+int tw_take_display_command(int* enabled, int* width, int* height, int* refreshHz) {
+    std::lock_guard<std::mutex> lock(g.displayMu);
+    if (!g.displayCommandReady) return 0;
+    if (enabled) *enabled = g.displayCommandEnabled;
+    if (width) *width = g.displayCommandMode.width;
+    if (height) *height = g.displayCommandMode.height;
+    if (refreshHz) *refreshHz = g.displayCommandMode.refreshHz;
+    g.displayCommandReady = false;
+    return 1;
+}
+
+void tw_set_fullscreen_state(int fullscreen, int width, int height, int refreshHz) {
+    fullscreen = std::clamp(fullscreen, 0, 2);
+    g.fullscreenState.store(fullscreen, std::memory_order_relaxed);
+    std::lock_guard<std::mutex> lock(g.displayMu);
+    if (width > 0 && height > 0) {
+        auto found = std::find_if(g.displayModes.begin(), g.displayModes.end(), [&](const DisplayMode& mode) {
+            return mode.width == width && mode.height == height;
+        });
+        if (found != g.displayModes.end()) {
+            if (refreshHz > 0) found->refreshHz = refreshHz;
+            g.selectedDisplayMode = static_cast<int>(std::distance(g.displayModes.begin(), found));
+        } else if (fullscreen) {
+            g.displayModes.insert(g.displayModes.begin(), DisplayMode{width, height, std::max(1, refreshHz)});
+            if (g.displayModes.size() > 24) g.displayModes.resize(24);
+            g.selectedDisplayMode = 0;
+        }
     }
     g.overlayDirty.store(1, std::memory_order_release);
 }
@@ -3744,6 +4435,21 @@ void tw_stats(int* fps, int* frame_us, int* width, int* height, int* vsync, uint
 
 int tw_is_open(void) {
     return g.open.load(std::memory_order_relaxed);
+}
+
+int tw_set_fullscreen(int mode, int width, int height, int refreshHz) {
+    try {
+        return onWorker([mode, width, height, refreshHz] {
+            g.pendingDisplayMode = std::clamp(mode, 0, 2);
+            g.pendingDisplayModeDetails = DisplayMode{width, height, refreshHz};
+            g.pendingDisplayTransition = true;
+            tryApplyPendingDisplayTransition();
+            return 1;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
 }
 
 void tw_shutdown(void) {

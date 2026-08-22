@@ -35,6 +35,7 @@
 #include <fstream>
 #include <functional>
 #include <future>
+#include <limits>
 #include <memory>
 #include <algorithm>
 #include <cmath>
@@ -65,12 +66,33 @@ void destroySurface() {
     if (g.canvas) {
         releaseGlOverlayGpu();
         if (auto* glfwWindow = static_cast<GLFWwindow*>(g.canvas->windowPtr())) {
+            if (g.fullscreenMode != 0) {
+                const int restoreW = std::max(1, g.windowedW);
+                const int restoreH = std::max(1, g.windowedH);
+                glfwSetWindowMonitor(glfwWindow, nullptr,
+                                     g.windowedX, g.windowedY,
+                                     restoreW, restoreH,
+                                     GLFW_DONT_CARE);
+                if (HWND hwnd = glfwGetWin32Window(glfwWindow)) {
+                    SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                }
+                glfwSetWindowAttrib(glfwWindow, GLFW_DECORATED, GLFW_TRUE);
+                g.fullscreenMode = 0;
+                g.statsW.store(restoreW, std::memory_order_relaxed);
+                g.statsH.store(restoreH, std::memory_order_relaxed);
+                tw_set_fullscreen_state(0, restoreW, restoreH, 0);
+                glfwPollEvents();
+            }
             if (HWND child = glfwGetWin32Window(glfwWindow)) {
                 ShowWindow(child, SW_HIDE);
                 SetParent(child, nullptr);
             }
         }
     }
+    tw_set_fullscreen_state(0,
+                            g.statsW.load(std::memory_order_relaxed),
+                            g.statsH.load(std::memory_order_relaxed), 0);
 #endif
     g.nativeHwnd.store(nullptr);
     g.renderer.reset();
@@ -96,6 +118,101 @@ using tn::setError;
 
 #if defined(_WIN32)
 namespace {
+
+GLFWmonitor* nearestMonitor(GLFWwindow* window) {
+    if (!window) return nullptr;
+
+    int monitorCount = 0;
+    GLFWmonitor** monitors = glfwGetMonitors(&monitorCount);
+    if (!monitors || monitorCount <= 0) return glfwGetPrimaryMonitor();
+
+    int windowX = 0;
+    int windowY = 0;
+    int windowW = 1;
+    int windowH = 1;
+    glfwGetWindowPos(window, &windowX, &windowY);
+    glfwGetWindowSize(window, &windowW, &windowH);
+    const long long windowLeft = windowX;
+    const long long windowTop = windowY;
+    const long long windowRight = windowLeft + std::max(1, windowW);
+    const long long windowBottom = windowTop + std::max(1, windowH);
+    const long long windowCenterX = (windowLeft + windowRight) / 2;
+    const long long windowCenterY = (windowTop + windowBottom) / 2;
+
+    GLFWmonitor* nearest = monitors[0];
+    long long bestOverlap = -1;
+    long long bestDistance = std::numeric_limits<long long>::max();
+    for (int i = 0; i < monitorCount; ++i) {
+        GLFWmonitor* monitor = monitors[i];
+        const GLFWvidmode* desktop = glfwGetVideoMode(monitor);
+        if (!desktop) continue;
+        int monitorX = 0;
+        int monitorY = 0;
+        glfwGetMonitorPos(monitor, &monitorX, &monitorY);
+        const long long monitorLeft = monitorX;
+        const long long monitorTop = monitorY;
+        const long long monitorRight = monitorLeft + desktop->width;
+        const long long monitorBottom = monitorTop + desktop->height;
+        const long long overlapW = std::max(0LL, std::min(windowRight, monitorRight) -
+                                                  std::max(windowLeft, monitorLeft));
+        const long long overlapH = std::max(0LL, std::min(windowBottom, monitorBottom) -
+                                                  std::max(windowTop, monitorTop));
+        const long long overlap = overlapW * overlapH;
+        const long long closestX = std::clamp(windowCenterX, monitorLeft, monitorRight);
+        const long long closestY = std::clamp(windowCenterY, monitorTop, monitorBottom);
+        const long long dx = windowCenterX - closestX;
+        const long long dy = windowCenterY - closestY;
+        const long long distance = dx * dx + dy * dy;
+        if (overlap > bestOverlap || (overlap == bestOverlap && distance < bestDistance)) {
+            nearest = monitor;
+            bestOverlap = overlap;
+            bestDistance = distance;
+        }
+    }
+    return nearest;
+}
+
+const GLFWvidmode* closestFullscreenMode(GLFWmonitor* monitor, int requestedW, int requestedH,
+                                         int requestedRefresh) {
+    if (!monitor) return nullptr;
+    int modeCount = 0;
+    const GLFWvidmode* modes = glfwGetVideoModes(monitor, &modeCount);
+    if (!modes || modeCount <= 0) return glfwGetVideoMode(monitor);
+
+    const GLFWvidmode* desktop = glfwGetVideoMode(monitor);
+    if (requestedW <= 0) requestedW = desktop ? desktop->width : modes[modeCount - 1].width;
+    if (requestedH <= 0) requestedH = desktop ? desktop->height : modes[modeCount - 1].height;
+    if (requestedRefresh <= 0) requestedRefresh = desktop ? desktop->refreshRate : GLFW_DONT_CARE;
+
+    // Resolution entries come from the runtime dropdown, so an exact width and
+    // height should normally exist. Within that resolution select the closest
+    // supported refresh rate. If the display changed after enumeration, fall
+    // back to the geometrically closest supported resolution.
+    const GLFWvidmode* best = nullptr;
+    long long bestScore = std::numeric_limits<long long>::max();
+    for (int pass = 0; pass < 2 && !best; ++pass) {
+        for (int i = 0; i < modeCount; ++i) {
+            const GLFWvidmode& mode = modes[i];
+            const bool exactResolution = mode.width == requestedW && mode.height == requestedH;
+            if (pass == 0 && !exactResolution) continue;
+            if (pass == 1 && exactResolution) continue;
+            const long long widthDelta = std::llabs(static_cast<long long>(mode.width) - requestedW);
+            const long long heightDelta = std::llabs(static_cast<long long>(mode.height) - requestedH);
+            const long long refreshDelta = requestedRefresh == GLFW_DONT_CARE
+                    ? 0
+                    : std::llabs(static_cast<long long>(mode.refreshRate) - requestedRefresh);
+            const long long score = pass == 0
+                    ? refreshDelta
+                    : (widthDelta * widthDelta + heightDelta * heightDelta) * 1000 + refreshDelta;
+            if (!best || score < bestScore ||
+                (score == bestScore && mode.refreshRate > best->refreshRate)) {
+                best = &mode;
+                bestScore = score;
+            }
+        }
+    }
+    return best ? best : desktop;
+}
 
 GLuint glOverlayProgram{};
 GLuint glOverlayTexture{};
@@ -718,6 +835,10 @@ int impl_runtime_start(int width, int height, const char* title) {
 #endif
     g.statsW.store(w, std::memory_order_relaxed);
     g.statsH.store(h, std::memory_order_relaxed);
+#if defined(_WIN32)
+    g.fullscreenMode = 0;
+    tw_set_fullscreen_state(0, w, h, 0);
+#endif
     g.open.store(true, std::memory_order_release);
     logLine("runtime started");
     return 1;
@@ -988,6 +1109,105 @@ void tn_runtime_set_vsync(int enabled) {
 
 void tn_runtime_set_standalone(int enabled) {
     g.standalone.store(enabled != 0, std::memory_order_relaxed);
+}
+
+int tn_runtime_set_fullscreen(int requestedMode, int width, int height, int refreshHz) {
+#if defined(_WIN32)
+    try {
+        return onWorker([requestedMode, width, height, refreshHz] {
+            const int targetMode = std::clamp(requestedMode, 0, 2);
+            if (!g.canvas || !g.standalone.load(std::memory_order_relaxed)) {
+                setError("fullscreen requires a standalone runtime window");
+                return 0;
+            }
+            auto* window = static_cast<GLFWwindow*>(g.canvas->windowPtr());
+            if (!window) {
+                setError("runtime window is unavailable");
+                return 0;
+            }
+
+            auto restoreWindowed = [&] {
+                if (g.fullscreenMode == 0) return;
+                const int restoreW = std::max(1, g.windowedW);
+                const int restoreH = std::max(1, g.windowedH);
+                glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_TRUE);
+                glfwSetWindowMonitor(window, nullptr, g.windowedX, g.windowedY,
+                                     restoreW, restoreH, GLFW_DONT_CARE);
+                if (HWND hwnd = glfwGetWin32Window(window)) {
+                    SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE |
+                                     SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+                }
+                g.fullscreenMode = 0;
+                g.statsW.store(restoreW, std::memory_order_relaxed);
+                g.statsH.store(restoreH, std::memory_order_relaxed);
+                if (g.renderer) g.renderer->setSize({restoreW, restoreH});
+                tw_set_fullscreen_state(0, restoreW, restoreH, 0);
+            };
+
+            if (targetMode == 0) {
+                restoreWindowed();
+            } else {
+                if (g.fullscreenMode != 0 && g.fullscreenMode != targetMode) {
+                    restoreWindowed();
+                }
+                GLFWmonitor* monitor = glfwGetWindowMonitor(window);
+                if (!monitor) monitor = nearestMonitor(window);
+                const GLFWvidmode* mode = targetMode == 1
+                    ? glfwGetVideoMode(monitor)
+                    : closestFullscreenMode(monitor, width, height, refreshHz);
+                if (!monitor || !mode) {
+                    setError("no supported fullscreen display mode");
+                    return 0;
+                }
+                if (g.fullscreenMode == 0) {
+                    glfwGetWindowPos(window, &g.windowedX, &g.windowedY);
+                    glfwGetWindowSize(window, &g.windowedW, &g.windowedH);
+                    g.windowedW = std::max(1, g.windowedW);
+                    g.windowedH = std::max(1, g.windowedH);
+                }
+                int targetX = 0;
+                int targetY = 0;
+                glfwGetMonitorPos(monitor, &targetX, &targetY);
+                if (targetMode == 1) {
+                    glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_FALSE);
+                    glfwSetWindowMonitor(window, nullptr, targetX, targetY,
+                                         mode->width, mode->height, GLFW_DONT_CARE);
+                } else {
+                    glfwSetWindowMonitor(window, monitor, 0, 0,
+                                         mode->width, mode->height, mode->refreshRate);
+                }
+                if (HWND hwnd = glfwGetWin32Window(window)) {
+                    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                                 SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+                    ShowWindow(hwnd, SW_SHOW);
+                    SetForegroundWindow(hwnd);
+                    SetFocus(hwnd);
+                }
+                g.fullscreenMode = targetMode;
+                g.statsW.store(mode->width, std::memory_order_relaxed);
+                g.statsH.store(mode->height, std::memory_order_relaxed);
+                if (g.renderer) g.renderer->setSize({mode->width, mode->height});
+                tw_set_fullscreen_state(targetMode, mode->width, mode->height,
+                                        targetMode == 2 ? mode->refreshRate : 0);
+            }
+            glfwPollEvents();
+            markDirty();
+            setError("");
+            return 1;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+#else
+    (void) requestedMode;
+    (void) width;
+    (void) height;
+    (void) refreshHz;
+    setError("exclusive fullscreen is only available on Windows");
+    return 0;
+#endif
 }
 
 int tn_runtime_render(uint32_t sceneHandle, uint32_t cameraHandle) {

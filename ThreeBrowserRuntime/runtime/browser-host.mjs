@@ -1742,7 +1742,10 @@ function dispatchNativeInput() {
       continue;
     }
     if (input.type === "wheel" || input.type === "wheelhorizontal") {
-      if (native.overlayOpen?.()) continue;
+      if (native.overlayOpen?.()) {
+        if (input.type === "wheel") native.overlayWheel?.(input.code);
+        continue;
+      }
       dispatchToCanvasAndWindow(() => eventWith("wheel", {
         clientX: input.x, clientY: input.y, pageX: input.x, pageY: input.y, x: input.x, y: input.y,
         deltaX: input.type === "wheelhorizontal" ? input.code : 0,
@@ -1763,6 +1766,7 @@ function dispatchNativeInput() {
       lastMouseX = input.x;
       lastMouseY = input.y;
       if (native.overlayOpen?.()) {
+        if (pointerType === "pointermove") native.overlayPointerMove?.(input.x, input.y);
         if (pointerType === "pointerup") native.overlayClick(input.x, input.y);
         continue;
       }

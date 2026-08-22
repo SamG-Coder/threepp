@@ -41,6 +41,7 @@ void stopActiveRuntime() {
     const int mode = runtimeMode.exchange(0, std::memory_order_acq_rel);
     if (mode == 2) tw_shutdown();
     else if (mode == 1) tn_runtime_shutdown();
+    tw_set_overlay_window(nullptr);
 }
 
 HWND runtimeHwnd() {
@@ -161,6 +162,7 @@ napi_value start(napi_env env, napi_callback_info info) {
     if (ok) {
         tn_runtime_set_loading(1, "Loading project assets");
         if (auto hwnd = static_cast<HWND>(tn_runtime_hwnd())) {
+            tw_set_overlay_window(hwnd);
             ShowWindowAsync(hwnd, SW_SHOW);
             SetWindowPos(hwnd, HWND_TOP, 0, 0, width, height,
                          SWP_NOMOVE | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS);
@@ -188,6 +190,7 @@ napi_value webGpuStart(napi_env env, napi_callback_info info) {
     if (ok) {
         tw_set_loading(1, "Loading project assets");
         if (auto hwnd = static_cast<HWND>(tw_hwnd())) {
+            tw_set_overlay_window(hwnd);
             ShowWindowAsync(hwnd, SW_SHOW);
             SetWindowPos(hwnd, HWND_TOP, 0, 0, width, height,
                          SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS);
@@ -366,7 +369,35 @@ napi_value overlayClick(napi_env env, napi_callback_info info) {
         const int y = static_cast<int>(argNumber(env, argv[1], 0));
         if (runtimeMode.load(std::memory_order_acquire) == 2) tw_overlay_click(x, y);
         else tn_runtime_overlay_click(x, y);
+        int mode = 0, width = 0, height = 0, refreshHz = 0;
+        if (tw_take_display_command(&mode, &width, &height, &refreshHz)) {
+            releasePointerLock();
+            if (runtimeMode.load(std::memory_order_acquire) == 2) {
+                tw_set_fullscreen(mode, width, height, refreshHz);
+            } else if (runtimeMode.load(std::memory_order_acquire) == 1) {
+                tn_runtime_set_fullscreen(mode, width, height, refreshHz);
+            }
+        }
     }
+    return undefined(env);
+}
+
+napi_value overlayPointerMove(napi_env env, napi_callback_info info) {
+    napi_value argv[2]{};
+    std::size_t argc = 2;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (argc == 2) {
+        tw_overlay_pointer_move(static_cast<int>(argNumber(env, argv[0], 0)),
+                                static_cast<int>(argNumber(env, argv[1], 0)));
+    }
+    return undefined(env);
+}
+
+napi_value overlayWheel(napi_env env, napi_callback_info info) {
+    napi_value argv[1]{};
+    std::size_t argc = 1;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (argc == 1) tw_overlay_wheel(static_cast<int>(argNumber(env, argv[0], 0)));
     return undefined(env);
 }
 
@@ -900,6 +931,8 @@ napi_value init(napi_env env, napi_value exports) {
         {"setOverlay", nullptr, setOverlay, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"overlayOpen", nullptr, overlayOpen, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"overlayClick", nullptr, overlayClick, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"overlayPointerMove", nullptr, overlayPointerMove, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"overlayWheel", nullptr, overlayWheel, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"toggleFpsOverlay", nullptr, toggleFpsOverlay, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, std::size(properties), properties);

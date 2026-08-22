@@ -78,6 +78,14 @@ struct Runtime {
     std::atomic<bool> standalone{false};
     std::atomic<bool> open{false};
     std::atomic<void*> nativeHwnd{nullptr};
+    // GLFW window-mode state. These fields are read and written only by the
+    // runtime worker which owns the GLFW window.
+    // 0 = windowed, 1 = borderless fullscreen, 2 = exclusive fullscreen.
+    int fullscreenMode{0};
+    int windowedX{0};
+    int windowedY{0};
+    int windowedW{0};
+    int windowedH{0};
     std::atomic<int> statsFps{0};
     std::atomic<int> statsFrameUs{0};
     std::atomic<int> statsW{0};
