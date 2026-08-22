@@ -11,7 +11,41 @@ const require = createRequire(import.meta.url);
 const addonPath = process.env.THREEBROWSER_RUNTIME_ADDON || path.join(here, "..", "three_browser_runtime.node");
 export const native = require(addonPath);
 
-class BrowserEventTarget extends EventTarget {}
+class BrowserEventTarget {
+  constructor() { this._eventListeners = new Map(); }
+  addEventListener(type, listener, options = {}) {
+    if (!listener) return;
+    const key = String(type);
+    const listeners = this._eventListeners.get(key) || [];
+    if (!listeners.some(entry => entry.listener === listener)) {
+      listeners.push({ listener, once: Boolean(typeof options === "object" && options.once) });
+      this._eventListeners.set(key, listeners);
+    }
+  }
+  removeEventListener(type, listener) {
+    const key = String(type);
+    const listeners = this._eventListeners.get(key);
+    if (!listeners) return;
+    this._eventListeners.set(key, listeners.filter(entry => entry.listener !== listener));
+  }
+  dispatchEvent(event) {
+    if (!event?.type) throw new TypeError("Event object requires a type");
+    try { Object.defineProperty(event, "target", { configurable: true, value: this }); } catch {}
+    try { Object.defineProperty(event, "currentTarget", { configurable: true, value: this }); } catch {}
+    for (const entry of [...(this._eventListeners.get(String(event.type)) || [])]) {
+      try {
+        if (typeof entry.listener === "function") entry.listener.call(this, event);
+        else entry.listener.handleEvent?.(event);
+      } catch (error) {
+        console.error(`Unhandled ${event.type} event listener error:`, error);
+      }
+      if (entry.once) this.removeEventListener(event.type, entry.listener);
+      if (event.cancelBubble) break;
+    }
+    return !event.defaultPrevented;
+  }
+}
+globalThis.EventTarget = BrowserEventTarget;
 if (typeof globalThis.ProgressEvent === "undefined") {
   globalThis.ProgressEvent = class ProgressEvent extends Event {
     constructor(type, init = {}) {
@@ -405,6 +439,7 @@ export const document = Object.assign(documentTarget, {
   head,
   documentElement: new Element("html"),
   activeElement: null,
+  readyState: "loading",
   visibilityState: "visible",
   hidden: false,
   pointerLockElement: null,
@@ -635,16 +670,26 @@ globalThis.Request = class BrowserRequest extends PlatformRequest {
   }
 };
 const platformFetch = globalThis.fetch.bind(globalThis);
+let pulledSourceURL = null;
+let pulledDirectory = null;
+let pulledFiles = new Map();
 const contentTypes = new Map([
   [".json", "application/json"], [".gltf", "model/gltf+json"], [".glb", "model/gltf-binary"],
-  [".bin", "application/octet-stream"], [".wasm", "application/wasm"], [".txt", "text/plain"],
+  [".bin", "application/octet-stream"], [".dat", "application/octet-stream"], [".wasm", "application/wasm"], [".txt", "text/plain"],
   [".glsl", "text/plain"], [".vert", "text/plain"], [".frag", "text/plain"], [".wgsl", "text/plain"],
   [".png", "image/png"], [".jpg", "image/jpeg"], [".jpeg", "image/jpeg"], [".webp", "image/webp"],
 ]);
 globalThis.fetch = async (input, init) => {
   const raw = input instanceof Request ? input.url : input instanceof URL ? input.href : String(input);
   let resolved;
-  try { resolved = new URL(raw, globalThis.location?.href); }
+  try {
+    const sourceCandidate = pulledSourceURL ? new URL(raw, pulledSourceURL) : null;
+    sourceCandidate && (sourceCandidate.hash = "");
+    const pulledPath = sourceCandidate ? pulledFiles.get(sourceCandidate.href) : null;
+    resolved = pulledPath && pulledDirectory
+      ? pathToFileURL(path.join(pulledDirectory, pulledPath))
+      : new URL(raw, globalThis.location?.href);
+  }
   catch { return platformFetch(input, init); }
   if (process.env.THREEBROWSER_TRACE_FETCH) console.error(`ThreeBrowser fetch: ${resolved.href}`);
   if (resolved.protocol !== "file:") return platformFetch(resolved, init);
@@ -941,9 +986,17 @@ export async function loadEntry(entryPath) {
       try { manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")); }
       catch (error) { throw new Error(`Invalid pull manifest in ${manifestPath}: ${error.message}`); }
       if (manifest.html) globalThis.location = new URL(pathToFileURL(path.join(path.dirname(absolute), manifest.html)));
+      pulledSourceURL = manifest.source ? new URL(manifest.source) : null;
+      pulledDirectory = path.dirname(absolute);
+      pulledFiles = new Map((manifest.files || []).map(file => [new URL(file.url).href, file.path]));
       if (manifest.requiresWebGPU) await enableWebGPU();
     }
-    return import(pathToFileURL(absolute));
+    const loaded = await import(pathToFileURL(absolute));
+    document.readyState = "interactive";
+    document.dispatchEvent(new Event("DOMContentLoaded"));
+    document.readyState = "complete";
+    globalThis.dispatchEvent(new Event("load"));
+    return loaded;
   }
   const html = fs.readFileSync(absolute, "utf8");
   const importMapSource = /<script\s+[^>]*type=["']importmap["'][^>]*>([\s\S]*?)<\/script>/i.exec(html)?.[1];
@@ -962,6 +1015,10 @@ export async function loadEntry(entryPath) {
     if (src) await import(new URL(src, pathToFileURL(absolute)));
     else await import(`data:text/javascript;base64,${Buffer.from(match[1]).toString("base64")}`);
   }
+  document.readyState = "interactive";
+  document.dispatchEvent(new Event("DOMContentLoaded"));
+  document.readyState = "complete";
+  globalThis.dispatchEvent(new Event("load"));
 }
 
 process.once("SIGINT", () => { stop(); process.exit(0); });

@@ -2,7 +2,12 @@
   "name": "threebrowser-runtime-js",
   "private": true,
   "type": "module",
+  "scripts": {
+    "test": "node --test runtime/*.test.mjs"
+  },
   "dependencies": {
+    "acorn": "8.15.0",
+    "acorn-walk": "8.3.4",
     "three": "0.184.0"
   }
 }

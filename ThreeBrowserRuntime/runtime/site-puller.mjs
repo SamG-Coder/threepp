@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { relinkViteChunk } from "./vite-relinker.mjs";
 
 const [address, destinationArgument, ...flags] = process.argv.slice(2);
 if (!address) {
@@ -30,6 +31,7 @@ const records = new Map();
 const queue = [];
 const findings = new Set();
 const importMapEntries = new Map();
+const relinkedFiles = [];
 const uiSignals = new Set();
 const visibleHtmlTags = new Set();
 let hasThreeRuntimeCode = false;
@@ -104,7 +106,7 @@ function resolveReference(value, baseURL, allowAssetLiteral = false, documentRel
     .filter(key => key.endsWith("/") && value.startsWith(key))
     .sort((a, b) => b.length - a.length)[0];
   if (prefix) return new URL(`${importMapEntries.get(prefix)}${value.slice(prefix.length)}`);
-  if (allowAssetLiteral && /[\\/].+\.(?:m?js|css|wasm|json|glsl|vert|frag|wgsl|png|jpe?g|webp|gif|svg|hdr|exr|gltf|glb|bin)(?:[?#].*)?$/i.test(value)) {
+  if (allowAssetLiteral && /[\\/].+\.(?:m?js|css|wasm|json|glsl|vert|frag|wgsl|png|jpe?g|webp|gif|svg|hdr|exr|gltf|glb|bin|dat)(?:[?#].*)?$/i.test(value)) {
     try { return new URL(value, rootURL); } catch { return null; }
   }
   return null;
@@ -168,7 +170,7 @@ function inspectComposedAssetArrays(record, source) {
   for (const match of source.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(['"])([^\r\n]*?)\2\s*;/g)) {
     constants.set(match[1], simpleStringLiteral(`${match[2]}${match[3]}${match[2]}`));
   }
-  const assetPattern = /\.(?:m?js|css|wasm|json|glsl|vert|frag|wgsl|png|jpe?g|webp|gif|svg|hdr|exr|gltf|glb|bin)(?:[?#].*)?$/i;
+  const assetPattern = /\.(?:m?js|css|wasm|json|glsl|vert|frag|wgsl|png|jpe?g|webp|gif|svg|hdr|exr|gltf|glb|bin|dat)(?:[?#].*)?$/i;
   for (const array of source.matchAll(/\b(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*\[([\s\S]*?)\]\s*;/g)) {
     for (const expression of array[1].split(",")) {
       let value = "";
@@ -245,9 +247,16 @@ function inspectJavaScript(record, source) {
   }
 
   const assetSource = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  const assetStrings = /["']([^"'\\\r\n]+\.(?:m?js|css|wasm|json|glsl|vert|frag|wgsl|png|jpe?g|webp|gif|svg|hdr|exr|gltf|glb|bin)(?:[?#][^"']*)?)["']/gi;
+  const assetStrings = /["']([^"'\\\r\n]+\.(?:m?js|css|wasm|json|glsl|vert|frag|wgsl|png|jpe?g|webp|gif|svg|hdr|exr|gltf|glb|bin|dat)(?:[?#][^"']*)?)["']/gi;
   for (const match of assetSource.matchAll(assetStrings)) {
     collectReference(record, match[1], "asset", true, record.virtualSource !== undefined);
+  }
+  // A common optimized-loader shape is `${base}assets/file.ext`. The base is
+  // normally the document path; collecting the static suffix preserves the
+  // same result without trying to execute arbitrary bundle expressions.
+  const templateAssetStrings = /`(?:\$\{[^}]+\})?([^`$]+\.(?:wasm|json|glsl|vert|frag|wgsl|png|jpe?g|webp|gif|svg|hdr|exr|gltf|glb|bin|dat)(?:[?#][^`]*)?)`/gi;
+  for (const match of assetSource.matchAll(templateAssetStrings)) {
+    collectReference(record, match[1], "asset", true, true);
   }
   inspectComposedAssetArrays(record, assetSource);
   const sourceMap = /\/\/[#@]\s*sourceMappingURL\s*=\s*([^\s]+)/g;
@@ -435,7 +444,24 @@ for (const record of successful) {
   const isText = !binaryContent && (moduleLike(record.url, record.contentType, record.hint) || styleLike(record.url, record.contentType, record.hint) ||
     sourceMapLike(record.url, record.contentType, record.hint) || /(?:text|json|xml|svg)/i.test(record.contentType) ||
     /\.html?$/i.test(record.url.pathname));
-  fs.writeFileSync(target, isText ? rewriteText(record, record.content.toString("utf8")).replaceAll("\r\n", "\n") : record.content);
+  if (isText) {
+    let output = rewriteText(record, record.content.toString("utf8")).replaceAll("\r\n", "\n");
+    if (moduleLike(record.url, record.contentType, record.hint) &&
+        hasThreeRuntimeCode && hasWebGlRenderer) {
+      const relinked = relinkViteChunk(output, record.localPath);
+      if (relinked.changed) {
+        output = relinked.source;
+        relinkedFiles.push({
+          path: record.localPath.replaceAll("\\", "/"),
+          renderers: relinked.renderers,
+        });
+        findings.add(`Native WebGLRenderer relinked in ${record.localPath}`);
+      }
+    }
+    fs.writeFileSync(target, output);
+  } else {
+    fs.writeFileSync(target, record.content);
+  }
 }
 
 const unpackedSources = successful.flatMap(unpackSourceMap);
@@ -458,12 +484,13 @@ const entryLines = [
 fs.writeFileSync(path.join(destination, "site-entry.mjs"), entryLines.join("\n"));
 
 const threeMode = !hasThreeRuntimeCode ? "not-detected" :
-  hasInterceptableThreeImport ? "importable" : "bundled";
+  relinkedFiles.length ? "relinked" : hasInterceptableThreeImport ? "importable" : "bundled";
 const uiMode = uiSignals.has("React UI") || uiSignals.has("scroll-driven UI") || uiSignals.has("form controls")
   ? "dom-required"
   : visibleHtmlTags.size || uiSignals.size ? "html-overlay" : "canvas-only";
 const compatibilityNotes = [];
-if (threeMode === "bundled") compatibilityNotes.push("Three.js is embedded in a production bundle; the native Three.js import facade cannot intercept it.");
+if (threeMode === "bundled") compatibilityNotes.push("Three.js is embedded in a production bundle and no safe native renderer binding was found.");
+if (threeMode === "relinked") compatibilityNotes.push("The embedded Three.js model layer is retained, while its WebGLRenderer binding is redirected to the native facade.");
 if (uiMode !== "canvas-only") compatibilityNotes.push("The native runtime does not paint arbitrary HTML/CSS, so visible browser UI will be missing.");
 
 const manifest = {
@@ -487,6 +514,7 @@ const manifest = {
     uiMode,
     visibleHtmlTags: [...visibleHtmlTags].sort(),
     uiSignals: [...uiSignals].sort(),
+    relinkedFiles,
     notes: compatibilityNotes,
   },
   unpackedSources,

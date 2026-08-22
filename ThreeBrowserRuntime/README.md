@@ -85,12 +85,15 @@ but this native-only milestone does not paint general HTML/CSS widgets over the
 GPU surface yet.
 
 Production Vite output creates a second, independent boundary. If Vite embeds a
-WebGL copy of Three.js into a minified chunk, its `WebGLRenderer` can no longer
-be redirected through the native `three` import facade. WebGPU bundles can use
-the native `navigator.gpu` bridge, subject to browser API coverage, but their
-React or HTML control panels are still headless. For native WebGL, the reliable
-input is an ESM graph that preserves `three` as an import (or a build/source map
-from which that graph can be reconstructed), rather than an opaque bundle.
+WebGL copy of Three.js into a minified chunk, the puller parses the chunk and
+looks for the renderer's semantic `isWebGLRenderer` marker. It then relinks that
+mangled class binding to ThreeBrowser's native `WebGLRenderer` while retaining
+the bundle's stock, duck-typed scene/model classes. The manifest reports this as
+`threeMode: "relinked"`; a bundle with no safe binding remains `"bundled"`.
+WebGPU bundles can use the native `navigator.gpu` bridge, subject to browser API
+coverage, but their React or HTML control panels are still headless. Source maps
+and builds that preserve `three` imports remain preferable because they retain
+more module structure and allow stronger tree-shaking.
 
 ## Visually verified official examples
 
