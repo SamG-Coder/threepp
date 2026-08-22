@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { relinkLegacyThreeBundle, relinkViteChunk } from "./vite-relinker.mjs";
+import { detectBundledRendererUsage, relinkLegacyThreeBundle, relinkViteChunk } from "./vite-relinker.mjs";
 
 const [address, destinationArgument, ...flags] = process.argv.slice(2);
 if (!address) {
@@ -197,14 +197,15 @@ function inspectJavaScript(record, source) {
     hasViteRuntime = true;
     findings.add("Vite runtime detected");
   }
-  const sourceHasWebGlRenderer = /\bWebGLRenderer\b/.test(source);
-  const sourceHasWebGpuRenderer = /\bWebGPURenderer\b/.test(source);
+  const bundledRenderer = detectBundledRendererUsage(source);
+  const sourceHasWebGlRenderer = /\bWebGLRenderer\b/.test(source) || bundledRenderer.hasWebGL;
+  const sourceHasWebGpuRenderer = /\bWebGPURenderer\b/.test(source) || bundledRenderer.hasWebGPU;
   // Keep runtime-definition detection separate from application usage. The
   // stock Three.js module contains both class names (and migration comments)
   // regardless of which renderer the page constructs. Treating any mention as
   // usage starts an idle WebGPU window before ordinary WebGL pages run.
-  const sourceUsesWebGlRenderer = /\bnew\s+(?:[A-Za-z_$][\w$]*\s*\.\s*)?WebGLRenderer\s*\(/.test(source);
-  const sourceUsesWebGpuRenderer = /\bnew\s+(?:[A-Za-z_$][\w$]*\s*\.\s*)?WebGPURenderer(?:Async)?\s*\(/.test(source);
+  const sourceUsesWebGlRenderer = /\bnew\s+(?:[A-Za-z_$][\w$]*\s*\.\s*)?WebGLRenderer\s*\(/.test(source) || bundledRenderer.usesWebGL;
+  const sourceUsesWebGpuRenderer = /\bnew\s+(?:[A-Za-z_$][\w$]*\s*\.\s*)?WebGPURenderer(?:Async)?\s*\(/.test(source) || bundledRenderer.usesWebGPU;
   for (const pattern of [
     /\bREVISION\s*=\s*["'](\d+)["']/g,
     /\bTHREE\.REVISION\s*=\s*["'](\d+)["']/g,

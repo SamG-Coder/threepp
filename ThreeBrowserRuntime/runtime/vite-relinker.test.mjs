@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parse } from "acorn";
-import { relinkViteChunk } from "./vite-relinker.mjs";
+import { detectBundledRendererUsage, relinkViteChunk } from "./vite-relinker.mjs";
 
 function validModule(source) {
   parse(source, { ecmaVersion: "latest", sourceType: "module" });
@@ -86,4 +86,27 @@ test("leaves unrelated Vite chunks untouched", () => {
   const result = relinkViteChunk(input, "unrelated.mjs");
   assert.equal(result.changed, false);
   assert.equal(result.source, input);
+});
+
+test("detects a constructed minified WebGPU renderer by its semantic marker", () => {
+  const input = [
+    "class uj{constructor(){this.isWebGPURenderer=!0}}",
+    "const renderer=new uj({antialias:true});",
+  ].join("");
+  assert.deepEqual(detectBundledRendererUsage(input), {
+    hasWebGL: false,
+    hasWebGPU: true,
+    usesWebGL: false,
+    usesWebGPU: true,
+  });
+});
+
+test("does not treat an unused bundled renderer definition as application usage", () => {
+  const input = "const Renderer=class{constructor(){this.isWebGPURenderer=true}};export{Renderer};";
+  assert.deepEqual(detectBundledRendererUsage(input), {
+    hasWebGL: false,
+    hasWebGPU: true,
+    usesWebGL: false,
+    usesWebGPU: false,
+  });
 });

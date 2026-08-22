@@ -130,6 +130,69 @@ function rendererDefinition(ancestors) {
   return null;
 }
 
+function definitionBinding(ancestors) {
+  for (let index = ancestors.length - 1; index >= 0; --index) {
+    const node = ancestors[index];
+    if ((node.type === "ClassDeclaration" || node.type === "FunctionDeclaration") && node.id?.name) {
+      return node.id.name;
+    }
+    if (node.type === "VariableDeclarator" && node.id?.type === "Identifier") {
+      return node.id.name;
+    }
+  }
+  return null;
+}
+
+// Rollup/Vite renames renderer classes, so `new WebGPURenderer()` is not a
+// reliable usage signal in a deployed bundle. Match the stable Three.js
+// semantic marker to its containing constructor, then check whether that
+// mangled constructor is instantiated anywhere in the chunk.
+export function detectBundledRendererUsage(source) {
+  if (!source.includes("isWebGLRenderer") && !source.includes("isWebGPURenderer")) {
+    return { hasWebGL: false, hasWebGPU: false, usesWebGL: false, usesWebGPU: false };
+  }
+
+  let ast;
+  try {
+    ast = parse(source, { ecmaVersion: "latest", sourceType: "module", allowHashBang: true });
+  } catch {
+    try {
+      ast = parse(source, { ecmaVersion: "latest", sourceType: "script", allowHashBang: true });
+    } catch {
+      return { hasWebGL: false, hasWebGPU: false, usesWebGL: false, usesWebGPU: false };
+    }
+  }
+
+  const webGLBindings = new Set();
+  const webGPUBindings = new Set();
+  const constructedBindings = new Set();
+  ancestor(ast, {
+    AssignmentExpression(node, ancestors) {
+      const truthy = node.right?.type === "Literal" && node.right.value === true ||
+        node.right?.type === "UnaryExpression" && node.right.operator === "!" &&
+          node.right.argument?.type === "Literal" && node.right.argument.value === 0;
+      if (!truthy || node.left?.type !== "MemberExpression" ||
+          node.left.object?.type !== "ThisExpression") return;
+      const marker = node.left.computed ? node.left.property?.value : node.left.property?.name;
+      if (marker !== "isWebGLRenderer" && marker !== "isWebGPURenderer") return;
+      const binding = definitionBinding(ancestors);
+      if (!binding) return;
+      (marker === "isWebGPURenderer" ? webGPUBindings : webGLBindings).add(binding);
+    },
+    NewExpression(node) {
+      if (node.callee?.type === "Identifier") constructedBindings.add(node.callee.name);
+    },
+  });
+
+  const isConstructed = bindings => [...bindings].some(binding => constructedBindings.has(binding));
+  return {
+    hasWebGL: webGLBindings.size > 0,
+    hasWebGPU: webGPUBindings.size > 0,
+    usesWebGL: isConstructed(webGLBindings),
+    usesWebGPU: isConstructed(webGPUBindings),
+  };
+}
+
 function replacementFor(node, source, nativeType) {
   if (node.type === "ClassDeclaration" || node.type === "FunctionDeclaration") {
     if (!node.id?.name) return null;
