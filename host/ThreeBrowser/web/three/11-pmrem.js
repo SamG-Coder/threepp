@@ -173,6 +173,16 @@
       } catch {
         /* cmd ring may not be attached yet */
       }
+      // Sky is a ShaderMaterial mesh, but its PMREM has stable semantic
+      // inputs. Generate that environment directly instead of first asking
+      // the native renderer to capture the custom shader. A failed shader
+      // capture still returns a valid render-target handle, so trying it first
+      // silently produces a black environment and prevents this fallback.
+      const sky = extractSkyFrom(scene);
+      if (sky) {
+        const handle = nativePmremFromSky(sky);
+        if (handle) return makeTarget(handle);
+      }
       const objH = scene && scene._h ? scene._h : 0;
       if (objH && TN.hostHas?.(n, "PmremFromObject")) {
         const id = allocHandle();
@@ -182,11 +192,6 @@
         } catch (err) {
           console.warn("ThreeBrowser PMREMGenerator.fromScene", err);
         }
-      }
-      const sky = extractSkyFrom(scene);
-      if (sky) {
-        const handle = nativePmremFromSky(sky);
-        if (handle) return makeTarget(handle);
       }
       console.warn(
         "ThreeBrowser: fromScene captures the live object shader; not substituting a default sky"

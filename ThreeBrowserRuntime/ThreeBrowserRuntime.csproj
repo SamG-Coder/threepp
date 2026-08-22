@@ -26,6 +26,9 @@
   </Target>
 
   <Target Name="BuildThreeBrowserNativeRuntime" AfterTargets="RestoreThreeBrowserJavaScript">
-    <Exec Command="pwsh -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\build.ps1&quot;" />
+    <!-- Visual Studio does not necessarily inherit the developer shell's
+         PowerShell 7 PATH. Windows PowerShell is available on every supported
+         Windows host and build.ps1 intentionally uses compatible syntax. -->
+    <Exec Command="powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\build.ps1&quot;" />
   </Target>
 </Project>
