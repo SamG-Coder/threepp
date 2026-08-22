@@ -28,6 +28,7 @@ class Element extends BrowserEventTarget {
     super();
     this.tagName = String(tagName).toUpperCase();
     this.nodeName = this.tagName;
+    this.nodeType = this.tagName === "#TEXT" ? 3 : this.tagName === "#DOCUMENT-FRAGMENT" ? 11 : 1;
     this.style = {
       setProperty(name, value) { this[name] = String(value); },
       getPropertyValue(name) { return this[name] ?? ""; },
@@ -164,6 +165,18 @@ class Element extends BrowserEventTarget {
     return result;
   }
   getRootNode() { return this.ownerDocument || document; }
+  getBoundingClientRect() {
+    const dimension = (client, css, viewport) => {
+      if (client > 0) return client;
+      const value = String(css || "").trim();
+      if (value.endsWith("%")) return viewport * (Number.parseFloat(value) || 0) / 100;
+      const parsed = Number.parseFloat(value);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : viewport;
+    };
+    const width = dimension(this.clientWidth, this.style.width, globalThis.innerWidth || 1280);
+    const height = dimension(this.clientHeight, this.style.height, globalThis.innerHeight || 720);
+    return { left: 0, top: 0, right: width, bottom: height, width, height, x: 0, y: 0 };
+  }
   contains(node) { return node === this || this.children.some(child => child.contains?.(node)); }
   closest(selector) {
     for (let node = this; node; node = node.parentNode) {
@@ -386,6 +399,8 @@ const body = new Element("body");
 const head = new Element("head");
 const documentTarget = new BrowserEventTarget();
 export const document = Object.assign(documentTarget, {
+  nodeType: 9,
+  nodeName: "#document",
   body,
   head,
   documentElement: new Element("html"),
@@ -406,7 +421,10 @@ export const document = Object.assign(documentTarget, {
   },
   querySelector(selector) {
     if (selector === "canvas") return currentCanvas;
-    return null;
+    return this.querySelectorAll(selector)[0] ?? null;
+  },
+  querySelectorAll(selector) {
+    return [...head.querySelectorAll(selector), ...body.querySelectorAll(selector)];
   },
   exitPointerLock() { releaseNativePointerLock(); },
 });
@@ -455,10 +473,16 @@ globalThis.__TN_SHARED = new ArrayBuffer(8 * 1024 * 1024);
 globalThis.Node = Element;
 globalThis.Element = Element;
 globalThis.HTMLElement = Element;
+globalThis.HTMLIFrameElement = Element;
+globalThis.HTMLInputElement = Element;
+globalThis.HTMLSelectElement = Element;
+globalThis.HTMLTextAreaElement = Element;
+globalThis.SVGElement = Element;
 globalThis.HTMLCanvasElement = CanvasElement;
 globalThis.CanvasRenderingContext2D = Canvas2DContext;
 globalThis.HTMLImageElement = ImageElement;
 globalThis.Image = ImageElement;
+document.defaultView = globalThis;
 globalThis.createImageBitmap = async source => {
   const bytes = source instanceof Blob ? Buffer.from(await source.arrayBuffer()) : Buffer.from(source);
   const decoded = native.decodeImage(bytes);
@@ -499,7 +523,19 @@ globalThis.localStorage = new MemoryStorage();
 globalThis.sessionStorage = new MemoryStorage();
 globalThis.getComputedStyle = element => element?.style ?? { getPropertyValue: () => "" };
 globalThis.matchMedia = query => ({ matches: false, media: String(query), onchange: null, addEventListener() {}, removeEventListener() {} });
-globalThis.ResizeObserver = class { constructor(callback) { this.callback = callback; } observe() {} unobserve() {} disconnect() {} };
+globalThis.ResizeObserver = class {
+  constructor(callback) { this.callback = callback; this.targets = new Set(); }
+  observe(target) {
+    this.targets.add(target);
+    queueMicrotask(() => {
+      if (!this.targets.has(target)) return;
+      const contentRect = target.getBoundingClientRect();
+      this.callback([{ target, contentRect, contentBoxSize: [{ inlineSize: contentRect.width, blockSize: contentRect.height }] }], this);
+    });
+  }
+  unobserve(target) { this.targets.delete(target); }
+  disconnect() { this.targets.clear(); }
+};
 globalThis.MutationObserver = class { constructor(callback) { this.callback = callback; } observe() {} disconnect() {} takeRecords() { return []; } };
 
 const activeWorkers = new Set();

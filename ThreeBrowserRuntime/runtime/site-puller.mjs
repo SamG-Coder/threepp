@@ -30,6 +30,13 @@ const records = new Map();
 const queue = [];
 const findings = new Set();
 const importMapEntries = new Map();
+const uiSignals = new Set();
+const visibleHtmlTags = new Set();
+let hasThreeRuntimeCode = false;
+let hasInterceptableThreeImport = false;
+let hasViteRuntime = false;
+let hasWebGlRenderer = false;
+let hasWebGpuRenderer = false;
 let rootURL = startURL;
 let inlineIndex = 0;
 
@@ -78,6 +85,10 @@ function isFetchable(value) {
 
 function resolveReference(value, baseURL, allowAssetLiteral = false, documentRelative = false) {
   if (!value || !isFetchable(value)) return null;
+  // Broad string scanning is deliberately conservative. Human-readable
+  // warnings in bundled libraries often mention paths such as
+  // "moved to /examples/...js" and are not network requests.
+  if (allowAssetLiteral && /\s/.test(value)) return null;
   // Literal loader/fetch assets in an extracted inline HTML module retain the
   // document's base URL in a browser. The synthetic __inline__ file is only a
   // storage detail and must not alter those URLs.
@@ -125,7 +136,8 @@ function collectReference(record, value, hint = "asset", allowAssetLiteral = fal
   // Module specifiers and new URL(..., import.meta.url) references are scanned
   // before the broad asset-literal pass. Keep their module-relative meaning
   // instead of enqueueing a second, document-relative copy of the same text.
-  if (record.references.some(reference => reference.value === value)) return;
+  const existingReference = record.references.find(reference => reference.value === value);
+  if (existingReference) return records.get(existingReference.target);
   const resolved = resolveReference(value, record.url, allowAssetLiteral, documentRelative);
   if (!resolved || !new Set(["http:", "https:"]).has(resolved.protocol)) return;
   const dependency = enqueue(resolved, hintFor(value, hint), record.url.href);
@@ -139,6 +151,7 @@ function collectReference(record, value, hint = "asset", allowAssetLiteral = fal
     preserveSpecifier: value === "three" && !importMapEntries.has("three/webgpu"),
     documentRelative,
   });
+  return dependency;
 }
 
 function simpleStringLiteral(source) {
@@ -175,10 +188,26 @@ function inspectComposedAssetArrays(record, source) {
 }
 
 function inspectJavaScript(record, source) {
-  if (/\b__vite__|vitePreload|__vitePreload/.test(source)) findings.add("Vite runtime detected");
-  if (/\bWebGLRenderer\b|\bWebGPURenderer\b|THREE\.REVISION|REVISION\s*=\s*["']\d+/i.test(source)) {
+  if (/\b__vite__|vitePreload|__vitePreload|["']modulepreload["'].*MutationObserver/.test(source)) {
+    hasViteRuntime = true;
+    findings.add("Vite runtime detected");
+  }
+  const sourceHasWebGlRenderer = /\bWebGLRenderer\b/.test(source);
+  const sourceHasWebGpuRenderer = /\bWebGPURenderer\b/.test(source);
+  if (sourceHasWebGlRenderer) hasWebGlRenderer = true;
+  if (sourceHasWebGpuRenderer) hasWebGpuRenderer = true;
+  if (sourceHasWebGlRenderer || sourceHasWebGpuRenderer || /THREE\.REVISION|REVISION\s*=\s*["']\d+/i.test(source)) {
+    hasThreeRuntimeCode = true;
     findings.add(`Three.js code detected in ${record.localPath}`);
   }
+  const browserUiApis = [
+    ["dynamic DOM", /document\.(?:createElement|querySelector|getElementById)|\.innerHTML\b|\.classList\b/],
+    ["layout measurements", /getBoundingClientRect|(?:offset|client)(?:Width|Height|Top|Left)\b/],
+    ["scroll-driven UI", /IntersectionObserver|scrollIntoView|\bscrollY\b|addEventListener\(\s*["']scroll/],
+    ["form controls", /HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|\.valueAsNumber\b/],
+    ["React UI", /react-dom|createRoot\(|hydrateRoot\(|__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED/],
+  ];
+  for (const [label, pattern] of browserUiApis) if (pattern.test(source)) uiSignals.add(label);
 
   const modulePatterns = [
     /\b(?:import|export)\s+(?:[^"']*?\s+from\s*)?["']([^"']+)["']/g,
@@ -187,7 +216,10 @@ function inspectJavaScript(record, source) {
   for (const pattern of modulePatterns) {
     for (const match of source.matchAll(pattern)) {
       const value = match[1];
-      if (value === "three" || value.startsWith("three/")) findings.add(`Three.js import: ${value}`);
+      if (value === "three" || value.startsWith("three/")) {
+        hasInterceptableThreeImport = true;
+        findings.add(`Three.js import: ${value}`);
+      }
       collectReference(record, value, "module");
     }
   }
@@ -196,6 +228,20 @@ function inspectJavaScript(record, source) {
   }
   for (const match of source.matchAll(/\.setPath\(\s*["']([^"']*)["']\s*\)\s*\.load\(\s*["']([^"']+)["']/g)) {
     collectReference(record, `${match[1]}${match[2]}`, "asset", true, record.virtualSource !== undefined);
+  }
+
+  // Browser URL consumers resolve ordinary relative strings against the
+  // document URL, even when the call itself lives in an external ES module.
+  // Keep new URL(..., import.meta.url) module-relative (handled above), but
+  // preserve browser semantics for fetch/Request and common asset loaders.
+  const documentUrlPatterns = [
+    /\b(?:fetch|Request)\s*\(\s*["']([^"']+)["']/g,
+    /\.\s*(?:load|loadAsync)\s*\(\s*["']([^"']+)["']/g,
+  ];
+  for (const pattern of documentUrlPatterns) {
+    for (const match of source.matchAll(pattern)) {
+      collectReference(record, match[1], "asset", true, true);
+    }
   }
 
   const assetSource = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
@@ -215,6 +261,12 @@ function inspectCss(record, source) {
 }
 
 function inspectHtml(record, source) {
+  for (const match of source.matchAll(/<([a-z][\w-]*)\b[^>]*>/gi)) {
+    const tag = match[1].toLowerCase();
+    if (!new Set(["html", "head", "body", "title", "script", "style", "link", "meta", "canvas"]).has(tag)) {
+      visibleHtmlTags.add(tag);
+    }
+  }
   record.htmlElements = [...source.matchAll(/<([a-z][\w-]*)\b[^>]*?\bid\s*=\s*["']([^"']+)["'][^>]*>/gi)]
     .map(match => ({ tag: match[1].toLowerCase(), id: match[2] }))
     .filter(element => !new Set(["html", "head", "body", "script", "style", "link", "meta"]).has(element.tag));
@@ -233,7 +285,13 @@ function inspectHtml(record, source) {
       continue;
     }
     const src = /\bsrc\s*=\s*["']([^"']+)["']/i.exec(attributes)?.[1];
-    if (src) collectReference(record, src, type === "module" ? "module" : "asset");
+    if (src) {
+      const dependency = collectReference(record, src, type === "module" ? "module" : "asset");
+      if (type === "module" && dependency) {
+        record.moduleEntries ??= [];
+        record.moduleEntries.push(dependency.url.href);
+      }
+    }
     else if (type === "module" && match[2].trim()) {
       const inlineURL = new URL(`./__inline__/entry-${++inlineIndex}.mjs`, record.url);
       const inline = enqueue(inlineURL, "module", record.url.href);
@@ -274,6 +332,12 @@ async function fetchRecord(record) {
       console.warn(`  skipped (${record.status})`);
       return;
     }
+    const responseContentType = response.headers.get("content-type") || "";
+    if (record !== rootRecord && record.hint !== "html" && /text\/html/i.test(responseContentType)) {
+      record.status = "unexpected HTML response for asset";
+      console.warn(`  skipped (${record.status})`);
+      return;
+    }
     const declaredLength = Number(response.headers.get("content-length") || 0);
     if (declaredLength > maximumFileBytes) throw new Error(`File exceeds 64 MB: ${record.url.href}`);
     const bytes = Buffer.from(await response.arrayBuffer());
@@ -281,7 +345,7 @@ async function fetchRecord(record) {
     totalBytes += bytes.length;
     if (totalBytes > maximumTotalBytes) throw new Error("Site exceeded the 768 MB safety limit.");
     record.content = bytes;
-    record.contentType = response.headers.get("content-type") || "";
+    record.contentType = responseContentType;
     record.status = "ok";
     if (response.url !== record.url.href && record === rootRecord) rootURL = new URL(response.url);
   }
@@ -290,7 +354,7 @@ async function fetchRecord(record) {
   const text = record.content.toString("utf8");
   if (moduleLike(record.url, record.contentType, record.hint)) inspectJavaScript(record, text);
   else if (styleLike(record.url, record.contentType, record.hint)) inspectCss(record, text);
-  else if (/text\/html/i.test(record.contentType) || /\.html?$/i.test(record.url.pathname)) inspectHtml(record, text);
+  else if (record === rootRecord) inspectHtml(record, text);
 }
 
 function relativeSpecifier(fromRecord, toRecord, documentRelative = false) {
@@ -375,9 +439,8 @@ for (const record of successful) {
 }
 
 const unpackedSources = successful.flatMap(unpackSourceMap);
-const rootModules = (rootRecord.references || [])
-  .filter(reference => records.get(reference.target)?.hint === "module")
-  .map(reference => records.get(reference.target))
+const rootModules = (rootRecord.moduleEntries || [])
+  .map(url => records.get(url))
   .filter(record => record?.status === "ok");
 for (const url of rootRecord.inlineModules || []) {
   const record = records.get(url);
@@ -394,12 +457,21 @@ const entryLines = [
 ];
 fs.writeFileSync(path.join(destination, "site-entry.mjs"), entryLines.join("\n"));
 
+const threeMode = !hasThreeRuntimeCode ? "not-detected" :
+  hasInterceptableThreeImport ? "importable" : "bundled";
+const uiMode = uiSignals.has("React UI") || uiSignals.has("scroll-driven UI") || uiSignals.has("form controls")
+  ? "dom-required"
+  : visibleHtmlTags.size || uiSignals.size ? "html-overlay" : "canvas-only";
+const compatibilityNotes = [];
+if (threeMode === "bundled") compatibilityNotes.push("Three.js is embedded in a production bundle; the native Three.js import facade cannot intercept it.");
+if (uiMode !== "canvas-only") compatibilityNotes.push("The native runtime does not paint arbitrary HTML/CSS, so visible browser UI will be missing.");
+
 const manifest = {
   format: 1,
   source: rootURL.href,
   pulledAt: new Date().toISOString(),
   entry: "site-entry.mjs",
-  requiresWebGPU: importMapEntries.has("three/webgpu") || importMapEntries.has("three/tsl"),
+  requiresWebGPU: hasWebGpuRenderer || importMapEntries.has("three/webgpu") || importMapEntries.has("three/tsl"),
   html: rootRecord.localPath.replaceAll("\\", "/"),
   files: successful.map(record => ({
     url: record.url.href,
@@ -408,6 +480,15 @@ const manifest = {
     bytes: record.content.length,
   })),
   findings: [...findings],
+  compatibility: {
+    vite: hasViteRuntime,
+    threeMode,
+    rendererCandidates: [hasWebGlRenderer ? "webgl" : null, hasWebGpuRenderer ? "webgpu" : null].filter(Boolean),
+    uiMode,
+    visibleHtmlTags: [...visibleHtmlTags].sort(),
+    uiSignals: [...uiSignals].sort(),
+    notes: compatibilityNotes,
+  },
   unpackedSources,
 };
 fs.writeFileSync(path.join(destination, "threebrowser.pull.json"), `${JSON.stringify(manifest, null, 2)}\n`);
@@ -416,3 +497,5 @@ console.log(`\nPulled ${successful.length} files (${(totalBytes / 1024 / 1024).t
 console.log(`Entry: ${path.join(destination, "site-entry.mjs")}`);
 for (const finding of findings) console.log(`Detected: ${finding}`);
 if (!findings.size) console.log("Detected: no explicit Vite or Three.js signature (the preserved module graph can still be launched). ");
+console.log(`Compatibility: Three.js ${threeMode}; UI ${uiMode}`);
+for (const note of compatibilityNotes) console.log(`  warning: ${note}`);

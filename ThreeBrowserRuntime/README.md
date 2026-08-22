@@ -60,7 +60,10 @@ dotnet run --project C:\ThreeBrowser\ThreeBrowserRuntime\ThreeBrowserRuntime.csp
 
 The command writes `site-entry.mjs` and `threebrowser.pull.json`. It refuses to
 write into a non-empty destination unless `--force` is supplied. `unpack` is an
-alias for `pull`.
+alias for `pull`. The manifest includes a `compatibility` section that reports
+whether Three.js remains importable or has been embedded into a production
+bundle, which renderer families were detected, and whether the page appears to
+be canvas-only, an HTML overlay, or DOM-required.
 
 Relative ESM imports, `.js` modules, and HTML import maps are supported. The
 bare `three` import resolves to the native ThreeBrowser compatibility API rather
@@ -80,6 +83,14 @@ decoding, HDR environments, DRACO workers, skeletal animation, pointer/keyboard
 input, and the WebGPU/TSL command path are supported. DOM controls can execute,
 but this native-only milestone does not paint general HTML/CSS widgets over the
 GPU surface yet.
+
+Production Vite output creates a second, independent boundary. If Vite embeds a
+WebGL copy of Three.js into a minified chunk, its `WebGLRenderer` can no longer
+be redirected through the native `three` import facade. WebGPU bundles can use
+the native `navigator.gpu` bridge, subject to browser API coverage, but their
+React or HTML control panels are still headless. For native WebGL, the reliable
+input is an ESM graph that preserves `three` as an import (or a build/source map
+from which that graph can be reconstructed), rather than an opaque bundle.
 
 ## Visually verified official examples
 
