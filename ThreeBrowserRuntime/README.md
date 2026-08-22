@@ -86,14 +86,22 @@ GPU surface yet.
 
 Production Vite output creates a second, independent boundary. If Vite embeds a
 WebGL copy of Three.js into a minified chunk, the puller parses the chunk and
-looks for the renderer's semantic `isWebGLRenderer` marker. It then relinks that
-mangled class binding to ThreeBrowser's native `WebGLRenderer` while retaining
-the bundle's stock, duck-typed scene/model classes. The manifest reports this as
-`threeMode: "relinked"`; a bundle with no safe binding remains `"bundled"`.
+looks for stable semantic markers such as `isScene`, `isMesh`,
+`isBufferGeometry`, and `isWebGLRenderer`. It then relinks the mangled render
+model and renderer bindings to ThreeBrowser's native facade, even when Rollup
+has renamed every class. The manifest reports each relinked native type and uses
+`threeMode: "relinked"`; a bundle with no safe renderer binding remains
+`"bundled"`.
 WebGPU bundles can use the native `navigator.gpu` bridge, subject to browser API
 coverage, but their React or HTML control panels are still headless. Source maps
 and builds that preserve `three` imports remain preferable because they retain
 more module structure and allow stronger tree-shaking.
+
+Framework effects may create their renderer after module evaluation, so the
+runtime keeps the browser event loop alive during a bounded startup window.
+Because the native host deliberately has no CSS layout engine, unmeasured DOM
+mounts inherit their parent box and ultimately the viewport; this preserves the
+standard full-window `clientWidth`/`clientHeight` canvas sizing pattern.
 
 ## Visually verified official examples
 

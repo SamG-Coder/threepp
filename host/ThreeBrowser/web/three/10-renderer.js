@@ -518,6 +518,31 @@
     render(scene, camera) {
       this.info.render.frame++;
       TN._renderFrame = this.info.render.frame;
+      if (!this._traceRendered && globalThis.process?.env?.THREEBROWSER_TRACE_RENDER) {
+        this._traceRendered = true;
+        const objects = [];
+        scene?.traverse?.((object) => objects.push({
+          type: object?.type || object?.constructor?.name,
+          handle: object?._h || 0,
+          geometry: object?.geometry?._h || 0,
+          material: object?.material?._h || 0,
+        }));
+        console.error("ThreeBrowser first scene", {
+          scene: scene?._h || 0,
+          camera: camera?._h || 0,
+          objects: objects.slice(0, 100),
+        });
+      }
+      if (globalThis.process?.env?.THREEBROWSER_TRACE_RENDER && this.info.render.frame % 300 === 0) {
+        let firstMesh = null;
+        scene?.traverse?.((object) => { if (!firstMesh && object?.isMesh) firstMesh = object; });
+        console.error("ThreeBrowser scene motion", {
+          frame: this.info.render.frame,
+          meshScale: firstMesh?.scale && [firstMesh.scale.x, firstMesh.scale.y, firstMesh.scale.z],
+          meshVisible: firstMesh?.visible,
+          parentRotation: firstMesh?.parent?.rotation?.y,
+        });
+      }
       if (scene && typeof scene.updateMatrixWorld === "function") scene.updateMatrixWorld();
       if (camera && camera.parent === null && typeof camera.updateMatrixWorld === "function") {
         camera.updateMatrixWorld();

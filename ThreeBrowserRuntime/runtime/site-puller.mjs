@@ -454,6 +454,7 @@ for (const record of successful) {
         relinkedFiles.push({
           path: record.localPath.replaceAll("\\", "/"),
           renderers: relinked.renderers,
+          types: relinked.types,
         });
         findings.add(`Native WebGLRenderer relinked in ${record.localPath}`);
       }
@@ -490,7 +491,7 @@ const uiMode = uiSignals.has("React UI") || uiSignals.has("scroll-driven UI") ||
   : visibleHtmlTags.size || uiSignals.size ? "html-overlay" : "canvas-only";
 const compatibilityNotes = [];
 if (threeMode === "bundled") compatibilityNotes.push("Three.js is embedded in a production bundle and no safe native renderer binding was found.");
-if (threeMode === "relinked") compatibilityNotes.push("The embedded Three.js model layer is retained, while its WebGLRenderer binding is redirected to the native facade.");
+if (threeMode === "relinked") compatibilityNotes.push("Semantic Three.js scene, camera, geometry, material, texture, light, mesh, and WebGLRenderer bindings were redirected to the native facade.");
 if (uiMode !== "canvas-only") compatibilityNotes.push("The native runtime does not paint arbitrary HTML/CSS, so visible browser UI will be missing.");
 
 const manifest = {

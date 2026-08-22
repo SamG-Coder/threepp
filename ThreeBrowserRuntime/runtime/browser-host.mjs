@@ -80,9 +80,23 @@ class Element extends BrowserEventTarget {
     this.ownerDocument = globalThis.document ?? null;
     this.textContent = "";
     this.id = "";
-    this.clientWidth = 0;
-    this.clientHeight = 0;
+    this._clientWidth = null;
+    this._clientHeight = null;
     Object.defineProperties(this, {
+      // There is no CSS layout engine in the headless host.  Canvas apps
+      // conventionally size a mount element from its parent, so inherit the
+      // nearest measured box and finally the viewport.  Explicit assignments
+      // (images, canvases and resize handling) still take precedence.
+      clientWidth: {
+        configurable: true,
+        get: () => this._clientWidth ?? this.parentNode?.clientWidth ?? globalThis.innerWidth ?? 1280,
+        set: value => { this._clientWidth = Number.isFinite(Number(value)) ? Number(value) : null; },
+      },
+      clientHeight: {
+        configurable: true,
+        get: () => this._clientHeight ?? this.parentNode?.clientHeight ?? globalThis.innerHeight ?? 720,
+        set: value => { this._clientHeight = Number.isFinite(Number(value)) ? Number(value) : null; },
+      },
       offsetWidth: { get: () => this.clientWidth || Number.parseFloat(this.style.width) || 0 },
       offsetHeight: { get: () => this.clientHeight || Number.parseFloat(this.style.height) || 0 },
     });
@@ -416,11 +430,17 @@ class ImageElement extends Element {
         this.naturalHeight = this.height = size.height;
         this.data = decoded?.pixels;
         this.complete = true;
+        if (process.env.THREEBROWSER_TRACE_RENDER) {
+          console.error("ThreeBrowser image loaded", this._src, `${size.width}x${size.height}`, decoded ? "decoded" : "metadata-only");
+        }
         const event = new Event("load");
         this.dispatchEvent(event);
         this.onload?.(event);
       } catch (error) {
         this.complete = true;
+        if (process.env.THREEBROWSER_TRACE_RENDER) {
+          console.error("ThreeBrowser image failed", this._src, error?.message || error);
+        }
         const event = eventWith("error", { error, message: error.message });
         this.dispatchEvent(event);
         this.onerror?.(event);
@@ -795,8 +815,11 @@ async function enableWebGPU() {
 const frameCallbacks = new Map();
 let nextFrameId = 1;
 let running = false;
+let startupDeadline = 0;
 let nextWebGpuFrame = 0;
+let nextTraceFrame = 0;
 const webGpuFrameInterval = 1000 / 240;
+const nativeStartupTimeout = 30_000;
 globalThis.requestAnimationFrame = callback => {
   const id = nextFrameId++;
   frameCallbacks.set(id, callback);
@@ -929,7 +952,21 @@ function syncWindowSize() {
 
 function pump() {
   if (!running) return;
-  if (!native.isOpen()) return stop();
+  // Frameworks such as React create the renderer from a deferred effect.  A
+  // browser keeps its event loop alive while that work is pending; exiting on
+  // the first pump made production Vite applications disappear before their
+  // first effect could construct WebGLRenderer.
+  if (!native.isOpen()) {
+    if (performance.now() < startupDeadline) {
+      setTimeout(pump, 1);
+      return;
+    }
+    return stop();
+  }
+  if (process.env.THREEBROWSER_TRACE_RENDER && performance.now() >= nextTraceFrame) {
+    nextTraceFrame = performance.now() + 1000;
+    console.error("ThreeBrowser render stats", native.stats());
+  }
   native.waitFrame();
   if (webGpuEnabled) {
     const now = performance.now();
@@ -955,6 +992,7 @@ function pump() {
 export function start() {
   if (running) return;
   running = true;
+  startupDeadline = performance.now() + nativeStartupTimeout;
   setImmediate(pump);
 }
 
