@@ -453,6 +453,19 @@
       this._outputColorSpace = value;
     }
 
+    // r150 and older use outputEncoding. Keep the legacy property live rather
+    // than allowing assignment to create an ignored expando on the renderer.
+    get outputEncoding() {
+      return this._outputColorSpace === (TN.SRGBColorSpace ?? "srgb")
+        ? (TN.sRGBEncoding ?? 3001)
+        : (TN.LinearEncoding ?? 3000);
+    }
+    set outputEncoding(value) {
+      this._outputColorSpace = value === (TN.sRGBEncoding ?? 3001)
+        ? (TN.SRGBColorSpace ?? "srgb")
+        : (TN.LinearSRGBColorSpace ?? "srgb-linear");
+    }
+
     setSize(width, height, updateStyle = true) {
       const w = Math.max(1, width | 0);
       const h = Math.max(1, height | 0);
@@ -549,6 +562,14 @@
     getActiveMipmapLevel() {
       return this._activeMipmapLevel;
     }
+    readRenderTargetPixels(_target, _x, _y, _width, _height, buffer) {
+      // Native offscreen readback is not exposed yet. Three.js applications
+      // commonly call this during capability detection; returning a cleared
+      // buffer correctly reports that optional float-target probes failed and
+      // lets the application select its fallback path.
+      if (buffer && typeof buffer.fill === "function") buffer.fill(0);
+      return buffer;
+    }
     getContext() {
       return this._dummyContext;
     }
@@ -615,6 +636,7 @@
 
     render(scene, camera, legacyRenderTarget) {
       this.info.render.frame++;
+      globalThis.__threeBrowserRendererCalls = (globalThis.__threeBrowserRendererCalls || 0) + 1;
       TN._renderFrame = this.info.render.frame;
       // Three.js before r110 passed the destination directly to render().
       // Modern Three.js uses setRenderTarget(). Supporting both is essential
@@ -623,6 +645,15 @@
       const activeRenderTarget = arguments.length >= 3
         ? (legacyRenderTarget || null)
         : this._renderTarget;
+      if (globalThis.process?.env?.THREEBROWSER_TRACE_RENDER) {
+        globalThis.__threeBrowserRenderTargets ??= { offscreen: 0, backbuffer: 0, command: !!TN.cmd };
+        if (activeRenderTarget) globalThis.__threeBrowserRenderTargets.offscreen++;
+        else {
+          globalThis.__threeBrowserRenderTargets.backbuffer++;
+          globalThis.__threeBrowserRenderTargets.latestScene = scene?._h || 0;
+          globalThis.__threeBrowserRenderTargets.latestCamera = camera?._h || 0;
+        }
+      }
       if (
         globalThis.__threeBrowserNativeRuntime &&
         activeRenderTarget &&
@@ -699,6 +730,20 @@
           console.error("ThreeBrowser scene materials", materials);
         }
       }
+      // WebGLRenderer creates a LightShadow render target before updating the
+      // scene. Native shadows do not expose that internal WebGL target, but
+      // user code legitimately manages its lifecycle (for example adaptive
+      // shadow resolution calls shadow.map.dispose()). Preserve that browser
+      // contract with a lightweight target facade.
+      scene?.traverse?.((object) => {
+        if (!object?.castShadow || !object.shadow || object.shadow.map) return;
+        object.shadow.map = {
+          width: object.shadow.mapSize?.width || 0,
+          height: object.shadow.mapSize?.height || 0,
+          texture: TN.Texture ? new TN.Texture() : null,
+          dispose() {},
+        };
+      });
       if (scene && typeof scene.updateMatrixWorld === "function") scene.updateMatrixWorld();
       if (camera && camera.parent === null && typeof camera.updateMatrixWorld === "function") {
         camera.updateMatrixWorld();
@@ -706,7 +751,20 @@
       if (scene && typeof scene.traverse === "function") {
         const self = this;
         const batched = [];
+        let nativeTraceMeshIndex = 0;
         scene.traverse(function (obj) {
+          if (globalThis.process?.env?.THREEBROWSER_NATIVE_TERRAIN_TRACE && obj?.name === "terrain" && !self._nativeTerrainTraceDone) {
+            const uv = obj.geometry?.attributes?.uv;
+            const values = uv?.array || [];
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            for (let i = 0; i + 1 < values.length; i += uv?.itemSize || 2) {
+              minX = Math.min(minX, values[i]); maxX = Math.max(maxX, values[i]);
+              minY = Math.min(minY, values[i + 1]); maxY = Math.max(maxY, values[i + 1]);
+            }
+            const mask = obj.material?.uniforms?.tMasks?.value;
+            console.error(`terrain trace uv=${minX},${minY}..${maxX},${maxY} mask=${mask?._h || 0} image=${mask?.image?.width || 0}x${mask?.image?.height || 0} flipY=${mask?.flipY}`);
+            if (mask?._h) self._nativeTerrainTraceDone = true;
+          }
           if (obj && typeof obj.onBeforeRender === "function") {
             try {
               obj.onBeforeRender(self, scene, camera, obj.geometry, obj.material);
@@ -716,7 +774,52 @@
             }
           }
           if (obj && obj.isBatchedMesh) batched.push(obj);
+          if (obj?.isSkinnedMesh && typeof obj._syncNativeSkeleton === "function") {
+            obj._syncNativeSkeleton();
+          }
+          const materials = Array.isArray(obj?.material) ? obj.material : [obj?.material];
+          // r148 enables the skinning chunks from WebGLRenderer state, not
+          // from ShaderMaterial itself. Custom instanced character classes
+          // deliberately extend InstancedMesh while exposing isSkinnedMesh,
+          // so mirror that renderer contract and bind their shared bone atlas.
+          if (obj?.isSkinnedMesh && obj.skeleton) {
+            const skeleton = obj.skeleton;
+            if (skeleton.boneTexture && typeof TN._ensureTextureNative === "function") {
+              TN._ensureTextureNative(skeleton.boneTexture);
+            }
+            for (const material of materials) {
+              if (material?._nativeKind !== "shader") continue;
+              material.defines ||= {};
+              const enabledSkinning = !Object.prototype.hasOwnProperty.call(material.defines, "USE_SKINNING");
+              if (enabledSkinning) material.defines.USE_SKINNING = "";
+              material.uniforms ||= {};
+              material.uniforms.boneTexture = { value: skeleton.boneTexture };
+              material.uniforms.boneTextureSize = { value: skeleton.boneTextureSize | 0 };
+              material.uniforms.bindMatrix = { value: obj.bindMatrix };
+              material.uniforms.bindMatrixInverse = { value: obj.bindMatrixInverse };
+              if (enabledSkinning) material.needsUpdate = true;
+            }
+          }
+          if (globalThis.process?.env?.THREEBROWSER_NATIVE_MESH_TRACE && obj?.isMesh && obj.visible !== false && !self._nativeMeshTraceDone) {
+            console.error("ThreeBrowser JS mesh", nativeTraceMeshIndex++, {
+              type: obj.type,
+              name: obj.name,
+              geometry: obj.geometry?.name || obj.geometry?.type,
+              attributes: Object.keys(obj.geometry?.attributes || {}),
+              material: materials.map((material) => ({
+                id: material?.id,
+                type: material?.type,
+                defines: material?.defines,
+              })),
+            });
+          }
+          for (const material of materials) {
+            if (material?._nativeKind === "shader" && typeof material.flushNative === "function") {
+              material.flushNative();
+            }
+          }
         });
+        if (globalThis.process?.env?.THREEBROWSER_NATIVE_MESH_TRACE) this._nativeMeshTraceDone = true;
         for (let i = 0; i < batched.length; i++) {
           const obj = batched[i];
           if (typeof obj._syncNativeBatches === "function") {
@@ -732,20 +835,54 @@
       let nativeCamera = camera;
       if (globalThis.__threeBrowserNativeRuntime) {
         let hasNativeDraw = false;
+        let hasNativeSceneDraw = false;
+        let nativeDepthPass = false;
+        let nativeDrawableCount = 0;
+        let sceneObjectCount = 0;
         scene?.traverse?.((object) => {
-          if (hasNativeDraw || !object?._h) return;
+          sceneObjectCount++;
+          if (!object?._h) return;
           const materials = Array.isArray(object.material) ? object.material : [object.material];
+          const depthDraw = materials.some((material) => material?.isMeshDepthMaterial);
+          if (depthDraw) nativeDepthPass = true;
           if (
             (object.isMesh || object.isLine || object.isLineSegments || object.isPoints || object.isSprite) &&
-            materials.some((material) => material?._h)
+            (depthDraw || materials.some((material) => material?._h))
           ) {
             hasNativeDraw = true;
+            nativeDrawableCount++;
+            if (materials.some((material) => material?._h && material?._nativeKind !== "shader")) {
+              hasNativeSceneDraw = true;
+            }
           }
         });
 
-        if (hasNativeDraw && camera?._h) {
+        const perspectiveScene = !!camera?.isPerspectiveCamera;
+        if (globalThis.process?.env?.THREEBROWSER_TRACE_RENDER) {
+          globalThis.__threeBrowserSceneCandidates ??= new Map();
+          const candidateKey = `${scene?._h || 0}/${camera?._h || 0}/${scene?.uuid || ""}/${camera?.uuid || ""}`;
+          globalThis.__threeBrowserSceneCandidates.set(candidateKey, {
+            scene: scene?._h || 0,
+            camera: camera?._h || 0,
+            objects: sceneObjectCount,
+            draws: nativeDrawableCount,
+            semantic: hasNativeSceneDraw,
+            perspective: perspectiveScene,
+            target: !!activeRenderTarget,
+          });
+        }
+        if (
+          hasNativeDraw && camera?._h &&
+          (perspectiveScene || (!this._lastNativeCameraIsPerspective && hasNativeSceneDraw))
+        ) {
           this._lastNativeScene = scene;
           this._lastNativeCamera = camera;
+          this._lastNativeCameraIsPerspective = perspectiveScene;
+          if (perspectiveScene && sceneObjectCount >= (globalThis.__threeBrowserWindowSceneScore || 0)) {
+            globalThis.__threeBrowserWindowScene = scene;
+            globalThis.__threeBrowserWindowCamera = camera;
+            globalThis.__threeBrowserWindowSceneScore = sceneObjectCount;
+          }
         }
 
         // Offscreen passes are still evaluated on the JS side, including
@@ -761,6 +898,29 @@
             if (typeof queueMicrotask === "function") queueMicrotask(clearToken);
             else Promise.resolve().then(clearToken);
           }
+          if (
+            hasNativeDraw && activeRenderTarget?._h && scene?._h && camera?._h &&
+            TN.cmd && typeof TN.cmd.renderPass === "function"
+          ) {
+            if (globalThis.process?.env?.THREEBROWSER_NATIVE_SHADOW_TRACE && nativeDepthPass) {
+              globalThis.__threeBrowserShadowPassTrace ||= new Set();
+              const traceKey = `${scene._h}:${camera._h}:${activeRenderTarget._h}`;
+              if (!globalThis.__threeBrowserShadowPassTrace.has(traceKey)) {
+                globalThis.__threeBrowserShadowPassTrace.add(traceKey);
+                console.error(`native shadow pass scene=${scene._h} camera=${camera._h} target=${activeRenderTarget._h}`);
+              }
+            }
+            const overrideHandle = scene?.overrideMaterial?._h || 0;
+            TN.cmd.renderPass(
+              scene._h,
+              camera._h,
+              activeRenderTarget._h,
+              overrideHandle,
+              this._activeCubeFace || 0,
+              this._activeMipmapLevel || 0,
+              nativeDepthPass ? 1 : 0
+            );
+          }
           return true;
         }
 
@@ -768,9 +928,13 @@
         // ShaderMaterial. Until custom GLSL is available natively, resolve
         // that pass to the latest real scene instead of presenting its empty
         // clear frame.
-        if (!hasNativeDraw && this._lastNativeScene && this._lastNativeCamera) {
-          nativeScene = this._lastNativeScene;
-          nativeCamera = this._lastNativeCamera;
+        if (!camera?._h || (!hasNativeSceneDraw && !camera?.isPerspectiveCamera)) {
+          const fallbackScene = globalThis.__threeBrowserWindowScene || this._lastNativeScene;
+          const fallbackCamera = globalThis.__threeBrowserWindowCamera || this._lastNativeCamera;
+          if (fallbackScene && fallbackCamera) {
+            nativeScene = fallbackScene;
+            nativeCamera = fallbackCamera;
+          }
         }
       }
       if (TN.cmd) {
@@ -780,6 +944,13 @@
           TN.cmd.flushPoses();
           TN.cmd.render(nativeScene?._h || 0, nativeCamera?._h || 0);
           TN.cmd.submit();
+        }
+        // The command stream synchronizes scene state; the direct render
+        // signal guarantees the latest backbuffer pass is presented even
+        // when a production composer emits many offscreen passes per frame.
+        const commandHost = native();
+        if (TN.hostHas?.(commandHost, "RuntimeRender")) {
+          commandHost.RuntimeRender(nativeScene?._h || 0, nativeCamera?._h || 0);
         }
         return true;
       }
@@ -923,7 +1094,18 @@
       this.width = source.width;
       this.height = source.height;
       this.depth = source.depth;
-      this.texture = source.texture;
+      // EffectComposer ping-pongs between clone()d render targets. Sharing the
+      // source texture aliases both buffers and makes every later ShaderPass
+      // sample the image it is currently writing. Preserve this target's own
+      // native attachment while copying the source texture's public state.
+      const targetTexture = this.texture;
+      if (targetTexture && source.texture) {
+        const nativeHandle = this._h || targetTexture._h || 0;
+        if (typeof targetTexture.copy === "function") targetTexture.copy(source.texture);
+        else Object.assign(targetTexture, source.texture);
+        targetTexture._h = nativeHandle;
+        this.texture = targetTexture;
+      }
       this.depthBuffer = source.depthBuffer;
       this.stencilBuffer = source.stencilBuffer;
       this.samples = source.samples;

@@ -4,6 +4,7 @@
   }
 
   let materialId = 0;
+  const shaderUniformCache = new Map();
 
   const FrontSide = TN.FrontSide ?? 0;
   const NormalBlending = TN.NormalBlending ?? 1;
@@ -197,6 +198,14 @@
   function expandShaderChunks(src) {
     if (!src || typeof src !== "string") return "";
     return src
+      .replace(/uniform\s+\w+\s*\{([^}]+)\}\s*;/g, (_match, body) =>
+        String(body)
+          .split(";")
+          .map((declaration) => declaration.trim())
+          .filter(Boolean)
+          .map((declaration) => `uniform ${declaration};`)
+          .join("\n")
+      )
       .replace(
         /#include\s+<tonemapping_fragment>/g,
         "#if defined( TONE_MAPPING )\n\tgl_FragColor.rgb = toneMapping( gl_FragColor.rgb );\n#endif"
@@ -212,27 +221,111 @@
       .replace(/#include\s+<colorspace_pars_fragment>/g, "");
   }
 
+  function nativeShaderSource(mat, source) {
+    const defineLines = [];
+    for (const name of Object.keys(mat?.defines || {})) {
+      if (!/^[A-Za-z_]\w*$/.test(name)) continue;
+      const value = mat.defines[name];
+      if (value === false || value == null) continue;
+      defineLines.push(value === true || value === "" ? `#define ${name}` : `#define ${name} ${value}`);
+    }
+    const expanded = expandShaderChunks(source || "");
+    // CSM shader generators declare _shadowN only inside the corresponding
+    // native shadow loop, but may use it later for ramp lighting. A renderer
+    // with no native shadow pass still needs the browser's unshadowed value.
+    const shadowNames = [...new Set(expanded.match(/\b_shadow\d+\b/g) || [])];
+    if (shadowNames.length) {
+      defineLines.push(
+        "#if NUM_DIR_LIGHT_SHADOWS == 0",
+        ...shadowNames.map((name) => `float ${name} = 1.0;`),
+        "#endif"
+      );
+    }
+    return defineLines.length ? `${defineLines.join("\n")}\n${expanded}` : expanded;
+  }
+
+  function shaderDefinesSignature(mat) {
+    return Object.keys(mat?.defines || {})
+      .sort()
+      .map((name) => `${name}=${String(mat.defines[name])}`)
+      .join(";");
+  }
+
   function uniformRawValue(entry) {
     if (entry == null) return undefined;
     if (typeof entry === "object" && "value" in entry) return entry.value;
     return entry;
   }
 
-  function pushShaderUniform(n, handle, name, value) {
+  function shaderUniformType(mat, name) {
+    const source = `${mat?.vertexShader || ""}\n${mat?.fragmentShader || ""}`;
+    const escaped = String(name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return source.match(new RegExp(`\\buniform\\s+(bool|int|float|mat3|mat4)\\s+${escaped}\\b`))?.[1] || "";
+  }
+
+  function pushShaderUniform(n, handle, name, value, mat) {
     if (!n || !handle || !name || value == null) return;
     try {
+      if (globalThis.process?.env?.THREEBROWSER_NATIVE_SHADOW_TRACE && String(name).startsWith("csm")) {
+        globalThis.__threeBrowserShadowUniformTrace ||= new Set();
+        const detail = value?.isTexture ? `texture:${value._h || 0}` : value?.elements ? `matrix:${value.elements.length}` : JSON.stringify(value);
+        const key = `${handle}:${name}:${detail}`;
+        if (!globalThis.__threeBrowserShadowUniformTrace.has(key)) {
+          globalThis.__threeBrowserShadowUniformTrace.add(key);
+          console.error(`native shadow uniform ${name} ${detail}`);
+        }
+      }
+      const isTexture = !!(value?.isTexture || value?.isCubeTexture);
+      if (isTexture && typeof TN._ensureTextureNative === "function") {
+        TN._ensureTextureNative(value);
+      }
+      const elements = value?.elements;
+      const signature = isTexture
+        ? `t:${value._h || 0}`
+        : elements && (elements.length === 9 || elements.length === 16)
+          ? `m:${Array.from(elements).join(",")}`
+        : typeof value === "object"
+          ? `o:${value.r ?? value.x ?? ""},${value.g ?? value.y ?? ""},${value.b ?? value.z ?? ""},${value.a ?? value.w ?? ""}`
+          : `${typeof value}:${value}`;
+      const cacheKey = `${handle}:${name}`;
+      // Loading images legitimately have no native handle yet. Do not cache
+      // that transient state or every later frame will skip the upload retry.
+      if (isTexture && !value._h) {
+        shaderUniformCache.delete(cacheKey);
+        return;
+      }
+      if (shaderUniformCache.get(cacheKey) === signature) return;
+      shaderUniformCache.set(cacheKey, signature);
       if (typeof value === "boolean") {
-        if (n.ShaderUniformFloat) n.ShaderUniformFloat(handle, name, value ? 1 : 0);
+        if (n.ShaderUniformInt) n.ShaderUniformInt(handle, name, value ? 1 : 0);
+        else if (n.ShaderUniformFloat) n.ShaderUniformFloat(handle, name, value ? 1 : 0);
         return;
       }
       if (typeof value === "number") {
-        if (Number.isFinite(value) && n.ShaderUniformFloat) {
-          n.ShaderUniformFloat(handle, name, value);
+        if (Number.isFinite(value)) {
+          const type = shaderUniformType(mat, name);
+          if ((type === "int" || type === "bool") && n.ShaderUniformInt) n.ShaderUniformInt(handle, name, value | 0);
+          else if (n.ShaderUniformFloat) n.ShaderUniformFloat(handle, name, value);
         }
         return;
       }
       if (typeof value !== "object") return;
-      if (value.isTexture || value.isCubeTexture) return;
+      if (isTexture) {
+        if (value._h && TN.cmd && typeof TN.cmd.shaderTexture === "function") {
+          TN.cmd.shaderTexture(handle, name, value._h);
+        } else if (value._h && n.ShaderUniformTexture) {
+          n.ShaderUniformTexture(handle, name, value._h);
+        }
+        return;
+      }
+      if (elements && elements.length === 9 && n.ShaderUniformMat3) {
+        n.ShaderUniformMat3(handle, name, ...elements);
+        return;
+      }
+      if (elements && elements.length === 16 && n.ShaderUniformMat4) {
+        n.ShaderUniformMat4(handle, name, ...elements);
+        return;
+      }
       if (
         value.isColor ||
         (typeof value.r === "number" &&
@@ -269,7 +362,29 @@
     if (!n || !mat.__h || !mat.uniforms) return;
     for (const name in mat.uniforms) {
       if (!Object.prototype.hasOwnProperty.call(mat.uniforms, name)) continue;
-      pushShaderUniform(n, mat.__h, name, uniformRawValue(mat.uniforms[name]));
+      pushShaderUniform(n, mat.__h, name, uniformRawValue(mat.uniforms[name]), mat);
+    }
+    const source = `${mat.vertexShader || ""}\n${mat.fragmentShader || ""}`;
+    if (source.includes("<uv_vertex>") || source.includes("uvTransform")) {
+      const map = uniformRawValue(mat.uniforms.map) || mat.map;
+      if (map?.matrixAutoUpdate && typeof map.updateMatrix === "function") map.updateMatrix();
+      const matrix = map?.matrix || { elements: [1, 0, 0, 0, 1, 0, 0, 0, 1] };
+      pushShaderUniform(n, mat.__h, "uvTransform", matrix, mat);
+    }
+    const blocks = new Map();
+    for (const match of source.matchAll(/uniform\s+(\w+)\s*\{([^}]+)\}\s*;/g)) {
+      const names = String(match[2])
+        .split(";")
+        .map((declaration) => declaration.trim().match(/([A-Za-z_]\w*)(?:\s*\[[^\]]+\])?$/)?.[1])
+        .filter(Boolean);
+      blocks.set(match[1], names);
+    }
+    for (const group of mat.uniformsGroups || []) {
+      const names = blocks.get(group?.name);
+      if (!names || !Array.isArray(group.uniforms)) continue;
+      for (let i = 0; i < Math.min(names.length, group.uniforms.length); i++) {
+        pushShaderUniform(n, mat.__h, names[i], uniformRawValue(group.uniforms[i]), mat);
+      }
     }
   }
 
@@ -281,7 +396,7 @@
       if (!mat.__h) return;
       const n = native();
       if (!n) return;
-      pushShaderUniform(n, mat.__h, name, uniformRawValue(entry));
+      pushShaderUniform(n, mat.__h, name, uniformRawValue(entry), mat);
     }
 
     function hookVec(v) {
@@ -422,9 +537,10 @@
         }
         if (TN.hostHas?.(n, "ShaderMaterialCreate")) {
           handle = n.ShaderMaterialCreate(
-            expandShaderChunks(mat.vertexShader || ""),
-            expandShaderChunks(mat.fragmentShader || "")
+            nativeShaderSource(mat, mat.vertexShader),
+            nativeShaderSource(mat, mat.fragmentShader)
           );
+          mat._nativeDefinesSignature = shaderDefinesSignature(mat);
           absorbNativeId(handle);
         }
       } catch (err) {
@@ -435,7 +551,7 @@
       if (mat.__h) {
         try {
           if (typeof n.ShaderSetFlags === "function") {
-            n.ShaderSetFlags(mat.__h, mat.side ?? FrontSide, mat.depthWrite ? 1 : 0);
+            n.ShaderSetFlags(mat.__h, mat.side ?? FrontSide, mat.depthWrite ? 1 : 0, mat.lights ? 1 : 0);
           } else if (n.MaterialSetSide) {
             n.MaterialSetSide(mat.__h, mat.side ?? FrontSide);
           }
@@ -736,7 +852,15 @@
     }
 
     flushNative() {
-      if (this._nativeKind === "shader") flushShaderUniforms(this);
+      if (this._nativeKind === "shader") {
+        // Three.js applications commonly mutate material.defines directly and
+        // only set needsUpdate afterwards. Compare the effective preprocessor
+        // state at render time so native ShaderMaterial follows those changes.
+        if (this.__h && this._nativeDefinesSignature !== shaderDefinesSignature(this)) {
+          pushShaderSource(this);
+        }
+        flushShaderUniforms(this);
+      }
     }
   }
 
@@ -967,9 +1091,10 @@
     try {
       n.ShaderMaterialSetSource(
         mat.__h,
-        expandShaderChunks(mat._vertexShader || ""),
-        expandShaderChunks(mat._fragmentShader || "")
+        nativeShaderSource(mat, mat._vertexShader),
+        nativeShaderSource(mat, mat._fragmentShader)
       );
+      mat._nativeDefinesSignature = shaderDefinesSignature(mat);
     } catch (err) {
       console.warn("ThreeBrowser ShaderMaterialSetSource failed", err);
     }

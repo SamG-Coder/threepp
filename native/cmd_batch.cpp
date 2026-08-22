@@ -10,16 +10,22 @@
 #include "threepp/objects/ObjectWithMaterials.hpp"
 #include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/materials/SpriteMaterial.hpp"
+#include "threepp/materials/ShaderMaterial.hpp"
+#include "threepp/materials/MeshDepthMaterial.hpp"
 #include "threepp/objects/Sprite.hpp"
 #include "threepp/textures/Texture.hpp"
 #include "threepp/textures/CubeTexture.hpp"
+#include "threepp/textures/DataTexture.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
+#include <iostream>
 #include <cstring>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
 
 using namespace tn;
 
@@ -85,6 +91,15 @@ void finishRgbaTexture(
         int texCoord = 0,
         Vector2 offset = {0, 0},
         Vector2 repeat = {1, 1}) {
+    if (std::getenv("THREEBROWSER_NATIVE_TERRAIN_TRACE") && width == 2048 && height == 2048) {
+        unsigned long long sums[4]{0, 0, 0, 0};
+        for (size_t i = 0; i + 3 < pixels.size(); i += 4) {
+            sums[0] += pixels[i]; sums[1] += pixels[i + 1];
+            sums[2] += pixels[i + 2]; sums[3] += pixels[i + 3];
+        }
+        std::cerr << "rgba texture id=" << id << " sums=" << sums[0] << ',' << sums[1]
+                  << ',' << sums[2] << ',' << sums[3] << '\n';
+    }
     Image image(std::move(pixels), static_cast<unsigned>(width), static_cast<unsigned>(height));
     auto tex = Texture::create(image);
     tex->format = Format::RGBA;
@@ -99,6 +114,52 @@ void finishRgbaTexture(
     tex->generateMipmaps =
             minFilter != Filter::Nearest && minFilter != Filter::Linear;
     tex->needsUpdate();
+
+    // Preserve the native Texture object's address when JavaScript uploads a
+    // newer image into an existing texture handle. Materials and custom shader
+    // uniforms retain Texture* values, just as Three.js retains the same
+    // Texture object while its Source changes. Replacing the entire slot here
+    // left those uniforms pointing at the previous pixels (or eventually a
+    // freed object) during progressive texture loading.
+    if (Slot* existing = getSlot(id); existing && existing->texture) {
+        existing->texture->copy(*tex);
+        existing->texture->needsUpdate();
+        markDirty();
+        return;
+    }
+
+    Slot slot;
+    slot.kind = Kind::Texture;
+    slot.texture = std::move(tex);
+    insertAt(id, std::move(slot));
+    markDirty();
+}
+
+void finishFloatTexture(uint32_t id, int width, int height, std::vector<float> pixels) {
+    auto tex = DataTexture::create(ImageData{std::move(pixels)},
+                                   static_cast<unsigned>(width),
+                                   static_cast<unsigned>(height));
+    tex->format = Format::RGBA;
+    tex->type = Type::Float;
+    tex->colorSpace = ColorSpace::NoColorSpace;
+    tex->wrapS = TextureWrapping::ClampToEdge;
+    tex->wrapT = TextureWrapping::ClampToEdge;
+    tex->magFilter = Filter::Nearest;
+    tex->minFilter = Filter::Nearest;
+    tex->generateMipmaps = false;
+    tex->needsUpdate();
+
+    if (Slot* existing = getSlot(id); existing && existing->texture) {
+        existing->texture->copy(*tex);
+        existing->texture->type = Type::Float;
+        existing->texture->format = Format::RGBA;
+        existing->texture->colorSpace = ColorSpace::NoColorSpace;
+        existing->texture->generateMipmaps = false;
+        existing->texture->needsUpdate();
+        markDirty();
+        return;
+    }
+
     Slot slot;
     slot.kind = Kind::Texture;
     slot.texture = std::move(tex);
@@ -236,6 +297,35 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             if (!has(p, end, 4)) return;
             auto scene = Scene::create();
             insertObject(ru32(p), Kind::Scene, scene);
+            return;
+        }
+        case tn::cmd::OP_RENDER_PASS: {
+            if (!has(p, end, 28)) return;
+            Slot* sceneSlot = getSlot(ru32(p));
+            Slot* cameraSlot = getSlot(ru32(p + 4));
+            Slot* targetSlot = getSlot(ru32(p + 8));
+            Slot* overrideSlot = ru32(p + 12) ? getSlot(ru32(p + 12)) : nullptr;
+            auto* gl = dynamic_cast<GLRenderer*>(g.renderer.get());
+            auto* scene = sceneSlot ? dynamic_cast<Scene*>(sceneSlot->object.get()) : nullptr;
+            auto* camera = cameraSlot ? dynamic_cast<Camera*>(cameraSlot->object.get()) : nullptr;
+            if (!gl || !scene || !camera || !targetSlot || !targetSlot->renderTarget) return;
+
+            auto previousOverride = scene->overrideMaterial;
+            const uint32_t flags = ru32(p + 24);
+            if ((flags & 1u) != 0u) {
+                static auto depthMaterial = MeshDepthMaterial::create(
+                        MeshDepthMaterial::Params{}.depthPacking(DepthPacking::RGBA));
+                scene->overrideMaterial = depthMaterial;
+            } else if (overrideSlot && overrideSlot->material) {
+                scene->overrideMaterial = overrideSlot->material;
+            }
+            auto* previousTarget = gl->getRenderTarget();
+            gl->setRenderTarget(targetSlot->renderTarget.get(),
+                                static_cast<int>(ru32(p + 16)),
+                                static_cast<int>(ru32(p + 20)));
+            gl->render(*scene, *camera);
+            gl->setRenderTarget(previousTarget);
+            scene->overrideMaterial = std::move(previousOverride);
             return;
         }
         case tn::cmd::OP_SCENE_BG: {
@@ -383,6 +473,23 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             }
             std::vector<unsigned char> pixels(cur, cur + need);
             finishRgbaTexture(id, static_cast<int>(width), static_cast<int>(height), std::move(pixels));
+            return;
+        }
+        case tn::cmd::OP_TEX_FLOAT: {
+            if (!has(p, end, 16)) return;
+            const uint32_t id = ru32(p);
+            const uint32_t width = ru32(p + 4);
+            const uint32_t height = ru32(p + 8);
+            const size_t count = static_cast<size_t>(width) * static_cast<size_t>(height) * 4u;
+            const size_t bytes = count * sizeof(float);
+            const uint8_t* cur = p + 16;
+            if (!width || !height || width > 16384 || height > 16384 || !has(cur, end, bytes)) {
+                setError("texture needs float rgba pixels");
+                return;
+            }
+            std::vector<float> pixels(count);
+            std::memcpy(pixels.data(), cur, bytes);
+            finishFloatTexture(id, static_cast<int>(width), static_cast<int>(height), std::move(pixels));
             return;
         }
         case tn::cmd::OP_TEX_BEGIN: {
@@ -635,6 +742,34 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             }
             return;
         }
+        case tn::cmd::OP_SHADER_TEX: {
+            if (!has(p, end, 12)) return;
+            const uint32_t materialId = ru32(p);
+            const uint32_t textureId = ru32(p + 4);
+            const uint32_t nameLength = ru32(p + 8);
+            if (nameLength == 0 || !has(p + 12, end, nameLength)) return;
+            Slot* materialSlot = getSlot(materialId);
+            Slot* textureSlot = getSlot(textureId);
+            if (!materialSlot || !materialSlot->material || !textureSlot || !textureSlot->texture) return;
+            auto* shader = materialSlot->material->as<ShaderMaterial>();
+            if (!shader) return;
+            const std::string name(reinterpret_cast<const char*>(p + 12), nameLength);
+            if (std::getenv("THREEBROWSER_NATIVE_TERRAIN_TRACE") && name == "tMasks") {
+                std::cerr << "terrain native sampler material=" << materialId
+                          << " texture=" << textureId
+                          << " image=" << textureSlot->texture->image().width()
+                          << 'x' << textureSlot->texture->image().height() << '\n';
+            }
+            const auto retained = std::find(
+                    materialSlot->shaderTextures.begin(), materialSlot->shaderTextures.end(), textureSlot->texture);
+            if (retained == materialSlot->shaderTextures.end()) {
+                materialSlot->shaderTextures.push_back(textureSlot->texture);
+            }
+            shader->uniforms[name].setValue(textureSlot->texture.get());
+            shader->uniformsNeedUpdate = true;
+            markDirty();
+            return;
+        }
         case tn::cmd::OP_MAT_SIDE: {
             if (!has(p, end, 8)) return;
             Slot* slot = getSlot(ru32(p));
@@ -746,10 +881,21 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             if (!has(p, end, 8)) return;
             Slot* meshSlot = getSlot(ru32(p));
             Slot* skelSlot = getSlot(ru32(p + 4));
-            if (!meshSlot || !meshSlot->object || !skelSlot || !skelSlot->skeleton) return;
+            if (!meshSlot || !meshSlot->object || !skelSlot || !skelSlot->skeleton) {
+                if (std::getenv("THREEBROWSER_NATIVE_SKIN_TRACE")) {
+                    std::cerr << "skin bind missed mesh=" << ru32(p)
+                              << " skeleton=" << ru32(p + 4) << '\n';
+                }
+                return;
+            }
             auto skinned = std::dynamic_pointer_cast<SkinnedMesh>(meshSlot->object);
             if (!skinned) return;
             skinned->bind(skelSlot->skeleton);
+            if (std::getenv("THREEBROWSER_NATIVE_SKIN_TRACE")) {
+                std::cerr << "skin bound mesh=" << ru32(p)
+                          << " skeleton=" << ru32(p + 4)
+                          << " bones=" << skelSlot->skeleton->bones.size() << '\n';
+            }
             markDirty();
             return;
         }

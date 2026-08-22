@@ -17,6 +17,7 @@ extern "C" {
 #endif
 
 TN_API const char* tn_last_error(void);
+TN_API const char* tn_debug_scene(void);
 TN_API const char* tn_backend_name(void);
 TN_API int tn_runtime_has_vulkan(void);
 TN_API void tn_runtime_set_backend(int vulkan);
@@ -153,10 +154,14 @@ TN_API void tn_lod_update(uint32_t lod, uint32_t camera);
 TN_API uint32_t tn_shader_material_create(const char* vertex_src, const char* fragment_src);
 TN_API void tn_shader_material_set_source(uint32_t material, const char* vertex_src, const char* fragment_src);
 TN_API void tn_shader_uniform_float(uint32_t material, const char* name, float v);
+TN_API void tn_shader_uniform_int(uint32_t material, const char* name, int v);
 TN_API void tn_shader_uniform_vec2(uint32_t material, const char* name, float x, float y);
 TN_API void tn_shader_uniform_vec3(uint32_t material, const char* name, float x, float y, float z);
 TN_API void tn_shader_uniform_vec4(uint32_t material, const char* name, float x, float y, float z, float w);
-TN_API void tn_shader_set_flags(uint32_t material, int side, int depth_write);
+TN_API void tn_shader_uniform_mat3(uint32_t material, const char* name, const float* elements9);
+TN_API void tn_shader_uniform_mat4(uint32_t material, const char* name, const float* elements16);
+TN_API void tn_shader_uniform_texture(uint32_t material, const char* name, uint32_t texture);
+TN_API void tn_shader_set_flags(uint32_t material, int side, int depth_write, int lights);
 
 TN_API void tn_scene_set_environment(uint32_t scene, uint32_t texture);
 TN_API uint32_t tn_pmrem_from_sky(

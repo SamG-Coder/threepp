@@ -8,6 +8,7 @@ file(MAKE_DIRECTORY "${generatedSourcesDir}")
 
 set(THREEPP_SHADER_INCLUDES)
 set(THREEPP_SHADERCHUNK_CODE)
+set(THREEPP_SHADERCHUNK148_CODE)
 set(THREEPP_SHADERLIB_CODE)
 
 # Filled with the generated headers; src/CMakeLists.txt hands them to the
@@ -67,8 +68,47 @@ function(embed_glsl_dir subdir ns codeVar)
 
 endfunction()
 
+# Custom ShaderMaterial sources imported from deployed Three.js r148 sites must
+# resolve against one internally consistent chunk set. Keep that set separate
+# from threepp's built-in r129 shaders so native stock materials are unchanged.
+function(embed_compat_glsl_dir subdir ns codeVar)
+
+    file(GLOB files CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/src/shaders/${subdir}/*.glsl")
+
+    set(_includes "${THREEPP_SHADER_INCLUDES}")
+    set(_code "${${codeVar}}")
+    set(_headers "${THREEPP_GENERATED_SHADER_HEADERS}")
+
+    foreach (shaderFile ${files})
+        get_filename_component(fileName ${shaderFile} NAME_WLE)
+        set(header_file "${generatedSourcesDir}/threepp/renderers/shaders/${subdir}/${fileName}.hpp")
+
+        add_custom_command(
+                OUTPUT "${header_file}"
+                COMMAND "${CMAKE_COMMAND}"
+                        "-DIN=${shaderFile}"
+                        "-DOUT=${header_file}"
+                        "-DNS=${ns}"
+                        "-DNAME=${fileName}"
+                        "-DGUARD=${subdir}_${fileName}"
+                        -P "${PROJECT_SOURCE_DIR}/cmake/EmbedGlsl.cmake"
+                DEPENDS "${shaderFile}" "${PROJECT_SOURCE_DIR}/cmake/EmbedGlsl.cmake"
+                COMMENT "Embedding GL shader ${subdir}/${fileName}.glsl"
+                VERBATIM)
+
+        list(APPEND _headers "${header_file}")
+        set(_includes "${_includes}\n#include \"${subdir}/${fileName}.hpp\"")
+        set(_code "${_code}\tcompatData_[\"${fileName}\"] = ${ns}::${fileName};\n")
+    endforeach ()
+
+    set(THREEPP_SHADER_INCLUDES "${_includes}" PARENT_SCOPE)
+    set(${codeVar} "${_code}" PARENT_SCOPE)
+    set(THREEPP_GENERATED_SHADER_HEADERS "${_headers}" PARENT_SCOPE)
+endfunction()
+
 embed_glsl_dir(ShaderChunk shaderchunk THREEPP_SHADERCHUNK_CODE)
 embed_glsl_dir(ShaderLib shaderlib THREEPP_SHADERLIB_CODE)
+embed_compat_glsl_dir(ShaderChunk148 shaderchunk148 THREEPP_SHADERCHUNK148_CODE)
 
 configure_file(
         "threepp/renderers/shaders/ShaderChunk.cpp.in"

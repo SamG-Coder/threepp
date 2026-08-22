@@ -67,12 +67,17 @@ class Element extends BrowserEventTarget {
     this.tagName = String(tagName).toUpperCase();
     this.nodeName = this.tagName;
     this.nodeType = this.tagName === "#TEXT" ? 3 : this.tagName === "#DOCUMENT-FRAGMENT" ? 11 : 1;
-    this.style = {
+    this.style = new Proxy({
       setProperty(name, value) { this[name] = String(value); },
       getPropertyValue(name) { return this[name] ?? ""; },
       removeProperty(name) { const value = this[name] ?? ""; delete this[name]; return value; },
       removeAttribute(name) { const value = this[name] ?? ""; delete this[name]; return value; },
-    };
+    }, {
+      // CSSStyleDeclaration exposes supported properties even before values
+      // are assigned. Animation libraries use the `in` operator for feature
+      // detection (transform, perspective, opacity, and vendor prefixes).
+      has: (_target, property) => typeof property === "string",
+    });
     this.dataset = {};
     this._attributes = new Map();
     this.children = [];
@@ -121,6 +126,23 @@ class Element extends BrowserEventTarget {
       set: value => { classes.clear(); String(value).split(/\s+/).filter(Boolean).forEach(name => classes.add(name)); },
     });
     this._innerHTML = "";
+    if (this.tagName === "STYLE") {
+      const rules = [];
+      this.sheet = {
+        ownerNode: this,
+        cssRules: rules,
+        insertRule(rule, index = rules.length) {
+          const position = Math.max(0, Math.min(Number(index) || 0, rules.length));
+          rules.splice(position, 0, { cssText: String(rule) });
+          return position;
+        },
+        deleteRule(index) {
+          const position = Number(index) || 0;
+          if (position >= 0 && position < rules.length) rules.splice(position, 1);
+        },
+      };
+      this.styleSheet = this.sheet;
+    }
   }
   appendChild(child) {
     if (typeof child !== "object" || child === null) {
@@ -133,6 +155,7 @@ class Element extends BrowserEventTarget {
     child.ownerDocument ??= this.ownerDocument || globalThis.document || null;
     this.children.push(child);
     promotePresentedCanvasTree(child);
+    completeVirtualResourceTree(child);
     return child;
   }
   append(...children) { for (const child of children) this.appendChild(child); }
@@ -143,6 +166,7 @@ class Element extends BrowserEventTarget {
       node.parentNode = this;
       node.ownerDocument ??= this.ownerDocument || globalThis.document || null;
       this.children.unshift(node);
+      completeVirtualResourceTree(node);
     }
   }
   insertBefore(child, reference) {
@@ -154,6 +178,7 @@ class Element extends BrowserEventTarget {
     child.ownerDocument ??= this.ownerDocument || globalThis.document || null;
     this.children.splice(index, 0, child);
     promotePresentedCanvasTree(child);
+    completeVirtualResourceTree(child);
     return child;
   }
   removeChild(child) {
@@ -252,6 +277,28 @@ class Element extends BrowserEventTarget {
       if (!/^(?:area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr|path|line|polyline|rect|circle)$/i.test(tag) && !/\/\s*$/.test(match[3])) stack.push(element);
     }
   }
+  insertAdjacentHTML(position, value) {
+    const where = String(position).toLowerCase();
+    if (!["beforebegin", "afterbegin", "beforeend", "afterend"].includes(where)) {
+      throw new SyntaxError(`Invalid insertAdjacentHTML position: ${position}`);
+    }
+    if ((where === "beforebegin" || where === "afterend") && !this.parentNode) return;
+
+    const container = new Element("template");
+    container.ownerDocument = this.ownerDocument || globalThis.document || null;
+    container.innerHTML = String(value);
+    const nodes = [...container.children];
+
+    if (where === "afterbegin") {
+      for (const node of nodes.reverse()) this.insertBefore(node, this.firstChild);
+    } else if (where === "beforeend") {
+      for (const node of nodes) this.appendChild(node);
+    } else {
+      const parent = this.parentNode;
+      const reference = where === "beforebegin" ? this : parent.children[parent.children.indexOf(this) + 1] ?? null;
+      for (const node of nodes) parent.insertBefore(node, reference);
+    }
+  }
   querySelector(selector) { return this.querySelectorAll(selector)[0] ?? null; }
   querySelectorAll(selector) {
     let token = String(selector).trim().split(/\s+|\s*>\s*/).filter(Boolean).at(-1) || "*";
@@ -319,9 +366,41 @@ class Element extends BrowserEventTarget {
       this.parentNode = null;
     }
   }
+  attachShadow(init = {}) {
+    if (this.shadowRoot) throw new Error("Shadow root already attached");
+    const root = new Element("#document-fragment");
+    root.nodeName = "#shadow-root";
+    root.host = this;
+    root.mode = init.mode === "closed" ? "closed" : "open";
+    // The native host has no separate composed-tree implementation. Keeping
+    // this link lets canvases mounted in a shadow root participate in the
+    // presented-canvas tree exactly as they do in a browser.
+    root.parentNode = this;
+    root.ownerDocument = this.ownerDocument || globalThis.document || null;
+    Object.defineProperty(this, "shadowRoot", {
+      configurable: true,
+      value: root.mode === "open" ? root : null,
+    });
+    this._closedShadowRoot = root.mode === "closed" ? root : null;
+    return root;
+  }
   click() { this.dispatchEvent(new Event("click", { bubbles: true, cancelable: true })); }
   remove() { if (this.parentNode) this.parentNode.removeChild(this); }
   requestPointerLock() { return requestNativePointerLock(this); }
+}
+
+function completeVirtualResourceTree(node) {
+  if (!node || typeof node !== "object") return;
+  if (node.tagName === "LINK" && !node._virtualLoadQueued) {
+    node._virtualLoadQueued = true;
+    queueMicrotask(() => {
+      if (!node.parentNode) return;
+      node.sheet ??= { cssRules: [] };
+      node.dispatchEvent(new Event("load"));
+      if (typeof node.onload === "function") node.onload.call(node, new Event("load"));
+    });
+  }
+  for (const child of node.children || []) completeVirtualResourceTree(child);
 }
 
 class Canvas2DContext {
@@ -621,6 +700,20 @@ class VideoElement extends AudioElement {
 const body = new Element("body");
 const head = new Element("head");
 const documentTarget = new BrowserEventTarget();
+const fonts = Object.assign(new BrowserEventTarget(), {
+  status: "loaded",
+  ready: Promise.resolve(),
+  check() { return true; },
+  load() { return Promise.resolve([]); },
+  add() { return this; },
+  delete() { return false; },
+  clear() {},
+  has() { return false; },
+  entries() { return [][Symbol.iterator](); },
+  keys() { return [][Symbol.iterator](); },
+  values() { return [][Symbol.iterator](); },
+  [Symbol.iterator]() { return this.values(); },
+});
 export const document = Object.assign(documentTarget, {
   nodeType: 9,
   nodeName: "#document",
@@ -631,6 +724,7 @@ export const document = Object.assign(documentTarget, {
   readyState: "loading",
   visibilityState: "visible",
   hidden: false,
+  fonts,
   pointerLockElement: null,
   createElement(tag) {
     const name = String(tag).toLowerCase();
@@ -643,6 +737,28 @@ export const document = Object.assign(documentTarget, {
   createElementNS(_namespace, tag) { return this.createElement(tag); },
   createTextNode(value) { const node = new Element("#text"); node.textContent = String(value); return node; },
   createDocumentFragment() { const fragment = new Element("#document-fragment"); fragment.ownerDocument = this; return fragment; },
+  createEvent() {
+    return {
+      type: "",
+      bubbles: false,
+      cancelable: false,
+      defaultPrevented: false,
+      cancelBubble: false,
+      detail: null,
+      initEvent(type, bubbles = false, cancelable = false) {
+        this.type = String(type);
+        this.bubbles = Boolean(bubbles);
+        this.cancelable = Boolean(cancelable);
+      },
+      initCustomEvent(type, bubbles = false, cancelable = false, detail = null) {
+        this.initEvent(type, bubbles, cancelable);
+        this.detail = detail;
+      },
+      preventDefault() { if (this.cancelable) this.defaultPrevented = true; },
+      stopPropagation() { this.cancelBubble = true; },
+      stopImmediatePropagation() { this.cancelBubble = true; },
+    };
+  },
   getElementById(id) {
     const walk = node => node.id === id ? node : node.children.map(walk).find(Boolean);
     return walk(body) || walk(head) || null;
@@ -655,17 +771,26 @@ export const document = Object.assign(documentTarget, {
     return [...head.querySelectorAll(tag), ...body.querySelectorAll(tag)];
   },
   querySelector(selector) {
+    if (String(selector).trim().toLowerCase() === "html") return this.documentElement;
+    if (String(selector).trim().toLowerCase() === "head") return head;
+    if (String(selector).trim().toLowerCase() === "body") return body;
     if (selector === "canvas") return currentCanvas;
     return this.querySelectorAll(selector)[0] ?? null;
   },
   querySelectorAll(selector) {
+    const normalized = String(selector).trim().toLowerCase();
+    if (normalized === "html") return [this.documentElement];
+    if (normalized === "head") return [head];
+    if (normalized === "body") return [body];
     return [...head.querySelectorAll(selector), ...body.querySelectorAll(selector)];
   },
+  hasFocus() { return true; },
   exitPointerLock() { releaseNativePointerLock(); },
 });
 body.ownerDocument = document;
 head.ownerDocument = document;
 document.documentElement.ownerDocument = document;
+document.documentElement.append(head, body);
 
 function requestNativePointerLock(element) {
   if (native.overlayOpen?.()) native.setOverlay(false);
@@ -766,7 +891,17 @@ globalThis.history = {
   back() {}, forward() {}, go() {},
 };
 Object.defineProperty(globalThis, "navigator", {
-  value: { userAgent: "ThreeBrowserRuntime/0.1 V8", platform: process.platform },
+  value: {
+    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ThreeBrowserRuntime/0.1 V8",
+    platform: process.platform,
+    language: "en-AU",
+    languages: ["en-AU", "en"],
+    maxTouchPoints: 0,
+    hardwareConcurrency: Math.max(1, Number(process.env.NUMBER_OF_PROCESSORS) || 1),
+    onLine: false,
+    cookieEnabled: false,
+    getGamepads: () => [],
+  },
   configurable: true,
 });
 globalThis.devicePixelRatio = 1;
@@ -846,6 +981,60 @@ class MemoryStorage {
 }
 globalThis.localStorage = new MemoryStorage();
 globalThis.sessionStorage = new MemoryStorage();
+const audioParam = (value = 0) => ({
+  value,
+  setValueAtTime(next) { this.value = Number(next); return this; },
+  linearRampToValueAtTime(next) { this.value = Number(next); return this; },
+  exponentialRampToValueAtTime(next) { this.value = Number(next); return this; },
+  setTargetAtTime(next) { this.value = Number(next); return this; },
+  cancelScheduledValues() { return this; },
+});
+const audioNode = extra => Object.assign({
+  connect() { return this; },
+  disconnect() {},
+}, extra);
+class SilentAudioContext {
+  constructor() {
+    this.currentTime = 0;
+    this.sampleRate = 48000;
+    this.state = "running";
+    this.destination = audioNode({});
+    this.listener = {
+      positionX: audioParam(), positionY: audioParam(), positionZ: audioParam(),
+      forwardX: audioParam(0), forwardY: audioParam(0), forwardZ: audioParam(-1),
+      upX: audioParam(0), upY: audioParam(1), upZ: audioParam(0),
+      setPosition() {}, setOrientation() {},
+    };
+  }
+  resume() { this.state = "running"; return Promise.resolve(); }
+  suspend() { this.state = "suspended"; return Promise.resolve(); }
+  close() { this.state = "closed"; return Promise.resolve(); }
+  createGain() { return audioNode({ gain: audioParam(1) }); }
+  createPanner() {
+    return audioNode({
+      positionX: audioParam(), positionY: audioParam(), positionZ: audioParam(),
+      orientationX: audioParam(1), orientationY: audioParam(), orientationZ: audioParam(),
+      refDistance: 1, rolloffFactor: 1, distanceModel: "inverse", panningModel: "HRTF",
+      setPosition() {}, setOrientation() {},
+    });
+  }
+  createBufferSource() {
+    return audioNode({
+      buffer: null, loop: false, loopStart: 0, loopEnd: 0,
+      playbackRate: audioParam(1), detune: audioParam(),
+      start() {}, stop() {}, onended: null,
+    });
+  }
+  createBiquadFilter() { return audioNode({ frequency: audioParam(350), Q: audioParam(1), gain: audioParam(), detune: audioParam(), type: "lowpass" }); }
+  createMediaElementSource() { return audioNode({}); }
+  decodeAudioData(data, success) {
+    const buffer = { duration: 0, length: 0, numberOfChannels: 0, sampleRate: this.sampleRate, _data: data };
+    queueMicrotask(() => success?.(buffer));
+    return Promise.resolve(buffer);
+  }
+}
+globalThis.AudioContext = SilentAudioContext;
+globalThis.webkitAudioContext = SilentAudioContext;
 globalThis.getComputedStyle = element => element?.style ?? { getPropertyValue: () => "" };
 globalThis.matchMedia = query => ({ matches: false, media: String(query), onchange: null, addEventListener() {}, removeEventListener() {} });
 globalThis.ResizeObserver = class {
@@ -880,6 +1069,12 @@ class BrowserWorker extends BrowserEventTarget {
     this.onmessageerror = null;
     this.worker = null;
     this.pending = [];
+    this.sentCount = 0;
+    this.receivedCount = 0;
+    this.fetchRequestCount = 0;
+    this.fetchResponseCount = 0;
+    this.decodeRequestCount = 0;
+    this.decodeResponseCount = 0;
     this.closed = false;
     activeWorkers.add(this);
     this.initialize();
@@ -892,7 +1087,17 @@ class BrowserWorker extends BrowserEventTarget {
       const wrapper = `
         const { parentPort, workerData } = require('node:worker_threads');
         globalThis.self = globalThis;
+        // Browser workers expose these as pre-existing writable globals.
+        // Strict-mode bundles commonly assign the onmessage global; without the
+        // binding Node treats that assignment as an undeclared identifier.
+        globalThis.onmessage = null;
+        globalThis.onmessageerror = null;
+        globalThis.onerror = null;
         const listeners = new Map();
+        const bitmapRequests = new Map();
+        const fetchRequests = new Map();
+        let nextBitmapRequest = 1;
+        let nextFetchRequest = 1;
         globalThis.addEventListener = (type, listener) => {
           const list = listeners.get(type) || [];
           list.push(listener);
@@ -902,19 +1107,159 @@ class BrowserWorker extends BrowserEventTarget {
           const list = listeners.get(type) || [];
           listeners.set(type, list.filter(item => item !== listener));
         };
-        globalThis.postMessage = (value, transfer) => parentPort.postMessage(value, transfer);
+        globalThis.postMessage = (value, transfer) => {
+          // ImageBitmap is transferable in browsers. Our bitmap-compatible
+          // object contains a transferable pixel ArrayBuffer, but is not
+          // itself a Node transfer-list object, so let structured clone copy
+          // the small wrapper and its pixels safely.
+          const safeTransfer = Array.isArray(transfer)
+            ? transfer.filter(item => item instanceof ArrayBuffer ||
+                (typeof MessagePort !== 'undefined' && item instanceof MessagePort))
+            : [];
+          parentPort.postMessage(value, safeTransfer);
+        };
         globalThis.close = () => process.exit(0);
         globalThis.importScripts = () => { throw new Error('importScripts requires an unpacked worker dependency'); };
         parentPort.on('message', data => {
+          if (data?.__threeBrowserBitmapResult) {
+            const pending = bitmapRequests.get(data.id);
+            if (!pending) return;
+            bitmapRequests.delete(data.id);
+            if (data.error) pending.reject(new Error(data.error));
+            else {
+              const bitmap = {
+              width: data.width,
+              height: data.height,
+              data: new Uint8Array(data.pixels),
+              };
+              // Keep browser API compatibility without placing a function in
+              // structured-cloned postMessage payloads.
+              Object.defineProperty(bitmap, 'close', { value() {}, enumerable: false });
+              pending.resolve(bitmap);
+            }
+            return;
+          }
+          if (data?.__threeBrowserFetchResult) {
+            const pending = fetchRequests.get(data.id);
+            if (!pending) return;
+            fetchRequests.delete(data.id);
+            if (data.error) pending.reject(new Error(data.error));
+            else pending.resolve(new Response(data.body, {
+              status: data.status,
+              statusText: data.statusText,
+              headers: data.headers,
+            }));
+            return;
+          }
           const event = { data };
           if (typeof globalThis.onmessage === 'function') globalThis.onmessage(event);
           for (const listener of listeners.get('message') || []) listener(event);
         });
+        globalThis.createImageBitmap = async source => {
+          let bytes;
+          if (source instanceof Blob) bytes = await source.arrayBuffer();
+          else if (source instanceof ArrayBuffer) bytes = source;
+          else if (ArrayBuffer.isView(source)) {
+            bytes = source.buffer.slice(source.byteOffset, source.byteOffset + source.byteLength);
+          } else {
+            throw new Error('Unsupported worker image source');
+          }
+          const id = nextBitmapRequest++;
+          const result = new Promise((resolve, reject) => bitmapRequests.set(id, { resolve, reject }));
+          parentPort.postMessage({ __threeBrowserDecodeImage: true, id, bytes }, [bytes]);
+          try {
+            return await result;
+          } catch (error) {
+            console.error('ThreeBrowser worker createImageBitmap failed:', error);
+            throw error;
+          }
+        };
+        globalThis.fetch = async (input, init = {}) => {
+          const id = nextFetchRequest++;
+          const result = new Promise((resolve, reject) => fetchRequests.set(id, { resolve, reject }));
+          parentPort.postMessage({
+            __threeBrowserWorkerFetch: true,
+            id,
+            input: input instanceof Request ? input.url : String(input),
+            init: {
+              method: init.method,
+              headers: init.headers ? Object.fromEntries(new Headers(init.headers)) : undefined,
+            },
+          });
+          try {
+            return await result;
+          } catch (error) {
+            console.error('ThreeBrowser worker fetch bridge failed:', error);
+            throw error;
+          }
+        };
         eval(workerData.source);
       `;
       if (this.closed) return;
       this.worker = new NodeWorker(wrapper, { eval: true, workerData: { source, url: this.url.href } });
       this.worker.on("message", data => {
+        if (data?.__threeBrowserWorkerFetch) {
+          this.fetchRequestCount++;
+          (async () => {
+            try {
+              const response = await globalThis.fetch(data.input, data.init);
+              if (!response.ok && (process.env.THREEBROWSER_TRACE_RENDER || process.env.THREEBROWSER_TRACE_FETCH)) {
+                console.error(`ThreeBrowser worker fetch response (${data.input}): ${response.status} ${response.statusText}`);
+              }
+              const body = await response.arrayBuffer();
+              this.worker?.postMessage({
+                __threeBrowserFetchResult: true,
+                id: data.id,
+                status: response.status,
+                statusText: response.statusText,
+                headers: Object.fromEntries(response.headers),
+                body,
+              }, [body]);
+              this.fetchResponseCount++;
+            } catch (cause) {
+              if (process.env.THREEBROWSER_TRACE_RENDER || process.env.THREEBROWSER_TRACE_FETCH) {
+                console.error(`ThreeBrowser worker fetch failed (${data.input}): ${cause?.stack || cause}`);
+              }
+              this.worker?.postMessage({
+                __threeBrowserFetchResult: true,
+                id: data.id,
+                error: cause?.message || String(cause),
+              });
+              this.fetchResponseCount++;
+            }
+          })();
+          return;
+        }
+        if (data?.__threeBrowserDecodeImage) {
+          this.decodeRequestCount++;
+          let decoded = null;
+          let error = null;
+          try {
+            decoded = native.decodeImage(Buffer.from(data.bytes));
+            if (!decoded) error = "Unsupported encoded image";
+          } catch (cause) {
+            error = cause?.message || String(cause);
+          }
+          if (error) {
+            if (process.env.THREEBROWSER_TRACE_RENDER || process.env.THREEBROWSER_TRACE_FETCH) {
+              console.error(`ThreeBrowser worker image decode failed: ${error}`);
+            }
+            this.worker?.postMessage({ __threeBrowserBitmapResult: true, id: data.id, error });
+            this.decodeResponseCount++;
+          } else {
+            const pixels = Uint8Array.from(decoded.pixels).buffer;
+            this.worker?.postMessage({
+              __threeBrowserBitmapResult: true,
+              id: data.id,
+              width: decoded.width,
+              height: decoded.height,
+              pixels,
+            }, [pixels]);
+            this.decodeResponseCount++;
+          }
+          return;
+        }
+        this.receivedCount++;
         const event = eventWith("message", { data });
         this.dispatchEvent(event);
         this.onmessage?.(event);
@@ -925,11 +1270,19 @@ class BrowserWorker extends BrowserEventTarget {
         this.onmessageerror?.(event);
       });
       this.worker.on("error", error => {
+        if (process.env.THREEBROWSER_TRACE_RENDER) {
+          console.error(`ThreeBrowser worker error (${this.url.href}): ${error?.stack || error}`);
+        }
         const event = eventWith("error", { error, message: error.message });
         this.dispatchEvent(event);
         this.onerror?.(event);
       });
-      this.worker.on("exit", () => activeWorkers.delete(this));
+      this.worker.on("exit", code => {
+        if (process.env.THREEBROWSER_TRACE_RENDER && !this.closed && code !== 0) {
+          console.error(`ThreeBrowser worker exited (${this.url.href}) with code ${code}`);
+        }
+        activeWorkers.delete(this);
+      });
       for (const [message, transfer] of this.pending) this.worker.postMessage(message, transfer);
       this.pending.length = 0;
     } catch (error) {
@@ -941,6 +1294,7 @@ class BrowserWorker extends BrowserEventTarget {
   }
   postMessage(message, transfer = []) {
     if (this.closed) return;
+    this.sentCount++;
     if (this.worker) this.worker.postMessage(message, transfer);
     else this.pending.push([message, transfer]);
   }
@@ -1224,12 +1578,23 @@ function hostObject() {
   return {
     RuntimeStart: startNativeRuntime,
     RuntimeSetSize: (width, height) => native.resize(width, height),
-    RuntimeRender: () => 1,
+    RuntimeRender: (scene, camera) => native.render(scene, camera),
     BackendName: () => native.backendName(),
     LastError: () => native.lastError(),
     CmdSubmit: used => submitNativeCommands(new Uint8Array(globalThis.__TN_SHARED, 0, used)),
     CmdSubmitBuffer: submitNativeCommands,
     RendererSetToneMapping: (mode, exposure) => native.setToneMapping(mode, exposure),
+    ShaderMaterialCreate: (vertex, fragment) => native.shaderMaterialCreate(vertex, fragment),
+    ShaderMaterialSetSource: (material, vertex, fragment) => native.shaderMaterialSetSource(material, vertex, fragment),
+    ShaderUniformFloat: (material, name, value) => native.shaderUniformFloat(material, name, value),
+    ShaderUniformInt: (material, name, value) => native.shaderUniformInt(material, name, value),
+    ShaderUniformVec2: (material, name, x, y) => native.shaderUniformVec2(material, name, x, y),
+    ShaderUniformVec3: (material, name, x, y, z) => native.shaderUniformVec3(material, name, x, y, z),
+    ShaderUniformVec4: (material, name, x, y, z, w) => native.shaderUniformVec4(material, name, x, y, z, w),
+    ShaderUniformMat3: (material, name, ...elements) => native.shaderUniformMat3(material, name, ...elements),
+    ShaderUniformMat4: (material, name, ...elements) => native.shaderUniformMat4(material, name, ...elements),
+    ShaderUniformTexture: (material, name, texture) => native.shaderUniformTexture(material, name, texture),
+    ShaderSetFlags: (material, side, depthWrite, lights) => native.shaderSetFlags(material, side, depthWrite, lights),
     SceneSetBackgroundTexture: (scene, texture) => native.setSceneBackgroundTexture(scene, texture),
     SceneSetEnvironment: (scene, texture) => native.setSceneEnvironment(scene, texture),
     PmremFromEquirect: (id, texture) => native.pmremFromEquirect(id, texture),
@@ -1497,7 +1862,21 @@ function pump() {
   }
   if (process.env.THREEBROWSER_TRACE_RENDER && performance.now() >= nextTraceFrame) {
     nextTraceFrame = performance.now() + 1000;
-    console.error("ThreeBrowser render stats", native.stats(), "lastError:", native.lastError());
+    console.error("ThreeBrowser render stats", {
+      ...native.stats(),
+      animationCallbacks: frameCallbacks.size,
+      workers: [...activeWorkers].map(worker => ({
+        url: worker.url.href.slice(0, 80),
+        sent: worker.sentCount,
+        received: worker.receivedCount,
+        fetch: `${worker.fetchResponseCount}/${worker.fetchRequestCount}`,
+        decode: `${worker.decodeResponseCount}/${worker.decodeRequestCount}`,
+      })),
+      rendererCalls: globalThis.__threeBrowserRendererCalls || 0,
+      renderTargets: globalThis.__threeBrowserRenderTargets || null,
+      nativeScene: native.debugScene?.() || "",
+      sceneCandidates: [...(globalThis.__threeBrowserSceneCandidates?.values?.() || [])].slice(-12),
+    }, "lastError:", native.lastError());
   }
   native.waitFrame();
   if (webGpuEnabled) {
@@ -1581,7 +1960,14 @@ export async function loadEntry(entryPath) {
         const basename = path.posix.basename(String(file.path).replaceAll("\\", "/"));
         if (basenameCounts.get(basename) === 1) pulledVirtualFiles.set(new URL(basename, pulledVirtualURL).href, file.path);
       }
-      globalThis.location = new URL(manifest.html || "index.html", pulledVirtualURL);
+      // Preserve the address the browser originally exposed. A root document
+      // served as index.html still has `/` as its location; using
+      // `/index.html` here breaks applications that concatenate
+      // `location.href + "assets/..."`.
+      const sourcePage = pulledSourceURL
+        ? `${pulledSourceURL.pathname}${pulledSourceURL.search}${pulledSourceURL.hash}`
+        : (manifest.html || "index.html");
+      globalThis.location = new URL(sourcePage, pulledVirtualURL);
       if (!manifest.requiresWebGPU && manifest.compatibility?.threeMode === "bundled") {
         throw new Error(
           "Native launch cannot bind this site's opaque bundled WebGL renderer. " +

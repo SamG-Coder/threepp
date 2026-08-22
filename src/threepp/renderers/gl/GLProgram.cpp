@@ -14,6 +14,7 @@
 #include <iostream>
 #include <list>
 #include <sstream>
+#include <unordered_set>
 #include <vector>
 
 #if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
@@ -26,6 +27,40 @@ using namespace threepp;
 using namespace threepp::gl;
 
 namespace {
+
+    std::string removeDuplicatePrefixDefines(const std::string& prefix, const std::string& source) {
+        std::unordered_set<std::string> defined;
+        auto collect = [&](const std::string& text) {
+            std::istringstream lines(text);
+            std::string line;
+            while (std::getline(lines, line)) {
+                const auto pos = line.find("#define ");
+                if (pos == std::string::npos) continue;
+                const auto begin = pos + 8;
+                const auto end = line.find_first_of(" \t(\r", begin);
+                if (begin < line.size()) defined.insert(line.substr(begin, end - begin));
+            }
+        };
+        collect(prefix);
+
+        std::ostringstream out;
+        std::istringstream lines(source);
+        std::string line;
+        while (std::getline(lines, line)) {
+            const auto pos = line.find("#define ");
+            if (pos != std::string::npos) {
+                const auto begin = pos + 8;
+                const auto end = line.find_first_of(" \t(\r", begin);
+                const auto name = line.substr(begin, end - begin);
+                if (defined.contains(name)) {
+                    out << "// duplicate prefix define " << name << '\n';
+                    continue;
+                }
+            }
+            out << line << '\n';
+        }
+        return out.str();
+    }
 
     inline unsigned int createShader(int type, const char* str) {
 
@@ -74,6 +109,9 @@ namespace {
     }
 
     void emitShaderLog(const GLRenderer* renderer, const std::string& msg) {
+        static std::unordered_set<std::string> emitted;
+        if (!emitted.emplace(msg).second) return;
+
         std::cerr << msg << std::endl;
         if (renderer && renderer->onShaderError) {
             renderer->onShaderError(msg);
@@ -245,7 +283,7 @@ namespace {
 
     // Resolve Includes
 
-    std::string resolveIncludes(const std::string& str) {
+    std::string resolveIncludes(const std::string& str, bool threeR148) {
 
         static const std::regex rex("#include +<([\\w\\d.]+)>");
 
@@ -261,7 +299,7 @@ namespace {
             pos = match.position(0) + match.length(0);
 
             const std::ssub_match& sub = match[1];
-            const std::string& r = shaders::ShaderChunk::instance().get(sub.str());
+            const std::string& r = shaders::ShaderChunk::instance().get(sub.str(), threeR148);
             if (r.empty()) {
                 std::stringstream ss;
                 ss << "unable to resolve #include <" << sub.str() << ">";
@@ -400,6 +438,24 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
 
     auto customDefines = generateDefines(defines);
 
+    // ShaderMaterial may carry renderer-owned feature defines in its source.
+    // In three.js those defines are installed before the standard attribute
+    // preamble is emitted. Preserve that ordering for imported shaders: if the
+    // define only remains in the later user source, declarations such as
+    // skinIndex/skinWeight are incorrectly omitted from the prefix.
+    std::string sourceFeatureDefines;
+    if (parameters->shaderName == "ShaderMaterial") {
+        const auto sourceDefines = [&](const char* name) {
+            return vertexShader.find(std::string("#define ") + name) != std::string::npos;
+        };
+        if (sourceDefines("USE_SKINNING")) sourceFeatureDefines += "#define USE_SKINNING\n";
+        if (sourceDefines("USE_MORPHTARGETS")) sourceFeatureDefines += "#define USE_MORPHTARGETS\n";
+        if (sourceDefines("USE_MORPHNORMALS")) sourceFeatureDefines += "#define USE_MORPHNORMALS\n";
+        if (sourceDefines("USE_TANGENT")) sourceFeatureDefines += "#define USE_TANGENT\n";
+        if (sourceDefines("USE_COLOR_ALPHA")) sourceFeatureDefines += "#define USE_COLOR_ALPHA\n";
+        else if (sourceDefines("USE_COLOR")) sourceFeatureDefines += "#define USE_COLOR\n";
+    }
+
     this->program = glCreateProgram();
 
     std::string prefixVertex, prefixFragment;
@@ -451,6 +507,8 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
                     "#define SHADER_NAME " + parameters->shaderName,
 
                     customDefines,
+
+                    sourceFeatureDefines,
 
                     parameters->instancing ? "#define USE_INSTANCING" : "",
                     parameters->instancingColor ? "#define USE_INSTANCING_COLOR" : "",
@@ -708,7 +766,7 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
 
     auto resolveLogged = [&](const char* stage, std::string src) {
         try {
-            return resolveIncludes(src);
+            return resolveIncludes(src, parameters->shaderName == "ShaderMaterial");
         } catch (const std::exception& ex) {
             std::ostringstream ss;
             ss << "[Shader include error] " << parameters->shaderName << " " << stage << ": " << ex.what();
@@ -772,6 +830,10 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
         }
     }
 
+    if (parameters->shaderName == "ShaderMaterial") {
+        vertexShader = removeDuplicatePrefixDefines(prefixVertex, vertexShader);
+        fragmentShader = removeDuplicatePrefixDefines(prefixFragment, fragmentShader);
+    }
     std::string vertexGlsl = prefixVertex + vertexShader;
     std::string fragmentGlsl = prefixFragment + fragmentShader;
 

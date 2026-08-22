@@ -40,6 +40,10 @@ struct Slot {
     std::shared_ptr<BufferGeometry> geometry;
     std::shared_ptr<Material> material;
     std::shared_ptr<Texture> texture;
+    // Shader uniforms store Texture* just like three.js/threepp. Retain every
+    // texture bound to a material so disposing a JS texture or render target
+    // cannot leave the live GL uniform pointing at freed storage.
+    std::vector<std::shared_ptr<Texture>> shaderTextures;
     std::shared_ptr<Skeleton> skeleton;
     std::unique_ptr<AnimationMixer> mixer;
     std::unique_ptr<RenderTarget> renderTarget;

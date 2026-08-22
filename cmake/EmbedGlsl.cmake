@@ -17,9 +17,13 @@ endif ()
 
 file(READ "${IN}" text)
 
+if (NOT GUARD)
+    set(GUARD "${NAME}")
+endif ()
+
 file(WRITE "${OUT}"
-        "#ifndef THREEPP_${NAME}_HPP\n"
-        "#define THREEPP_${NAME}_HPP\n\n"
+        "#ifndef THREEPP_${GUARD}_HPP\n"
+        "#define THREEPP_${GUARD}_HPP\n\n"
         "namespace threepp::shaders::${NS} {\n\n"
         "const char* ${NAME}=R\"(${text})\";\n\n"
         "}\n"

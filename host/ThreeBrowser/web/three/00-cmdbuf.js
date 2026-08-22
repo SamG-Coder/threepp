@@ -8,6 +8,7 @@
     RENDER: 1,
     SET_SIZE: 2,
     CLEAR_COLOR: 3,
+    RENDER_PASS: 4,
     SCENE_CREATE: 10,
     SCENE_BG: 11,
     SCENE_FOG: 12,
@@ -25,6 +26,7 @@
     TEX_ROWS: 35,
     TEX_PARAMS: 36,
     TEX_CUBE: 37,
+    TEX_FLOAT: 38,
     MAT_BASIC: 40,
     MAT_LAMBERT: 41,
     MAT_STANDARD: 42,
@@ -41,6 +43,7 @@
     MAT_VISIBLE: 53,
     MAT_COLOR: 54,
     MAT_NORMAL_SCALE: 55,
+    SHADER_TEX: 56,
     MESH: 60,
     GROUP: 61,
     INSTANCED: 62,
@@ -377,6 +380,17 @@
     render(scene, camera) {
       appendRender(scene, camera);
     },
+    renderPass(scene, camera, target, overrideMaterial = 0, face = 0, mip = 0, flags = 0) {
+      const s = begin(OP.RENDER_PASS, 28);
+      wu32(scene);
+      wu32(camera);
+      wu32(target);
+      wu32(overrideMaterial);
+      wu32(face);
+      wu32(mip);
+      wu32(flags);
+      end(s);
+    },
     setSize(w, h) {
       const s = begin(OP.SET_SIZE, 8);
       wu32(w);
@@ -618,6 +632,25 @@
       }
       return true;
     },
+    // Float data textures (for example skinning bone matrices) must retain
+    // signed values and cannot pass through the display-image RGBA8 path.
+    uploadFloat(id, width, height, pixels, params) {
+      const w = width | 0;
+      const h = height | 0;
+      const count = w * h * 4;
+      if (w <= 0 || h <= 0 || !pixels || pixels.length < count) return false;
+      const payload = 16 + count * 4;
+      if (!canFit(payload)) return false;
+      const s = begin(OP.TEX_FLOAT, payload);
+      wu32(id);
+      wu32(w);
+      wu32(h);
+      wu32(0);
+      copyBytes(new Uint8Array(pixels.buffer, pixels.byteOffset, count * 4));
+      end(s);
+      if (params) this.texParams(id, params.wrapS, params.wrapT, params.colorSpace, params.mag, params.min, params.channel, params.ox, params.oy, params.rx, params.ry);
+      return true;
+    },
     matBasic(id, hex) {
       const s = begin(OP.MAT_BASIC, 8);
       wu32(id);
@@ -742,6 +775,16 @@
       wf32(x);
       wf32(y);
       wu32(0);
+      end(s);
+    },
+    shaderTexture(id, name, tex) {
+      const bytes = new TextEncoder().encode(String(name || ""));
+      if (!id || !tex || !bytes.length) return;
+      const s = begin(OP.SHADER_TEX, 12 + bytes.length);
+      wu32(id);
+      wu32(tex);
+      wu32(bytes.length);
+      copyBytes(bytes);
       end(s);
     },
     mesh(id, geo, mat) {

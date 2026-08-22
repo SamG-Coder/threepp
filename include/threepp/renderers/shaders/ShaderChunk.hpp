@@ -540,8 +540,13 @@ namespace threepp::shaders {
             return get("sprite_vert");
         }
 
-        const std::string& get(const std::string& key) {
-            return data_.at(key);
+        const std::string& get(const std::string& key, bool threeR148 = false) {
+            const auto& chunks = threeR148 ? compatData_ : data_;
+            const auto it = chunks.find(key);
+            if (it != chunks.end()) return it->second;
+
+            static const std::string empty;
+            return empty;
         }
 
         static ShaderChunk& instance() {
@@ -551,6 +556,7 @@ namespace threepp::shaders {
 
     private:
         std::unordered_map<std::string, std::string> data_;
+        std::unordered_map<std::string, std::string> compatData_;
 
         ShaderChunk();
 

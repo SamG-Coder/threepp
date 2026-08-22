@@ -573,18 +573,21 @@ struct GLRenderer::Impl {
 
             } else if (object->is<Mesh>() || object->is<Line>() || object->is<Points>()) {
 
+                bool renderable = true;
                 if (auto skinned = object->as<SkinnedMesh>()) {
 
-                    // update skeleton only once in a frame
-
-                    if (skinned->skeleton->frame != static_cast<int>(_info.render.frame)) {
+                    // A browser-side SkinnedMesh can be inserted into the scene
+                    // before its asynchronous skeleton load has completed. Do
+                    // not dereference or draw it until bind() supplies one.
+                    renderable = static_cast<bool>(skinned->skeleton);
+                    if (renderable && skinned->skeleton->frame != static_cast<int>(_info.render.frame)) {
 
                         skinned->skeleton->update();
                         skinned->skeleton->frame = _info.render.frame;
                     }
                 }
 
-                if (!object->frustumCulled || _frustum.intersectsObject(*object)) {
+                if (renderable && (!object->frustumCulled || _frustum.intersectsObject(*object))) {
 
                     if (sortObjects) {
 
@@ -843,29 +846,33 @@ struct GLRenderer::Impl {
 
             // wire up the material to this renderer's lighting state
 
-            uniforms.at("ambientLightColor").setValue(lights.state.ambient);
-            uniforms.at("lightProbe").setValue(lights.state.probe);
-            uniforms.at("directionalLights").setValue(lights.state.directional);
-            uniforms.at("directionalLightShadows").setValue(lights.state.directionalShadow);
-            uniforms.at("spotLights").setValue(lights.state.spot);
-            uniforms.at("spotLightShadows").setValue(lights.state.spotShadow);
-            uniforms.at("pointLights").setValue(lights.state.point);
-            uniforms.at("pointLightShadows").setValue(lights.state.pointShadow);
-            uniforms.at("rectAreaLights").setValue(lights.state.rectArea);
-            uniforms.at("hemisphereLights").setValue(lights.state.hemi);
+            // ShaderMaterial uniforms normally originate in JavaScript's UniformsLib.
+            // Native-hosted pages send scalar/custom values, while the renderer owns
+            // the structured light arrays. Create those entries here when necessary
+            // instead of requiring the bridge to serialize Three.js light objects.
+            uniforms["ambientLightColor"].setValue(lights.state.ambient);
+            uniforms["lightProbe"].setValue(lights.state.probe);
+            uniforms["directionalLights"].setValue(lights.state.directional);
+            uniforms["directionalLightShadows"].setValue(lights.state.directionalShadow);
+            uniforms["spotLights"].setValue(lights.state.spot);
+            uniforms["spotLightShadows"].setValue(lights.state.spotShadow);
+            uniforms["pointLights"].setValue(lights.state.point);
+            uniforms["pointLightShadows"].setValue(lights.state.pointShadow);
+            uniforms["rectAreaLights"].setValue(lights.state.rectArea);
+            uniforms["hemisphereLights"].setValue(lights.state.hemi);
 
-            uniforms.at("directionalShadowMap").setValue(lights.state.directionalShadowMap);
-            uniforms.at("directionalShadowMatrix").setValue(lights.state.directionalShadowMatrix);
-            uniforms.at("spotShadowMap").setValue(lights.state.spotShadowMap);
-            uniforms.at("spotShadowMatrix").setValue(lights.state.spotShadowMatrix);
-            uniforms.at("pointShadowMap").setValue(lights.state.pointShadowMap);
-            uniforms.at("pointShadowMatrix").setValue(lights.state.pointShadowMatrix);
+            uniforms["directionalShadowMap"].setValue(lights.state.directionalShadowMap);
+            uniforms["directionalShadowMatrix"].setValue(lights.state.directionalShadowMatrix);
+            uniforms["spotShadowMap"].setValue(lights.state.spotShadowMap);
+            uniforms["spotShadowMatrix"].setValue(lights.state.spotShadowMatrix);
+            uniforms["pointShadowMap"].setValue(lights.state.pointShadowMap);
+            uniforms["pointShadowMatrix"].setValue(lights.state.pointShadowMatrix);
 
             if (!lights.state.rectArea.empty()) {
                 auto& ltcLib = RectAreaLightUniformsLib::instance();
                 ltcLib.init();
-                uniforms.at("ltc_1").setValue(ltcLib.ltc_1().get());
-                uniforms.at("ltc_2").setValue(ltcLib.ltc_2().get());
+                uniforms["ltc_1"].setValue(ltcLib.ltc_1().get());
+                uniforms["ltc_2"].setValue(ltcLib.ltc_2().get());
             }
         }
 
@@ -1211,17 +1218,17 @@ struct GLRenderer::Impl {
     }
 
     void markUniformsLightsNeedsUpdate(UniformMap& uniforms, bool value) {
-        uniforms.at("ambientLightColor").needsUpdate = value;
-        uniforms.at("lightProbe").needsUpdate = value;
+        uniforms["ambientLightColor"].needsUpdate = value;
+        uniforms["lightProbe"].needsUpdate = value;
 
-        uniforms.at("directionalLights").needsUpdate = value;
-        uniforms.at("directionalLightShadows").needsUpdate = value;
-        uniforms.at("pointLights").needsUpdate = value;
-        uniforms.at("pointLightShadows").needsUpdate = value;
-        uniforms.at("spotLights").needsUpdate = value;
-        uniforms.at("spotLightShadows").needsUpdate = value;
-        uniforms.at("rectAreaLights").needsUpdate = value;
-        uniforms.at("hemisphereLights").needsUpdate = value;
+        uniforms["directionalLights"].needsUpdate = value;
+        uniforms["directionalLightShadows"].needsUpdate = value;
+        uniforms["pointLights"].needsUpdate = value;
+        uniforms["pointLightShadows"].needsUpdate = value;
+        uniforms["spotLights"].needsUpdate = value;
+        uniforms["spotLightShadows"].needsUpdate = value;
+        uniforms["rectAreaLights"].needsUpdate = value;
+        uniforms["hemisphereLights"].needsUpdate = value;
     }
 
     bool materialNeedsLights(Material* material) {

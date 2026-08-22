@@ -54,6 +54,7 @@ const nativeTypes = new Map([
   ["isDepthTexture", "DepthTexture"],
   ["isCubeTexture", "CubeTexture"],
   ["isMesh", "Mesh"],
+  ["isInstancedMesh", "InstancedMesh"],
   ["isLine", "Line"],
   ["isLineSegments", "LineSegments"],
   ["isPoints", "Points"],
@@ -72,6 +73,37 @@ const nativeTypes = new Map([
   ["isWebGLRenderer", "WebGLRenderer"],
 ]);
 const nativeTypeNames = new Set(nativeTypes.values());
+const expectedNativeBase = new Map([
+  ["Group", "Object3D"], ["Scene", "Object3D"], ["Camera", "Object3D"],
+  ["PerspectiveCamera", "Camera"], ["OrthographicCamera", "Camera"],
+  ["Mesh", "Object3D"], ["InstancedMesh", "Mesh"],
+  ["Line", "Object3D"], ["LineSegments", "Line"],
+  ["Points", "Object3D"], ["Sprite", "Object3D"], ["Bone", "Object3D"],
+  ["SkinnedMesh", "Mesh"], ["Light", "Object3D"], ["AmbientLight", "Light"],
+  ["DirectionalLight", "Light"], ["HemisphereLight", "Light"],
+  ["PointLight", "Light"], ["SpotLight", "Light"], ["RectAreaLight", "Light"],
+  ["MeshBasicMaterial", "Material"], ["MeshLambertMaterial", "Material"],
+  ["MeshPhongMaterial", "Material"], ["MeshToonMaterial", "Material"],
+  ["MeshStandardMaterial", "Material"], ["MeshPhysicalMaterial", "MeshStandardMaterial"],
+  ["MeshNormalMaterial", "Material"], ["PointsMaterial", "Material"],
+  ["LineBasicMaterial", "Material"], ["LineDashedMaterial", "LineBasicMaterial"],
+  ["SpriteMaterial", "Material"], ["ShaderMaterial", "Material"],
+  ["RawShaderMaterial", "ShaderMaterial"], ["MeshDepthMaterial", "Material"],
+  ["MeshDistanceMaterial", "Material"], ["CanvasTexture", "Texture"],
+  ["DataTexture", "Texture"], ["Data3DTexture", "Texture"],
+  ["DataArrayTexture", "Texture"], ["DepthTexture", "Texture"],
+  ["CubeTexture", "Texture"], ["WebGLCubeRenderTarget", "WebGLRenderTarget"],
+]);
+const recognizableThreeBases = new Set([
+  ...nativeTypeNames, "InstancedMesh", "EventDispatcher", "Loader",
+]);
+
+function isCustomDerivedType(definition, nativeType) {
+  if (definition.type !== "ClassDeclaration" && definition.type !== "ClassExpression") return false;
+  const baseName = definition.superClass?.type === "Identifier" ? definition.superClass.name : null;
+  const expected = expectedNativeBase.get(nativeType);
+  return Boolean(baseName && expected && recognizableThreeBases.has(baseName) && baseName !== expected);
+}
 
 function semanticMarker(node) {
   const truthy = node.right?.type === "Literal" && node.right.value === true ||
@@ -142,6 +174,7 @@ export function relinkViteChunk(source, filename = "chunk.mjs") {
   });
 
   const replacements = [...definitions.values()]
+    .filter(({ definition, nativeType }) => !isCustomDerivedType(definition, nativeType))
     .map(({ definition, nativeType }) => replacementFor(definition, source, nativeType))
     .filter(Boolean)
     .sort((left, right) => right.start - left.start);

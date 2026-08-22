@@ -28,6 +28,9 @@ set_target_properties(three_native PROPERTIES
         LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 if (MINGW)
+    target_compile_options(threepp PRIVATE -g)
+    target_compile_options(three_native PRIVATE -g)
+    target_link_options(three_native PRIVATE -g)
     target_link_options(three_native PRIVATE -static -static-libgcc -static-libstdc++)
 endif ()
 

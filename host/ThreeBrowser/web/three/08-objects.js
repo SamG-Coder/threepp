@@ -135,9 +135,22 @@
       (src && src.length !== packed);
     if (interleaved || attr.normalized || !src || !(src instanceof Float32Array)) {
       const out = new Float32Array(packed);
+      const readers = [attr.getX, attr.getY, attr.getZ, attr.getW];
       for (let i = 0; i < count; i++) {
         for (let j = 0; j < itemSize; j++) {
-          out[i * itemSize + j] = attr.getComponent ? attr.getComponent(i, j) : 0;
+          // getComponent() is a newer Three.js API. Deployed r148 and older
+          // bundles expose the component-specific accessors instead, notably
+          // on InterleavedBufferAttribute. Falling back to zero silently
+          // destroyed UV, skin, colour, and tangent streams from those sites.
+          if (typeof attr.getComponent === "function") {
+            out[i * itemSize + j] = attr.getComponent(i, j);
+          } else if (j < readers.length && typeof readers[j] === "function") {
+            out[i * itemSize + j] = readers[j].call(attr, i);
+          } else if (attr.data?.array && attr.data.stride != null) {
+            out[i * itemSize + j] = attr.data.array[i * attr.data.stride + (attr.offset || 0) + j];
+          } else {
+            out[i * itemSize + j] = src?.[i * itemSize + j] ?? 0;
+          }
         }
       }
       return out;
@@ -277,6 +290,9 @@
   function nativeSkinnedHandle(geometry, material) {
     const gh = ensureNativeGeometry(geometry);
     const mh = materialHandle(material);
+    if (globalThis.process?.env?.THREEBROWSER_NATIVE_SKIN_TRACE) {
+      console.error(`skin create request geometry=${gh} material=${mh}`);
+    }
     if (!gh || !mh) return 0;
     if (TN.cmd && typeof TN.cmd.skinnedMesh === "function") {
       const id = TN.cmd.alloc();
@@ -715,6 +731,73 @@
       for (let i = 0; i < count; i++) {
         this.instanceMatrix.array.set(_identity, i * 16);
       }
+      // A native handle already exists, but the JS-side instance attributes
+      // are populated after construction. Queue the same first-render upload
+      // stock WebGLRenderer performs for a newly-created InstancedMesh.
+      if (TN.cmd && typeof TN.cmd.markPose === "function") TN.cmd.markPose(this);
+    }
+    flushSelf() {
+      const result = super.flushSelf();
+      if (!this._h) return result;
+
+      // Stock three.js uploads the current BufferAttribute storage on the
+      // first render.  Applications are allowed to replace `.array` before
+      // that render (summer-afternoon does this for every environment patch),
+      // so syncing only setMatrixAt() leaves all native instances at identity.
+      const matrix = this.instanceMatrix;
+      const matrixArray = matrix && matrix.array;
+      const matrixVersion = matrix && Number.isFinite(matrix.version) ? matrix.version : 0;
+      if (
+        matrixArray &&
+        matrixArray.length >= 16 &&
+        (this._nativeInstanceMatrixArray !== matrixArray ||
+          this._nativeInstanceMatrixVersion !== matrixVersion)
+      ) {
+        const count = Math.min(this._capacity || this.count || 0, (matrixArray.length / 16) | 0);
+        if (TN.cmd && typeof TN.cmd.instMatrices === "function") {
+          TN.cmd.instMatrices(this._h, 0, count, matrixArray.subarray(0, count * 16));
+        } else {
+          const value = TN.Matrix4 ? new TN.Matrix4() : null;
+          if (value) {
+            for (let i = 0; i < count; i++) {
+              value.fromArray(matrixArray, i * 16);
+              this.setMatrixAt(i, value);
+            }
+          }
+        }
+        this._nativeInstanceMatrixArray = matrixArray;
+        this._nativeInstanceMatrixVersion = matrixVersion;
+      }
+
+      const color = this.instanceColor;
+      const colorArray = color && color.array;
+      const colorVersion = color && Number.isFinite(color.version) ? color.version : 0;
+      if (
+        colorArray &&
+        colorArray.length >= 3 &&
+        (this._nativeInstanceColorArray !== colorArray ||
+          this._nativeInstanceColorVersion !== colorVersion)
+      ) {
+        const count = Math.min(this._capacity || this.count || 0, (colorArray.length / 3) | 0);
+        const value = TN.Color ? new TN.Color() : null;
+        for (let i = 0; i < count; i++) {
+          const offset = i * 3;
+          if (value && typeof value.setRGB === "function") {
+            value.setRGB(colorArray[offset], colorArray[offset + 1], colorArray[offset + 2]);
+            this.setColorAt(i, value);
+          } else if (TN.cmd && typeof TN.cmd.instColor === "function") {
+            const hex =
+              ((Math.round(colorArray[offset] * 255) & 255) << 16) |
+              ((Math.round(colorArray[offset + 1] * 255) & 255) << 8) |
+              (Math.round(colorArray[offset + 2] * 255) & 255);
+            TN.cmd.instColor(this._h, i, hex >>> 0);
+          }
+        }
+        this._nativeInstanceColorArray = colorArray;
+        this._nativeInstanceColorVersion = colorVersion;
+      }
+
+      return result;
     }
     setMatrixAt(index, matrix) {
       writeMatrix(this.instanceMatrix.array, index * 16, matrix);
@@ -1149,16 +1232,27 @@
         this.boneInverses = [];
         for (let i = 0; i < bones.length; i++) this.boneInverses.push(newMatrix4());
       }
+      this._h = 0;
+      this.ensureNative();
+    }
+    ensureNative() {
+      if (this._h) return this._h;
+      const handles = this.bones.map((bone) => bone?._h || 0);
+      if (globalThis.process?.env?.THREEBROWSER_NATIVE_SKIN_TRACE) {
+        console.error(`skeleton ensure bones=${handles.length} ready=${handles.filter(Boolean).length}`);
+      }
+      // Preserve the exact GLTF bone ordering. A partially-created native
+      // skeleton shifts every following skinIndex, so retry later at bind time.
+      if (handles.length === 0 || handles.some((handle) => !handle)) return 0;
       const n = native();
       if (n && typeof n.SkeletonCreate === "function") {
         try {
-          this._h = n.SkeletonCreate(
-            this.bones.map((b) => b._h || 0).filter(Boolean).join(",")
-          ) || 0;
+          this._h = n.SkeletonCreate(handles.join(",")) || 0;
         } catch {
           this._h = 0;
         }
       }
+      return this._h;
     }
     calculateInverses() {
       this.boneInverses.length = 0;
@@ -1265,6 +1359,82 @@
       this.boundingBox = null;
       this.boundingSphere = null;
       this.skeleton = null;
+      this._nativeBoundSkeletonHandle = 0;
+    }
+    _syncNativeSkeleton() {
+      const skeleton = this.skeleton;
+      if (!skeleton) return;
+      let skeletonHandle = skeleton.ensureNative?.() || skeleton._h || 0;
+      if (!skeletonHandle) {
+        const n = native();
+        const bones = skeleton.bones || [];
+        if (!n || typeof n.BoneCreate !== "function" || typeof n.SkeletonCreate !== "function") return;
+        for (const bone of bones) {
+          if (!bone._h) {
+            try {
+              bone._h = n.BoneCreate() || 0;
+            } catch {
+              bone._h = 0;
+            }
+          }
+        }
+        const handles = bones.map((bone) => bone?._h || 0);
+        if (handles.length === 0 || handles.some((handle) => !handle)) return;
+        try {
+          skeleton._h = n.SkeletonCreate(handles.join(",")) || 0;
+        } catch {
+          skeleton._h = 0;
+        }
+        skeletonHandle = skeleton._h;
+      }
+      if (globalThis.process?.env?.THREEBROWSER_NATIVE_SKIN_TRACE) {
+        console.error(`skin sync mesh=${this._h || 0} skeleton=${skeletonHandle}`);
+      }
+      if (!this._h || !skeletonHandle) return;
+      if (this._nativeBoundSkeletonHandle !== skeletonHandle) {
+        const bones = skeleton.bones || [];
+        if (TN.cmd) {
+          for (const bone of bones) {
+            const parentHandle = bone.parent?.isBone ? bone.parent._h : this._h;
+            if (parentHandle && bone._h) TN.cmd.add(parentHandle, bone._h);
+          }
+          TN.cmd.skinnedBind(this._h, skeletonHandle);
+        } else {
+          const n = native();
+          if (n && typeof n.SkinnedBind === "function") {
+            try {
+              for (const bone of bones) {
+                const parentHandle = bone.parent?.isBone ? bone.parent._h : this._h;
+                if (parentHandle && bone._h && n.ObjectAdd) n.ObjectAdd(parentHandle, bone._h);
+              }
+              n.SkinnedBind(this._h, skeletonHandle);
+            } catch {
+              return;
+            }
+          }
+        }
+        this._nativeBoundSkeletonHandle = skeletonHandle;
+        applySkeletonInverses(skeleton);
+      }
+      // Bundled Vite builds can retain their own Bone/Skeleton constructors.
+      // Mirror those animated local transforms into the native hierarchy each
+      // frame even though their properties do not carry our dirty callbacks.
+      if (TN.cmd) {
+        for (const bone of skeleton.bones || []) {
+          if (!bone?._h) continue;
+          TN.cmd.setPose(
+            bone._h,
+            bone.position?.x || 0, bone.position?.y || 0, bone.position?.z || 0,
+            bone.rotation?.x || 0, bone.rotation?.y || 0, bone.rotation?.z || 0,
+            bone.scale?.x ?? 1, bone.scale?.y ?? 1, bone.scale?.z ?? 1
+          );
+        }
+      }
+    }
+    flushSelf() {
+      const result = super.flushSelf();
+      this._syncNativeSkeleton();
+      return result;
     }
     bind(skeleton, bindMatrix) {
       this.skeleton = skeleton;
@@ -1280,21 +1450,7 @@
           if (typeof this.bindMatrixInverse.invert === "function") this.bindMatrixInverse.invert();
         }
       }
-      if (this._h && skeleton?._h) {
-        if (TN.cmd && typeof TN.cmd.skinnedBind === "function") {
-          TN.cmd.skinnedBind(this._h, skeleton._h);
-        } else {
-          const n = native();
-          if (n && typeof n.SkinnedBind === "function") {
-            try {
-              n.SkinnedBind(this._h, skeleton._h);
-            } catch {
-              /* native skin bind optional */
-            }
-          }
-        }
-        applySkeletonInverses(skeleton);
-      }
+      this._syncNativeSkeleton();
     }
     pose() {
       this.skeleton?.pose?.();
@@ -1351,6 +1507,8 @@
         this.bindMatrixInverse.copy(source.bindMatrixInverse);
       }
       this.skeleton = source.skeleton;
+      this._nativeBoundSkeletonHandle = 0;
+      this._syncNativeSkeleton();
       return this;
     }
   }

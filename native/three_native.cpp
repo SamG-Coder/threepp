@@ -4,6 +4,7 @@
 #include "threepp/animation/AnimationMixer.hpp"
 #include "threepp/geometries/TorusKnotGeometry.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
+#include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 #ifdef THREEPP_WITH_VULKAN
 #include "threepp/renderers/VulkanRenderer.hpp"
@@ -25,6 +26,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <exception>
@@ -43,6 +45,8 @@
 #include <vector>
 
 #include "runtime_internal.hpp"
+
+#include <iostream>
 
 using namespace threepp;
 using tn::g;
@@ -87,6 +91,11 @@ void tn::renderPendingFrame() {
     const uint32_t sceneHandle = g.drawScene.load();
     const uint32_t cameraHandle = g.drawCamera.load();
     if (!g.renderer || sceneHandle == 0 || cameraHandle == 0) {
+        if (sceneHandle != 0 || cameraHandle != 0) {
+            setError(("render skipped: renderer=" + std::to_string(g.renderer ? 1 : 0) +
+                      " scene=" + std::to_string(sceneHandle) +
+                      " camera=" + std::to_string(cameraHandle)).c_str());
+        }
         g.sceneDirty.store(false, std::memory_order_relaxed);
         return;
     }
@@ -94,12 +103,15 @@ void tn::renderPendingFrame() {
     Slot* cameraSlot = getSlot(cameraHandle);
     if (!sceneSlot || sceneSlot->kind != Kind::Scene || !sceneSlot->object ||
         !cameraSlot || cameraSlot->kind != Kind::Camera || !cameraSlot->object) {
+        setError(("render skipped: invalid scene/camera handles " +
+                  std::to_string(sceneHandle) + "/" + std::to_string(cameraHandle)).c_str());
         g.sceneDirty.store(false, std::memory_order_relaxed);
         return;
     }
     auto* scene = dynamic_cast<Scene*>(sceneSlot->object.get());
     auto* camera = dynamic_cast<Camera*>(cameraSlot->object.get());
     if (!scene || !camera) {
+        setError("render skipped: scene/camera type conversion failed");
         g.sceneDirty.store(false, std::memory_order_relaxed);
         return;
     }
@@ -110,7 +122,48 @@ void tn::renderPendingFrame() {
 #if defined(__ANDROID__)
     g.renderer->render(*scene, *camera);
 #else
+    std::vector<Object3D*> debugHidden;
+    static bool meshTraceDone = false;
+    const bool traceMeshes = !meshTraceDone && std::getenv("THREEBROWSER_NATIVE_MESH_TRACE") != nullptr;
+    int meshIndex = 0;
+    if (const char* value = std::getenv("THREEBROWSER_NATIVE_MESH_LIMIT")) {
+        const int limit = std::max(0, std::atoi(value));
+        int visible = 0;
+        scene->traverse([&](Object3D& object) {
+            if (auto* mesh = dynamic_cast<Mesh*>(&object); mesh && object.visible) {
+                if (traceMeshes) {
+                    const auto material = mesh->material();
+                    std::cerr << "[native mesh " << meshIndex << "] name=\"" << object.name
+                              << "\" object=" << object.type()
+                              << " material=" << (material ? material->type() : "null");
+                    if (const auto geometry = mesh->geometry()) {
+                        std::cerr << " attributes=";
+                        bool first = true;
+                        for (const auto& [attributeName, attribute] : geometry->getAttributes()) {
+                            if (!first) std::cerr << ',';
+                            first = false;
+                            std::cerr << attributeName << ':' << attribute->itemSize() << 'x' << attribute->count();
+                        }
+                    }
+                    if (const auto* shader = material ? material->as<ShaderMaterial>() : nullptr) {
+                        std::cerr << " materialPtr=" << shader
+                                  << " vertexHash=" << std::hash<std::string>{}(shader->vertexShader)
+                                  << " fragmentHash=" << std::hash<std::string>{}(shader->fragmentShader)
+                                  << " uniforms=" << shader->uniforms.size();
+                    }
+                    std::cerr << std::endl;
+                }
+                ++meshIndex;
+                if (visible++ >= limit) {
+                    object.visible = false;
+                    debugHidden.push_back(&object);
+                }
+            }
+        });
+        if (traceMeshes) meshTraceDone = true;
+    }
     g.canvas->animateOnce([&] { g.renderer->render(*scene, *camera); });
+    for (auto* object : debugHidden) object->visible = true;
 #endif
     const auto t1 = std::chrono::steady_clock::now();
     g.statsFrameUs.store(
@@ -131,6 +184,10 @@ void tn::renderPendingFrame() {
 void tn::workerMain() {
     g.workerId = std::this_thread::get_id();
     logLine("worker started");
+    // Keep large scene uploads from monopolising the thread which owns the
+    // GLFW window.  Production Vite scenes can enqueue thousands of object,
+    // material and transform updates before their first render.
+    constexpr std::size_t maxJobsPerTurn = 256;
     while (true) {
         std::vector<std::function<void()>> batch;
         bool stopping = false;
@@ -141,7 +198,7 @@ void tn::workerMain() {
                     return g.stop || !g.jobs.empty() || g.sceneDirty.load(std::memory_order_relaxed);
                 });
             }
-            while (!g.jobs.empty()) {
+            while (!g.jobs.empty() && batch.size() < maxJobsPerTurn) {
                 batch.push_back(std::move(g.jobs.front()));
                 g.jobs.pop_front();
             }
@@ -161,6 +218,15 @@ void tn::workerMain() {
         }
         try {
             renderPendingFrame();
+#if !defined(__ANDROID__)
+            // renderPendingFrame pumps GLFW only when a frame is actually
+            // presented. During initial scene construction there may be no
+            // camera/render call yet, but Windows still requires its message
+            // queue to be serviced or the window becomes "Not Responding".
+            if (g.canvas) {
+                glfwPollEvents();
+            }
+#endif
         } catch (const std::exception& ex) {
             setError(ex.what());
         } catch (...) {
@@ -177,6 +243,30 @@ void tn::workerMain() {
 
 namespace {
 
+#if defined(_WIN32)
+LONG WINAPI nativeCrashTrace(EXCEPTION_POINTERS* exception) {
+    const auto code = exception && exception->ExceptionRecord
+            ? exception->ExceptionRecord->ExceptionCode
+            : 0;
+    const auto address = exception && exception->ExceptionRecord
+            ? exception->ExceptionRecord->ExceptionAddress
+            : nullptr;
+    const auto module = reinterpret_cast<std::uintptr_t>(GetModuleHandleA("three_native.dll"));
+    std::cerr << "[native crash] code=0x" << std::hex << code
+              << " address=" << address << " module=" << reinterpret_cast<void*>(module)
+              << std::dec << std::endl;
+    void* frames[64]{};
+    const USHORT count = CaptureStackBackTrace(0, 64, frames, nullptr);
+    for (USHORT i = 0; i < count; ++i) {
+        const auto frame = reinterpret_cast<std::uintptr_t>(frames[i]);
+        std::cerr << "[native crash frame " << i << "] " << frames[i];
+        if (module && frame >= module) std::cerr << " rva=0x" << std::hex << (frame - module) << std::dec;
+        std::cerr << std::endl;
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+#endif
+
 int impl_runtime_start(int width, int height, const char* title) {
     setError("");
     if (g.renderer) {
@@ -188,6 +278,9 @@ int impl_runtime_start(int width, int height, const char* title) {
     const int h = height > 0 ? height : 1;
     g.renderer = std::make_unique<GLRenderer>(WindowSize{w, h});
 #else
+    if (std::getenv("THREEBROWSER_NATIVE_CRASH_TRACE")) {
+        SetUnhandledExceptionFilter(nativeCrashTrace);
+    }
     const bool wantVulkan = g.backend.load(std::memory_order_relaxed) != 0;
 #ifndef THREEPP_WITH_VULKAN
     if (wantVulkan) {
@@ -375,6 +468,38 @@ void tn_runtime_set_backend(int vulkan) {
         setError(ex.what());
     }
 #endif
+}
+
+const char* tn_debug_scene(void) {
+    thread_local std::string result;
+    result = onWorker([] {
+        const auto sceneHandle = g.drawScene.load();
+        const auto cameraHandle = g.drawCamera.load();
+        Slot* sceneSlot = getSlot(sceneHandle);
+        Slot* cameraSlot = getSlot(cameraHandle);
+        auto* scene = sceneSlot && sceneSlot->object ? dynamic_cast<Scene*>(sceneSlot->object.get()) : nullptr;
+        auto* camera = cameraSlot && cameraSlot->object ? dynamic_cast<Camera*>(cameraSlot->object.get()) : nullptr;
+        std::size_t nodes = 0, meshes = 0, visibleMeshes = 0, materials = 0;
+        if (scene) {
+            scene->traverse([&](Object3D& object) {
+                ++nodes;
+                if (auto* mesh = dynamic_cast<Mesh*>(&object)) {
+                    ++meshes;
+                    if (mesh->visible) ++visibleMeshes;
+                    if (mesh->material()) ++materials;
+                }
+            });
+        }
+        return std::string("scene=") + std::to_string(sceneHandle) +
+               " camera=" + std::to_string(cameraHandle) +
+               " sceneOk=" + std::to_string(scene != nullptr) +
+               " cameraOk=" + std::to_string(camera != nullptr) +
+               " nodes=" + std::to_string(nodes) +
+               " meshes=" + std::to_string(meshes) +
+               " visibleMeshes=" + std::to_string(visibleMeshes) +
+               " materials=" + std::to_string(materials);
+    });
+    return result.c_str();
 }
 
 int tn_runtime_start(int width, int height, const char* title) {

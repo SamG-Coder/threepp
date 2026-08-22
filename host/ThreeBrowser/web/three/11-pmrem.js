@@ -223,7 +223,10 @@
     // shadow the prototype setter. Drop it so later assignments hit native IBL.
     const orig = Scene;
     function SceneEnv(...args) {
-      const inst = new orig(...args);
+      // Preserve derived-class construction. Returning `new orig()` here
+      // replaced a site's subclass instance with a plain Scene and discarded
+      // every method on the derived prototype.
+      const inst = Reflect.construct(orig, args, new.target || SceneEnv);
       if (Object.prototype.hasOwnProperty.call(inst, "environment")) {
         const current = inst.environment;
         delete inst.environment;

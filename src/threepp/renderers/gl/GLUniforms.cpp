@@ -13,7 +13,9 @@
 #endif
 
 #include <iostream>
+#include <cstdlib>
 #include <regex>
+#include <vector>
 
 using namespace threepp;
 using namespace threepp::gl;
@@ -122,6 +124,33 @@ namespace {
             glUniform1i(addr, unit);
             auto tex = std::get<Texture*>(value);
             textures->setTexture2D(*tex, unit);
+            if (id == "tMasks" && std::getenv("THREEBROWSER_NATIVE_TERRAIN_TRACE")) {
+                static int traces = 0;
+                if (traces++ < 8) {
+                    GLint binding = 0, width = 0, height = 0, minFilter = 0, magFilter = 0;
+                    glGetIntegerv(GL_TEXTURE_BINDING_2D, &binding);
+                    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &width);
+                    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &height);
+                    glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &minFilter);
+                    glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, &magFilter);
+                    std::cerr << "tMasks GL unit=" << unit << " binding=" << binding
+                              << " size=" << width << 'x' << height
+                              << " filter=" << minFilter << '/' << magFilter
+                              << " version=" << tex->version()
+                              << " error=" << glGetError() << '\n';
+                    if (traces == 1 && width > 0 && height > 0) {
+                        std::vector<unsigned char> pixels(static_cast<size_t>(width) * height * 4u);
+                        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+                        unsigned long long sums[4]{0, 0, 0, 0};
+                        for (size_t i = 0; i + 3 < pixels.size(); i += 4) {
+                            sums[0] += pixels[i]; sums[1] += pixels[i + 1];
+                            sums[2] += pixels[i + 2]; sums[3] += pixels[i + 3];
+                        }
+                        std::cerr << "tMasks GL sums=" << sums[0] << ',' << sums[1] << ','
+                                  << sums[2] << ',' << sums[3] << " error=" << glGetError() << '\n';
+                    }
+                }
+            }
         }
 
         void setValueT3D1(const UniformValue& value, GLTextures* textures) const {

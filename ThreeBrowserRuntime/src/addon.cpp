@@ -204,6 +204,17 @@ napi_value submit(napi_env env, napi_callback_info info) {
     return boolean(env, tn_cmd_submit(static_cast<const std::uint8_t*>(data), static_cast<int>(size)) != 0);
 }
 
+napi_value render(napi_env env, napi_callback_info info) {
+    if (!runtimeActive.load(std::memory_order_acquire)) return boolean(env, false);
+    napi_value argv[2]{};
+    std::size_t argc = 2;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (argc < 2) return boolean(env, false);
+    return boolean(env, tn_runtime_render(
+        static_cast<std::uint32_t>(argNumber(env, argv[0], 0)),
+        static_cast<std::uint32_t>(argNumber(env, argv[1], 0))) != 0);
+}
+
 napi_value decodeImage(napi_env env, napi_callback_info info) {
     napi_value argv[1]{};
     std::size_t argc = 1;
@@ -358,6 +369,10 @@ napi_value lastError(napi_env env, napi_callback_info) {
     return string(env, runtimeMode.load(std::memory_order_acquire) == 2 ? tw_last_error() : tn_last_error());
 }
 
+napi_value debugScene(napi_env env, napi_callback_info) {
+    return string(env, runtimeMode.load(std::memory_order_acquire) == 1 ? tn_debug_scene() : "");
+}
+
 napi_value webGpuSubmit(napi_env env, napi_callback_info info) {
     napi_value argv[2]{};
     std::size_t argc = 2;
@@ -396,6 +411,154 @@ napi_value setToneMapping(napi_env env, napi_callback_info info) {
     napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
     if (runtimeActive.load(std::memory_order_acquire) && argc == 2) tn_renderer_set_tone_mapping(static_cast<int>(argNumber(env, argv[0], 0)),
                                                 static_cast<float>(argNumber(env, argv[1], 1)));
+    return undefined(env);
+}
+
+napi_value shaderMaterialCreate(napi_env env, napi_callback_info info) {
+    napi_value argv[2]{};
+    std::size_t argc = 2;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (!runtimeActive.load(std::memory_order_acquire) || runtimeMode.load(std::memory_order_acquire) != 1 || argc != 2) {
+        return number(env, 0);
+    }
+    const std::string vertex = argString(env, argv[0], "");
+    const std::string fragment = argString(env, argv[1], "");
+    return number(env, tn_shader_material_create(vertex.c_str(), fragment.c_str()));
+}
+
+napi_value shaderMaterialSetSource(napi_env env, napi_callback_info info) {
+    napi_value argv[3]{};
+    std::size_t argc = 3;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (!runtimeActive.load(std::memory_order_acquire) || runtimeMode.load(std::memory_order_acquire) != 1 || argc != 3) {
+        return undefined(env);
+    }
+    const std::string vertex = argString(env, argv[1], "");
+    const std::string fragment = argString(env, argv[2], "");
+    tn_shader_material_set_source(static_cast<std::uint32_t>(argNumber(env, argv[0], 0)),
+                                  vertex.c_str(), fragment.c_str());
+    return undefined(env);
+}
+
+napi_value shaderUniformFloat(napi_env env, napi_callback_info info) {
+    napi_value argv[3]{};
+    std::size_t argc = 3;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (runtimeActive.load(std::memory_order_acquire) && runtimeMode.load(std::memory_order_acquire) == 1 && argc == 3) {
+        const std::string name = argString(env, argv[1], "");
+        tn_shader_uniform_float(static_cast<std::uint32_t>(argNumber(env, argv[0], 0)), name.c_str(),
+                                static_cast<float>(argNumber(env, argv[2], 0)));
+    }
+    return undefined(env);
+}
+
+napi_value shaderUniformInt(napi_env env, napi_callback_info info) {
+    napi_value argv[3]{};
+    std::size_t argc = 3;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (runtimeActive.load(std::memory_order_acquire) && runtimeMode.load(std::memory_order_acquire) == 1 && argc == 3) {
+        const std::string name = argString(env, argv[1], "");
+        tn_shader_uniform_int(static_cast<std::uint32_t>(argNumber(env, argv[0], 0)), name.c_str(),
+                              static_cast<int>(argNumber(env, argv[2], 0)));
+    }
+    return undefined(env);
+}
+
+napi_value shaderUniformVec2(napi_env env, napi_callback_info info) {
+    napi_value argv[4]{};
+    std::size_t argc = 4;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (runtimeActive.load(std::memory_order_acquire) && runtimeMode.load(std::memory_order_acquire) == 1 && argc == 4) {
+        const std::string name = argString(env, argv[1], "");
+        tn_shader_uniform_vec2(static_cast<std::uint32_t>(argNumber(env, argv[0], 0)), name.c_str(),
+                               static_cast<float>(argNumber(env, argv[2], 0)),
+                               static_cast<float>(argNumber(env, argv[3], 0)));
+    }
+    return undefined(env);
+}
+
+napi_value shaderUniformVec3(napi_env env, napi_callback_info info) {
+    napi_value argv[5]{};
+    std::size_t argc = 5;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (runtimeActive.load(std::memory_order_acquire) && runtimeMode.load(std::memory_order_acquire) == 1 && argc == 5) {
+        const std::string name = argString(env, argv[1], "");
+        tn_shader_uniform_vec3(static_cast<std::uint32_t>(argNumber(env, argv[0], 0)), name.c_str(),
+                               static_cast<float>(argNumber(env, argv[2], 0)),
+                               static_cast<float>(argNumber(env, argv[3], 0)),
+                               static_cast<float>(argNumber(env, argv[4], 0)));
+    }
+    return undefined(env);
+}
+
+napi_value shaderUniformVec4(napi_env env, napi_callback_info info) {
+    napi_value argv[6]{};
+    std::size_t argc = 6;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (runtimeActive.load(std::memory_order_acquire) && runtimeMode.load(std::memory_order_acquire) == 1 && argc == 6) {
+        const std::string name = argString(env, argv[1], "");
+        tn_shader_uniform_vec4(static_cast<std::uint32_t>(argNumber(env, argv[0], 0)), name.c_str(),
+                               static_cast<float>(argNumber(env, argv[2], 0)),
+                               static_cast<float>(argNumber(env, argv[3], 0)),
+                               static_cast<float>(argNumber(env, argv[4], 0)),
+                               static_cast<float>(argNumber(env, argv[5], 0)));
+    }
+    return undefined(env);
+}
+
+napi_value shaderUniformMat3(napi_env env, napi_callback_info info) {
+    napi_value argv[11]{};
+    std::size_t argc = 11;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (runtimeActive.load(std::memory_order_acquire) && runtimeMode.load(std::memory_order_acquire) == 1 && argc == 11) {
+        const std::string name = argString(env, argv[1], "");
+        std::array<float, 9> elements{};
+        for (std::size_t i = 0; i < elements.size(); ++i) {
+            elements[i] = static_cast<float>(argNumber(env, argv[i + 2], i % 4 == 0 ? 1 : 0));
+        }
+        tn_shader_uniform_mat3(static_cast<std::uint32_t>(argNumber(env, argv[0], 0)), name.c_str(), elements.data());
+    }
+    return undefined(env);
+}
+
+napi_value shaderUniformMat4(napi_env env, napi_callback_info info) {
+    napi_value argv[18]{};
+    std::size_t argc = 18;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (runtimeActive.load(std::memory_order_acquire) && runtimeMode.load(std::memory_order_acquire) == 1 && argc == 18) {
+        const std::string name = argString(env, argv[1], "");
+        std::array<float, 16> elements{};
+        for (std::size_t i = 0; i < elements.size(); ++i) {
+            elements[i] = static_cast<float>(argNumber(env, argv[i + 2], i % 5 == 0 ? 1 : 0));
+        }
+        tn_shader_uniform_mat4(static_cast<std::uint32_t>(argNumber(env, argv[0], 0)), name.c_str(), elements.data());
+    }
+    return undefined(env);
+}
+
+napi_value shaderUniformTexture(napi_env env, napi_callback_info info) {
+    napi_value argv[3]{};
+    std::size_t argc = 3;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (runtimeActive.load(std::memory_order_acquire) && argc == 3) {
+        const auto material = static_cast<std::uint32_t>(argNumber(env, argv[0], 0));
+        const auto name = argString(env, argv[1], "");
+        const auto texture = static_cast<std::uint32_t>(argNumber(env, argv[2], 0));
+        tn_shader_uniform_texture(material, name.c_str(), texture);
+    }
+    return undefined(env);
+}
+
+napi_value shaderSetFlags(napi_env env, napi_callback_info info) {
+    napi_value argv[4]{};
+    std::size_t argc = 4;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (runtimeActive.load(std::memory_order_acquire) && runtimeMode.load(std::memory_order_acquire) == 1 && argc >= 3) {
+        tn_shader_set_flags(static_cast<std::uint32_t>(argNumber(env, argv[0], 0)),
+                            static_cast<int>(argNumber(env, argv[1], 0)),
+                            static_cast<int>(argNumber(env, argv[2], 1)),
+                            argc >= 4 ? static_cast<int>(argNumber(env, argv[3], 0)) : 0);
+    }
     return undefined(env);
 }
 
@@ -682,6 +845,7 @@ napi_value init(napi_env env, napi_value exports) {
         {"webGpuSubmit", nullptr, webGpuSubmit, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"webGpuMapRead", nullptr, webGpuMapRead, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"submit", nullptr, submit, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"render", nullptr, render, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"decodeImage", nullptr, decodeImage, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"resize", nullptr, resize, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"shutdown", nullptr, shutdown, nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -690,7 +854,19 @@ napi_value init(napi_env env, napi_value exports) {
         {"pressure", nullptr, pressure, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"backendName", nullptr, backendName, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"lastError", nullptr, lastError, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"debugScene", nullptr, debugScene, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setToneMapping", nullptr, setToneMapping, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"shaderMaterialCreate", nullptr, shaderMaterialCreate, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"shaderMaterialSetSource", nullptr, shaderMaterialSetSource, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"shaderUniformFloat", nullptr, shaderUniformFloat, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"shaderUniformInt", nullptr, shaderUniformInt, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"shaderUniformVec2", nullptr, shaderUniformVec2, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"shaderUniformVec3", nullptr, shaderUniformVec3, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"shaderUniformVec4", nullptr, shaderUniformVec4, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"shaderUniformMat3", nullptr, shaderUniformMat3, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"shaderUniformMat4", nullptr, shaderUniformMat4, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"shaderUniformTexture", nullptr, shaderUniformTexture, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"shaderSetFlags", nullptr, shaderSetFlags, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setSceneBackgroundTexture", nullptr, setSceneBackgroundTexture, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setSceneEnvironment", nullptr, setSceneEnvironment, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"pmremFromEquirect", nullptr, pmremFromEquirect, nullptr, nullptr, nullptr, napi_default, nullptr},

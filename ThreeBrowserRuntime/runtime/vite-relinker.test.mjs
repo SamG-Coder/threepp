@@ -50,6 +50,37 @@ test("relinks the scene model spine together with the renderer", () => {
   validModule(result.source);
 });
 
+test("preserves custom subclasses that reuse a core semantic marker", () => {
+  const input = [
+    "class Mesh{constructor(){this.isMesh=!0}}",
+    "class InstancedMesh extends Mesh{}",
+    "class SkinnedMesh extends Mesh{constructor(){super();this.isSkinnedMesh=!0}}",
+    "class CharacterMesh extends InstancedMesh{constructor(actions){super();this.isSkinnedMesh=!0;this.actions=actions}}",
+    "class Renderer{constructor(){this.isWebGLRenderer=!0}}",
+    "export{CharacterMesh,Renderer};",
+  ].join("");
+  const result = relinkViteChunk(input, "vite-custom-subclass.mjs");
+  assert.equal(result.changed, true);
+  assert.match(result.source, /const SkinnedMesh=__TB_relink\("SkinnedMesh"/);
+  assert.doesNotMatch(result.source, /const CharacterMesh=__TB_relink/);
+  assert.match(result.source, /class CharacterMesh extends InstancedMesh/);
+  validModule(result.source);
+});
+
+test("relinks core InstancedMesh so instance transforms cross the native boundary", () => {
+  const input = [
+    "class Mesh{constructor(){this.isMesh=!0}}",
+    "class InstancedMesh extends Mesh{constructor(count){super();this.isInstancedMesh=!0;this.count=count}}",
+    "class Renderer{constructor(){this.isWebGLRenderer=!0}}",
+    "export{InstancedMesh,Renderer};",
+  ].join("");
+  const result = relinkViteChunk(input, "vite-instanced.mjs");
+  assert.equal(result.changed, true);
+  assert.match(result.source, /const InstancedMesh=__TB_relink\("InstancedMesh",class extends Mesh/);
+  assert.ok(result.types.includes("InstancedMesh"));
+  validModule(result.source);
+});
+
 test("leaves unrelated Vite chunks untouched", () => {
   const input = "const renderer={isWebGLRenderer:false};export default renderer;";
   const result = relinkViteChunk(input, "unrelated.mjs");

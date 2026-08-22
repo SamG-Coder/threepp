@@ -2713,6 +2713,13 @@
         /* native fog optional */
       }
     }
+    _upload() {
+      // Some production Three.js frameworks expose a private warm-up helper
+      // on their Scene subclass. Native scene resources are synchronized as
+      // objects are created and on render, so the equivalent operation is
+      // already complete here.
+      return Promise.resolve(this);
+    }
     copy(source, recursive) {
       super.copy(source, recursive);
       if (source.background !== null && source.background !== undefined) {

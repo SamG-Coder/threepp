@@ -522,6 +522,8 @@
             })
             .catch(function (e) {
               if (onError) onError(e);
+              scope.manager.itemError(url);
+              scope.manager.itemEnd(url);
             });
           return;
         }
@@ -970,6 +972,21 @@
   function rasterizeToRgba(texture) {
     const img = texture && texture.image;
     if (!img) return null;
+    // KTX2Loader still returns CompressedTexture when Basis selects its RGBA32
+    // fallback. In that mode mipmaps[0].data is already ordinary RGBA bytes;
+    // drawing the metadata-only `image` object to a canvas produces transparent
+    // black and silently discards the transcoder result.
+    const mip = texture?.isCompressedTexture ? texture.mipmaps?.[0] : null;
+    if (
+      mip?.data &&
+      mip.width > 0 &&
+      mip.height > 0 &&
+      (texture.format === RGBAFormat || mip.data.length >= mip.width * mip.height * 4) &&
+      (mip.data instanceof Uint8Array || mip.data instanceof Uint8ClampedArray) &&
+      mip.data.length >= mip.width * mip.height * 4
+    ) {
+      return { width: mip.width, height: mip.height, pixels: mip.data };
+    }
     if (typeof HTMLVideoElement !== "undefined" && img instanceof HTMLVideoElement) return null;
     if (typeof ImageData !== "undefined" && img instanceof ImageData) {
       return { width: img.width, height: img.height, pixels: img.data };
@@ -1083,14 +1100,18 @@
 
   function textureParams(texture) {
     const cs = texture && texture.colorSpace;
-    const linear =
-      cs == null ||
-      cs === "" ||
-      cs === -1 ||
-      cs === 3000 ||
-      cs === TN.LinearSRGBColorSpace ||
-      cs === "srgb-linear" ||
-      cs === "NoColorSpace";
+    const encoding = texture && texture.encoding;
+    const hasColorSpace = cs != null && cs !== "";
+    // Three.js r151 moved Texture.encoding to Texture.colorSpace. Imported
+    // bundles such as r148 still communicate sRGB through encoding=3001;
+    // treating the absent colorSpace as linear washed every colour texture.
+    const linear = hasColorSpace
+      ? cs === -1 ||
+        cs === 3000 ||
+        cs === TN.LinearSRGBColorSpace ||
+        cs === "srgb-linear" ||
+        cs === "NoColorSpace"
+      : encoding == null || encoding === 3000 || encoding === TN.LinearEncoding;
     const off = texture && texture.offset;
     const rep = texture && texture.repeat;
     return {
@@ -1165,6 +1186,23 @@
       texture._nativeFlipY = flip;
       texture._nativeVersion = ver;
       bindWaitingMaterials(texture);
+      return;
+    }
+    const dataImage = texture?.image;
+    if (
+      dataImage?.data instanceof Float32Array &&
+      dataImage.width > 0 && dataImage.height > 0 &&
+      dataImage.data.length >= dataImage.width * dataImage.height * 4 &&
+      TN.cmd && typeof TN.cmd.uploadFloat === "function"
+    ) {
+      const id = texture._h || TN.cmd.alloc();
+      const params = textureParams(texture);
+      if (TN.cmd.uploadFloat(id, dataImage.width, dataImage.height, dataImage.data, params)) {
+        texture._h = id;
+        texture._nativeFlipY = false;
+        texture._nativeVersion = ver;
+        bindWaitingMaterials(texture);
+      }
       return;
     }
     const raster = rasterizeToRgba(texture);
