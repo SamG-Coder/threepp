@@ -304,26 +304,34 @@ void renderGlOverlay() {
     const int fps = g.statsFps.load(std::memory_order_relaxed);
     const int frameUs = g.statsFrameUs.load(std::memory_order_relaxed);
     if (!ensureGlOverlayGpu()) return;
+    int overlayLeft = 0;
+    int overlayTop = 0;
+    int overlayWidth = 0;
+    int overlayHeight = 0;
+    tw_overlay_bounds(width, height, &overlayLeft, &overlayTop, &overlayWidth, &overlayHeight);
+    if (overlayWidth < 1 || overlayHeight < 1) return;
     int rowBytes = 0;
     const uint8_t* pixels = tw_overlay_raster(
         width, height, fps, frameUs, tn_backend_name(), 0,
         g.statsPresents.load(std::memory_order_relaxed), &rowBytes);
-    if (!pixels || rowBytes < width * 4) return;
+    if (!pixels || rowBytes < overlayWidth * 4) return;
     const uint64_t revision = tw_overlay_revision();
-    const bool sizeChanged = glOverlayWidth != width || glOverlayHeight != height;
+    const bool sizeChanged = glOverlayWidth != overlayWidth || glOverlayHeight != overlayHeight;
     const bool uploadNeeded = sizeChanged || glOverlayUploadedRevision != revision;
     if (uploadNeeded) {
         glBindTexture(GL_TEXTURE_2D, glOverlayTexture);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
         glPixelStorei(GL_UNPACK_ROW_LENGTH, rowBytes / 4);
         if (sizeChanged) {
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_BGRA, GL_UNSIGNED_BYTE, pixels);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, overlayWidth, overlayHeight,
+                         0, GL_BGRA, GL_UNSIGNED_BYTE, pixels);
         } else {
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_BGRA, GL_UNSIGNED_BYTE, pixels);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, overlayWidth, overlayHeight,
+                            GL_BGRA, GL_UNSIGNED_BYTE, pixels);
         }
         glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-        glOverlayWidth = width;
-        glOverlayHeight = height;
+        glOverlayWidth = overlayWidth;
+        glOverlayHeight = overlayHeight;
         glOverlayUploadedRevision = revision;
     }
 
@@ -340,20 +348,12 @@ void renderGlOverlay() {
     const GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
     if (scissor) glGetIntegerv(GL_SCISSOR_BOX, scissorBox);
 
-    glViewport(0, 0, width, height);
+    const int viewportY = height - overlayTop - overlayHeight;
+    glViewport(overlayLeft, viewportY, overlayWidth, overlayHeight);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_CULL_FACE);
-    const bool fpsOnly = !tw_loading_visible() && !tw_overlay_open();
-    if (fpsOnly) {
-        const int left = std::max(0, width - 142);
-        const int right = std::max(0, width - 14);
-        const int top = 14;
-        const int bottom = std::min(height, 58);
-        glEnable(GL_SCISSOR_TEST);
-        glScissor(left, height - bottom, std::max(0, right - left), std::max(0, bottom - top));
-    } else {
-        glDisable(GL_SCISSOR_TEST);
-    }
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(overlayLeft, viewportY, overlayWidth, overlayHeight);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glUseProgram(glOverlayProgram);

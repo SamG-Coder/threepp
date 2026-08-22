@@ -211,6 +211,8 @@ struct Runtime {
     bool activeRenderPassUsesSurface{false};
     uint32_t activeRenderPassSampleCount{1};
     WGPUTextureFormat activeRenderPassDepthFormat{WGPUTextureFormat_Undefined};
+    int activeRenderPassWidth{0};
+    int activeRenderPassHeight{0};
     bool overlayRecordedForCurrentTexture{false};
     WGPUComputePassEncoder computePass{};
     WGPURenderPassEncoder renderPass{};
@@ -731,6 +733,8 @@ bool beginSwapchainPass(WGPULoadOp load, float cr, float cg, float cb, float ca)
     g.currentEncoderUsesSurface = true;
     g.activeRenderPassSampleCount = 1;
     g.activeRenderPassDepthFormat = WGPUTextureFormat_Undefined;
+    g.activeRenderPassWidth = static_cast<int>(g.config.width);
+    g.activeRenderPassHeight = static_cast<int>(g.config.height);
     return true;
 }
 
@@ -752,6 +756,8 @@ void endPasses() {
     g.activeRenderPassUsesSurface = false;
     g.activeRenderPassSampleCount = 1;
     g.activeRenderPassDepthFormat = WGPUTextureFormat_Undefined;
+    g.activeRenderPassWidth = 0;
+    g.activeRenderPassHeight = 0;
     g.renderPipelineSet = false;
     g.skipRenderPass = false;
 }
@@ -1475,6 +1481,25 @@ OverlayLayout overlayLayout(int width, int height) {
     return layout;
 }
 
+RECT overlayRasterRect(int width, int height) {
+    width = std::max(1, width);
+    height = std::max(1, height);
+    if (g.loading.load(std::memory_order_relaxed) != 0) {
+        return RECT{0, 0, width, height};
+    }
+    if (g.overlayOpen.load(std::memory_order_relaxed) != 0) {
+        return overlayLayout(width, height).performance;
+    }
+    if (g.fpsOverlay.load(std::memory_order_relaxed) != 0) {
+        const int badgeWidth = std::min(188, width);
+        const int badgeHeight = std::min(44, height);
+        const int left = std::max(0, width - badgeWidth - 14);
+        const int top = std::min(14, std::max(0, height - badgeHeight));
+        return RECT{left, top, left + badgeWidth, top + badgeHeight};
+    }
+    return RECT{};
+}
+
 constexpr int kDropdownVisibleRows = 6;
 constexpr int kDropdownOptionHeight = 32;
 
@@ -1645,17 +1670,21 @@ struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) uv: v
     return g.overlayBindGroup != nullptr;
 }
 
-void buildOverlayPixels(int width, int height, bool compactFps = false) {
+void buildOverlayPixels(int width, int height, bool compactFps = false,
+                        int cropLeft = 0, int cropTop = 0,
+                        int cropWidth = 0, int cropHeight = 0) {
     const bool loading = g.loading.load(std::memory_order_relaxed) != 0;
     const bool menu = !loading && g.overlayOpen.load(std::memory_order_relaxed) != 0;
     const bool fpsOnly = !loading && !menu && g.fpsOverlay.load(std::memory_order_relaxed) != 0;
+    cropWidth = cropWidth > 0 ? cropWidth : width;
+    cropHeight = cropHeight > 0 ? cropHeight : height;
     // GDI's rounded primitives are not antialiased. Draw interactive overlays
     // at 2x and filter once into the GPU texture so pills, switches, and text
     // retain smooth edges without making the full-time renderer multisampled.
     const int renderScale = (menu || fpsOnly) ? 2 : 1;
-    const int renderWidth = width * renderScale;
-    const int renderHeight = height * renderScale;
-    const int rowBytes = width * 4;
+    const int renderWidth = cropWidth * renderScale;
+    const int renderHeight = cropHeight * renderScale;
+    const int rowBytes = cropWidth * 4;
     const int renderRowBytes = renderWidth * 4;
     BITMAPINFO info{};
     info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
@@ -1671,7 +1700,7 @@ void buildOverlayPixels(int width, int height, bool compactFps = false) {
     std::memset(bits, 0, static_cast<size_t>(renderRowBytes) * renderHeight);
     if (renderScale > 1) {
         SetMapMode(dc, MM_ANISOTROPIC);
-        SetWindowExtEx(dc, width, height, nullptr);
+        SetWindowExtEx(dc, cropWidth, cropHeight, nullptr);
         SetViewportExtEx(dc, renderWidth, renderHeight, nullptr);
     }
     SetBkMode(dc, TRANSPARENT);
@@ -1684,8 +1713,6 @@ void buildOverlayPixels(int width, int height, bool compactFps = false) {
                              OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
     HFONT label = CreateFontW(-12, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                               OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-    HFONT mono = CreateFontW(-14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Cascadia Mono");
     HGDIOBJ oldFont = SelectObject(dc, body);
 
     auto fillRect = [&](RECT rect, COLORREF color) {
@@ -1816,9 +1843,22 @@ void buildOverlayPixels(int width, int height, bool compactFps = false) {
     }
 
     if (menu) {
-        RECT full{0, 0, width, height};
+        RECT full{0, 0, cropWidth, cropHeight};
         fillRect(full, RGB(15, 20, 28));
-        const OverlayLayout layout = overlayLayout(width, height);
+        OverlayLayout layout = overlayLayout(width, height);
+        auto makeCropLocal = [&](RECT& rect) {
+            OffsetRect(&rect, -cropLeft, -cropTop);
+        };
+        makeCropLocal(layout.performance);
+        makeCropLocal(layout.settings);
+        makeCropLocal(layout.input);
+        makeCropLocal(layout.resolutionButton);
+        makeCropLocal(layout.windowedButton);
+        makeCropLocal(layout.borderlessButton);
+        makeCropLocal(layout.fullscreenButton);
+        makeCropLocal(layout.fpsButton);
+        makeCropLocal(layout.debugButton);
+        layout.margin -= cropLeft;
         const RECT panel = layout.performance;
         rounded(panel, RGB(255, 255, 255), RGB(223, 227, 232), 16);
 
@@ -1835,17 +1875,6 @@ void buildOverlayPixels(int width, int height, bool compactFps = false) {
         drawText(L"SHIFT + TAB", keycap, label, RGB(86, 97, 115),
                  DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         line(panel.left + 24, panel.top + 78, panel.right - 24, panel.top + 78, RGB(223, 227, 232));
-
-        RECT stats{panel.left + 24, panel.top + 96, panel.right - 24, panel.top + 150};
-        rounded(stats, RGB(246, 247, 249), RGB(223, 227, 232), 10);
-        std::wstring backend(g.backendName.begin(), g.backendName.end());
-        wchar_t performance[256]{};
-        std::swprintf(performance, std::size(performance), L"%d FPS     %.2f ms     %ls",
-                      g.statsFps.load(std::memory_order_relaxed),
-                      g.statsFrameUs.load(std::memory_order_relaxed) / 1000.0,
-                      backend.c_str());
-        drawText(performance, stats, mono, RGB(54, 65, 81),
-                 DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
         std::vector<DisplayMode> displayModes;
         int selectedDisplayMode = 0;
@@ -1958,12 +1987,14 @@ void buildOverlayPixels(int width, int height, bool compactFps = false) {
             : RECT{width - 138, 18, width - 18, 54};
         rounded(badge, RGB(255, 255, 255), RGB(207, 213, 221), 10);
         wchar_t fps[32]{};
-        std::swprintf(fps, std::size(fps), L"%d FPS", g.statsFps.load(std::memory_order_relaxed));
+        std::swprintf(fps, std::size(fps), L"%d FPS  ·  %.1f ms",
+                      g.statsFps.load(std::memory_order_relaxed),
+                      g.statsFrameUs.load(std::memory_order_relaxed) / 1000.0);
         drawText(fps, badge, title, RGB(20, 105, 220), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 
     const int paddedRowBytes = (rowBytes + 255) & ~255;
-    g.overlayPixels.assign(static_cast<size_t>(paddedRowBytes) * height, 0);
+    g.overlayPixels.assign(static_cast<size_t>(paddedRowBytes) * cropHeight, 0);
     const auto* source = static_cast<const uint8_t*>(bits);
     int sourceRowBytes = renderRowBytes;
     HDC downsampleDc = nullptr;
@@ -1973,8 +2004,8 @@ void buildOverlayPixels(int width, int height, bool compactFps = false) {
         SetMapMode(dc, MM_TEXT);
         BITMAPINFO downsampleInfo{};
         downsampleInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-        downsampleInfo.bmiHeader.biWidth = width;
-        downsampleInfo.bmiHeader.biHeight = -height;
+        downsampleInfo.bmiHeader.biWidth = cropWidth;
+        downsampleInfo.bmiHeader.biHeight = -cropHeight;
         downsampleInfo.bmiHeader.biPlanes = 1;
         downsampleInfo.bmiHeader.biBitCount = 32;
         downsampleInfo.bmiHeader.biCompression = BI_RGB;
@@ -1985,15 +2016,15 @@ void buildOverlayPixels(int width, int height, bool compactFps = false) {
         oldDownsampleBitmap = SelectObject(downsampleDc, downsampleBitmap);
         SetStretchBltMode(downsampleDc, HALFTONE);
         SetBrushOrgEx(downsampleDc, 0, 0, nullptr);
-        StretchBlt(downsampleDc, 0, 0, width, height,
+        StretchBlt(downsampleDc, 0, 0, cropWidth, cropHeight,
                    dc, 0, 0, renderWidth, renderHeight, SRCCOPY);
         source = static_cast<const uint8_t*>(downsampleBits);
         sourceRowBytes = rowBytes;
     }
-    for (int y = 0; y < height; ++y) {
+    for (int y = 0; y < cropHeight; ++y) {
         auto* destination = g.overlayPixels.data() + static_cast<size_t>(y) * paddedRowBytes;
         std::memcpy(destination, source + static_cast<size_t>(y) * sourceRowBytes, rowBytes);
-        for (int x = 0; x < width; ++x) {
+        for (int x = 0; x < cropWidth; ++x) {
             uint8_t* pixel = destination + x * 4;
             const int brightness = pixel[0] + pixel[1] + pixel[2];
             if (loading) {
@@ -2018,41 +2049,45 @@ void buildOverlayPixels(int width, int height, bool compactFps = false) {
     DeleteObject(title);
     DeleteObject(body);
     DeleteObject(label);
-    DeleteObject(mono);
     SelectObject(dc, oldBitmap);
     DeleteObject(bitmap);
     DeleteDC(dc);
     g.overlayRevision.fetch_add(1, std::memory_order_release);
 }
 
-bool prepareOverlay(int& width, int& height, uint32_t sampleCount,
+bool prepareOverlay(int width, int height, uint32_t sampleCount,
                     WGPUTextureFormat depthFormat) {
     const bool visible = g.loading.load(std::memory_order_relaxed) != 0 ||
                          g.overlayOpen.load(std::memory_order_relaxed) != 0 ||
                          g.fpsOverlay.load(std::memory_order_relaxed) != 0;
     if (!visible || !g.currentView || !g.device || !g.queue) return false;
-    width = g.statsW.load(std::memory_order_relaxed);
-    height = g.statsH.load(std::memory_order_relaxed);
     if (width < 1 || height < 1) return false;
     const bool loading = g.loading.load(std::memory_order_relaxed) != 0;
+    const bool menu = !loading && g.overlayOpen.load(std::memory_order_relaxed) != 0;
     const bool fpsOnly = !loading && g.overlayOpen.load(std::memory_order_relaxed) == 0 &&
                          g.fpsOverlay.load(std::memory_order_relaxed) != 0;
-    const int textureWidth = fpsOnly ? std::min(128, width) : width;
-    const int textureHeight = fpsOnly ? std::min(44, height) : height;
-    g.overlayLeft = fpsOnly ? std::max(0, width - textureWidth - 14) : 0;
-    g.overlayTop = fpsOnly ? std::min(14, std::max(0, height - textureHeight)) : 0;
+    const RECT rasterRect = overlayRasterRect(width, height);
+    const int textureWidth = std::max(1L, rasterRect.right - rasterRect.left);
+    const int textureHeight = std::max(1L, rasterRect.bottom - rasterRect.top);
+    g.overlayLeft = rasterRect.left;
+    g.overlayTop = rasterRect.top;
     if (!g.overlayPipeline || g.overlayWidth != textureWidth || g.overlayHeight != textureHeight ||
         g.overlaySampleCount != std::max(1u, sampleCount) || g.overlayDepthFormat != depthFormat) {
         if (!createOverlayGpu(textureWidth, textureHeight, sampleCount, depthFormat)) return false;
     }
     const auto now = std::chrono::steady_clock::now();
     static thread_local auto lastDiagnosticsRefresh = std::chrono::steady_clock::time_point{};
-    const bool diagnosticsDue = !loading &&
+    const bool diagnosticsDue = fpsOnly &&
         (lastDiagnosticsRefresh.time_since_epoch().count() == 0 ||
-         now - lastDiagnosticsRefresh >= std::chrono::milliseconds(250));
+         now - lastDiagnosticsRefresh >= std::chrono::seconds(1));
     const bool dirty = g.overlayDirty.exchange(0, std::memory_order_acq_rel) != 0;
     if (loading || dirty || diagnosticsDue) {
-        buildOverlayPixels(textureWidth, textureHeight, fpsOnly);
+        if (menu) {
+            buildOverlayPixels(width, height, false, g.overlayLeft, g.overlayTop,
+                               textureWidth, textureHeight);
+        } else {
+            buildOverlayPixels(textureWidth, textureHeight, fpsOnly);
+        }
         const int rowBytes = (textureWidth * 4 + 255) & ~255;
         WGPUTexelCopyTextureInfo destination{};
         destination.texture = g.overlayTexture;
@@ -2062,18 +2097,26 @@ bool prepareOverlay(int& width, int& height, uint32_t sampleCount,
         WGPUExtent3D extent{static_cast<uint32_t>(textureWidth), static_cast<uint32_t>(textureHeight), 1};
         wgpuQueueWriteTexture(g.queue, &destination, g.overlayPixels.data(), g.overlayPixels.size(), &layout, &extent);
         g.overlayRenderedFps = g.statsFps.load(std::memory_order_relaxed);
-        if (!loading) lastDiagnosticsRefresh = now;
+        if (fpsOnly) lastDiagnosticsRefresh = now;
     }
     return true;
 }
 
 void encodeOverlayDraw(WGPURenderPassEncoder pass, int width, int height) {
+    if (width < 1 || height < 1) return;
+    const int clampedLeft = std::clamp(g.overlayLeft, 0, width);
+    const int clampedTop = std::clamp(g.overlayTop, 0, height);
+    const int remainingWidth = width - clampedLeft;
+    const int remainingHeight = height - clampedTop;
+    const int clampedWidth = std::clamp(g.overlayWidth, 0, remainingWidth);
+    const int clampedHeight = std::clamp(g.overlayHeight, 0, remainingHeight);
+    if (clampedWidth < 1 || clampedHeight < 1) return;
     wgpuRenderPassEncoderSetPipeline(pass, g.overlayPipeline);
     wgpuRenderPassEncoderSetBindGroup(pass, 0, g.overlayBindGroup, 0, nullptr);
-    const uint32_t left = static_cast<uint32_t>(std::max(0, g.overlayLeft));
-    const uint32_t top = static_cast<uint32_t>(std::max(0, g.overlayTop));
-    const uint32_t drawWidth = static_cast<uint32_t>(std::min(g.overlayWidth, width - static_cast<int>(left)));
-    const uint32_t drawHeight = static_cast<uint32_t>(std::min(g.overlayHeight, height - static_cast<int>(top)));
+    const uint32_t left = static_cast<uint32_t>(clampedLeft);
+    const uint32_t top = static_cast<uint32_t>(clampedTop);
+    const uint32_t drawWidth = static_cast<uint32_t>(clampedWidth);
+    const uint32_t drawHeight = static_cast<uint32_t>(clampedHeight);
     wgpuRenderPassEncoderSetViewport(pass, static_cast<float>(left), static_cast<float>(top),
                                      static_cast<float>(drawWidth), static_cast<float>(drawHeight), 0.f, 1.f);
     wgpuRenderPassEncoderSetScissorRect(pass, left, top, drawWidth, drawHeight);
@@ -2081,8 +2124,8 @@ void encodeOverlayDraw(WGPURenderPassEncoder pass, int width, int height) {
 }
 
 bool drawOverlayInPass(WGPURenderPassEncoder pass) {
-    int width = 0;
-    int height = 0;
+    const int width = g.activeRenderPassWidth;
+    const int height = g.activeRenderPassHeight;
     if (!pass || !prepareOverlay(width, height, g.activeRenderPassSampleCount,
                                  g.activeRenderPassDepthFormat)) return false;
     encodeOverlayDraw(pass, width, height);
@@ -2090,8 +2133,8 @@ bool drawOverlayInPass(WGPURenderPassEncoder pass) {
 }
 
 bool recordOverlay(WGPUCommandEncoder encoder) {
-    int width = 0;
-    int height = 0;
+    const int width = static_cast<int>(g.config.width);
+    const int height = static_cast<int>(g.config.height);
     if (!encoder || !prepareOverlay(width, height, 1, WGPUTextureFormat_Undefined)) return false;
     WGPURenderPassColorAttachment color{};
     color.view = g.currentView;
@@ -3620,6 +3663,8 @@ void execOne(uint32_t op, Reader& r) {
                 g.currentEncoderUsesSurface = true;
                 g.activeRenderPassUsesSurface = true;
                 g.activeRenderPassSampleCount = 1;
+                g.activeRenderPassWidth = static_cast<int>(colorW);
+                g.activeRenderPassHeight = static_cast<int>(colorH);
                 if (primaryColorView != 0) {
                     if (Slot* colorSlot = getSlot(primaryColorView)) {
                         g.activeRenderPassSampleCount = std::max(1u, colorSlot->texSampleCount);
@@ -3814,6 +3859,8 @@ void execOne(uint32_t op, Reader& r) {
             g.activeRenderPassUsesSurface = false;
             g.activeRenderPassSampleCount = 1;
             g.activeRenderPassDepthFormat = WGPUTextureFormat_Undefined;
+            g.activeRenderPassWidth = 0;
+            g.activeRenderPassHeight = 0;
             g.renderPipelineSet = false;
             g.skipRenderPass = false;
             return;
@@ -4355,13 +4402,20 @@ int tw_overlay_visible(void) {
            g.fpsOverlay.load(std::memory_order_relaxed) != 0;
 }
 
+void tw_overlay_bounds(int canvasWidth, int canvasHeight,
+                       int* left, int* top, int* width, int* height) {
+    const RECT rect = overlayRasterRect(canvasWidth, canvasHeight);
+    if (left) *left = rect.left;
+    if (top) *top = rect.top;
+    if (width) *width = std::max(0L, rect.right - rect.left);
+    if (height) *height = std::max(0L, rect.bottom - rect.top);
+}
+
 const uint8_t* tw_overlay_raster(int width, int height, int fps, int frameUs,
                                  const char* backend, int backlog, uint64_t packets,
                                  int* rowBytes) {
     static int cachedWidth = 0;
     static int cachedHeight = 0;
-    static int cachedFps = -1;
-    static int cachedFrameUs = -1;
     static auto lastDiagnosticsRefresh = std::chrono::steady_clock::time_point{};
     width = std::max(1, width);
     height = std::max(1, height);
@@ -4372,27 +4426,35 @@ const uint8_t* tw_overlay_raster(int width, int height, int fps, int frameUs,
     g.pendingCommandSubmits.store(backlog, std::memory_order_relaxed);
     g.statsCmdSubmits.store(packets, std::memory_order_relaxed);
     if (backend && backend[0]) g.backendName = backend;
-    const int stride = (width * 4 + 255) & ~255;
+    const RECT rasterRect = overlayRasterRect(width, height);
+    const int rasterWidth = std::max(1L, rasterRect.right - rasterRect.left);
+    const int rasterHeight = std::max(1L, rasterRect.bottom - rasterRect.top);
+    const int stride = (rasterWidth * 4 + 255) & ~255;
     if (rowBytes) *rowBytes = stride;
     if (!tw_overlay_visible()) return nullptr;
     const bool loading = g.loading.load(std::memory_order_relaxed) != 0;
+    const bool menu = !loading && g.overlayOpen.load(std::memory_order_relaxed) != 0;
+    const bool fpsOnly = !loading && !menu && g.fpsOverlay.load(std::memory_order_relaxed) != 0;
     if (loading) {
         g.loadingPhase.fetch_add(1, std::memory_order_relaxed);
         g.overlayDirty.store(1, std::memory_order_release);
     }
     const auto now = std::chrono::steady_clock::now();
-    const bool sizeChanged = cachedWidth != width || cachedHeight != height;
-    const bool diagnosticsDue = !loading &&
+    const bool sizeChanged = cachedWidth != rasterWidth || cachedHeight != rasterHeight;
+    const bool diagnosticsDue = fpsOnly &&
         (lastDiagnosticsRefresh.time_since_epoch().count() == 0 ||
-         now - lastDiagnosticsRefresh >= std::chrono::milliseconds(250));
+         now - lastDiagnosticsRefresh >= std::chrono::seconds(1));
     const bool dirty = g.overlayDirty.exchange(0, std::memory_order_acq_rel) != 0;
     if (loading || dirty || sizeChanged || diagnosticsDue) {
-        buildOverlayPixels(width, height);
-        cachedWidth = width;
-        cachedHeight = height;
-        cachedFps = fps;
-        cachedFrameUs = frameUs;
-        if (!loading) lastDiagnosticsRefresh = now;
+        if (menu) {
+            buildOverlayPixels(width, height, false, rasterRect.left, rasterRect.top,
+                               rasterWidth, rasterHeight);
+        } else {
+            buildOverlayPixels(rasterWidth, rasterHeight, fpsOnly);
+        }
+        cachedWidth = rasterWidth;
+        cachedHeight = rasterHeight;
+        if (fpsOnly) lastDiagnosticsRefresh = now;
     }
     return g.overlayPixels.empty() ? nullptr : g.overlayPixels.data();
 }

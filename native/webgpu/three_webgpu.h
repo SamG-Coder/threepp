@@ -61,6 +61,8 @@ TW_API int tw_take_display_command(int* enabled, int* width, int* height, int* r
 TW_API void tw_set_fullscreen_state(int mode, int width, int height, int refresh_hz);
 TW_API void tw_toggle_fps_overlay(void);
 TW_API int tw_overlay_visible(void);
+TW_API void tw_overlay_bounds(int canvas_width, int canvas_height,
+                              int* left, int* top, int* width, int* height);
 TW_API const uint8_t* tw_overlay_raster(int width, int height, int fps, int frame_us,
                                         const char* backend, int backlog, uint64_t packets,
                                         int* row_bytes);

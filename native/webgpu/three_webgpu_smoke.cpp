@@ -185,6 +185,11 @@ int main() {
     // Keep the diagnostics visible while the scene submits so the smoke test
     // exercises the in-encoder overlay path used by real WebGPU pages.
     tw_toggle_fps_overlay();
+    // Reproduce a Win32 double-click resize race: browser layout can still
+    // report the old large canvas while this pass targets the resized surface.
+    int staleOverlayRowBytes = 0;
+    tw_overlay_raster(2560, 1440, 120, 8000, tw_backend_name(), 0, 0,
+                      &staleOverlayRowBytes);
     if (!tw_cmd_submit(s.bytes.data(), static_cast<int>(s.bytes.size()))) {
         std::cerr << "cmd_submit failed: " << tw_last_error() << '\n';
         tw_shutdown();
@@ -237,6 +242,51 @@ int main() {
         return 5;
     }
     tw_toggle_fps_overlay();
+    tw_set_overlay(1);
+    int overlayLeft = 0;
+    int overlayTop = 0;
+    int overlayWidth = 0;
+    int overlayHeight = 0;
+    tw_overlay_bounds(3840, 2160, &overlayLeft, &overlayTop, &overlayWidth, &overlayHeight);
+    if (overlayWidth > 620 || overlayHeight > 430 || overlayWidth < 1 || overlayHeight < 1) {
+        std::cerr << "menu overlay was not bounded to its resident panel texture\n";
+        tw_shutdown();
+        return 9;
+    }
+    const uint8_t* menuPixels = tw_overlay_raster(
+        3840, 2160, 120, 8000, tw_backend_name(), 0, presents, &overlayRowBytes);
+    if (!menuPixels) {
+        std::cerr << "cropped menu raster was empty\n";
+        tw_shutdown();
+        return 11;
+    }
+    size_t lightMenuPixels = 0;
+    const size_t menuPixelCount = static_cast<size_t>(overlayWidth) * overlayHeight;
+    for (int y = 0; y < overlayHeight; ++y) {
+        const uint8_t* row = menuPixels + static_cast<size_t>(y) * overlayRowBytes;
+        for (int x = 0; x < overlayWidth; ++x) {
+            const uint8_t* pixel = row + x * 4;
+            if (pixel[0] > 180 && pixel[1] > 180 && pixel[2] > 180) {
+                ++lightMenuPixels;
+            }
+        }
+    }
+    if (menuPixelCount == 0 || lightMenuPixels * 100 < menuPixelCount * 70) {
+        std::cerr << "cropped menu content was not aligned to its resident texture\n";
+        tw_shutdown();
+        return 11;
+    }
+    const uint64_t menuRevision = tw_overlay_revision();
+    for (int i = 0; i < 1000; ++i) {
+        tw_overlay_raster(3840, 2160, 120 + (i & 3), 8000 + i,
+                          tw_backend_name(), 0, presents + i, &overlayRowBytes);
+    }
+    if (tw_overlay_revision() != menuRevision) {
+        std::cerr << "static menu overlay rebuilt for changing diagnostics\n";
+        tw_shutdown();
+        return 10;
+    }
+    tw_set_overlay(0);
     tw_shutdown();
     return 0;
 }
