@@ -238,6 +238,16 @@ void renderGlOverlay() {
 
 void tn::renderPendingFrame() {
 #if defined(_WIN32)
+    // Command-buffer renderers publish their backbuffer scene through
+    // OP_RENDER rather than tn_runtime_render(). Treat that pending scene as
+    // the first real application frame so the startup overlay cannot mask a
+    // fully running page forever.
+    const bool applicationFramePending = g.sceneDirty.load(std::memory_order_relaxed) &&
+                                         g.drawScene.load(std::memory_order_relaxed) != 0 &&
+                                         g.drawCamera.load(std::memory_order_relaxed) != 0;
+    if (tw_loading_visible() && applicationFramePending) {
+        tn_runtime_set_loading(0, nullptr);
+    }
     if (tw_loading_visible() && g.renderer && g.canvas) {
         static thread_local auto lastLoadingFrame = std::chrono::steady_clock::time_point{};
         const auto now = std::chrono::steady_clock::now();

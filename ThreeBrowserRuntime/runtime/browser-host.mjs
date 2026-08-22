@@ -1327,7 +1327,7 @@ globalThis.Request = class BrowserRequest extends PlatformRequest {
     // Browser Request accepts document-relative URLs; Node's undici Request
     // rejects them before our fetch wrapper gets a chance to resolve them.
     const resolved = typeof input === "string" || input instanceof URL
-      ? new URL(String(input), pulledVirtualURL || globalThis.location?.href)
+      ? new URL(String(input), globalThis.location?.href || pulledVirtualURL)
       : input;
     super(resolved, init);
   }
@@ -1375,7 +1375,7 @@ globalThis.fetch = async (input, init) => {
   }
   let resolved, requestURL, isVirtual;
   try {
-    requestURL = new URL(raw, pulledVirtualURL || globalThis.location?.href);
+    requestURL = new URL(raw, globalThis.location?.href || pulledVirtualURL);
     requestURL.hash = "";
     isVirtual = pulledVirtualURL && requestURL.origin === pulledVirtualURL.origin;
     const sourceCandidate = isVirtual && pulledSourceURL
