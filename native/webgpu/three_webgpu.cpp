@@ -20,6 +20,7 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <atomic>
 #include <chrono>
@@ -4352,6 +4353,56 @@ void execOne(uint32_t op, Reader& r) {
             }
             return;
         }
+        case OP_RTX_SCENE_TRIANGLE_RADIANCE: {
+            const uint32_t version = r.u32();
+            const uint32_t triangleCount = r.u32();
+            if (!r.ok || version != 1u || triangleCount == 0u ||
+                static_cast<uint64_t>(triangleCount) * 16ull > r.remaining()) {
+                setError("Unsupported or truncated RTX triangle-radiance chunk");
+                return;
+            }
+            std::vector<float> radiance(static_cast<std::size_t>(triangleCount) * 4u);
+            for (float& value : radiance) value = r.f32();
+            if (!r.ok || !tw_ray_query_scene_triangle_radiance(
+                    radiance.data(), triangleCount)) {
+                if (!r.ok) setError("RTX triangle-radiance chunk ended before triangleCount");
+                return;
+            }
+            return;
+        }
+        case OP_RTX_SCENE_TRIANGLE_SURFACE: {
+            const uint32_t version = r.u32();
+            const uint32_t triangleCount = r.u32();
+            if (!r.ok || version != 1u || triangleCount == 0u ||
+                static_cast<uint64_t>(triangleCount) * 16ull > r.remaining()) {
+                setError("Unsupported or truncated RTX triangle-surface chunk");
+                return;
+            }
+            std::vector<float> surface(static_cast<std::size_t>(triangleCount) * 4u);
+            for (float& value : surface) value = r.f32();
+            if (!r.ok || !tw_ray_query_scene_triangle_surface(
+                    surface.data(), triangleCount)) {
+                if (!r.ok) setError("RTX triangle-surface chunk ended before triangleCount");
+                return;
+            }
+            return;
+        }
+        case OP_RTX_SCENE_LIGHTS: {
+            const uint32_t version = r.u32();
+            const uint32_t lightCount = r.u32();
+            if (!r.ok || version != 1u || lightCount == 0u || lightCount > 8u ||
+                static_cast<uint64_t>(lightCount) * 64ull > r.remaining()) {
+                setError("Unsupported or truncated RTX static-light payload");
+                return;
+            }
+            std::vector<float> lights(static_cast<std::size_t>(lightCount) * 16u);
+            for (float& value : lights) value = r.f32();
+            if (!r.ok || !tw_ray_query_scene_lights(lights.data(), lightCount)) {
+                if (!r.ok) setError("RTX static-light payload ended before lightCount");
+                return;
+            }
+            return;
+        }
         case OP_RTX_SCENE_COMMIT: {
             const uint32_t version = r.u32();
             const uint32_t encoder = r.u32();
@@ -4393,6 +4444,36 @@ void execOne(uint32_t op, Reader& r) {
                 return;
             }
             tw_ray_query_lighting_evaluate(&frame);
+            return;
+        }
+        case OP_RTX_REFLECTIONS_EVALUATE: {
+            TWRayQueryReflectionFrame frame{};
+            frame.struct_size = sizeof(frame);
+            const uint32_t version = r.u32();
+            frame.command_encoder_handle = r.u32();
+            frame.source_color_texture_handle = r.u32();
+            frame.source_color_vulkan_layout = r.u32();
+            frame.output_color_texture_handle = r.u32();
+            frame.output_color_vulkan_layout = r.u32();
+            frame.depth_texture_handle = r.u32();
+            frame.depth_vulkan_layout = r.u32();
+            frame.normal_roughness_texture_handle = r.u32();
+            frame.normal_roughness_vulkan_layout = r.u32();
+            frame.specular_albedo_texture_handle = r.u32();
+            frame.specular_albedo_vulkan_layout = r.u32();
+            frame.width = r.u32();
+            frame.height = r.u32();
+            for (float& value : frame.inverse_view_projection) value = r.f32();
+            for (float& value : frame.camera_position) value = r.f32();
+            for (float& value : frame.parameters) value = r.f32();
+            for (float& value : frame.environment) value = r.f32();
+            frame.flags = r.u32();
+            frame.frame_index = r.u32();
+            if (!r.ok || version != 1u) {
+                setError("Unsupported or truncated RTX reflection command");
+                return;
+            }
+            tw_ray_query_reflections_evaluate(&frame);
             return;
         }
         case OP_SUBMIT:
@@ -5943,6 +6024,53 @@ int tw_ray_query_scene_indices(const uint32_t* indices, uint32_t indexCount) {
     }
 }
 
+int tw_ray_query_scene_triangle_radiance(const float* rgba,
+                                         uint32_t triangleCount) {
+    if (!rgba || triangleCount == 0) return 0;
+    try {
+        return onWorker([rgba, triangleCount] {
+            const bool result = rayQueryBridgeSetTriangleRadiance(rgba, triangleCount);
+            if (!result) setError(rayQueryBridgeCapabilities().status);
+            return result ? 1 : 0;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+}
+
+int tw_ray_query_scene_triangle_surface(const float* albedoRoughness,
+                                        uint32_t triangleCount) {
+    if (!albedoRoughness || triangleCount == 0) return 0;
+    try {
+        return onWorker([albedoRoughness, triangleCount] {
+            const bool result = rayQueryBridgeSetTriangleSurface(
+                albedoRoughness, triangleCount);
+            if (!result) setError(rayQueryBridgeCapabilities().status);
+            return result ? 1 : 0;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+}
+
+int tw_ray_query_scene_lights(const float* lightRecords,
+                              uint32_t lightCount) {
+    if (!lightRecords || lightCount == 0 || lightCount > 8) return 0;
+    try {
+        return onWorker([lightRecords, lightCount] {
+            const bool result = rayQueryBridgeSetStaticLights(
+                lightRecords, lightCount);
+            if (!result) setError(rayQueryBridgeCapabilities().status);
+            return result ? 1 : 0;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+}
+
 int tw_ray_query_scene_commit(uint32_t commandEncoderHandle) {
 #if !defined(THREEBROWSER_RAY_QUERY)
     (void)commandEncoderHandle;
@@ -6091,6 +6219,158 @@ int tw_ray_query_lighting_evaluate(const TWRayQueryLightingFrame* frame) {
                 const auto rayQuery = rayQueryBridgeCapabilities();
                 setError(status != WGPUStatus_Success
                     ? "wgpu-native rejected the Vulkan ray-query lighting callback"
+                    : rayQuery.status);
+                return 0;
+            }
+            return 1;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+#endif
+}
+
+int tw_ray_query_reflections_evaluate(const TWRayQueryReflectionFrame* frame) {
+    if (!frame || frame->struct_size < sizeof(TWRayQueryReflectionFrame)) return 0;
+#if !defined(THREEBROWSER_RAY_QUERY)
+    (void)frame;
+    return 0;
+#else
+    const TWRayQueryReflectionFrame copy = *frame;
+    const auto acceptedColorLayout = [](uint32_t value) {
+        switch (static_cast<VkImageLayout>(value)) {
+            case VK_IMAGE_LAYOUT_GENERAL:
+            case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+            case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+            case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+            case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+                return true;
+            default:
+                return false;
+        }
+    };
+    const auto acceptedDepthLayout = [](uint32_t value) {
+        switch (static_cast<VkImageLayout>(value)) {
+            case VK_IMAGE_LAYOUT_GENERAL:
+            case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+            case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
+            case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+            case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+            case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+                return true;
+            default:
+                return false;
+        }
+    };
+    if (!acceptedColorLayout(copy.source_color_vulkan_layout) ||
+        !acceptedColorLayout(copy.output_color_vulkan_layout) ||
+        !acceptedColorLayout(copy.normal_roughness_vulkan_layout) ||
+        !acceptedColorLayout(copy.specular_albedo_vulkan_layout)) {
+        setError("Ray-query reflections received an unsupported color VkImageLayout");
+        return 0;
+    }
+    if (!acceptedDepthLayout(copy.depth_vulkan_layout)) {
+        setError("Ray-query reflections received an unsupported depth VkImageLayout");
+        return 0;
+    }
+    try {
+        return onWorker([copy] {
+            endPasses();
+            WGPUCommandEncoder encoder = g.currentEncoder;
+            if (copy.command_encoder_handle) {
+                Slot* slot = getSlot(copy.command_encoder_handle);
+                encoder = slot && slot->kind == Kind::Encoder ? slot->encoder : nullptr;
+            }
+            Slot* source = getSlot(copy.source_color_texture_handle);
+            Slot* output = getSlot(copy.output_color_texture_handle);
+            Slot* depth = getSlot(copy.depth_texture_handle);
+            Slot* normal = getSlot(copy.normal_roughness_texture_handle);
+            Slot* specular = getSlot(copy.specular_albedo_texture_handle);
+            if (!encoder || !source || source->kind != Kind::Texture ||
+                !output || output->kind != Kind::Texture ||
+                !depth || depth->kind != Kind::Texture ||
+                !normal || normal->kind != Kind::Texture ||
+                !specular || specular->kind != Kind::Texture) {
+                setError("Ray-query reflections received an invalid encoder or texture handle");
+                return 0;
+            }
+            const std::array<uint32_t, 5> handles{{
+                copy.source_color_texture_handle,
+                copy.output_color_texture_handle,
+                copy.depth_texture_handle,
+                copy.normal_roughness_texture_handle,
+                copy.specular_albedo_texture_handle,
+            }};
+            for (std::size_t first = 0; first < handles.size(); ++first) {
+                for (std::size_t second = first + 1; second < handles.size(); ++second) {
+                    if (handles[first] == handles[second]) {
+                        setError("Ray-query reflection input and output textures must be distinct");
+                        return 0;
+                    }
+                }
+            }
+            if (source->texFormat != WGPUTextureFormat_RGBA16Float ||
+                (source->texUsage & WGPUTextureUsage_TextureBinding) == 0 ||
+                output->texFormat != WGPUTextureFormat_RGBA16Float ||
+                (output->texUsage & WGPUTextureUsage_StorageBinding) == 0 ||
+                depth->texFormat != WGPUTextureFormat_Depth32Float ||
+                (depth->texUsage & WGPUTextureUsage_TextureBinding) == 0 ||
+                normal->texFormat != WGPUTextureFormat_RGBA16Float ||
+                (normal->texUsage & WGPUTextureUsage_TextureBinding) == 0 ||
+                specular->texFormat != WGPUTextureFormat_RGBA16Float ||
+                (specular->texUsage & WGPUTextureUsage_TextureBinding) == 0) {
+                setError("Ray-query reflections require rgba16float sampled source/guides, rgba16float storage output and sampled depth32float");
+                return 0;
+            }
+            const std::array<Slot*, 5> textures{{source, output, depth, normal, specular}};
+            for (const Slot* texture : textures) {
+                if (texture->texD != 1 || texture->texSampleCount != 1 ||
+                    texture->texMipLevels != 1 || texture->texW != copy.width ||
+                    texture->texH != copy.height) {
+                    setError("Ray-query reflection textures must be identical single-sampled 2D extents with one mip and layer");
+                    return 0;
+                }
+            }
+            if (copy.width == 0 || copy.height == 0) {
+                setError("Ray-query reflection extent must be non-zero");
+                return 0;
+            }
+            RayQueryReflectionFrame native{};
+            native.sourceColorImage = wgpuTextureGetNativeVulkanImage(source->texture);
+            native.sourceColorLayout = copy.source_color_vulkan_layout;
+            native.outputColorImage = wgpuTextureGetNativeVulkanImage(output->texture);
+            native.outputColorLayout = copy.output_color_vulkan_layout;
+            native.depthImage = wgpuTextureGetNativeVulkanImage(depth->texture);
+            native.depthLayout = copy.depth_vulkan_layout;
+            native.normalRoughnessImage = wgpuTextureGetNativeVulkanImage(normal->texture);
+            native.normalRoughnessLayout = copy.normal_roughness_vulkan_layout;
+            native.specularAlbedoImage = wgpuTextureGetNativeVulkanImage(specular->texture);
+            native.specularAlbedoLayout = copy.specular_albedo_vulkan_layout;
+            native.width = copy.width;
+            native.height = copy.height;
+            std::copy_n(copy.inverse_view_projection, 16, native.inverseViewProjection);
+            std::copy_n(copy.camera_position, 4, native.cameraPosition);
+            std::copy_n(copy.parameters, 4, native.parameters);
+            std::copy_n(copy.environment, 4, native.environment);
+            native.flags = copy.flags;
+            native.frameIndex = copy.frame_index;
+            struct Evaluation {
+                RayQueryReflectionFrame* frame;
+                bool result{};
+            } evaluation{&native, false};
+            const WGPUStatus status = wgpuCommandEncoderWithNativeVulkanCommandBuffer(
+                encoder,
+                [](void* commandBuffer, void* userdata) {
+                    auto* value = static_cast<Evaluation*>(userdata);
+                    value->frame->commandBuffer = commandBuffer;
+                    value->result = rayQueryBridgeEvaluateReflections(*value->frame);
+                },
+                &evaluation);
+            if (status != WGPUStatus_Success || !evaluation.result) {
+                const auto rayQuery = rayQueryBridgeCapabilities();
+                setError(status != WGPUStatus_Success
+                    ? "wgpu-native rejected the Vulkan ray-query reflection callback"
                     : rayQuery.status);
                 return 0;
             }

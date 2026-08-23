@@ -271,6 +271,34 @@ typedef struct TWRayQueryLightingFrame {
     float water[4];
 } TWRayQueryLightingFrame;
 
+// Additive reflection ABI. Keep separate from TWRayQueryLightingFrame so
+// callers compiled against the original OP82 contract remain compatible.
+typedef struct TWRayQueryReflectionFrame {
+    uint32_t struct_size;
+    uint32_t command_encoder_handle;
+    uint32_t source_color_texture_handle;
+    uint32_t source_color_vulkan_layout;
+    uint32_t output_color_texture_handle;
+    uint32_t output_color_vulkan_layout;
+    uint32_t depth_texture_handle;
+    uint32_t depth_vulkan_layout;
+    uint32_t normal_roughness_texture_handle;
+    uint32_t normal_roughness_vulkan_layout;
+    uint32_t specular_albedo_texture_handle;
+    uint32_t specular_albedo_vulkan_layout;
+    uint32_t width;
+    uint32_t height;
+    float inverse_view_projection[16];
+    float camera_position[4];
+    // reflection strength, maximum distance, ray-origin bias, roughness cutoff.
+    float parameters[4];
+    // linear environment RGB and intensity for reflection misses.
+    float environment[4];
+    // bit 0: reverse/inverted depth; bit 1: include frame index in sample jitter.
+    uint32_t flags;
+    uint32_t frame_index;
+} TWRayQueryReflectionFrame;
+
 TW_API int tw_start(void* parent_hwnd, int x, int y, int w, int h);
 TW_API void tw_set_standalone_ui(int on);
 TW_API int tw_attach_host(void* parent_hwnd, int x, int y, int w, int h);
@@ -323,9 +351,16 @@ TW_API int tw_ray_query_capabilities(TWRayQueryCapabilities* capabilities);
 TW_API int tw_ray_query_scene_begin(void);
 TW_API int tw_ray_query_scene_positions(const float* xyz, uint32_t vertex_count);
 TW_API int tw_ray_query_scene_indices(const uint32_t* indices, uint32_t index_count);
+TW_API int tw_ray_query_scene_triangle_radiance(const float* rgba,
+                                                uint32_t triangle_count);
+TW_API int tw_ray_query_scene_triangle_surface(const float* albedo_roughness,
+                                               uint32_t triangle_count);
+TW_API int tw_ray_query_scene_lights(const float* light_records,
+                                     uint32_t light_count);
 TW_API int tw_ray_query_scene_commit(uint32_t command_encoder_handle);
 TW_API void tw_ray_query_scene_destroy(void);
 TW_API int tw_ray_query_lighting_evaluate(const TWRayQueryLightingFrame* frame);
+TW_API int tw_ray_query_reflections_evaluate(const TWRayQueryReflectionFrame* frame);
 TW_API int tw_cmd_submit(const uint8_t* data, int nbytes);
 TW_API int tw_map_read(uint32_t buffer_handle, uint64_t offset, uint64_t size, void* dst, int dst_bytes);
 

@@ -171,6 +171,15 @@ const rtx = navigator.gpu.threeBrowserRTX;
 const registration = rtx.registerStaticScene({
   positions, // Float32Array of world-space xyz values
   indices,   // Uint32Array, one indexed triangle list
+  // Optional linear HDR RGB plus a reserved alpha value for every triangle.
+  // A native reflection ray returns this radiance when it hits that triangle.
+  triangleRadiance,
+  // Optional linear albedo RGB + perceptual roughness for every triangle.
+  triangleSurface,
+  // Optional packed point/spot records, 16 floats each, maximum eight.
+  // position/range, direction/outerCos, color/intensity,
+  // innerCos/type/decay/reserved
+  lights,
 });
 
 if (registration.queued) {
@@ -184,19 +193,65 @@ if (registration.queued) {
     shadowStrength: 0.6,
     aoStrength: 0.2,
     aoRadius: 0.9,
+    // Optional stable four-ray area-light visibility plus eight-ray AO.
+    // The default remains one shadow ray plus two AO rays.
+    highQuality: false,
     water: { time, surfaceY, strength: 0.8, ior: 1.333 },
   });
 }
+```
+
+Pages that provide reflection guides can record a separate one-bounce pass.
+The source and output must be distinct, equally sized persistent textures so
+the native shader never samples and writes the same image. `normalRoughness`
+stores a world-space normal in RGB and perceptual roughness in A;
+`specularAlbedo` stores linear F0 in RGB and a reflection mask in A:
+
+```js
+rtx.evaluateRayReflections({
+  commandEncoder,
+  sourceColor,       // rgba16float TEXTURE_BINDING
+  outputColor,       // distinct rgba16float STORAGE_BINDING
+  depth,             // depth32float TEXTURE_BINDING
+  normalRoughness,   // rgba16float TEXTURE_BINDING
+  specularAlbedo,    // rgba16float TEXTURE_BINDING
+  width,
+  height,
+  inverseViewProjection,
+  cameraPosition,
+  reflectionStrength: 1,
+  maxDistance: 120,
+  rayBias: 0.012,
+  roughnessCutoff: 0.32,
+  environmentColor: [0.018, 0.032, 0.052],
+  environmentIntensity: 1,
+  highQuality: false, // true opts this page into stable 1/8/16-ray GGX tiers
+  temporalJitter: true, // rotate deterministic rough-reflection samples per frame
+  frameIndex,
+});
 ```
 
 `registerStaticScene()` builds one native BLAS and identity TLAS. The lighting
 evaluation is recorded into the supplied WebGPU command encoder, reconstructs
 receivers from depth, traces sun visibility and ambient occlusion, and can apply
 wave-surface Snell refraction plus convergence-derived underwater caustics.
-The bridge restores the supplied Vulkan image layouts before later WebGPU/DLSS
-work. Dynamic BLAS updates, skinned geometry, general trace-ray pipelines and
-path tracing are not part of this first contract; pages must retain a normal
-WebGPU fallback when `capabilities.rayQuery` is false.
+Lighting defaults to one visibility and two AO rays per visible pixel; pages
+with measured headroom may request the deterministic four-plus-eight-ray tier.
+The reflection evaluation reconstructs the visible receiver from depth, traces
+the static TLAS, reconstructs the hit triangle's geometric normal, evaluates
+the optional packed emitters with range/cone attenuation and shadow rays, then
+combines that first diffuse bounce with the registered terminal radiance. Glass
+may be deliberately omitted from the TLAS so light crosses a transparent pane
+while opaque frames and walls still occlude it. Stable one/four/eight-ray GGX
+tiers composite the result through roughness-aware Fresnel into a distinct HDR
+output; pages with measured headroom may opt into stable one/eight/sixteen-ray
+tiers. It is one reflection bounce with shadow-tested hit lighting, not a
+recursive path tracer. Both passes restore every
+supplied Vulkan image layout before later WebGPU/DLSS work. Dynamic BLAS
+updates, skinned geometry, textured hit materials, transparent refraction,
+general trace-ray pipelines and path tracing are not part of this contract;
+pages must retain a normal WebGPU fallback when `capabilities.rayQuery` is
+false.
 
 The legacy `reflexMode` and `setReflexMode()` members remain supported.
 

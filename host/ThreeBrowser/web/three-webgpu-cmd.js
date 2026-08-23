@@ -58,6 +58,10 @@ export const OP = {
   RTX_SCENE_COMMIT: 80,
   RTX_SCENE_DESTROY: 81,
   RTX_LIGHTING_EVALUATE: 82,
+  RTX_SCENE_TRIANGLE_RADIANCE: 83,
+  RTX_REFLECTIONS_EVALUATE: 84,
+  RTX_SCENE_TRIANGLE_SURFACE: 85,
+  RTX_SCENE_LIGHTS: 86,
 };
 
 // wgpu-native webgpu.h numeric enums (WGPUTextureFormat, …).
@@ -1237,6 +1241,56 @@ function rtxSceneIndices(indices) {
   }
 }
 
+function rtxSceneTriangleRadiance(radiance) {
+  const src = asU8(radiance);
+  if ((src.byteLength % 16) !== 0) {
+    throw new RangeError("RTX triangle radiance must contain tightly packed vec4<f32> values");
+  }
+  const chunkBytes = Math.floor((maxPayload() - 8) / 16) * 16;
+  if (chunkBytes <= 0) {
+    throw new RangeError("Native command buffer is too small for an RTX triangle-radiance chunk");
+  }
+  for (let offset = 0; offset < src.byteLength; offset += chunkBytes) {
+    const chunk = src.subarray(offset, Math.min(offset + chunkBytes, src.byteLength));
+    const s = begin(OP.RTX_SCENE_TRIANGLE_RADIANCE, 8 + chunk.byteLength);
+    wu32(RTX_PROTOCOL_VERSION);
+    wu32(chunk.byteLength / 16);
+    wbytes(chunk);
+    end(s);
+  }
+}
+
+function rtxSceneTriangleSurface(surface) {
+  const src = asU8(surface);
+  if ((src.byteLength % 16) !== 0) {
+    throw new RangeError("RTX triangle surface data must contain tightly packed vec4<f32> values");
+  }
+  const chunkBytes = Math.floor((maxPayload() - 8) / 16) * 16;
+  if (chunkBytes <= 0) {
+    throw new RangeError("Native command buffer is too small for an RTX triangle-surface chunk");
+  }
+  for (let offset = 0; offset < src.byteLength; offset += chunkBytes) {
+    const chunk = src.subarray(offset, Math.min(offset + chunkBytes, src.byteLength));
+    const s = begin(OP.RTX_SCENE_TRIANGLE_SURFACE, 8 + chunk.byteLength);
+    wu32(RTX_PROTOCOL_VERSION);
+    wu32(chunk.byteLength / 16);
+    wbytes(chunk);
+    end(s);
+  }
+}
+
+function rtxSceneLights(lights) {
+  const src = asU8(lights);
+  if ((src.byteLength % 64) !== 0 || src.byteLength > 8 * 64) {
+    throw new RangeError("RTX static lights must contain at most eight tightly packed 4xvec4<f32> records");
+  }
+  const s = begin(OP.RTX_SCENE_LIGHTS, 8 + src.byteLength);
+  wu32(RTX_PROTOCOL_VERSION);
+  wu32(src.byteLength / 64);
+  wbytes(src);
+  end(s);
+}
+
 function rtxSceneCommit(encoder) {
   const s = begin(OP.RTX_SCENE_COMMIT, 8);
   wu32(RTX_PROTOCOL_VERSION);
@@ -1266,6 +1320,31 @@ function rtxLightingEvaluate(encoder, frame) {
   for (const value of frame.params) wf32(value);
   wu32(frame.flags >>> 0);
   for (const value of frame.water) wf32(value);
+  end(s);
+}
+
+function rtxReflectionsEvaluate(encoder, frame) {
+  const s = begin(OP.RTX_REFLECTIONS_EVALUATE, 176);
+  wu32(RTX_PROTOCOL_VERSION);
+  wu32(encoder >>> 0);
+  for (const resource of [
+    frame.sourceColor,
+    frame.outputColor,
+    frame.depth,
+    frame.normalRoughness,
+    frame.specularAlbedo,
+  ]) {
+    wu32(resource.textureHandle >>> 0);
+    wu32(resource.vulkanLayout >>> 0);
+  }
+  wu32(frame.width >>> 0);
+  wu32(frame.height >>> 0);
+  for (const value of frame.inverseViewProjection) wf32(value);
+  for (const value of frame.cameraPosition) wf32(value);
+  for (const value of frame.params) wf32(value);
+  for (const value of frame.environment) wf32(value);
+  wu32(frame.flags >>> 0);
+  wu32(frame.frameIndex >>> 0);
   end(s);
 }
 
@@ -1410,9 +1489,13 @@ const cmd = {
   rtxSceneBegin,
   rtxScenePositions,
   rtxSceneIndices,
+  rtxSceneTriangleRadiance,
+  rtxSceneTriangleSurface,
+  rtxSceneLights,
   rtxSceneCommit,
   rtxSceneDestroy,
   rtxLightingEvaluate,
+  rtxReflectionsEvaluate,
   submitEncoders,
   pipeBgl,
   copyBuf,

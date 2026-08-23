@@ -18,6 +18,7 @@ layout(push_constant) uniform FrameConstants {
 } frame;
 
 const uint kDepthInverted = 1u;
+const uint kHighQuality = 2u;
 
 float readDepth(ivec2 pixel) {
     pixel = clamp(pixel, ivec2(0), ivec2(frame.extentFlags.xy) - ivec2(1));
@@ -186,6 +187,8 @@ void main() {
 
     vec3 origin = world + normal * max(0.002, frame.parameters.z * 0.002);
     vec3 sunDirection = normalize(frame.sunDirectionIntensity.xyz);
+    bool highQuality = (frame.extentFlags.z & kHighQuality) != 0u;
+    uint state = uint(pixel.x) * 1973u ^ uint(pixel.y) * 9277u ^ 0x68bc21ebu;
     vec2 waterSurfaceIor = unpackHalf2x16(frame.extentFlags.w);
     float waterTime = frame.cameraPosition.w;
     float surfaceY = waterSurfaceIor.x;
@@ -204,12 +207,28 @@ void main() {
                                           sunDirection, 10000.0);
         sunVisible = blockedInWater || blockedAboveWater ? 0.0 : 1.0;
     } else {
-        sunVisible = occluded(origin, sunDirection, 10000.0) ? 0.0 : 1.0;
+        int sunRayCount = highQuality ? 4 : 1;
+        vec3 sunTangent = normalize(cross(
+            abs(sunDirection.y) < 0.98 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0),
+            sunDirection));
+        vec3 sunBitangent = cross(sunDirection, sunTangent);
+        float diskRotation = random01(state) * 6.28318530718;
+        sunVisible = 0.0;
+        for (int rayIndex = 0; rayIndex < sunRayCount; ++rayIndex) {
+            float u = (float(rayIndex) + 0.5) / float(sunRayCount);
+            float angle = diskRotation + float(rayIndex) * 2.39996322973;
+            vec2 disk = sqrt(u) * vec2(cos(angle), sin(angle));
+            // A restrained angular radius gives the moon/architectural fill a
+            // stable penumbra instead of a brittle binary shadow boundary.
+            vec3 direction = normalize(sunDirection +
+                (sunTangent * disk.x + sunBitangent * disk.y) * 0.0065);
+            sunVisible += occluded(origin, direction, 10000.0) ? 0.0 : 1.0;
+        }
+        sunVisible /= float(sunRayCount);
     }
 
-    uint state = uint(pixel.x) * 1973u ^ uint(pixel.y) * 9277u ^ 0x68bc21ebu;
     float aoVisible = 0.0;
-    const int aoRayCount = 2;
+    int aoRayCount = highQuality ? 8 : 2;
     for (int rayIndex = 0; rayIndex < aoRayCount; ++rayIndex) {
         vec3 direction = cosineHemisphere(normal, state);
         aoVisible += occluded(origin, direction, max(frame.parameters.z, 0.02)) ? 0.0 : 1.0;

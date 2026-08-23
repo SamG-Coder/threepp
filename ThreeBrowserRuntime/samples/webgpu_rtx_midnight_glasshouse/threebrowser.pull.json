@@ -1,0 +1,78 @@
+{
+  "format": 2,
+  "projectId": "410de169362eaff4",
+  "virtualURL": "https://410de169362eaff4.runtime.threebrowser.local/",
+  "source": "https://webgpu-rtx-midnight-glasshouse.runtime.threebrowser.local/",
+  "pulledAt": "2026-08-23T00:00:00.000Z",
+  "entry": "site-entry.mjs",
+  "requiresWebGPU": true,
+  "html": "index.html",
+  "files": [
+    {
+      "url": "https://webgpu-rtx-midnight-glasshouse.runtime.threebrowser.local/",
+      "path": "index.html",
+      "type": "html",
+      "bytes": 623
+    },
+    {
+      "url": "https://webgpu-rtx-midnight-glasshouse.runtime.threebrowser.local/site-entry.mjs",
+      "path": "site-entry.mjs",
+      "type": "module",
+      "bytes": 296
+    },
+    {
+      "url": "https://webgpu-rtx-midnight-glasshouse.runtime.threebrowser.local/src/main.mjs",
+      "path": "src/main.mjs",
+      "type": "module",
+      "bytes": 14656
+    },
+    {
+      "url": "https://webgpu-rtx-midnight-glasshouse.runtime.threebrowser.local/src/materials.mjs",
+      "path": "src/materials.mjs",
+      "type": "module",
+      "bytes": 10263
+    },
+    {
+      "url": "https://webgpu-rtx-midnight-glasshouse.runtime.threebrowser.local/src/scene.mjs",
+      "path": "src/scene.mjs",
+      "type": "module",
+      "bytes": 21592
+    },
+    {
+      "url": "https://webgpu-rtx-midnight-glasshouse.runtime.threebrowser.local/src/hud.mjs",
+      "path": "src/hud.mjs",
+      "type": "module",
+      "bytes": 12648
+    },
+    {
+      "url": "https://webgpu-rtx-midnight-glasshouse.runtime.threebrowser.local/src/native-reflections.mjs",
+      "path": "src/native-reflections.mjs",
+      "type": "module",
+      "bytes": 14290
+    },
+    {
+      "url": "https://webgpu-rtx-midnight-glasshouse.runtime.threebrowser.local/src/rtx-scene.mjs",
+      "path": "src/rtx-scene.mjs",
+      "type": "module",
+      "bytes": 5063
+    }
+  ],
+  "compatibility": {
+    "threeImportable": true,
+    "bundledThree": false,
+    "rendererCandidates": ["webgpu"],
+    "canvasOnly": true,
+    "htmlOverlay": false,
+    "domRequired": false,
+    "notes": [
+      "Native WebGPU/TSL-only sample; no WebGL fallback.",
+      "All visible controls are a second Three.js scene using a JS-generated RGBA DataTexture bitmap font atlas and batched glyph geometry.",
+      "The HUD is rendered after the world and never enters the native MRT or planar reflection captures.",
+      "OP83 registerStaticScene uploads static world triangles with one linear HDR RGBA terminal hit-radiance value per triangle; animated rain, foliage, vehicle and chrome mobile remain outside that static BLAS.",
+      "OP84 evaluateRayReflections consumes same-size FP16 source/normal-roughness/specular-F0 MRT guides plus D32 depth and writes one-bounce native specular to a distinct FP16 HDR output.",
+      "Native guide materials for the wet floor, pool and rear glass contain no ReflectorNode or viewport-copy nodes.",
+      "If OP83 registration or OP84 evaluation is unavailable, the original materials are restored and three public WebGPU ReflectorNode planar captures provide the fallback; chrome and rough metals retain procedural GGX-prefiltered IBL.",
+      "No downloaded models, images, textures, fonts, style sheets or HTML UI are used."
+    ]
+  }
+}

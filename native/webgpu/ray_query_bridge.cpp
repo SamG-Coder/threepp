@@ -10,6 +10,7 @@
 #include <vulkan/vulkan.h>
 
 #include "threepp/renderers/vulkan/shaders/ray_query_lighting.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/ray_query_reflections.comp.spv.h"
 
 #include <algorithm>
 #include <array>
@@ -60,6 +61,7 @@ struct VulkanFunctions {
     PFN_vkDestroySampler destroySampler{};
     PFN_vkCreateImageView createImageView{};
     PFN_vkDestroyImageView destroyImageView{};
+    PFN_vkCmdCopyBuffer cmdCopyBuffer{};
     PFN_vkCmdPipelineBarrier cmdPipelineBarrier{};
     PFN_vkCmdBindPipeline cmdBindPipeline{};
     PFN_vkCmdBindDescriptorSets cmdBindDescriptorSets{};
@@ -74,6 +76,7 @@ struct Buffer {
     VkDeviceSize size{};
     VkDeviceSize allocationSize{};
     VkDeviceAddress address{};
+    VkMemoryPropertyFlags memoryProperties{};
     bool coherent{};
 };
 
@@ -104,6 +107,41 @@ struct DescriptorRecord {
     VkImageView depthView{VK_NULL_HANDLE};
 };
 
+struct ReflectionDescriptorKey {
+    VkImage sourceColor{VK_NULL_HANDLE};
+    VkImage outputColor{VK_NULL_HANDLE};
+    VkImage depth{VK_NULL_HANDLE};
+    VkImage normalRoughness{VK_NULL_HANDLE};
+    VkImage specularAlbedo{VK_NULL_HANDLE};
+
+    bool operator==(const ReflectionDescriptorKey&) const = default;
+};
+
+struct ReflectionDescriptorKeyHash {
+    std::size_t operator()(const ReflectionDescriptorKey& key) const noexcept {
+        std::size_t value = 0x9e3779b97f4a7c15ull;
+        const auto combine = [&value](VkImage image) {
+            const auto part = reinterpret_cast<std::uintptr_t>(image);
+            value ^= part + 0x9e3779b97f4a7c15ull + (value << 6u) + (value >> 2u);
+        };
+        combine(key.sourceColor);
+        combine(key.outputColor);
+        combine(key.depth);
+        combine(key.normalRoughness);
+        combine(key.specularAlbedo);
+        return value;
+    }
+};
+
+struct ReflectionDescriptorRecord {
+    VkDescriptorSet set{VK_NULL_HANDLE};
+    VkImageView sourceColorView{VK_NULL_HANDLE};
+    VkImageView outputColorView{VK_NULL_HANDLE};
+    VkImageView depthView{VK_NULL_HANDLE};
+    VkImageView normalRoughnessView{VK_NULL_HANDLE};
+    VkImageView specularAlbedoView{VK_NULL_HANDLE};
+};
+
 struct State {
     std::mutex mutex;
     VkInstance instance{VK_NULL_HANDLE};
@@ -124,10 +162,24 @@ struct State {
     VkSampler depthSampler{VK_NULL_HANDLE};
     std::unordered_map<DescriptorKey, DescriptorRecord, DescriptorKeyHash> descriptors;
 
+    VkDescriptorSetLayout reflectionDescriptorLayout{VK_NULL_HANDLE};
+    VkDescriptorPool reflectionDescriptorPool{VK_NULL_HANDLE};
+    VkPipelineLayout reflectionPipelineLayout{VK_NULL_HANDLE};
+    VkPipeline reflectionPipeline{VK_NULL_HANDLE};
+    std::unordered_map<ReflectionDescriptorKey, ReflectionDescriptorRecord,
+                       ReflectionDescriptorKeyHash> reflectionDescriptors;
+
     std::vector<float> pendingPositions;
     std::vector<uint32_t> pendingIndices;
+    std::vector<float> pendingTriangleRadiance;
+    std::vector<float> pendingTriangleSurface;
+    std::vector<float> pendingStaticLights;
     Buffer vertices{};
     Buffer indices{};
+    Buffer triangleRadiance{};
+    Buffer triangleSurface{};
+    Buffer staticLights{};
+    std::vector<Buffer> sceneUploadStaging;
     Buffer blasScratch{};
     Buffer instances{};
     Buffer tlasScratch{};
@@ -207,6 +259,7 @@ bool loadFunctions() {
     LOAD_DEVICE(destroySampler, vkDestroySampler);
     LOAD_DEVICE(createImageView, vkCreateImageView);
     LOAD_DEVICE(destroyImageView, vkDestroyImageView);
+    LOAD_DEVICE(cmdCopyBuffer, vkCmdCopyBuffer);
     LOAD_DEVICE(cmdPipelineBarrier, vkCmdPipelineBarrier);
     LOAD_DEVICE(cmdBindPipeline, vkCmdBindPipeline);
     LOAD_DEVICE(cmdBindDescriptorSets, vkCmdBindDescriptorSets);
@@ -228,7 +281,7 @@ bool loadFunctions() {
            f.createPipelineLayout && f.createShaderModule && f.createComputePipelines &&
            f.destroyPipelineLayout && f.destroyShaderModule && f.destroyPipeline &&
            f.createSampler && f.destroySampler && f.createImageView &&
-           f.destroyImageView && f.cmdPipelineBarrier &&
+           f.destroyImageView && f.cmdCopyBuffer && f.cmdPipelineBarrier &&
            f.cmdBindPipeline && f.cmdBindDescriptorSets && f.cmdPushConstants &&
            f.cmdDispatch && f.deviceWaitIdle;
 }
@@ -262,7 +315,8 @@ uint32_t packHalf2(float low, float high) {
 }
 
 uint32_t findMemoryType(uint32_t bits, VkMemoryPropertyFlags required,
-                        VkMemoryPropertyFlags preferred, bool* coherent = nullptr) {
+                        VkMemoryPropertyFlags preferred, bool* coherent = nullptr,
+                        VkMemoryPropertyFlags* selectedProperties = nullptr) {
     VkPhysicalDeviceMemoryProperties properties{};
     g.vk.getPhysicalDeviceMemoryProperties(g.physicalDevice, &properties);
     uint32_t fallback = std::numeric_limits<uint32_t>::max();
@@ -272,6 +326,7 @@ uint32_t findMemoryType(uint32_t bits, VkMemoryPropertyFlags required,
         if ((flags & required) != required) continue;
         if ((flags & preferred) == preferred) {
             if (coherent) *coherent = (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
+            if (selectedProperties) *selectedProperties = flags;
             return index;
         }
         if (fallback == std::numeric_limits<uint32_t>::max()) fallback = index;
@@ -279,6 +334,9 @@ uint32_t findMemoryType(uint32_t bits, VkMemoryPropertyFlags required,
     if (fallback != std::numeric_limits<uint32_t>::max() && coherent) {
         *coherent = (properties.memoryTypes[fallback].propertyFlags &
                      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
+    }
+    if (fallback != std::numeric_limits<uint32_t>::max() && selectedProperties) {
+        *selectedProperties = properties.memoryTypes[fallback].propertyFlags;
     }
     return fallback;
 }
@@ -305,8 +363,9 @@ bool createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
     VkMemoryRequirements requirements{};
     g.vk.getBufferMemoryRequirements(g.device, output.buffer, &requirements);
     const uint32_t memoryType = findMemoryType(requirements.memoryTypeBits,
-                                                requiredMemory, preferredMemory,
-                                                &output.coherent);
+                                                 requiredMemory, preferredMemory,
+                                                 &output.coherent,
+                                                 &output.memoryProperties);
     if (memoryType == std::numeric_limits<uint32_t>::max()) {
         fail("No compatible Vulkan memory type exists for ray-query resources");
         destroyBuffer(output);
@@ -339,7 +398,9 @@ bool createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
 }
 
 bool uploadBuffer(Buffer& buffer, const void* data, VkDeviceSize bytes) {
-    if (!buffer.memory || !data || bytes > buffer.size ||
+    if (!buffer.memory || !data ||
+        (buffer.memoryProperties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) == 0u ||
+        bytes > buffer.size ||
         buffer.allocationSize < buffer.size) {
         fail("Invalid ray-query upload buffer range");
         return false;
@@ -367,6 +428,41 @@ bool uploadBuffer(Buffer& buffer, const void* data, VkDeviceSize bytes) {
     return true;
 }
 
+struct PendingBufferCopy {
+    VkBuffer source{VK_NULL_HANDLE};
+    VkBuffer destination{VK_NULL_HANDLE};
+    VkDeviceSize size{};
+};
+
+bool createImmutableSceneBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
+                                const void* data, Buffer& output,
+                                std::vector<PendingBufferCopy>& pendingCopies) {
+    // Prefer device-local storage so ray-query shader reads and AS traversal do
+    // not repeatedly cross PCIe. Integrated/ReBAR memory may also be host
+    // visible, in which case a direct upload is both valid and cheaper.
+    if (!createBuffer(size, usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                      0, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, output)) {
+        return false;
+    }
+    if ((output.memoryProperties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0u) {
+        return uploadBuffer(output, data, size);
+    }
+
+    Buffer staging{};
+    if (!createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                      staging) ||
+        !uploadBuffer(staging, data, size)) {
+        destroyBuffer(staging);
+        return false;
+    }
+    pendingCopies.push_back({staging.buffer, output.buffer, size});
+    g.sceneUploadStaging.push_back(staging);
+    return true;
+}
+
 void destroyAccelerationStructure(AccelerationStructure& structure) {
     if (structure.handle) {
         g.vk.destroyAccelerationStructure(g.device, structure.handle, nullptr);
@@ -385,6 +481,39 @@ void resetDescriptorCache() {
     g.descriptors.clear();
     if (g.descriptorPool && g.vk.resetDescriptorPool) {
         g.vk.resetDescriptorPool(g.device, g.descriptorPool, 0);
+    }
+}
+
+void destroyReflectionViews(ReflectionDescriptorRecord& record) {
+    if (record.sourceColorView) {
+        g.vk.destroyImageView(g.device, record.sourceColorView, nullptr);
+    }
+    if (record.outputColorView) {
+        g.vk.destroyImageView(g.device, record.outputColorView, nullptr);
+    }
+    if (record.depthView) g.vk.destroyImageView(g.device, record.depthView, nullptr);
+    if (record.normalRoughnessView) {
+        g.vk.destroyImageView(g.device, record.normalRoughnessView, nullptr);
+    }
+    if (record.specularAlbedoView) {
+        g.vk.destroyImageView(g.device, record.specularAlbedoView, nullptr);
+    }
+    record.sourceColorView = VK_NULL_HANDLE;
+    record.outputColorView = VK_NULL_HANDLE;
+    record.depthView = VK_NULL_HANDLE;
+    record.normalRoughnessView = VK_NULL_HANDLE;
+    record.specularAlbedoView = VK_NULL_HANDLE;
+}
+
+void resetReflectionDescriptorCache() {
+    if (!g.device) return;
+    for (auto& [key, record] : g.reflectionDescriptors) {
+        (void)key;
+        destroyReflectionViews(record);
+    }
+    g.reflectionDescriptors.clear();
+    if (g.reflectionDescriptorPool && g.vk.resetDescriptorPool) {
+        g.vk.resetDescriptorPool(g.device, g.reflectionDescriptorPool, 0);
     }
 }
 
@@ -419,6 +548,7 @@ void destroySceneResources(bool wait) {
     // Every cached set contains the TLAS handle. It must not survive a scene
     // rebuild, even when the borrowed color/depth images are unchanged.
     resetDescriptorCache();
+    resetReflectionDescriptorCache();
     destroyAccelerationStructure(g.tlas);
     destroyAccelerationStructure(g.blas);
     destroyBuffer(g.tlasScratch);
@@ -426,6 +556,11 @@ void destroySceneResources(bool wait) {
     destroyBuffer(g.blasScratch);
     destroyBuffer(g.indices);
     destroyBuffer(g.vertices);
+    destroyBuffer(g.triangleRadiance);
+    destroyBuffer(g.triangleSurface);
+    destroyBuffer(g.staticLights);
+    for (auto& staging : g.sceneUploadStaging) destroyBuffer(staging);
+    g.sceneUploadStaging.clear();
     g.sceneReady = false;
     g.triangleCount = 0;
 }
@@ -513,10 +648,112 @@ bool createPipeline() {
     return true;
 }
 
+bool createReflectionPipeline() {
+    const std::array<VkDescriptorSetLayoutBinding, 11> bindings{{
+        {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1,
+         VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1,
+         VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+         VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+         VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+         VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+         VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+         VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+         VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+         VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+         VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+         VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+    }};
+    VkDescriptorSetLayoutCreateInfo descriptorLayout{
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    descriptorLayout.bindingCount = static_cast<uint32_t>(bindings.size());
+    descriptorLayout.pBindings = bindings.data();
+    if (g.vk.createDescriptorSetLayout(g.device, &descriptorLayout, nullptr,
+                                       &g.reflectionDescriptorLayout) != VK_SUCCESS) {
+        fail("Creating the ray-query reflection descriptor layout failed");
+        return false;
+    }
+    const std::array<VkDescriptorPoolSize, 4> poolSizes{{
+        {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 256},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 256},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1024},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1280},
+    }};
+    VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    pool.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    pool.maxSets = 256;
+    pool.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+    pool.pPoolSizes = poolSizes.data();
+    if (g.vk.createDescriptorPool(g.device, &pool, nullptr,
+                                  &g.reflectionDescriptorPool) != VK_SUCCESS) {
+        fail("Creating the ray-query reflection descriptor pool failed");
+        return false;
+    }
+    VkPushConstantRange push{};
+    push.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    push.size = 128;
+    VkPipelineLayoutCreateInfo pipelineLayout{
+        VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    pipelineLayout.setLayoutCount = 1;
+    pipelineLayout.pSetLayouts = &g.reflectionDescriptorLayout;
+    pipelineLayout.pushConstantRangeCount = 1;
+    pipelineLayout.pPushConstantRanges = &push;
+    if (g.vk.createPipelineLayout(g.device, &pipelineLayout, nullptr,
+                                  &g.reflectionPipelineLayout) != VK_SUCCESS) {
+        fail("Creating the ray-query reflection pipeline layout failed");
+        return false;
+    }
+    VkShaderModuleCreateInfo shader{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    shader.codeSize = sizeof(kRayQueryReflectionsCompSpv);
+    shader.pCode = kRayQueryReflectionsCompSpv;
+    VkShaderModule shaderModule{VK_NULL_HANDLE};
+    if (g.vk.createShaderModule(g.device, &shader, nullptr, &shaderModule) != VK_SUCCESS) {
+        fail("Creating the ray-query reflection compute shader failed");
+        return false;
+    }
+    VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    stage.module = shaderModule;
+    stage.pName = "main";
+    VkComputePipelineCreateInfo pipeline{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+    pipeline.stage = stage;
+    pipeline.layout = g.reflectionPipelineLayout;
+    const VkResult pipelineResult = g.vk.createComputePipelines(
+        g.device, VK_NULL_HANDLE, 1, &pipeline, nullptr, &g.reflectionPipeline);
+    g.vk.destroyShaderModule(g.device, shaderModule, nullptr);
+    if (pipelineResult != VK_SUCCESS) {
+        fail("Creating the ray-query reflection compute pipeline failed");
+        return false;
+    }
+    return true;
+}
+
 void destroyPipelineResources() {
     if (!g.device) return;
     resetDescriptorCache();
+    resetReflectionDescriptorCache();
     if (g.depthSampler) g.vk.destroySampler(g.device, g.depthSampler, nullptr);
+    if (g.reflectionPipeline) {
+        g.vk.destroyPipeline(g.device, g.reflectionPipeline, nullptr);
+    }
+    if (g.reflectionPipelineLayout) {
+        g.vk.destroyPipelineLayout(g.device, g.reflectionPipelineLayout, nullptr);
+    }
+    if (g.reflectionDescriptorPool) {
+        g.vk.destroyDescriptorPool(g.device, g.reflectionDescriptorPool, nullptr);
+    }
+    if (g.reflectionDescriptorLayout) {
+        g.vk.destroyDescriptorSetLayout(g.device, g.reflectionDescriptorLayout, nullptr);
+    }
     if (g.pipeline) g.vk.destroyPipeline(g.device, g.pipeline, nullptr);
     if (g.pipelineLayout) g.vk.destroyPipelineLayout(g.device, g.pipelineLayout, nullptr);
     if (g.descriptorPool) g.vk.destroyDescriptorPool(g.device, g.descriptorPool, nullptr);
@@ -524,6 +761,10 @@ void destroyPipelineResources() {
         g.vk.destroyDescriptorSetLayout(g.device, g.descriptorLayout, nullptr);
     }
     g.depthSampler = VK_NULL_HANDLE;
+    g.reflectionPipeline = VK_NULL_HANDLE;
+    g.reflectionPipelineLayout = VK_NULL_HANDLE;
+    g.reflectionDescriptorPool = VK_NULL_HANDLE;
+    g.reflectionDescriptorLayout = VK_NULL_HANDLE;
     g.pipeline = VK_NULL_HANDLE;
     g.pipelineLayout = VK_NULL_HANDLE;
     g.descriptorPool = VK_NULL_HANDLE;
@@ -608,6 +849,138 @@ VkDescriptorSet descriptorFor(VkImage color, VkImage depth) {
     return record.set;
 }
 
+VkDescriptorSet reflectionDescriptorFor(const ReflectionDescriptorKey& key) {
+    if (const auto found = g.reflectionDescriptors.find(key);
+        found != g.reflectionDescriptors.end()) {
+        return found->second.set;
+    }
+    if (!g.triangleRadiance.buffer || !g.vertices.buffer || !g.indices.buffer ||
+        !g.triangleSurface.buffer || !g.staticLights.buffer ||
+        g.triangleRadiance.size < sizeof(float) * 4u ||
+        g.triangleSurface.size < sizeof(float) * 4u ||
+        g.staticLights.size < sizeof(float) * 16u) {
+        fail("Ray-query reflections require scene geometry, radiance, surfaces and a static-light buffer");
+        return VK_NULL_HANDLE;
+    }
+    ReflectionDescriptorRecord record{};
+    record.sourceColorView = createImageView(
+        key.sourceColor, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_ASPECT_COLOR_BIT);
+    record.outputColorView = createImageView(
+        key.outputColor, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_ASPECT_COLOR_BIT);
+    record.depthView = createImageView(
+        key.depth, VK_FORMAT_D32_SFLOAT, VK_IMAGE_ASPECT_DEPTH_BIT);
+    record.normalRoughnessView = createImageView(
+        key.normalRoughness, VK_FORMAT_R16G16B16A16_SFLOAT,
+        VK_IMAGE_ASPECT_COLOR_BIT);
+    record.specularAlbedoView = createImageView(
+        key.specularAlbedo, VK_FORMAT_R16G16B16A16_SFLOAT,
+        VK_IMAGE_ASPECT_COLOR_BIT);
+    if (!record.sourceColorView || !record.outputColorView || !record.depthView ||
+        !record.normalRoughnessView || !record.specularAlbedoView) {
+        destroyReflectionViews(record);
+        fail("Creating borrowed WebGPU image views for ray-query reflections failed");
+        return VK_NULL_HANDLE;
+    }
+    VkDescriptorSetAllocateInfo allocate{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    allocate.descriptorPool = g.reflectionDescriptorPool;
+    allocate.descriptorSetCount = 1;
+    allocate.pSetLayouts = &g.reflectionDescriptorLayout;
+    if (g.vk.allocateDescriptorSets(g.device, &allocate, &record.set) != VK_SUCCESS) {
+        destroyReflectionViews(record);
+        fail("Allocating a ray-query reflection descriptor set failed");
+        return VK_NULL_HANDLE;
+    }
+
+    VkWriteDescriptorSetAccelerationStructureKHR asWrite{
+        VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
+    asWrite.accelerationStructureCount = 1;
+    asWrite.pAccelerationStructures = &g.tlas.handle;
+    VkDescriptorImageInfo outputInfo{};
+    outputInfo.imageView = record.outputColorView;
+    outputInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    const auto sampledInfo = [](VkSampler sampler, VkImageView view) {
+        VkDescriptorImageInfo info{};
+        info.sampler = sampler;
+        info.imageView = view;
+        info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        return info;
+    };
+    const VkDescriptorImageInfo sourceInfo = sampledInfo(g.depthSampler,
+                                                         record.sourceColorView);
+    const VkDescriptorImageInfo depthInfo = sampledInfo(g.depthSampler,
+                                                        record.depthView);
+    const VkDescriptorImageInfo normalInfo = sampledInfo(g.depthSampler,
+                                                         record.normalRoughnessView);
+    const VkDescriptorImageInfo specularInfo = sampledInfo(g.depthSampler,
+                                                           record.specularAlbedoView);
+    VkDescriptorBufferInfo radianceInfo{};
+    radianceInfo.buffer = g.triangleRadiance.buffer;
+    radianceInfo.offset = 0;
+    radianceInfo.range = g.triangleRadiance.size;
+    VkDescriptorBufferInfo vertexInfo{};
+    vertexInfo.buffer = g.vertices.buffer;
+    vertexInfo.offset = 0;
+    vertexInfo.range = g.vertices.size;
+    VkDescriptorBufferInfo indexInfo{};
+    indexInfo.buffer = g.indices.buffer;
+    indexInfo.offset = 0;
+    indexInfo.range = g.indices.size;
+    VkDescriptorBufferInfo surfaceInfo{};
+    surfaceInfo.buffer = g.triangleSurface.buffer;
+    surfaceInfo.offset = 0;
+    surfaceInfo.range = g.triangleSurface.size;
+    VkDescriptorBufferInfo lightsInfo{};
+    lightsInfo.buffer = g.staticLights.buffer;
+    lightsInfo.offset = 0;
+    lightsInfo.range = g.staticLights.size;
+
+    std::array<VkWriteDescriptorSet, 11> writes{};
+    writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    writes[0].pNext = &asWrite;
+    writes[0].dstSet = record.set;
+    writes[0].dstBinding = 0;
+    writes[0].descriptorCount = 1;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    writes[1].dstSet = record.set;
+    writes[1].dstBinding = 1;
+    writes[1].descriptorCount = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[1].pImageInfo = &outputInfo;
+    const std::array<const VkDescriptorImageInfo*, 4> sampledInfos{{
+        &sourceInfo, &depthInfo, &normalInfo, &specularInfo,
+    }};
+    for (uint32_t index = 0; index < sampledInfos.size(); ++index) {
+        writes[2u + index] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        writes[2u + index].dstSet = record.set;
+        writes[2u + index].dstBinding = 2u + index;
+        writes[2u + index].descriptorCount = 1;
+        writes[2u + index].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[2u + index].pImageInfo = sampledInfos[index];
+    }
+    writes[6] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    writes[6].dstSet = record.set;
+    writes[6].dstBinding = 6;
+    writes[6].descriptorCount = 1;
+    writes[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[6].pBufferInfo = &radianceInfo;
+    const std::array<const VkDescriptorBufferInfo*, 4> sceneBuffers{{
+        &vertexInfo, &indexInfo, &surfaceInfo, &lightsInfo,
+    }};
+    for (uint32_t index = 0; index < sceneBuffers.size(); ++index) {
+        writes[7u + index] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        writes[7u + index].dstSet = record.set;
+        writes[7u + index].dstBinding = 7u + index;
+        writes[7u + index].descriptorCount = 1;
+        writes[7u + index].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[7u + index].pBufferInfo = sceneBuffers[index];
+    }
+    g.vk.updateDescriptorSets(g.device, static_cast<uint32_t>(writes.size()),
+                              writes.data(), 0, nullptr);
+    g.reflectionDescriptors.emplace(key, record);
+    return record.set;
+}
+
 void imageBarrier(VkCommandBuffer commandBuffer, VkImage image,
                   VkImageAspectFlags aspect, VkImageLayout oldLayout,
                   VkImageLayout newLayout, VkAccessFlags srcAccess,
@@ -664,6 +1037,10 @@ bool rayQueryBridgeAttachVulkan(const RayQueryVulkanContext& context) {
         return false;
     }
     if (!createPipeline()) return false;
+    if (!createReflectionPipeline()) {
+        destroyPipelineResources();
+        return false;
+    }
     g.attached = true;
     g.status = "Vulkan ray query attached; waiting for static world geometry";
     return true;
@@ -678,7 +1055,7 @@ RayQueryBridgeCapabilities rayQueryBridgeCapabilities() {
         g.webgpuFeatureEnabled,
         g.accelerationStructureSupported,
         g.rayQuerySupported,
-        g.pipeline != VK_NULL_HANDLE,
+        g.pipeline != VK_NULL_HANDLE && g.reflectionPipeline != VK_NULL_HANDLE,
         g.sceneReady,
         g.triangleCount,
         g.buildCount,
@@ -693,6 +1070,9 @@ void rayQueryBridgeSceneBegin() {
     destroySceneResources(true);
     g.pendingPositions.clear();
     g.pendingIndices.clear();
+    g.pendingTriangleRadiance.clear();
+    g.pendingTriangleSurface.clear();
+    g.pendingStaticLights.clear();
     g.status = g.attached
         ? "Collecting static world-space triangles"
         : "Ray query bridge is unavailable";
@@ -726,6 +1106,100 @@ bool rayQueryBridgeSetIndices(const uint32_t* indices, std::size_t indexCount) {
     return true;
 }
 
+bool rayQueryBridgeSetTriangleRadiance(const float* rgba,
+                                      std::size_t triangleCount) {
+    std::scoped_lock lock(g.mutex);
+    if (!g.attached || !rgba || triangleCount == 0 ||
+        triangleCount > (std::numeric_limits<std::size_t>::max() / 4u)) {
+        fail("Invalid static ray-query triangle-radiance chunk");
+        return false;
+    }
+    const std::size_t scalarCount = triangleCount * 4u;
+    for (std::size_t index = 0; index < scalarCount; ++index) {
+        if (!std::isfinite(rgba[index]) || rgba[index] < 0.0f) {
+            fail("Static ray-query triangle radiance must be finite and non-negative");
+            return false;
+        }
+    }
+    g.pendingTriangleRadiance.insert(g.pendingTriangleRadiance.end(), rgba,
+                                     rgba + scalarCount);
+    return true;
+}
+
+bool rayQueryBridgeSetTriangleSurface(const float* albedoRoughness,
+                                     std::size_t triangleCount) {
+    std::scoped_lock lock(g.mutex);
+    if (!g.attached || !albedoRoughness || triangleCount == 0 ||
+        triangleCount > (std::numeric_limits<std::size_t>::max() / 4u)) {
+        fail("Invalid static ray-query triangle-surface chunk");
+        return false;
+    }
+    const std::size_t scalarCount = triangleCount * 4u;
+    for (std::size_t offset = 0; offset < scalarCount; offset += 4u) {
+        if (!std::isfinite(albedoRoughness[offset + 0u]) ||
+            !std::isfinite(albedoRoughness[offset + 1u]) ||
+            !std::isfinite(albedoRoughness[offset + 2u]) ||
+            !std::isfinite(albedoRoughness[offset + 3u]) ||
+            albedoRoughness[offset + 0u] < 0.0f ||
+            albedoRoughness[offset + 1u] < 0.0f ||
+            albedoRoughness[offset + 2u] < 0.0f ||
+            albedoRoughness[offset + 3u] < 0.0f ||
+            albedoRoughness[offset + 3u] > 1.0f) {
+            fail("Static ray-query triangle surfaces require non-negative linear albedo and roughness in [0, 1]");
+            return false;
+        }
+    }
+    g.pendingTriangleSurface.insert(g.pendingTriangleSurface.end(),
+                                    albedoRoughness,
+                                    albedoRoughness + scalarCount);
+    return true;
+}
+
+bool rayQueryBridgeSetStaticLights(const float* lightRecords,
+                                   std::size_t lightCount) {
+    std::scoped_lock lock(g.mutex);
+    if (!g.attached || !lightRecords || lightCount == 0u || lightCount > 8u) {
+        fail("Static ray-query lighting accepts between one and eight lights");
+        return false;
+    }
+    constexpr std::size_t kScalarsPerLight = 16u;
+    const std::size_t scalarCount = lightCount * kScalarsPerLight;
+    for (std::size_t offset = 0; offset < scalarCount; offset += kScalarsPerLight) {
+        for (std::size_t field = 0; field < kScalarsPerLight; ++field) {
+            if (!std::isfinite(lightRecords[offset + field])) {
+                fail("Static ray-query lights must contain only finite values");
+                return false;
+            }
+        }
+        const float range = lightRecords[offset + 3u];
+        const float outerCos = lightRecords[offset + 7u];
+        const float intensity = lightRecords[offset + 11u];
+        const float innerCos = lightRecords[offset + 12u];
+        const float type = lightRecords[offset + 13u];
+        const float decay = lightRecords[offset + 14u];
+        if (range < 0.0f || outerCos < -1.0f || outerCos > 1.0f ||
+            lightRecords[offset + 8u] < 0.0f ||
+            lightRecords[offset + 9u] < 0.0f ||
+            lightRecords[offset + 10u] < 0.0f || intensity < 0.0f ||
+            innerCos < -1.0f || innerCos > 1.0f ||
+            (type != 0.0f && type != 1.0f) || decay < 0.0f) {
+            fail("Static ray-query light ranges, colors, intensity, cones, type and decay are invalid");
+            return false;
+        }
+        if (type == 1.0f) {
+            const float x = lightRecords[offset + 4u];
+            const float y = lightRecords[offset + 5u];
+            const float z = lightRecords[offset + 6u];
+            if (x * x + y * y + z * z <= 1e-12f || innerCos < outerCos) {
+                fail("Static spot lights require a direction and innerCos >= outerCos");
+                return false;
+            }
+        }
+    }
+    g.pendingStaticLights.assign(lightRecords, lightRecords + scalarCount);
+    return true;
+}
+
 bool rayQueryBridgeCommit(void* commandBufferValue) {
     std::scoped_lock lock(g.mutex);
     if (!g.attached || !commandBufferValue || g.pendingPositions.empty() ||
@@ -741,6 +1215,56 @@ bool rayQueryBridgeCommit(void* commandBufferValue) {
             return false;
         }
     }
+    const uint32_t primitiveCount = static_cast<uint32_t>(g.pendingIndices.size() / 3u);
+    if (!g.pendingTriangleRadiance.empty() &&
+        g.pendingTriangleRadiance.size() != static_cast<std::size_t>(primitiveCount) * 4u) {
+        fail("Ray-query triangle radiance must contain exactly one vec4 per primitive");
+        return false;
+    }
+    if (!g.pendingTriangleSurface.empty() &&
+        g.pendingTriangleSurface.size() != static_cast<std::size_t>(primitiveCount) * 4u) {
+        fail("Ray-query triangle surface data must contain exactly one vec4 per primitive");
+        return false;
+    }
+    if (!g.pendingStaticLights.empty() &&
+        (g.pendingStaticLights.size() % 16u != 0u ||
+         g.pendingStaticLights.size() > 8u * 16u)) {
+        fail("Ray-query static lights must contain at most eight 4xvec4 records");
+        return false;
+    }
+    std::vector<float> defaultTriangleRadiance;
+    const std::vector<float>* triangleRadiance = &g.pendingTriangleRadiance;
+    if (triangleRadiance->empty()) {
+        defaultTriangleRadiance.resize(static_cast<std::size_t>(primitiveCount) * 4u);
+        for (uint32_t primitive = 0; primitive < primitiveCount; ++primitive) {
+            const std::size_t offset = static_cast<std::size_t>(primitive) * 4u;
+            defaultTriangleRadiance[offset + 0u] = 0.18f;
+            defaultTriangleRadiance[offset + 1u] = 0.20f;
+            defaultTriangleRadiance[offset + 2u] = 0.24f;
+            defaultTriangleRadiance[offset + 3u] = 1.0f;
+        }
+        triangleRadiance = &defaultTriangleRadiance;
+    }
+    std::vector<float> defaultTriangleSurface;
+    const std::vector<float>* triangleSurface = &g.pendingTriangleSurface;
+    if (triangleSurface->empty()) {
+        defaultTriangleSurface.resize(static_cast<std::size_t>(primitiveCount) * 4u);
+        for (uint32_t primitive = 0; primitive < primitiveCount; ++primitive) {
+            const std::size_t offset = static_cast<std::size_t>(primitive) * 4u;
+            defaultTriangleSurface[offset + 0u] = 0.5f;
+            defaultTriangleSurface[offset + 1u] = 0.5f;
+            defaultTriangleSurface[offset + 2u] = 0.5f;
+            defaultTriangleSurface[offset + 3u] = 0.5f;
+        }
+        triangleSurface = &defaultTriangleSurface;
+    }
+    std::array<float, 16> defaultStaticLight{};
+    const float* staticLights = g.pendingStaticLights.empty()
+        ? defaultStaticLight.data()
+        : g.pendingStaticLights.data();
+    const std::size_t staticLightScalarCount = g.pendingStaticLights.empty()
+        ? defaultStaticLight.size()
+        : g.pendingStaticLights.size();
     // A direct C-API caller may recommit without a preceding SceneBegin.  Wait
     // before replacing an existing or partially-created scene so no submitted
     // lighting dispatch can still reference its TLAS or descriptor sets.  The
@@ -749,27 +1273,37 @@ bool rayQueryBridgeCommit(void* commandBufferValue) {
         g.sceneReady || g.tlas.handle || g.tlas.storage.buffer ||
         g.blas.handle || g.blas.storage.buffer || g.tlasScratch.buffer ||
         g.instances.buffer || g.blasScratch.buffer || g.indices.buffer ||
-        g.vertices.buffer;
+        g.vertices.buffer || g.triangleRadiance.buffer ||
+        g.triangleSurface.buffer || g.staticLights.buffer ||
+        !g.sceneUploadStaging.empty();
     destroySceneResources(replacingScene);
     const VkBufferUsageFlags geometryUsage =
         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-    const VkMemoryPropertyFlags uploadRequired = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
-    const VkMemoryPropertyFlags uploadPreferred =
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-    if (!createBuffer(g.pendingPositions.size() * sizeof(float), geometryUsage,
-                      uploadRequired, uploadPreferred, g.vertices) ||
-        !uploadBuffer(g.vertices, g.pendingPositions.data(),
-                      g.pendingPositions.size() * sizeof(float)) ||
-        !createBuffer(g.pendingIndices.size() * sizeof(uint32_t), geometryUsage,
-                      uploadRequired, uploadPreferred, g.indices) ||
-        !uploadBuffer(g.indices, g.pendingIndices.data(),
-                      g.pendingIndices.size() * sizeof(uint32_t))) {
+        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    std::vector<PendingBufferCopy> pendingCopies;
+    if (!createImmutableSceneBuffer(
+            g.pendingPositions.size() * sizeof(float), geometryUsage,
+            g.pendingPositions.data(), g.vertices, pendingCopies) ||
+        !createImmutableSceneBuffer(
+            g.pendingIndices.size() * sizeof(uint32_t), geometryUsage,
+            g.pendingIndices.data(), g.indices, pendingCopies) ||
+        !createImmutableSceneBuffer(
+            triangleRadiance->size() * sizeof(float),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, triangleRadiance->data(),
+            g.triangleRadiance, pendingCopies) ||
+        !createImmutableSceneBuffer(
+            triangleSurface->size() * sizeof(float),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, triangleSurface->data(),
+            g.triangleSurface, pendingCopies) ||
+        !createImmutableSceneBuffer(
+            staticLightScalarCount * sizeof(float),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, staticLights,
+            g.staticLights, pendingCopies)) {
         destroySceneResources(false);
         return false;
     }
 
-    const uint32_t primitiveCount = static_cast<uint32_t>(g.pendingIndices.size() / 3u);
     VkAccelerationStructureGeometryTrianglesDataKHR triangles{
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR};
     triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
@@ -825,9 +1359,8 @@ bool rayQueryBridgeCommit(void* commandBufferValue) {
     instance.mask = 0xffu;
     instance.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
     instance.accelerationStructureReference = g.blas.address;
-    if (!createBuffer(sizeof(instance), geometryUsage, uploadRequired,
-                      uploadPreferred, g.instances) ||
-        !uploadBuffer(g.instances, &instance, sizeof(instance))) {
+    if (!createImmutableSceneBuffer(sizeof(instance), geometryUsage, &instance,
+                                    g.instances, pendingCopies)) {
         destroySceneResources(false);
         return false;
     }
@@ -874,10 +1407,27 @@ bool rayQueryBridgeCommit(void* commandBufferValue) {
         return false;
     }
 
-    // Do not record either build until every object referenced by both commands
-    // has been allocated and uploaded.  From this point onward there are no
-    // fallible resource-creation paths that could invalidate the command buffer.
+    // Do not record copies or either build until every object referenced by the
+    // commands has been allocated and uploaded. From this point onward there
+    // are no fallible resource-creation paths that could invalidate the command
+    // buffer. Staging buffers remain alive with the scene until GPU completion.
     const VkCommandBuffer commandBuffer = static_cast<VkCommandBuffer>(commandBufferValue);
+    for (const PendingBufferCopy& copy : pendingCopies) {
+        VkBufferCopy region{};
+        region.size = copy.size;
+        g.vk.cmdCopyBuffer(commandBuffer, copy.source, copy.destination, 1, &region);
+    }
+    VkMemoryBarrier uploadBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    uploadBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT |
+                                  VK_ACCESS_TRANSFER_WRITE_BIT;
+    uploadBarrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                  VK_ACCESS_SHADER_READ_BIT;
+    g.vk.cmdPipelineBarrier(
+        commandBuffer,
+        VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        0, 1, &uploadBarrier, 0, nullptr, 0, nullptr);
     VkAccelerationStructureBuildRangeInfoKHR blasRange{};
     blasRange.primitiveCount = primitiveCount;
     const VkAccelerationStructureBuildRangeInfoKHR* blasRangePtr = &blasRange;
@@ -905,6 +1455,9 @@ bool rayQueryBridgeCommit(void* commandBufferValue) {
         : "Vulkan returned no address for the static TLAS";
     g.pendingPositions.clear();
     g.pendingIndices.clear();
+    g.pendingTriangleRadiance.clear();
+    g.pendingTriangleSurface.clear();
+    g.pendingStaticLights.clear();
     return g.sceneReady;
 }
 
@@ -913,6 +1466,9 @@ void rayQueryBridgeDestroyScene() {
     destroySceneResources(true);
     g.pendingPositions.clear();
     g.pendingIndices.clear();
+    g.pendingTriangleRadiance.clear();
+    g.pendingTriangleSurface.clear();
+    g.pendingStaticLights.clear();
     g.status = g.attached
         ? "Static ray-query scene destroyed"
         : "Ray query bridge is unavailable";
@@ -1003,15 +1559,194 @@ bool rayQueryBridgeEvaluate(const RayQueryLightingFrame& frame) {
     return true;
 }
 
+bool rayQueryBridgeEvaluateReflections(const RayQueryReflectionFrame& frame) {
+    std::scoped_lock lock(g.mutex);
+    if (!g.attached || !g.sceneReady || !g.reflectionPipeline ||
+        !frame.commandBuffer || !frame.sourceColorImage || !frame.outputColorImage ||
+        !frame.depthImage || !frame.normalRoughnessImage ||
+        !frame.specularAlbedoImage || frame.width == 0 || frame.height == 0 ||
+        frame.sourceColorLayout == VK_IMAGE_LAYOUT_UNDEFINED ||
+        frame.outputColorLayout == VK_IMAGE_LAYOUT_UNDEFINED ||
+        frame.depthLayout == VK_IMAGE_LAYOUT_UNDEFINED ||
+        frame.normalRoughnessLayout == VK_IMAGE_LAYOUT_UNDEFINED ||
+        frame.specularAlbedoLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
+        fail("Ray-query reflections require a ready TLAS, an encoder and five valid images");
+        return false;
+    }
+    for (float value : frame.inverseViewProjection) {
+        if (!std::isfinite(value)) {
+            fail("Ray-query reflection inverseViewProjection must be finite");
+            return false;
+        }
+    }
+    for (float value : frame.cameraPosition) {
+        if (!std::isfinite(value)) {
+            fail("Ray-query reflection cameraPosition must be finite");
+            return false;
+        }
+    }
+    for (float value : frame.parameters) {
+        if (!std::isfinite(value)) {
+            fail("Ray-query reflection parameters must be finite");
+            return false;
+        }
+    }
+    for (float value : frame.environment) {
+        if (!std::isfinite(value)) {
+            fail("Ray-query reflection environment must be finite");
+            return false;
+        }
+    }
+    if (frame.parameters[0] < 0.0f || frame.parameters[1] <= 0.0f ||
+        frame.parameters[2] <= 0.0f || frame.parameters[3] <= 0.0f ||
+        frame.parameters[3] > 1.0f || frame.environment[0] < 0.0f ||
+        frame.environment[1] < 0.0f || frame.environment[2] < 0.0f ||
+        frame.environment[3] < 0.0f) {
+        fail("Ray-query reflection strengths, distances, bias, cutoff and environment must be valid");
+        return false;
+    }
+
+    const ReflectionDescriptorKey key{
+        static_cast<VkImage>(frame.sourceColorImage),
+        static_cast<VkImage>(frame.outputColorImage),
+        static_cast<VkImage>(frame.depthImage),
+        static_cast<VkImage>(frame.normalRoughnessImage),
+        static_cast<VkImage>(frame.specularAlbedoImage),
+    };
+    const std::array<VkImage, 5> images{{
+        key.sourceColor, key.outputColor, key.depth,
+        key.normalRoughness, key.specularAlbedo,
+    }};
+    for (std::size_t first = 0; first < images.size(); ++first) {
+        for (std::size_t second = first + 1; second < images.size(); ++second) {
+            if (images[first] == images[second]) {
+                fail("Ray-query reflection input and output images must be distinct");
+                return false;
+            }
+        }
+    }
+    const VkDescriptorSet descriptor = reflectionDescriptorFor(key);
+    if (!descriptor) return false;
+
+    const VkCommandBuffer commandBuffer = static_cast<VkCommandBuffer>(frame.commandBuffer);
+    const auto sourceLayout = static_cast<VkImageLayout>(frame.sourceColorLayout);
+    const auto outputLayout = static_cast<VkImageLayout>(frame.outputColorLayout);
+    const auto depthLayout = static_cast<VkImageLayout>(frame.depthLayout);
+    const auto normalLayout = static_cast<VkImageLayout>(frame.normalRoughnessLayout);
+    const auto specularLayout = static_cast<VkImageLayout>(frame.specularAlbedoLayout);
+    imageBarrier(commandBuffer, key.outputColor, VK_IMAGE_ASPECT_COLOR_BIT,
+                 outputLayout, VK_IMAGE_LAYOUT_GENERAL,
+                 VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+                 VK_ACCESS_SHADER_WRITE_BIT,
+                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    imageBarrier(commandBuffer, key.sourceColor, VK_IMAGE_ASPECT_COLOR_BIT,
+                 sourceLayout, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                 VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+                 VK_ACCESS_SHADER_READ_BIT,
+                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    imageBarrier(commandBuffer, key.depth, VK_IMAGE_ASPECT_DEPTH_BIT,
+                 depthLayout, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                 VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+                 VK_ACCESS_SHADER_READ_BIT,
+                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    imageBarrier(commandBuffer, key.normalRoughness, VK_IMAGE_ASPECT_COLOR_BIT,
+                 normalLayout, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                 VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+                 VK_ACCESS_SHADER_READ_BIT,
+                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    imageBarrier(commandBuffer, key.specularAlbedo, VK_IMAGE_ASPECT_COLOR_BIT,
+                 specularLayout, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                 VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+                 VK_ACCESS_SHADER_READ_BIT,
+                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+
+    struct PushConstants {
+        float inverseViewProjection[16];
+        float cameraPosition[4];
+        float parameters[4];
+        float environment[4];
+        uint32_t extentFlags[4];
+    } push{};
+    static_assert(sizeof(PushConstants) == 128);
+    std::copy_n(frame.inverseViewProjection, 16, push.inverseViewProjection);
+    std::copy_n(frame.cameraPosition, 4, push.cameraPosition);
+    std::copy_n(frame.parameters, 4, push.parameters);
+    std::copy_n(frame.environment, 4, push.environment);
+    push.extentFlags[0] = frame.width;
+    push.extentFlags[1] = frame.height;
+    push.extentFlags[2] = frame.flags;
+    push.extentFlags[3] = frame.frameIndex;
+    g.vk.cmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                         g.reflectionPipeline);
+    g.vk.cmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                               g.reflectionPipelineLayout, 0, 1, &descriptor,
+                               0, nullptr);
+    g.vk.cmdPushConstants(commandBuffer, g.reflectionPipelineLayout,
+                          VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+    g.vk.cmdDispatch(commandBuffer, (frame.width + 7u) / 8u,
+                     (frame.height + 7u) / 8u, 1);
+
+    imageBarrier(commandBuffer, key.specularAlbedo, VK_IMAGE_ASPECT_COLOR_BIT,
+                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, specularLayout,
+                 VK_ACCESS_SHADER_READ_BIT,
+                 VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+    imageBarrier(commandBuffer, key.normalRoughness, VK_IMAGE_ASPECT_COLOR_BIT,
+                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, normalLayout,
+                 VK_ACCESS_SHADER_READ_BIT,
+                 VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+    imageBarrier(commandBuffer, key.depth, VK_IMAGE_ASPECT_DEPTH_BIT,
+                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, depthLayout,
+                 VK_ACCESS_SHADER_READ_BIT,
+                 VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+    imageBarrier(commandBuffer, key.sourceColor, VK_IMAGE_ASPECT_COLOR_BIT,
+                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, sourceLayout,
+                 VK_ACCESS_SHADER_READ_BIT,
+                 VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+    imageBarrier(commandBuffer, key.outputColor, VK_IMAGE_ASPECT_COLOR_BIT,
+                 VK_IMAGE_LAYOUT_GENERAL, outputLayout,
+                 VK_ACCESS_SHADER_WRITE_BIT,
+                 VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+    ++g.evaluationCount;
+    g.status = "Hardware one-bounce roughness-aware reflections dispatched";
+    return true;
+}
+
 void rayQueryBridgeForgetImage(void* imageValue) {
     std::scoped_lock lock(g.mutex);
     if (!g.device || !imageValue) return;
     const auto image = static_cast<VkImage>(imageValue);
     bool found = false;
     for (const auto& [key, record] : g.descriptors) {
+        (void)record;
         if (key.color == image || key.depth == image) {
             found = true;
             break;
+        }
+    }
+    if (!found) {
+        for (const auto& [key, record] : g.reflectionDescriptors) {
+            (void)record;
+            if (key.sourceColor == image || key.outputColor == image ||
+                key.depth == image || key.normalRoughness == image ||
+                key.specularAlbedo == image) {
+                found = true;
+                break;
+            }
         }
     }
     if (!found) return;
@@ -1029,6 +1764,22 @@ void rayQueryBridgeForgetImage(void* imageValue) {
                 g.vk.destroyImageView(g.device, iterator->second.depthView, nullptr);
             }
             iterator = g.descriptors.erase(iterator);
+        } else {
+            ++iterator;
+        }
+    }
+    for (auto iterator = g.reflectionDescriptors.begin();
+         iterator != g.reflectionDescriptors.end();) {
+        const auto& key = iterator->first;
+        if (key.sourceColor == image || key.outputColor == image ||
+            key.depth == image || key.normalRoughness == image ||
+            key.specularAlbedo == image) {
+            if (iterator->second.set && g.reflectionDescriptorPool) {
+                g.vk.freeDescriptorSets(g.device, g.reflectionDescriptorPool, 1,
+                                        &iterator->second.set);
+            }
+            destroyReflectionViews(iterator->second);
+            iterator = g.reflectionDescriptors.erase(iterator);
         } else {
             ++iterator;
         }
@@ -1062,9 +1813,13 @@ RayQueryBridgeCapabilities rayQueryBridgeCapabilities() {
 void rayQueryBridgeSceneBegin() {}
 bool rayQueryBridgeSetPositions(const float*, std::size_t) { return false; }
 bool rayQueryBridgeSetIndices(const uint32_t*, std::size_t) { return false; }
+bool rayQueryBridgeSetTriangleRadiance(const float*, std::size_t) { return false; }
+bool rayQueryBridgeSetTriangleSurface(const float*, std::size_t) { return false; }
+bool rayQueryBridgeSetStaticLights(const float*, std::size_t) { return false; }
 bool rayQueryBridgeCommit(void*) { return false; }
 void rayQueryBridgeDestroyScene() {}
 bool rayQueryBridgeEvaluate(const RayQueryLightingFrame&) { return false; }
+bool rayQueryBridgeEvaluateReflections(const RayQueryReflectionFrame&) { return false; }
 void rayQueryBridgeForgetImage(void*) {}
 void rayQueryBridgeShutdown() {}
 

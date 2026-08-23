@@ -94,6 +94,10 @@ if (WIN32)
             "${CMAKE_CURRENT_SOURCE_DIR}/webgpu/shaders/ray_query_lighting.comp"
             kRayQueryLightingCompSpv
             _ray_query_lighting_spv_h)
+        compile_vulkan_shader(three_webgpu
+            "${CMAKE_CURRENT_SOURCE_DIR}/webgpu/shaders/ray_query_reflections.comp"
+            kRayQueryReflectionsCompSpv
+            _ray_query_reflections_spv_h)
     endif ()
     target_link_libraries(three_webgpu PRIVATE "${WGPU_NATIVE_LIB}" user32 gdi32)
     target_link_libraries(three_native PRIVATE three_webgpu)

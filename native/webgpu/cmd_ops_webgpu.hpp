@@ -81,6 +81,26 @@ constexpr uint32_t OP_RTX_SCENE_DESTROY = 81;   // version
 // causticStrength, IOR). Color is modified in place and the native pass
 // restores both incoming Vulkan layouts before returning.
 constexpr uint32_t OP_RTX_LIGHTING_EVALUATE = 82;
+// Optional terminal radiance for each primitive in the single static BLAS.
+// Chunks are concatenated until scene commit. Payload:
+// version, triangleCount, triangleCount * vec4f (linear HDR RGB, reserved A).
+constexpr uint32_t OP_RTX_SCENE_TRIANGLE_RADIANCE = 83;
+// One-bounce roughness-aware reflection composite. Payload:
+// version, encoder; source/output/depth/normalRoughness/specularAlbedo as
+// {texture, VkImageLayout}; width, height; inverseViewProjection[16],
+// cameraPosition[4], parameters[4] (strength, maxDistance, bias,
+// roughnessCutoff), environment[4] (linear RGB, intensity), flags and
+// frameIndex. Source and output must be distinct rgba16f images.
+constexpr uint32_t OP_RTX_REFLECTIONS_EVALUATE = 84;
+// Optional material response for each primitive in the single static BLAS.
+// Chunks are concatenated until scene commit. Payload:
+// version, triangleCount, triangleCount * vec4f (linear albedo RGB, roughness).
+constexpr uint32_t OP_RTX_SCENE_TRIANGLE_SURFACE = 85;
+// Optional static lights used to shade reflection hits. Payload:
+// version, lightCount (maximum 8), lightCount * 4 * vec4f containing
+// position/range, direction/outerCos, linear color/intensity and
+// innerCos/type/decay/reserved. Type 0 is point and type 1 is spot.
+constexpr uint32_t OP_RTX_SCENE_LIGHTS = 86;
 // DLSS Frame Generation resource tag/options command, replayed after rendering
 // and before OP_SUBMIT/OP_PRESENT. Payload:
 // u32 encoder, viewport; 4x {texture, VkImageLayout, left, top, width, height};

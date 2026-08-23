@@ -292,9 +292,98 @@ function rtxUint32Indices(value, vertexCount) {
   return indices;
 }
 
+function rtxTriangleRadiance(value, triangleCount) {
+  if (value == null) return null;
+  const source = value?.array ?? value;
+  const expected = triangleCount * 4;
+  if (!source || typeof source.length !== "number" || source.length !== expected) {
+    throw new TypeError(
+      `triangleRadiance must contain exactly one linear HDR vec4 per triangle (${expected} floats)`,
+    );
+  }
+  const radiance = source instanceof Float32Array
+    ? new Float32Array(source)
+    : Float32Array.from(source, Number);
+  if (radiance.some(component => !Number.isFinite(component) || component < 0)) {
+    throw new TypeError("triangleRadiance must contain only finite, non-negative linear HDR values");
+  }
+  return radiance;
+}
+
+function rtxTriangleSurface(value, triangleCount) {
+  if (value == null) return null;
+  const source = value?.array ?? value;
+  const expected = triangleCount * 4;
+  if (!source || typeof source.length !== "number" || source.length !== expected) {
+    throw new TypeError(
+      `triangleSurface must contain exactly one linear albedo/roughness vec4 per triangle (${expected} floats)`,
+    );
+  }
+  const surface = source instanceof Float32Array
+    ? new Float32Array(source)
+    : Float32Array.from(source, Number);
+  for (let offset = 0; offset < surface.length; offset += 4) {
+    if (!Number.isFinite(surface[offset]) || surface[offset] < 0 ||
+        !Number.isFinite(surface[offset + 1]) || surface[offset + 1] < 0 ||
+        !Number.isFinite(surface[offset + 2]) || surface[offset + 2] < 0 ||
+        !Number.isFinite(surface[offset + 3]) ||
+        surface[offset + 3] < 0 || surface[offset + 3] > 1) {
+      throw new TypeError(
+        "triangleSurface must contain finite non-negative linear albedo RGB and roughness in [0, 1]",
+      );
+    }
+  }
+  return surface;
+}
+
+function rtxStaticLights(value) {
+  if (value == null) return null;
+  const source = value?.array ?? value;
+  if (!source || typeof source.length !== "number" || source.length === 0 ||
+      (source.length % 16) !== 0 || source.length > 8 * 16) {
+    throw new TypeError(
+      "lights must contain between one and eight packed 4xvec4 records (16 floats per light)",
+    );
+  }
+  const lights = source instanceof Float32Array
+    ? new Float32Array(source)
+    : Float32Array.from(source, Number);
+  for (let offset = 0; offset < lights.length; offset += 16) {
+    if (Array.from(lights.subarray(offset, offset + 16)).some(value => !Number.isFinite(value))) {
+      throw new TypeError("lights must contain only finite values");
+    }
+    const range = lights[offset + 3];
+    const outerCos = lights[offset + 7];
+    const intensity = lights[offset + 11];
+    const innerCos = lights[offset + 12];
+    const type = lights[offset + 13];
+    const decay = lights[offset + 14];
+    if (range < 0 || outerCos < -1 || outerCos > 1 || intensity < 0 ||
+        lights[offset + 8] < 0 || lights[offset + 9] < 0 || lights[offset + 10] < 0 ||
+        innerCos < -1 || innerCos > 1 || !Number.isInteger(type) ||
+        (type !== 0 && type !== 1) || decay < 0) {
+      throw new RangeError(
+        "lights require non-negative range/color/intensity/decay, cone cosines in [-1, 1], and type 0 (point) or 1 (spot)",
+      );
+    }
+    if (type === 1) {
+      const directionLength = Math.hypot(
+        lights[offset + 4], lights[offset + 5], lights[offset + 6],
+      );
+      if (!(directionLength > 1e-6) || innerCos < outerCos) {
+        throw new RangeError(
+          "spot lights require a non-zero direction and innerCos greater than or equal to outerCos",
+        );
+      }
+    }
+  }
+  return lights;
+}
+
 function rtxTextureResource(value, name, requiredFormat, requiredUsage, layoutOverride, defaultLayout) {
   const texture = value instanceof GPUTexture ? value : value?.texture;
-  if (!(texture instanceof GPUTexture) || texture._kind !== "texture" || !texture._h) {
+  if (!(texture instanceof GPUTexture) || texture._kind !== "texture" ||
+      !texture._h || texture._destroyed) {
     throw new TypeError(`${name} must be a native GPUTexture created by this device`);
   }
   if (texture._swapchain) {
@@ -535,6 +624,9 @@ function dynOffsets(dyn, start, count) {
 function viewHandle(v) {
   if (!v) return 0;
   if (v._swapchain) return 0;
+  if (v._tex?._destroyed) {
+    throw new Error("Cannot use a GPUTextureView after its parent GPUTexture was destroyed");
+  }
   return (v._h || 0) >>> 0;
 }
 
@@ -722,9 +814,11 @@ class GPUTexture {
     this.format = desc.format;
     this.usage = desc.usage >>> 0;
     this.label = desc.label || "";
+    this._destroyed = false;
   }
   createView(desc) {
     desc = desc || {};
+    if (this._destroyed) throw new Error("Cannot create a view from a destroyed GPUTexture");
     if (this._swapchain) return new GPUTextureView(0, this, desc);
     const h = cmd.allocHandle();
     cmd.texView(h, this._h, desc);
@@ -734,8 +828,11 @@ class GPUTexture {
     return new GPUTextureView(h, this, desc);
   }
   destroy() {
-    if (this._swapchain) return;
-    cmd.texDestroy(this._h);
+    if (this._swapchain || this._destroyed) return;
+    const handle = this._h;
+    this._destroyed = true;
+    this._h = 0;
+    cmd.texDestroy(handle);
   }
 }
 
@@ -830,9 +927,11 @@ class GPUQuerySet {
 }
 
 class GPUCommandBuffer {
-  constructor(handle, commands) {
+  constructor(handle, commands, submissionValidators = [], submissionCallbacks = []) {
     this._h = handle;
     this._commands = commands;
+    this._submissionValidators = submissionValidators;
+    this._submissionCallbacks = submissionCallbacks;
     this.label = "";
   }
 }
@@ -1009,6 +1108,8 @@ class GPUCommandEncoder {
   constructor(desc) {
     this._h = cmd.allocHandle();
     this._commands = [];
+    this._submissionValidators = [];
+    this._submissionCallbacks = [];
     this._finished = false;
     this.label = desc?.label || "";
   }
@@ -1077,7 +1178,12 @@ class GPUCommandEncoder {
   clearBuffer() {}
   resolveQuerySet() {}
   finish() {
-    const commandBuffer = new GPUCommandBuffer(this._h, this._commands.slice());
+    const commandBuffer = new GPUCommandBuffer(
+      this._h,
+      this._commands.slice(),
+      this._submissionValidators.slice(),
+      this._submissionCallbacks.slice(),
+    );
     this._finished = true;
     return commandBuffer;
   }
@@ -1116,8 +1222,12 @@ function replayCommandBuffer(buffer) {
       case "rtxSceneBegin": cmd.rtxSceneBegin(); break;
       case "rtxScenePositions": cmd.rtxScenePositions(entry[1]); break;
       case "rtxSceneIndices": cmd.rtxSceneIndices(entry[1]); break;
+      case "rtxSceneTriangleRadiance": cmd.rtxSceneTriangleRadiance(entry[1]); break;
+      case "rtxSceneTriangleSurface": cmd.rtxSceneTriangleSurface(entry[1]); break;
+      case "rtxSceneLights": cmd.rtxSceneLights(entry[1]); break;
       case "rtxSceneCommit": cmd.rtxSceneCommit(enc); break;
       case "rtxLightingEvaluate": cmd.rtxLightingEvaluate(enc, entry[1]); break;
+      case "rtxReflectionsEvaluate": cmd.rtxReflectionsEvaluate(enc, entry[1]); break;
       case "copyBuf": cmd.copyBuf(enc, entry[1]._h, entry[3]._h, entry[2], entry[4], entry[5]); break;
       case "copyTex": cmd.copyTex(enc, entry[1], entry[2], entry[3], entry[4]); break;
     }
@@ -1131,8 +1241,15 @@ class GPUQueue {
     this.label = "";
   }
   submit(buffers) {
+    const submittedBuffers = Array.from(buffers || []);
+    // Native-only passes may depend on state established by an earlier submit.
+    // Validate every command buffer before replaying any of them so a stale
+    // evaluation cannot partially mutate the native command stream.
+    for (const buffer of submittedBuffers) {
+      for (const validate of buffer?._submissionValidators || []) validate();
+    }
     if (globalThis.process?.env?.THREEBROWSER_TRACE_RENDER && tracedSurfaceSubmits < 8) {
-      for (const buffer of buffers || []) {
+      for (const buffer of submittedBuffers) {
         const commands = buffer?._commands || [];
         const surfacePasses = commands.filter(entry => entry[0] === "renderBegin" &&
           entry[1]?.colorAttachments?.some(attachment => attachment.viewHandle === 0));
@@ -1147,12 +1264,17 @@ class GPUQueue {
         }
       }
     }
-    for (const buffer of buffers || []) replayCommandBuffer(buffer);
+    for (const buffer of submittedBuffers) replayCommandBuffer(buffer);
     if (swapchainAcquired) {
       cmd.present();
       swapchainAcquired = false;
     }
     cmd.submitNow();
+    // State becomes active only after native replay and submission both return
+    // successfully. Keep callback order identical to command-buffer order.
+    for (const buffer of submittedBuffers) {
+      for (const submitted of buffer?._submissionCallbacks || []) submitted();
+    }
   }
   writeBuffer(buffer, bufferOffset, data, dataOffset, size) {
     cmd.bufWrite(buffer._h, bufferOffset || 0, writeBufferBytes(data, dataOffset, size));
@@ -1562,7 +1684,11 @@ export function install() {
     dlssRayReconstruction: -1,
   };
   let staticRaySceneQueued = false;
+  let staticRaySceneSubmitted = false;
+  let staticRaySceneGeneration = 0;
+  let activeStaticRaySceneGeneration = 0;
   let rayLightingQueued = false;
+  let rayReflectionsQueued = false;
 
   const readCapabilities = () => {
     const raw = nativeCall(() => n.WebGpuCapabilities?.(), {}) || {};
@@ -1654,14 +1780,16 @@ export function install() {
           capabilities.nativeRayTracing,
           staticRaySceneQueued ? 1 : -1,
           staticRaySceneQueued,
-          rayLightingQueued,
+          rayLightingQueued || rayReflectionsQueued,
           !capabilities.nativeRayTracing
             ? "The active Vulkan adapter does not expose the required acceleration-structure and ray-query features."
             : !staticRaySceneQueued
               ? "Native ray queries are available; register a world-space static triangle scene to build BLAS/TLAS resources."
-              : rayLightingQueued
-                ? "Native sun visibility and ray-traced ambient occlusion have been queued on the Vulkan command stream."
-                : "The static scene is queued; evaluate ray lighting with an HDR color and depth target.",
+              : rayReflectionsQueued
+                ? "Native one-bounce reflections have been queued on the Vulkan command stream."
+                : rayLightingQueued
+                  ? "Native sun visibility and ray-traced ambient occlusion have been queued on the Vulkan command stream."
+                  : "The static scene is queued; evaluate ray lighting or reflections with persistent render targets.",
         ),
       },
     };
@@ -2047,6 +2175,30 @@ export function install() {
     return true;
   };
 
+  const requireActiveStaticRayScene = (operation) => {
+    if (!staticRaySceneQueued ||
+        !staticRaySceneSubmitted ||
+        activeStaticRaySceneGeneration !== staticRaySceneGeneration) {
+      throw new Error(
+        `registerStaticScene must be submitted before native ${operation} can be evaluated`,
+      );
+    }
+    return activeStaticRaySceneGeneration;
+  };
+
+  const bindEvaluationToStaticScene = (encoder, generation, operation) => {
+    encoder._submissionValidators.push(() => {
+      if (!staticRaySceneQueued ||
+          !staticRaySceneSubmitted ||
+          staticRaySceneGeneration !== generation ||
+          activeStaticRaySceneGeneration !== generation) {
+        throw new Error(
+          `The static scene changed before native ${operation} was submitted; record the evaluation again`,
+        );
+      }
+    });
+  };
+
   const registerStaticScene = (scene = {}) => {
     if (!scene || typeof scene !== "object") {
       throw new TypeError("threeBrowserRTX.registerStaticScene expects a scene object");
@@ -2054,21 +2206,46 @@ export function install() {
     const positions = rtxFloat32Positions(scene.positions);
     const vertexCount = positions.length / 3;
     const indices = rtxUint32Indices(scene.indices, vertexCount);
-    const nativeEncoder = dedicatedNativeEncoder(scene.commandEncoder, "registerStaticScene");
-    nativeEncoder.encoder._commands.push(
-      ["rtxSceneBegin"],
-      ["rtxScenePositions", positions],
-      ["rtxSceneIndices", indices],
-      ["rtxSceneCommit"],
+    const triangleCount = indices.length / 3;
+    const triangleRadiance = rtxTriangleRadiance(
+      scene.triangleRadiance ?? scene.radiance,
+      triangleCount,
     );
+    const triangleSurface = rtxTriangleSurface(scene.triangleSurface, triangleCount);
+    const lights = rtxStaticLights(scene.lights);
+    const nativeEncoder = dedicatedNativeEncoder(scene.commandEncoder, "registerStaticScene");
+    nativeEncoder.encoder._commands.push(["rtxSceneBegin"]);
+    nativeEncoder.encoder._commands.push(["rtxScenePositions", positions]);
+    nativeEncoder.encoder._commands.push(["rtxSceneIndices", indices]);
+    if (triangleRadiance) {
+      nativeEncoder.encoder._commands.push(["rtxSceneTriangleRadiance", triangleRadiance]);
+    }
+    if (triangleSurface) {
+      nativeEncoder.encoder._commands.push(["rtxSceneTriangleSurface", triangleSurface]);
+    }
+    if (lights) {
+      nativeEncoder.encoder._commands.push(["rtxSceneLights", lights]);
+    }
+    nativeEncoder.encoder._commands.push(["rtxSceneCommit"]);
+    const generation = ++staticRaySceneGeneration;
     staticRaySceneQueued = true;
+    staticRaySceneSubmitted = false;
+    rayLightingQueued = false;
+    rayReflectionsQueued = false;
+    nativeEncoder.encoder._submissionCallbacks.push(() => {
+      activeStaticRaySceneGeneration = generation;
+      staticRaySceneSubmitted = generation === staticRaySceneGeneration;
+    });
     const submitted = submitNativeEncoderIfNeeded(nativeEncoder);
     return immutableSnapshot({
       queued: true,
       submitted,
       vertexCount,
-      triangleCount: indices.length / 3,
-      note: "World-space geometry is uploaded once; native owns the BLAS and identity TLAS after this command buffer completes.",
+      triangleCount,
+      hasTriangleRadiance: Boolean(triangleRadiance),
+      hasTriangleSurface: Boolean(triangleSurface),
+      staticLightCount: lights ? lights.length / 16 : 0,
+      note: "World-space geometry plus optional per-triangle radiance, surface response and static lights are uploaded once; native owns the BLAS and identity TLAS after this command buffer completes.",
     });
   };
 
@@ -2076,7 +2253,11 @@ export function install() {
     cmd.rtxSceneDestroy();
     cmd.submitNow(true);
     staticRaySceneQueued = false;
+    staticRaySceneSubmitted = false;
+    staticRaySceneGeneration++;
+    activeStaticRaySceneGeneration = 0;
     rayLightingQueued = false;
+    rayReflectionsQueued = false;
     return true;
   };
 
@@ -2084,10 +2265,13 @@ export function install() {
     if (!frame || typeof frame !== "object") {
       throw new TypeError("threeBrowserRTX.evaluateRayLighting expects a frame object");
     }
-    if (!staticRaySceneQueued) {
-      throw new Error("registerStaticScene must be submitted before native ray-query lighting can be evaluated");
-    }
+    const sceneGeneration = requireActiveStaticRayScene("ray-query lighting");
     const nativeEncoder = dedicatedNativeEncoder(frame.commandEncoder, "evaluateRayLighting");
+    bindEvaluationToStaticScene(
+      nativeEncoder.encoder,
+      sceneGeneration,
+      "ray-query lighting",
+    );
     const color = rtxTextureResource(
       frame.color ?? frame.colorTexture,
       "color",
@@ -2154,7 +2338,7 @@ export function install() {
         intensity,
       ],
       params: [shadowStrength, aoStrength, aoRadius, aoMaxDistance],
-      flags: frame.depthInverted ? 1 : 0,
+      flags: (frame.depthInverted ? 1 : 0) | (frame.highQuality ? 2 : 0),
       water: [waterTime, waterSurfaceY, causticStrength, waterIor],
     };
     nativeEncoder.encoder._commands.push(["rtxLightingEvaluate", packed]);
@@ -2169,8 +2353,169 @@ export function install() {
         sunVisibility: shadowStrength > 0,
         rayTracedAmbientOcclusion: aoStrength > 0,
         refractedWaterCaustics: causticStrength > 0,
+        stableSunSamples: frame.highQuality ? 4 : 1,
+        stableAoSamples: frame.highQuality ? 8 : 2,
       }),
       note: "Native Vulkan ray queries shade the HDR target in place and restore both supplied image layouts.",
+    });
+  };
+
+  const evaluateRayReflections = (frame = {}) => {
+    if (!frame || typeof frame !== "object") {
+      throw new TypeError("threeBrowserRTX.evaluateRayReflections expects a frame object");
+    }
+    const sceneGeneration = requireActiveStaticRayScene("ray reflections");
+    const nativeEncoder = dedicatedNativeEncoder(frame.commandEncoder, "evaluateRayReflections");
+    bindEvaluationToStaticScene(
+      nativeEncoder.encoder,
+      sceneGeneration,
+      "ray reflections",
+    );
+    const sourceColor = rtxTextureResource(
+      frame.sourceColor ?? frame.colorInput,
+      "sourceColor",
+      "rgba16float",
+      0x04,
+      frame.sourceColorVulkanLayout ?? frame.sourceColorLayout,
+      VULKAN_IMAGE_LAYOUTS.shaderReadOnly,
+    );
+    const outputColor = rtxTextureResource(
+      frame.outputColor ?? frame.colorOutput,
+      "outputColor",
+      "rgba16float",
+      0x08,
+      frame.outputColorVulkanLayout ?? frame.outputColorLayout,
+      VULKAN_IMAGE_LAYOUTS.colorAttachment,
+    );
+    const depth = rtxTextureResource(
+      frame.depth ?? frame.depthTexture,
+      "depth",
+      "depth32float",
+      0x04,
+      frame.depthVulkanLayout ?? frame.depthLayout,
+      VULKAN_IMAGE_LAYOUTS.depthStencilAttachment,
+    );
+    const normalRoughness = rtxTextureResource(
+      frame.normalRoughness,
+      "normalRoughness",
+      "rgba16float",
+      0x04,
+      frame.normalRoughnessVulkanLayout ?? frame.normalRoughnessLayout,
+      VULKAN_IMAGE_LAYOUTS.colorAttachment,
+    );
+    const specularAlbedo = rtxTextureResource(
+      frame.specularAlbedo,
+      "specularAlbedo",
+      "rgba16float",
+      0x04,
+      frame.specularAlbedoVulkanLayout ?? frame.specularAlbedoLayout,
+      VULKAN_IMAGE_LAYOUTS.colorAttachment,
+    );
+    const inputs = [sourceColor, depth, normalRoughness, specularAlbedo];
+    if (inputs.some(resource => resource.textureHandle === outputColor.textureHandle)) {
+      throw new TypeError("outputColor must be distinct from every ray-reflection input texture");
+    }
+    const uniqueInputHandles = new Set(inputs.map(resource => resource.textureHandle));
+    if (uniqueInputHandles.size !== inputs.length) {
+      throw new TypeError("Ray-reflection source, depth, normal/roughness and specular guides must be distinct textures");
+    }
+
+    const width = positiveDimension(frame.width, "width", sourceColor.texture.width);
+    const height = positiveDimension(frame.height, "height", sourceColor.texture.height);
+    for (const [name, resource] of [
+      ["sourceColor", sourceColor],
+      ["outputColor", outputColor],
+      ["depth", depth],
+      ["normalRoughness", normalRoughness],
+      ["specularAlbedo", specularAlbedo],
+    ]) {
+      if (resource.texture.width !== width || resource.texture.height !== height) {
+        throw new RangeError(`${name} must exactly match the ${width}x${height} ray-reflection extent`);
+      }
+    }
+
+    const inverseViewProjection = numericArray(
+      frame.inverseViewProjection,
+      16,
+      "inverseViewProjection",
+    );
+    const cameraPosition = rtxVector4(frame.cameraPosition, "cameraPosition", 1);
+    const reflectionStrength = finiteNumber(frame.reflectionStrength, "reflectionStrength", 1);
+    const maxDistance = finiteNumber(frame.maxDistance, "maxDistance", 120);
+    const rayBias = finiteNumber(frame.rayBias, "rayBias", 0.012);
+    const roughnessCutoff = finiteNumber(frame.roughnessCutoff, "roughnessCutoff", 0.32);
+    if (reflectionStrength < 0 || maxDistance <= 0 || rayBias <= 0 ||
+        roughnessCutoff <= 0 || roughnessCutoff > 1) {
+      throw new RangeError(
+        "reflectionStrength must be non-negative; maxDistance/rayBias must be positive; roughnessCutoff must be in (0, 1]",
+      );
+    }
+    const environmentColor = rtxVector4(
+      frame.environmentColor ?? frame.environment ?? [0.018, 0.032, 0.052],
+      "environmentColor",
+      1,
+    );
+    const environmentIntensity = finiteNumber(
+      frame.environmentIntensity,
+      "environmentIntensity",
+      environmentColor[3],
+    );
+    if (environmentColor.slice(0, 3).some(component => component < 0) ||
+        environmentIntensity < 0) {
+      throw new RangeError("environmentColor and environmentIntensity must be non-negative");
+    }
+    const frameIndex = Math.trunc(finiteNumber(frame.frameIndex, "frameIndex", 0));
+    if (frameIndex < 0) throw new RangeError("frameIndex cannot be negative");
+
+    const packed = {
+      sourceColor: {
+        textureHandle: sourceColor.textureHandle,
+        vulkanLayout: sourceColor.vulkanLayout,
+      },
+      outputColor: {
+        textureHandle: outputColor.textureHandle,
+        vulkanLayout: outputColor.vulkanLayout,
+      },
+      depth: { textureHandle: depth.textureHandle, vulkanLayout: depth.vulkanLayout },
+      normalRoughness: {
+        textureHandle: normalRoughness.textureHandle,
+        vulkanLayout: normalRoughness.vulkanLayout,
+      },
+      specularAlbedo: {
+        textureHandle: specularAlbedo.textureHandle,
+        vulkanLayout: specularAlbedo.vulkanLayout,
+      },
+      width,
+      height,
+      inverseViewProjection,
+      cameraPosition,
+      params: [reflectionStrength, maxDistance, rayBias, roughnessCutoff],
+      environment: [
+        environmentColor[0],
+        environmentColor[1],
+        environmentColor[2],
+        environmentIntensity,
+      ],
+      flags: (frame.depthInverted ? 1 : 0) |
+        (frame.temporalJitter ? 2 : 0) |
+        (frame.highQuality ? 4 : 0),
+      frameIndex,
+    };
+    nativeEncoder.encoder._commands.push(["rtxReflectionsEvaluate", packed]);
+    rayReflectionsQueued = true;
+    const submitted = submitNativeEncoderIfNeeded(nativeEncoder);
+    return immutableSnapshot({
+      queued: true,
+      submitted,
+      width,
+      height,
+      effects: Object.freeze({
+        oneBounceReflections: reflectionStrength > 0,
+        roughnessAware: true,
+        offscreenStaticGeometry: true,
+        stableSampleTiers: frame.highQuality ? "1/8/16" : "1/4/8",
+      }),
+      note: "Native Vulkan ray queries write one-bounce static-scene reflections to a distinct HDR output and restore all supplied image layouts.",
     });
   };
 
@@ -2195,6 +2540,7 @@ export function install() {
       registerStaticScene,
       destroyStaticScene,
       evaluateRayLighting,
+      evaluateRayReflections,
       releaseViewport,
       vulkanImageLayouts: VULKAN_IMAGE_LAYOUTS,
       setReflexMode(mode) {
