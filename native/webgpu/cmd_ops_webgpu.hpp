@@ -59,6 +59,35 @@ constexpr uint32_t OP_SET_STENCIL = 70;   // encoder, reference
 constexpr uint32_t OP_SET_BLEND = 71;     // encoder, rgba (f32)
 constexpr uint32_t OP_DRAW_INDIRECT = 72; // encoder, buffer, offset
 constexpr uint32_t OP_DRAW_INDEXED_INDIRECT = 73; // encoder, buffer, offset
+// DLSS SR evaluate, replayed after rendering and before OP_SUBMIT. Payload:
+// u32 encoder, viewport; 5x {texture, VkImageLayout, left, top, width, height};
+// u32 hasExposure; 102x f32 common constants; 7x u32 common-constant flags.
+constexpr uint32_t OP_DLSS_EVALUATE = 74;
+// DLSS Ray Reconstruction evaluate.  Payload carries ten resources, packed /
+// alternate-guide flags, world/view matrices and the common frame constants.
+constexpr uint32_t OP_RAY_RECONSTRUCTION_EVALUATE = 76;
+// Native Vulkan ray-query lighting bridge. The first milestone owns one
+// world-space static scene (one BLAS + identity TLAS) per WebGPU context.
+// Every payload starts with u32 protocolVersion (= 1).
+constexpr uint32_t OP_RTX_SCENE_BEGIN = 77;     // version
+constexpr uint32_t OP_RTX_SCENE_POSITIONS = 78; // version, vertexCount, vertexCount * vec3f
+constexpr uint32_t OP_RTX_SCENE_INDICES = 79;   // version, indexCount, indexCount * u32
+constexpr uint32_t OP_RTX_SCENE_COMMIT = 80;    // version, encoder; build BLAS/TLAS
+constexpr uint32_t OP_RTX_SCENE_DESTROY = 81;   // version
+// version, encoder, rgba16f color texture/layout, depth32f texture/layout,
+// width, height, inverseViewProjection[16], cameraPosition[4],
+// sunDirectionIntensity[4], params[4] (shadow, AO strength/radius/maxDistance),
+// flags (bit 0 = reversed/inverted depth), water[4] (time, surfaceY,
+// causticStrength, IOR). Color is modified in place and the native pass
+// restores both incoming Vulkan layouts before returning.
+constexpr uint32_t OP_RTX_LIGHTING_EVALUATE = 82;
+// DLSS Frame Generation resource tag/options command, replayed after rendering
+// and before OP_SUBMIT/OP_PRESENT. Payload:
+// u32 encoder, viewport; 4x {texture, VkImageLayout, left, top, width, height};
+// u32 hasUI, uiAlphaOnly, framesToGenerate; 102x f32 common constants;
+// 7x u32 common-constant flags. Configuration is not ACTIVE until a later
+// slDLSSGGetState reports more than one frame from Present.
+constexpr uint32_t OP_DLSSG_TAG = 75;
 
 // OP_BGL_CREATE type field
 constexpr uint32_t BGL_UNIFORM = 0;

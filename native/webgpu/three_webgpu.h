@@ -54,7 +54,222 @@ typedef struct TWGpuCapabilities {
     int reflex;
     char adapter_name[128];
     char status[256];
+    int native_ray_tracing;
+    int ray_query;
 } TWGpuCapabilities;
+
+enum {
+    TW_DLSS_OFF = 0,
+    TW_DLSS_MAX_PERFORMANCE = 1,
+    TW_DLSS_BALANCED = 2,
+    TW_DLSS_MAX_QUALITY = 3,
+    TW_DLSS_ULTRA_PERFORMANCE = 4,
+    TW_DLSS_ULTRA_QUALITY = 5,
+    TW_DLSS_DLAA = 6
+};
+
+typedef struct TWGpuFeatureRequest {
+    uint32_t struct_size;
+    uint32_t dlss_mode;
+    uint32_t output_width;
+    uint32_t output_height;
+    float pre_exposure;
+    float exposure_scale;
+    int color_buffers_hdr;
+    int auto_exposure;
+    int alpha_upscaling;
+    int frame_generation;
+    int ray_reconstruction;
+} TWGpuFeatureRequest;
+
+typedef struct TWGpuFeatureStatus {
+    uint32_t struct_size;
+    int dlss_supported;
+    int dlss_api_loaded;
+    int dlss_requested;
+    int dlss_configured;
+    int dlss_active;
+    uint32_t dlss_mode;
+    uint32_t render_width;
+    uint32_t render_height;
+    uint32_t output_width;
+    uint32_t output_height;
+    uint64_t estimated_vram_bytes;
+    uint64_t dlss_evaluation_count;
+    uint64_t dlss_failure_count;
+    int32_t dlss_last_result;
+    int frame_generation_supported;
+    int frame_generation_api_loaded;
+    int frame_generation_requested;
+    int frame_generation_configured;
+    int frame_generation_active;
+    int ray_reconstruction_supported;
+    int ray_reconstruction_api_loaded;
+    int ray_reconstruction_requested;
+    int ray_reconstruction_configured;
+    int ray_reconstruction_active;
+    uint64_t ray_reconstruction_evaluation_count;
+    uint64_t ray_reconstruction_failure_count;
+    uint64_t ray_reconstruction_estimated_vram_bytes;
+    int32_t ray_reconstruction_last_result;
+    char dlss_reason[256];
+    char frame_generation_reason[256];
+    char ray_reconstruction_reason[256];
+    int native_ray_tracing_supported;
+    int native_ray_tracing_configured;
+    int native_ray_tracing_active;
+    char native_ray_tracing_reason[256];
+} TWGpuFeatureStatus;
+
+typedef struct TWDLSSOptimalSettings {
+    uint32_t struct_size;
+    uint32_t optimal_render_width;
+    uint32_t optimal_render_height;
+    uint32_t render_width_min;
+    uint32_t render_height_min;
+    uint32_t render_width_max;
+    uint32_t render_height_max;
+    float optimal_sharpness;
+} TWDLSSOptimalSettings;
+
+typedef struct TWDLSSResource {
+    uint32_t texture_handle;
+    uint32_t vulkan_layout;
+    uint32_t left;
+    uint32_t top;
+    uint32_t width;
+    uint32_t height;
+} TWDLSSResource;
+
+typedef struct TWDLSSFrameConstants {
+    float camera_view_to_clip[16];
+    float clip_to_camera_view[16];
+    float clip_to_lens_clip[16];
+    float clip_to_prev_clip[16];
+    float prev_clip_to_clip[16];
+    float jitter_offset[2];
+    float motion_vector_scale[2];
+    float camera_pinhole_offset[2];
+    float camera_position[3];
+    float camera_up[3];
+    float camera_right[3];
+    float camera_forward[3];
+    float camera_near;
+    float camera_far;
+    float camera_fov;
+    float camera_aspect_ratio;
+    int depth_inverted;
+    int camera_motion_included;
+    int motion_vectors_3d;
+    int reset;
+    int orthographic_projection;
+    int motion_vectors_dilated;
+    int motion_vectors_jittered;
+} TWDLSSFrameConstants;
+
+typedef struct TWDLSSFrame {
+    uint32_t struct_size;
+    uint32_t viewport;
+    uint32_t command_encoder_handle;
+    TWDLSSResource color_input;
+    TWDLSSResource color_output;
+    TWDLSSResource depth;
+    TWDLSSResource motion_vectors;
+    TWDLSSResource exposure;
+    int has_exposure;
+    TWDLSSFrameConstants constants;
+} TWDLSSFrame;
+
+typedef struct TWRayReconstructionFrame {
+    uint32_t struct_size;
+    uint32_t viewport;
+    uint32_t command_encoder_handle;
+    TWDLSSResource noisy_color;
+    TWDLSSResource color_output;
+    TWDLSSResource depth;
+    TWDLSSResource motion_vectors;
+    TWDLSSResource diffuse_albedo;
+    TWDLSSResource specular_albedo;
+    TWDLSSResource normal_roughness;
+    TWDLSSResource roughness;
+    TWDLSSResource specular_motion_vectors;
+    TWDLSSResource specular_hit_distance;
+    int normal_roughness_packed;
+    int has_roughness;
+    int has_specular_motion_vectors;
+    int has_specular_hit_distance;
+    float world_to_camera_view[16];
+    float camera_view_to_world[16];
+    TWDLSSFrameConstants constants;
+} TWRayReconstructionFrame;
+
+typedef struct TWFrameGenerationFrame {
+    uint32_t struct_size;
+    uint32_t viewport;
+    uint32_t command_encoder_handle;
+    TWDLSSResource hudless_color;
+    TWDLSSResource depth;
+    TWDLSSResource motion_vectors;
+    TWDLSSResource ui;
+    int has_ui;
+    int ui_alpha_only;
+    uint32_t frames_to_generate;
+    TWDLSSFrameConstants constants;
+} TWFrameGenerationFrame;
+
+typedef struct TWFrameGenerationStatus {
+    uint32_t struct_size;
+    int supported;
+    int api_loaded;
+    int requested;
+    int configured;
+    int active;
+    uint32_t frames_to_generate;
+    uint32_t frames_to_generate_max;
+    uint32_t last_frames_presented;
+    uint64_t generated_frame_count;
+    uint64_t failure_count;
+    uint64_t estimated_vram_bytes;
+    int32_t last_result;
+    uint32_t last_status;
+    char reason[256];
+} TWFrameGenerationStatus;
+
+// Truthful native ray-query state. "supported" means the active adapter and
+// requested wgpu-native device feature both expose Vulkan ray query;
+// "configured" means the native compute pipeline is ready; "active" means a
+// static TLAS is ready for evaluation.
+typedef struct TWRayQueryCapabilities {
+    uint32_t struct_size;
+    int supported;
+    int configured;
+    int active;
+    int webgpu_feature_enabled;
+    int acceleration_structure_supported;
+    int ray_query_supported;
+    uint32_t triangle_count;
+    uint64_t build_count;
+    uint64_t evaluation_count;
+    uint64_t failure_count;
+    char reason[256];
+} TWRayQueryCapabilities;
+
+typedef struct TWRayQueryLightingFrame {
+    uint32_t struct_size;
+    uint32_t command_encoder_handle;
+    uint32_t color_texture_handle;
+    uint32_t color_vulkan_layout;
+    uint32_t depth_texture_handle;
+    uint32_t depth_vulkan_layout;
+    uint32_t width;
+    uint32_t height;
+    float inverse_view_projection[16];
+    float camera_position[4];
+    float sun_direction_intensity[4];
+    float parameters[4];
+    uint32_t flags;
+    float water[4];
+} TWRayQueryLightingFrame;
 
 TW_API int tw_start(void* parent_hwnd, int x, int y, int w, int h);
 TW_API void tw_set_standalone_ui(int on);
@@ -93,8 +308,24 @@ TW_API void tw_reset(void);
 TW_API const char* tw_last_error(void);
 TW_API const char* tw_backend_name(void);
 TW_API int tw_gpu_capabilities(TWGpuCapabilities* capabilities);
+TW_API int tw_request_gpu_features(const TWGpuFeatureRequest* request);
+TW_API int tw_gpu_feature_status(TWGpuFeatureStatus* status);
+TW_API int tw_dlss_optimal_settings(const TWGpuFeatureRequest* request,
+                                    TWDLSSOptimalSettings* settings);
+TW_API int tw_dlss_evaluate(const TWDLSSFrame* frame);
+TW_API int tw_ray_reconstruction_evaluate(const TWRayReconstructionFrame* frame);
+TW_API int tw_frame_generation_tag(const TWFrameGenerationFrame* frame);
+TW_API int tw_frame_generation_status(TWFrameGenerationStatus* status);
+TW_API void tw_dlss_release_viewport(uint32_t viewport);
 TW_API int tw_set_reflex_mode(int mode);
 TW_API int tw_reflex_mode(void);
+TW_API int tw_ray_query_capabilities(TWRayQueryCapabilities* capabilities);
+TW_API int tw_ray_query_scene_begin(void);
+TW_API int tw_ray_query_scene_positions(const float* xyz, uint32_t vertex_count);
+TW_API int tw_ray_query_scene_indices(const uint32_t* indices, uint32_t index_count);
+TW_API int tw_ray_query_scene_commit(uint32_t command_encoder_handle);
+TW_API void tw_ray_query_scene_destroy(void);
+TW_API int tw_ray_query_lighting_evaluate(const TWRayQueryLightingFrame* frame);
 TW_API int tw_cmd_submit(const uint8_t* data, int nbytes);
 TW_API int tw_map_read(uint32_t buffer_handle, uint64_t offset, uint64_t size, void* dst, int dst_bytes);
 

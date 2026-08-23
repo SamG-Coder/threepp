@@ -62,9 +62,12 @@ endif ()
 if (WIN32)
     include("${CMAKE_SOURCE_DIR}/cmake/FetchWebGPU.cmake")
     include("${CMAKE_SOURCE_DIR}/cmake/FetchStreamline.cmake")
+    option(THREEBROWSER_ENABLE_RAY_QUERY
+           "Enable the Vulkan ray-query bridge used by the WebGPU runtime" ON)
     add_library(three_webgpu SHARED
             webgpu/three_webgpu.cpp
             webgpu/streamline_bridge.cpp
+            webgpu/ray_query_bridge.cpp
     )
     target_include_directories(three_webgpu PUBLIC
             "${CMAKE_CURRENT_SOURCE_DIR}/webgpu"
@@ -75,12 +78,22 @@ if (WIN32)
         target_include_directories(three_webgpu PRIVATE "${WGPU_INCLUDE_DIR2}")
     endif ()
     target_compile_definitions(three_webgpu PRIVATE THREE_WEBGPU_EXPORT WGPU_SHARED_LIBRARY)
-    if (THREEBROWSER_ENABLE_STREAMLINE)
+    if (THREEBROWSER_ENABLE_STREAMLINE OR THREEBROWSER_ENABLE_RAY_QUERY)
         find_package(Vulkan REQUIRED)
+        target_include_directories(three_webgpu PRIVATE "${Vulkan_INCLUDE_DIRS}")
+    endif ()
+    if (THREEBROWSER_ENABLE_STREAMLINE)
         target_compile_definitions(three_webgpu PRIVATE THREEBROWSER_STREAMLINE=1)
         target_include_directories(three_webgpu PRIVATE
-            "${STREAMLINE_INCLUDE_DIR}"
-            "${Vulkan_INCLUDE_DIRS}")
+            "${STREAMLINE_INCLUDE_DIR}")
+    endif ()
+    if (THREEBROWSER_ENABLE_RAY_QUERY)
+        include("${CMAKE_SOURCE_DIR}/cmake/CompileVulkanShaders.cmake")
+        target_compile_definitions(three_webgpu PRIVATE THREEBROWSER_RAY_QUERY=1)
+        compile_vulkan_shader(three_webgpu
+            "${CMAKE_CURRENT_SOURCE_DIR}/webgpu/shaders/ray_query_lighting.comp"
+            kRayQueryLightingCompSpv
+            _ray_query_lighting_spv_h)
     endif ()
     target_link_libraries(three_webgpu PRIVATE "${WGPU_NATIVE_LIB}" user32 gdi32)
     target_link_libraries(three_native PRIVATE three_webgpu)

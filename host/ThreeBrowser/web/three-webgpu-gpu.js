@@ -79,6 +79,302 @@ let overlayStyled = false;
 let origGetContext = null;
 let origOffscreenGetContext = null;
 let tracedSurfaceSubmits = 0;
+let activeNativeDevice = null;
+
+function nativeCall(callback, fallback) {
+  try {
+    const value = callback();
+    return value == null ? fallback : value;
+  } catch {
+    return fallback;
+  }
+}
+
+function reflexRequestMode(value) {
+  if (value === undefined || value === null) return -1;
+  if (value === true) return 1;
+  if (value === false) return 0;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase().replace(/[\s_+-]+/g, "");
+    if (normalized === "off" || normalized === "disabled") return 0;
+    if (normalized === "on" || normalized === "enabled" || normalized === "lowlatency") return 1;
+    if (normalized === "boost" || normalized === "onboost" || normalized === "lowlatencyboost") return 2;
+  }
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) throw new TypeError("Reflex mode must be off, on, boost, or a number from 0 to 2");
+  return Math.max(0, Math.min(2, numeric | 0));
+}
+
+function requestedFlag(options, name) {
+  if (!Object.prototype.hasOwnProperty.call(options, name)) return -1;
+  const value = options[name];
+  return value && typeof value === "object" ? (value.enabled === false ? 0 : 1) : (value ? 1 : 0);
+}
+
+const DLSS_MODES = Object.freeze({
+  off: 0,
+  performance: 1,
+  "max-performance": 1,
+  balanced: 2,
+  quality: 3,
+  "max-quality": 3,
+  "ultra-performance": 4,
+  "ultra-quality": 5,
+  dlaa: 6,
+});
+
+const VULKAN_IMAGE_LAYOUTS = Object.freeze({
+  general: 1,
+  colorAttachment: 2,
+  depthStencilAttachment: 3,
+  depthStencilReadOnly: 4,
+  shaderReadOnly: 5,
+  transferSource: 6,
+  transferDestination: 7,
+});
+
+function dlssModeValue(value, fallback = 3) {
+  if (value === undefined || value === null || value === true) return fallback;
+  if (value === false) return 0;
+  if (typeof value === "string") {
+    const key = value.trim().toLowerCase().replace(/[\s_]+/g, "-");
+    if (Object.prototype.hasOwnProperty.call(DLSS_MODES, key)) return DLSS_MODES[key];
+    throw new TypeError(`Unknown DLSS mode "${value}"`);
+  }
+  const mode = Number(value);
+  if (!Number.isInteger(mode) || mode < 0 || mode > 6) {
+    throw new TypeError("DLSS mode must be off, performance, balanced, quality, ultra-performance, ultra-quality, DLAA, or 0-6");
+  }
+  return mode;
+}
+
+function finiteNumber(value, name, fallback) {
+  const number = value === undefined ? fallback : Number(value);
+  if (!Number.isFinite(number)) throw new TypeError(`${name} must be a finite number`);
+  return number;
+}
+
+function positiveDimension(value, name, fallback) {
+  const number = Math.trunc(finiteNumber(value, name, fallback));
+  if (number <= 0) throw new RangeError(`${name} must be greater than zero`);
+  return number;
+}
+
+function normalizeDlssOptions(value, defaultWidth, defaultHeight) {
+  const source = value && typeof value === "object" ? value : {};
+  const enabled = source.enabled !== false && value !== false;
+  const mode = enabled ? dlssModeValue(source.mode ?? (typeof value === "object" ? undefined : value)) : 0;
+  const outputWidth = mode === 0 ? 0 : positiveDimension(source.outputWidth, "outputWidth", defaultWidth);
+  const outputHeight = mode === 0 ? 0 : positiveDimension(source.outputHeight, "outputHeight", defaultHeight);
+  return {
+    mode,
+    outputWidth,
+    outputHeight,
+    preExposure: finiteNumber(source.preExposure, "preExposure", 1),
+    exposureScale: finiteNumber(source.exposureScale, "exposureScale", 1),
+    colorBuffersHDR: source.colorBuffersHDR !== false,
+    autoExposure: Boolean(source.autoExposure),
+    alphaUpscaling: Boolean(source.alphaUpscaling),
+  };
+}
+
+function numericArray(value, length, name) {
+  const source = value?.elements ?? value;
+  if (!source || typeof source.length !== "number" || source.length !== length) {
+    throw new TypeError(`${name} must contain exactly ${length} numbers`);
+  }
+  const result = Array.from(source, Number);
+  if (result.some(number => !Number.isFinite(number))) {
+    throw new TypeError(`${name} must contain only finite numbers`);
+  }
+  return result;
+}
+
+function numericVector(value, length, name) {
+  if (value && typeof value === "object" && typeof value.length !== "number" && !value.elements) {
+    const keys = length === 2 ? ["x", "y"] : ["x", "y", "z"];
+    return numericArray(keys.map(key => value[key]), length, name);
+  }
+  return numericArray(value, length, name);
+}
+
+const DLSS_COLOR_FORMATS = new Set([
+  "rgba8unorm", "rgba8unorm-srgb", "bgra8unorm", "bgra8unorm-srgb",
+  "rgb10a2unorm", "rg11b10ufloat", "rgba16float", "rgba32float",
+]);
+const DLSS_DEPTH_FORMATS = new Set(["depth16unorm", "depth32float", "depth32float-stencil8"]);
+const DLSS_MOTION_FORMATS = new Set(["rg16float", "rg32float", "rgba16float", "rgba32float"]);
+const DLSS_EXPOSURE_FORMATS = new Set(["r16float", "r32float"]);
+// Streamline 2.12 DLSS-G does not support FP16/scRGB final color. Keep this
+// narrower than the DLSS-SR color set so an HDR intermediate cannot be
+// mislabeled as the post-tonemapped HUD-less frame.
+const DLSSG_HUDLESS_FORMATS = new Set([
+  "rgba8unorm", "rgba8unorm-srgb", "bgra8unorm", "bgra8unorm-srgb", "rgb10a2unorm",
+]);
+const DLSSG_UI_COLOR_FORMATS = new Set([
+  "rgba8unorm", "rgba8unorm-srgb", "bgra8unorm", "bgra8unorm-srgb",
+]);
+const DLSSG_UI_ALPHA_FORMATS = new Set(["r8unorm", "r16float", "r32float"]);
+const RR_HDR_COLOR_FORMATS = new Set(["rg11b10ufloat", "rgba16float", "rgba32float"]);
+const RR_LINEAR_ALBEDO_FORMATS = new Set([
+  "rgba8unorm", "rgb10a2unorm", "rg11b10ufloat", "rgba16float", "rgba32float",
+]);
+const RR_NORMAL_FORMATS = new Set(["rgba16float", "rgba32float"]);
+const RR_SCALAR_FORMATS = new Set(["r16float", "r32float"]);
+const RR_MOTION_FORMATS = new Set(["rg16float", "rg32float"]);
+const IDENTITY_MATRIX_4 = Object.freeze([
+  1, 0, 0, 0,
+  0, 1, 0, 0,
+  0, 0, 1, 0,
+  0, 0, 0, 1,
+]);
+
+function dlssResource(value, name, allowedFormats, requiredUsage) {
+  if (!value || typeof value !== "object") throw new TypeError(`${name} is required`);
+  const texture = value.texture;
+  if (!(texture instanceof GPUTexture) || texture._kind !== "texture" || !texture._h) {
+    throw new TypeError(`${name}.texture must be a native GPUTexture created by this device`);
+  }
+  if (texture._swapchain) throw new TypeError(`${name}.texture cannot be the transient swapchain texture`);
+  if (texture.dimension !== "2d" || texture.depthOrArrayLayers !== 1 ||
+      texture.mipLevelCount !== 1 || texture.sampleCount !== 1) {
+    throw new TypeError(`${name}.texture must be a single-sampled, single-layer 2D texture with one mip level`);
+  }
+  if (!allowedFormats.has(texture.format)) {
+    throw new TypeError(`${name}.texture format ${texture.format || "undefined"} is not valid for this DLSS input`);
+  }
+  if ((texture.usage & requiredUsage) === 0) {
+    const requiredName = requiredUsage === 0x08 ? "STORAGE_BINDING" : "TEXTURE_BINDING";
+    throw new TypeError(`${name}.texture requires GPUTextureUsage.${requiredName}`);
+  }
+  const vulkanLayout = Number(value.vulkanLayout);
+  if (!Number.isInteger(vulkanLayout) || vulkanLayout <= 0) {
+    throw new TypeError(`${name}.vulkanLayout must be the texture's current non-zero Vulkan VkImageLayout value`);
+  }
+  const left = Math.trunc(finiteNumber(value.left, `${name}.left`, 0));
+  const top = Math.trunc(finiteNumber(value.top, `${name}.top`, 0));
+  const width = positiveDimension(value.width, `${name}.width`, texture.width - left);
+  const height = positiveDimension(value.height, `${name}.height`, texture.height - top);
+  if (left < 0 || top < 0 || left + width > texture.width || top + height > texture.height) {
+    throw new RangeError(`${name} region must be contained by its texture`);
+  }
+  return { textureHandle: texture._h, vulkanLayout, left, top, width, height };
+}
+
+function rtxFloat32Positions(value) {
+  const source = value?.array ?? value;
+  if (!source || typeof source.length !== "number" || source.length === 0 || (source.length % 3) !== 0) {
+    throw new TypeError("positions must be a non-empty Float32Array-compatible list of world-space xyz triples");
+  }
+  const positions = source instanceof Float32Array
+    ? new Float32Array(source)
+    : Float32Array.from(source, Number);
+  if (positions.some(component => !Number.isFinite(component))) {
+    throw new TypeError("positions must contain only finite world-space coordinates");
+  }
+  return positions;
+}
+
+function rtxUint32Indices(value, vertexCount) {
+  const source = value?.array ?? value;
+  if (!source || typeof source.length !== "number" || source.length === 0 || (source.length % 3) !== 0) {
+    throw new TypeError("indices must be a non-empty Uint32Array-compatible triangle index list");
+  }
+  const indices = source instanceof Uint32Array
+    ? new Uint32Array(source)
+    : Uint32Array.from(source, Number);
+  for (let i = 0; i < indices.length; i++) {
+    const original = Number(source[i]);
+    if (!Number.isInteger(original) || original < 0 || original >= vertexCount) {
+      throw new RangeError(`indices[${i}] does not reference a registered position`);
+    }
+  }
+  return indices;
+}
+
+function rtxTextureResource(value, name, requiredFormat, requiredUsage, layoutOverride, defaultLayout) {
+  const texture = value instanceof GPUTexture ? value : value?.texture;
+  if (!(texture instanceof GPUTexture) || texture._kind !== "texture" || !texture._h) {
+    throw new TypeError(`${name} must be a native GPUTexture created by this device`);
+  }
+  if (texture._swapchain) {
+    throw new TypeError(`${name} cannot be the transient swapchain texture; use a persistent render target`);
+  }
+  if (texture.dimension !== "2d" || texture.depthOrArrayLayers !== 1 ||
+      texture.mipLevelCount !== 1 || texture.sampleCount !== 1) {
+    throw new TypeError(`${name} must be a single-sampled, single-layer 2D texture with one mip level`);
+  }
+  if (texture.format !== requiredFormat) {
+    throw new TypeError(`${name} must use ${requiredFormat}; received ${texture.format || "undefined"}`);
+  }
+  if ((texture.usage & requiredUsage) !== requiredUsage) {
+    throw new TypeError(`${name} does not include the GPU usage bits required by native ray-query lighting`);
+  }
+  const vulkanLayout = Number(layoutOverride ?? value?.vulkanLayout ?? defaultLayout);
+  if (!Number.isInteger(vulkanLayout) || vulkanLayout <= 0) {
+    throw new TypeError(`${name} requires its current non-zero Vulkan VkImageLayout`);
+  }
+  return { texture, textureHandle: texture._h, vulkanLayout };
+}
+
+function rtxVector4(value, name, defaultW) {
+  let source = value?.elements ?? value;
+  if (source && typeof source === "object" && typeof source.length !== "number" &&
+      "x" in source && "y" in source && "z" in source) {
+    source = [source.x, source.y, source.z, source.w ?? defaultW];
+  }
+  if (!source || typeof source.length !== "number" || (source.length !== 3 && source.length !== 4)) {
+    throw new TypeError(`${name} must contain three or four finite numbers`);
+  }
+  const result = [Number(source[0]), Number(source[1]), Number(source[2]),
+    source.length === 4 ? Number(source[3]) : defaultW];
+  if (result.some(component => !Number.isFinite(component))) {
+    throw new TypeError(`${name} must contain only finite numbers`);
+  }
+  return result;
+}
+
+function dlssFrameConstants(value) {
+  if (!value || typeof value !== "object") throw new TypeError("frame.constants is required");
+  const cameraNear = finiteNumber(value.cameraNear, "constants.cameraNear");
+  const cameraFar = finiteNumber(value.cameraFar, "constants.cameraFar");
+  const cameraFov = finiteNumber(value.cameraFov, "constants.cameraFov");
+  const cameraAspectRatio = finiteNumber(value.cameraAspectRatio, "constants.cameraAspectRatio");
+  if (cameraNear < 0 || cameraFar <= cameraNear || cameraFov <= 0 || cameraAspectRatio <= 0) {
+    throw new RangeError("cameraNear/far/fov/aspectRatio do not describe a valid camera");
+  }
+  return {
+    cameraViewToClip: numericArray(value.cameraViewToClip, 16, "constants.cameraViewToClip"),
+    clipToCameraView: numericArray(value.clipToCameraView, 16, "constants.clipToCameraView"),
+    clipToLensClip: numericArray(value.clipToLensClip, 16, "constants.clipToLensClip"),
+    clipToPrevClip: numericArray(value.clipToPrevClip, 16, "constants.clipToPrevClip"),
+    prevClipToClip: numericArray(value.prevClipToClip, 16, "constants.prevClipToClip"),
+    jitterOffset: numericVector(value.jitterOffset, 2, "constants.jitterOffset"),
+    motionVectorScale: numericVector(value.motionVectorScale, 2, "constants.motionVectorScale"),
+    cameraPinholeOffset: numericVector(value.cameraPinholeOffset, 2, "constants.cameraPinholeOffset"),
+    cameraPosition: numericVector(value.cameraPosition, 3, "constants.cameraPosition"),
+    cameraUp: numericVector(value.cameraUp, 3, "constants.cameraUp"),
+    cameraRight: numericVector(value.cameraRight, 3, "constants.cameraRight"),
+    cameraForward: numericVector(value.cameraForward, 3, "constants.cameraForward"),
+    cameraNear,
+    cameraFar,
+    cameraFov,
+    cameraAspectRatio,
+    depthInverted: Boolean(value.depthInverted),
+    cameraMotionIncluded: Boolean(value.cameraMotionIncluded),
+    motionVectors3D: Boolean(value.motionVectors3D),
+    reset: Boolean(value.reset),
+    orthographicProjection: Boolean(value.orthographicProjection),
+    motionVectorsDilated: Boolean(value.motionVectorsDilated),
+    motionVectorsJittered: Boolean(value.motionVectorsJittered),
+  };
+}
+
+function immutableSnapshot(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value)) immutableSnapshot(child);
+  return Object.freeze(value);
+}
 
 function ensureConstants() {
   const g = globalThis;
@@ -713,6 +1009,7 @@ class GPUCommandEncoder {
   constructor(desc) {
     this._h = cmd.allocHandle();
     this._commands = [];
+    this._finished = false;
     this.label = desc?.label || "";
   }
   beginComputePass() {
@@ -780,7 +1077,9 @@ class GPUCommandEncoder {
   clearBuffer() {}
   resolveQuerySet() {}
   finish() {
-    return new GPUCommandBuffer(this._h, this._commands.slice());
+    const commandBuffer = new GPUCommandBuffer(this._h, this._commands.slice());
+    this._finished = true;
+    return commandBuffer;
   }
   pushDebugGroup() {}
   popDebugGroup() {}
@@ -811,6 +1110,14 @@ function replayCommandBuffer(buffer) {
       case "setStencil": cmd.setStencil(enc, entry[1]); break;
       case "setBlend": cmd.setBlend(enc, entry[1]); break;
       case "renderEnd": cmd.renderEnd(enc); break;
+      case "dlssEvaluate": cmd.dlssEvaluate(enc, entry[1]); break;
+      case "frameGenerationTag": cmd.frameGenerationTag(enc, entry[1]); break;
+      case "rayReconstructionEvaluate": cmd.rayReconstructionEvaluate(enc, entry[1]); break;
+      case "rtxSceneBegin": cmd.rtxSceneBegin(); break;
+      case "rtxScenePositions": cmd.rtxScenePositions(entry[1]); break;
+      case "rtxSceneIndices": cmd.rtxSceneIndices(entry[1]); break;
+      case "rtxSceneCommit": cmd.rtxSceneCommit(enc); break;
+      case "rtxLightingEvaluate": cmd.rtxLightingEvaluate(enc, entry[1]); break;
       case "copyBuf": cmd.copyBuf(enc, entry[1]._h, entry[3]._h, entry[2], entry[4], entry[5]); break;
       case "copyTex": cmd.copyTex(enc, entry[1], entry[2], entry[3], entry[4]); break;
     }
@@ -939,6 +1246,7 @@ class GPUDevice extends Emitter {
     this.lost = new Promise(() => {});
     this.label = desc.label || "";
     this._errStack = [];
+    activeNativeDevice = this;
     ensureStarted(globalThis.innerWidth || 1, globalThis.innerHeight || 1);
   }
   createShaderModule(desc) {
@@ -1040,7 +1348,9 @@ class GPUDevice extends Emitter {
     this._errStack.pop();
     return Promise.resolve(null);
   }
-  destroy() {}
+  destroy() {
+    if (activeNativeDevice === this) activeNativeDevice = null;
+  }
   importExternalTexture() {
     return { _kind: "external" };
   }
@@ -1244,15 +1554,652 @@ export function install() {
 
   ensureConstants();
   const gpu = new GPU();
+  const requested = {
+    reflexMode: -1,
+    dlssSuperResolution: -1,
+    dlssOptions: null,
+    dlssFrameGeneration: -1,
+    dlssRayReconstruction: -1,
+  };
+  let staticRaySceneQueued = false;
+  let rayLightingQueued = false;
+
+  const readCapabilities = () => {
+    const raw = nativeCall(() => n.WebGpuCapabilities?.(), {}) || {};
+    return {
+      vendorId: Number(raw.vendorId || 0),
+      deviceId: Number(raw.deviceId || 0),
+      rtx: Boolean(raw.rtx),
+      streamlinePresent: Boolean(raw.streamlinePresent),
+      streamlineInitialized: Boolean(raw.streamlineInitialized),
+      vulkanAttached: Boolean(raw.vulkanAttached),
+      dlssSuperResolution: Boolean(raw.dlssSuperResolution),
+      dlssFrameGeneration: Boolean(raw.dlssFrameGeneration),
+      dlssRayReconstruction: Boolean(raw.dlssRayReconstruction),
+      nativeRayTracing: Boolean(raw.nativeRayTracing ?? raw.rayQuery ?? raw.rayTracing),
+      rayQuery: Boolean(raw.rayQuery ?? raw.nativeRayTracing ?? raw.rayTracing),
+      reflex: Boolean(raw.reflex),
+      adapterName: String(raw.adapterName || ""),
+      status: String(raw.status || ""),
+    };
+  };
+
+  const featureState = (supported, request, configured, active, reason, extra = {}) => ({
+    supported: Boolean(supported),
+    requested: request > 0,
+    requestSpecified: request >= 0,
+    configured: Boolean(configured),
+    active: Boolean(active),
+    reason,
+    ...extra,
+  });
+
+  const fallbackStatus = () => {
+    const capabilities = readCapabilities();
+    const activeReflexMode = Number(nativeCall(() => n.WebGpuReflexMode?.(), 0)) || 0;
+    const reflexConfigured = requested.reflexMode >= 0 && capabilities.reflex &&
+      activeReflexMode === requested.reflexMode;
+    const reflexReason = !capabilities.reflex
+      ? "NVIDIA Reflex is not supported by the active native context."
+      : requested.reflexMode < 0
+        ? (activeReflexMode > 0
+          ? "Enabled by the native runtime default; no page request has been made."
+          : "Supported, but no page request has been made.")
+        : reflexConfigured
+          ? (activeReflexMode > 0
+            ? "The requested Reflex mode is configured and active."
+            : "Reflex is configured off as requested.")
+          : "The requested Reflex mode was not accepted by the native runtime.";
+    const unevaluated = (supported, request) => !supported
+      ? "The active native context does not report this feature as supported."
+      : request > 0
+        ? "Support is present and the request is recorded, but no successful native evaluation has been observed; the feature is not active."
+        : "Support is present, but the page has not requested or evaluated this feature.";
+    return {
+      apiVersion: 1,
+      available: Boolean(capabilities.adapterName || capabilities.rtx || capabilities.streamlinePresent),
+      backend: String(nativeCall(() => n.WebGpuBackendName?.(), "") || ""),
+      capabilities,
+      features: {
+        reflex: featureState(
+          capabilities.reflex,
+          requested.reflexMode,
+          reflexConfigured,
+          capabilities.reflex && activeReflexMode > 0,
+          reflexReason,
+          { requestedMode: requested.reflexMode, activeMode: activeReflexMode },
+        ),
+        dlssSuperResolution: featureState(
+          capabilities.dlssSuperResolution,
+          requested.dlssSuperResolution,
+          false,
+          false,
+          unevaluated(capabilities.dlssSuperResolution, requested.dlssSuperResolution),
+        ),
+        dlssFrameGeneration: featureState(
+          capabilities.dlssFrameGeneration,
+          requested.dlssFrameGeneration,
+          false,
+          false,
+          unevaluated(capabilities.dlssFrameGeneration, requested.dlssFrameGeneration),
+        ),
+        dlssRayReconstruction: featureState(
+          capabilities.dlssRayReconstruction,
+          requested.dlssRayReconstruction,
+          false,
+          false,
+          unevaluated(capabilities.dlssRayReconstruction, requested.dlssRayReconstruction),
+        ),
+        nativeRayTracing: featureState(
+          capabilities.nativeRayTracing,
+          staticRaySceneQueued ? 1 : -1,
+          staticRaySceneQueued,
+          rayLightingQueued,
+          !capabilities.nativeRayTracing
+            ? "The active Vulkan adapter does not expose the required acceleration-structure and ray-query features."
+            : !staticRaySceneQueued
+              ? "Native ray queries are available; register a world-space static triangle scene to build BLAS/TLAS resources."
+              : rayLightingQueued
+                ? "Native sun visibility and ray-traced ambient occlusion have been queued on the Vulkan command stream."
+                : "The static scene is queued; evaluate ray lighting with an HDR color and depth target.",
+        ),
+      },
+    };
+  };
+
+  const getStatus = () => {
+    const nativeStatus = nativeCall(() => n.WebGpuFeatureStatus?.(), null);
+    if (nativeStatus?.features) {
+      try {
+        return immutableSnapshot(JSON.parse(JSON.stringify(nativeStatus)));
+      } catch {
+        // A legacy COM host may return a non-serializable proxy. The normalized
+        // fallback below has the same public shape.
+      }
+    }
+    return immutableSnapshot(fallbackStatus());
+  };
+
+  const requestFeatures = (options = {}) => {
+    if (!options || typeof options !== "object") {
+      throw new TypeError("threeBrowserRTX.requestFeatures expects an options object");
+    }
+    const reflexValue = Object.prototype.hasOwnProperty.call(options, "reflexMode")
+      ? options.reflexMode
+      : options.reflex;
+    const reflexMode = reflexRequestMode(reflexValue);
+    const hasDlss = Object.prototype.hasOwnProperty.call(options, "dlssSuperResolution");
+    const hasRayReconstruction = Object.prototype.hasOwnProperty.call(options, "dlssRayReconstruction");
+    const dlssSuperResolution = requestedFlag(options, "dlssSuperResolution");
+    const dlssFrameGeneration = requestedFlag(options, "dlssFrameGeneration");
+    const dlssRayReconstruction = requestedFlag(options, "dlssRayReconstruction");
+    if (reflexMode >= 0) requested.reflexMode = reflexMode;
+    if (hasDlss) {
+      requested.dlssSuperResolution = dlssSuperResolution;
+      requested.dlssOptions = normalizeDlssOptions(
+        options.dlssSuperResolution,
+        Math.max(1, lastW || globalThis.innerWidth || 1),
+        Math.max(1, lastH || globalThis.innerHeight || 1),
+      );
+    } else if (hasRayReconstruction && dlssRayReconstruction > 0) {
+      // DLSS-RR is an extension of DLSS and uses its performance-quality mode
+      // and fixed output size.  A Ray Reconstruction object therefore doubles
+      // as the underlying DLSS configuration when SR was not specified.
+      requested.dlssSuperResolution = 1;
+      requested.dlssOptions = normalizeDlssOptions(
+        options.dlssRayReconstruction,
+        Math.max(1, lastW || globalThis.innerWidth || 1),
+        Math.max(1, lastH || globalThis.innerHeight || 1),
+      );
+    }
+    if (dlssFrameGeneration >= 0) requested.dlssFrameGeneration = dlssFrameGeneration;
+    if (dlssRayReconstruction >= 0) requested.dlssRayReconstruction = dlssRayReconstruction;
+
+    const dlss = requested.dlssOptions;
+
+    const nativeStatus = nativeCall(
+      () => n.WebGpuRequestFeatures?.(
+        reflexMode,
+        dlss ? dlss.mode : -1,
+        dlss?.outputWidth ?? 0,
+        dlss?.outputHeight ?? 0,
+        dlss?.preExposure ?? 1,
+        dlss?.exposureScale ?? 1,
+        dlss?.colorBuffersHDR === false ? 0 : 1,
+        dlss?.autoExposure ? 1 : 0,
+        dlss?.alphaUpscaling ? 1 : 0,
+        requested.dlssFrameGeneration,
+        requested.dlssRayReconstruction,
+      ),
+      null,
+    );
+    if (!nativeStatus && reflexMode >= 0) {
+      nativeCall(() => n.WebGpuSetReflexMode?.(reflexMode), false);
+    }
+    return getStatus();
+  };
+
+  const getOptimalSettings = (options = {}) => {
+    const normalized = normalizeDlssOptions(
+      options,
+      Math.max(1, lastW || globalThis.innerWidth || 1),
+      Math.max(1, lastH || globalThis.innerHeight || 1),
+    );
+    if (normalized.mode === 0) throw new TypeError("DLSS optimal settings require an enabled DLSS mode");
+    const result = nativeCall(
+      () => n.WebGpuDLSSOptimalSettings?.(
+        normalized.mode,
+        normalized.outputWidth,
+        normalized.outputHeight,
+        normalized.preExposure,
+        normalized.exposureScale,
+        normalized.colorBuffersHDR ? 1 : 0,
+        normalized.autoExposure ? 1 : 0,
+        normalized.alphaUpscaling ? 1 : 0,
+      ),
+      null,
+    );
+    return result && typeof result === "object"
+      ? immutableSnapshot(JSON.parse(JSON.stringify(result)))
+      : null;
+  };
+
+  const evaluateSuperResolution = (frame = {}) => {
+    if (!frame || typeof frame !== "object") {
+      throw new TypeError("threeBrowserRTX.evaluateSuperResolution expects a frame object");
+    }
+    const encoder = frame.commandEncoder;
+    if (!(encoder instanceof GPUCommandEncoder) || !encoder._h || !Array.isArray(encoder._commands)) {
+      throw new TypeError("frame.commandEncoder must be a native GPUCommandEncoder from this device");
+    }
+    if (encoder._finished) {
+      throw new TypeError("frame.commandEncoder has already been finished; record DLSS evaluation before finish()");
+    }
+    const packed = {
+      viewport: Math.max(0, Math.trunc(finiteNumber(frame.viewport, "frame.viewport", 0))),
+      colorInput: dlssResource(frame.colorInput, "frame.colorInput", DLSS_COLOR_FORMATS, 0x04),
+      colorOutput: dlssResource(frame.colorOutput, "frame.colorOutput", DLSS_COLOR_FORMATS, 0x08),
+      depth: dlssResource(frame.depth, "frame.depth", DLSS_DEPTH_FORMATS, 0x04),
+      motionVectors: dlssResource(frame.motionVectors, "frame.motionVectors", DLSS_MOTION_FORMATS, 0x04),
+      exposure: frame.exposure
+        ? dlssResource(frame.exposure, "frame.exposure", DLSS_EXPOSURE_FORMATS, 0x04)
+        : null,
+      constants: dlssFrameConstants(frame.constants),
+    };
+    if (packed.colorInput.textureHandle === packed.colorOutput.textureHandle) {
+      throw new TypeError("DLSS colorInput and colorOutput must be different textures");
+    }
+    for (const [name, resource] of [["depth", packed.depth], ["motionVectors", packed.motionVectors]]) {
+      if (resource.width !== packed.colorInput.width || resource.height !== packed.colorInput.height) {
+        throw new RangeError(`frame.${name} region must match frame.colorInput dimensions`);
+      }
+    }
+    const configured = getStatus().features?.dlssSuperResolution;
+    if (configured?.configured && configured.renderWidth > 0 && configured.renderHeight > 0 &&
+        (packed.colorInput.width !== configured.renderWidth || packed.colorInput.height !== configured.renderHeight)) {
+      throw new RangeError("frame.colorInput dimensions do not match the configured DLSS render dimensions");
+    }
+    if (configured?.configured && configured.outputWidth > 0 && configured.outputHeight > 0 &&
+        (packed.colorOutput.width !== configured.outputWidth || packed.colorOutput.height !== configured.outputHeight)) {
+      throw new RangeError("frame.colorOutput dimensions do not match the configured DLSS output dimensions");
+    }
+    encoder._commands.push(["dlssEvaluate", packed]);
+    const status = getStatus();
+    return immutableSnapshot({
+      queued: true,
+      viewport: packed.viewport,
+      status,
+      note: "Evaluation is recorded on the command encoder. Active state changes only after queue submission and successful native replay.",
+    });
+  };
+
+  const tagFrameGeneration = (frame = {}) => {
+    if (!frame || typeof frame !== "object") {
+      throw new TypeError("threeBrowserRTX.tagFrameGeneration expects a frame object");
+    }
+    const encoder = frame.commandEncoder;
+    if (!(encoder instanceof GPUCommandEncoder) || !encoder._h || !Array.isArray(encoder._commands)) {
+      throw new TypeError("frame.commandEncoder must be a native GPUCommandEncoder from this device");
+    }
+    if (encoder._finished) {
+      throw new TypeError("frame.commandEncoder has already been finished; tag Frame Generation before finish()");
+    }
+    if (encoder._commands.length !== 0) {
+      throw new TypeError(
+        "Frame Generation tagging requires a dedicated empty command encoder; submit ordinary WebGPU work before tagging present inputs",
+      );
+    }
+    const feature = getStatus().features?.dlssFrameGeneration;
+    if (!feature?.requested) {
+      throw new TypeError(
+        "DLSS Frame Generation must be requested with requestFeatures before tagging present inputs",
+      );
+    }
+    const framesToGenerate = Math.trunc(finiteNumber(
+      frame.framesToGenerate,
+      "frame.framesToGenerate",
+      1,
+    ));
+    // Streamline 2.12 only supports multi-frame generation on D3D12.  This
+    // runtime presents through Vulkan, so exposing a larger value would be a
+    // false capability even on a GPU that supports Dynamic MFG elsewhere.
+    if (framesToGenerate !== 1) {
+      throw new RangeError("Vulkan Frame Generation supports exactly one generated frame per rendered frame");
+    }
+    const uiAlphaOnly = Boolean(frame.uiAlphaOnly);
+    if (!frame.ui && uiAlphaOnly) {
+      throw new TypeError("frame.uiAlphaOnly requires frame.ui");
+    }
+    const packed = {
+      viewport: Math.max(0, Math.trunc(finiteNumber(frame.viewport, "frame.viewport", 0))),
+      hudlessColor: dlssResource(
+        frame.hudlessColor,
+        "frame.hudlessColor",
+        DLSSG_HUDLESS_FORMATS,
+        0x04,
+      ),
+      depth: dlssResource(frame.depth, "frame.depth", DLSS_DEPTH_FORMATS, 0x04),
+      motionVectors: dlssResource(
+        frame.motionVectors,
+        "frame.motionVectors",
+        DLSS_MOTION_FORMATS,
+        0x04,
+      ),
+      ui: frame.ui
+        ? dlssResource(
+          frame.ui,
+          "frame.ui",
+          uiAlphaOnly ? DLSSG_UI_ALPHA_FORMATS : DLSSG_UI_COLOR_FORMATS,
+          0x04,
+        )
+        : null,
+      uiAlphaOnly,
+      framesToGenerate,
+      constants: dlssFrameConstants(frame.constants),
+    };
+    if (packed.depth.width !== packed.motionVectors.width ||
+        packed.depth.height !== packed.motionVectors.height) {
+      throw new RangeError("frame.depth and frame.motionVectors regions must have identical dimensions");
+    }
+    const backbufferWidth = Math.max(0, Math.trunc(lastW || globalThis.innerWidth || 0));
+    const backbufferHeight = Math.max(0, Math.trunc(lastH || globalThis.innerHeight || 0));
+    if (backbufferWidth > 0 && backbufferHeight > 0 &&
+        (packed.hudlessColor.width !== backbufferWidth ||
+         packed.hudlessColor.height !== backbufferHeight)) {
+      throw new RangeError("frame.hudlessColor region must exactly match the configured backbuffer dimensions");
+    }
+    if (packed.ui &&
+        (packed.ui.width !== packed.hudlessColor.width ||
+         packed.ui.height !== packed.hudlessColor.height)) {
+      throw new RangeError("frame.ui region must exactly match frame.hudlessColor dimensions");
+    }
+    encoder._commands.push(["frameGenerationTag", packed]);
+    return immutableSnapshot({
+      queued: true,
+      viewport: packed.viewport,
+      status: getStatus(),
+      note: "Inputs are tagged until the following Present. Active changes only when Streamline reports an interpolated frame after that Present.",
+    });
+  };
+
+  const evaluateRayReconstruction = (frame = {}) => {
+    if (!frame || typeof frame !== "object") {
+      throw new TypeError("threeBrowserRTX.evaluateRayReconstruction expects a frame object");
+    }
+    if (frame.rayTracedInput !== true) {
+      throw new TypeError(
+        "frame.rayTracedInput must be true: Ray Reconstruction denoises genuine noisy ray-traced lighting; it does not create rays",
+      );
+    }
+    const encoder = frame.commandEncoder;
+    if (!(encoder instanceof GPUCommandEncoder) || !encoder._h || !Array.isArray(encoder._commands)) {
+      throw new TypeError("frame.commandEncoder must be a native GPUCommandEncoder from this device");
+    }
+    if (encoder._finished) {
+      throw new TypeError("frame.commandEncoder has already been finished; record Ray Reconstruction before finish()");
+    }
+    if (encoder._commands.length !== 0) {
+      throw new TypeError(
+        "Ray Reconstruction requires a dedicated empty command encoder; submit ordinary WebGPU work before recording the native pass",
+      );
+    }
+    const normalRoughnessPacked = frame.normalRoughnessPacked !== false;
+    const hasRoughness = Boolean(frame.roughness);
+    if (normalRoughnessPacked === hasRoughness) {
+      throw new TypeError(
+        "Provide packed normal.xyz/roughness.w or set normalRoughnessPacked:false and provide a separate roughness texture",
+      );
+    }
+    const hasSpecularMotionVectors = Boolean(frame.specularMotionVectors);
+    const hasSpecularHitDistance = Boolean(frame.specularHitDistance);
+    if (hasSpecularMotionVectors === hasSpecularHitDistance) {
+      throw new TypeError(
+        "Provide exactly one reflection guide: specularMotionVectors or specularHitDistance plus world/view matrices",
+      );
+    }
+    if (hasSpecularHitDistance &&
+        (frame.worldToCameraView == null || frame.cameraViewToWorld == null)) {
+      throw new TypeError(
+        "specularHitDistance requires explicit worldToCameraView and cameraViewToWorld matrices",
+      );
+    }
+    const worldToCameraView = numericArray(
+      frame.worldToCameraView ?? IDENTITY_MATRIX_4,
+      16,
+      "frame.worldToCameraView",
+    );
+    const cameraViewToWorld = numericArray(
+      frame.cameraViewToWorld ?? IDENTITY_MATRIX_4,
+      16,
+      "frame.cameraViewToWorld",
+    );
+    if (hasSpecularHitDistance &&
+        (worldToCameraView.every(value => value === 0) ||
+         cameraViewToWorld.every(value => value === 0))) {
+      throw new TypeError("specularHitDistance requires non-zero worldToCameraView and cameraViewToWorld matrices");
+    }
+
+    const packed = {
+      viewport: Math.max(0, Math.trunc(finiteNumber(frame.viewport, "frame.viewport", 0))),
+      noisyColor: dlssResource(frame.noisyColor, "frame.noisyColor", RR_HDR_COLOR_FORMATS, 0x04),
+      colorOutput: dlssResource(frame.colorOutput, "frame.colorOutput", RR_HDR_COLOR_FORMATS, 0x08),
+      depth: dlssResource(frame.depth, "frame.depth", DLSS_DEPTH_FORMATS, 0x04),
+      motionVectors: dlssResource(frame.motionVectors, "frame.motionVectors", RR_MOTION_FORMATS, 0x04),
+      diffuseAlbedo: dlssResource(frame.diffuseAlbedo, "frame.diffuseAlbedo", RR_LINEAR_ALBEDO_FORMATS, 0x04),
+      specularAlbedo: dlssResource(frame.specularAlbedo, "frame.specularAlbedo", RR_LINEAR_ALBEDO_FORMATS, 0x04),
+      normalRoughness: dlssResource(frame.normalRoughness, "frame.normalRoughness", RR_NORMAL_FORMATS, 0x04),
+      roughness: hasRoughness
+        ? dlssResource(frame.roughness, "frame.roughness", RR_SCALAR_FORMATS, 0x04)
+        : null,
+      specularMotionVectors: hasSpecularMotionVectors
+        ? dlssResource(frame.specularMotionVectors, "frame.specularMotionVectors", RR_MOTION_FORMATS, 0x04)
+        : null,
+      specularHitDistance: hasSpecularHitDistance
+        ? dlssResource(frame.specularHitDistance, "frame.specularHitDistance", RR_SCALAR_FORMATS, 0x04)
+        : null,
+      normalRoughnessPacked,
+      worldToCameraView,
+      cameraViewToWorld,
+      constants: dlssFrameConstants(frame.constants),
+    };
+    if (packed.noisyColor.textureHandle === packed.colorOutput.textureHandle) {
+      throw new TypeError("Ray Reconstruction noisyColor and colorOutput must be different textures");
+    }
+    for (const [name, resource] of [
+      ["depth", packed.depth],
+      ["motionVectors", packed.motionVectors],
+      ["diffuseAlbedo", packed.diffuseAlbedo],
+      ["specularAlbedo", packed.specularAlbedo],
+      ["normalRoughness", packed.normalRoughness],
+      ["roughness", packed.roughness],
+      ["specularMotionVectors", packed.specularMotionVectors],
+      ["specularHitDistance", packed.specularHitDistance],
+    ]) {
+      if (resource &&
+          (resource.width !== packed.noisyColor.width ||
+           resource.height !== packed.noisyColor.height)) {
+        throw new RangeError(`frame.${name} region must match frame.noisyColor dimensions`);
+      }
+    }
+    const statusBeforeQueue = getStatus().features?.dlssRayReconstruction;
+    if (statusBeforeQueue && !statusBeforeQueue.requested) {
+      throw new TypeError(
+        "DLSS Ray Reconstruction must be requested with requestFeatures before recording evaluation",
+      );
+    }
+    const dlssStatus = getStatus().features?.dlssSuperResolution;
+    if (dlssStatus?.outputWidth > 0 && dlssStatus?.outputHeight > 0 &&
+        (packed.colorOutput.width !== dlssStatus.outputWidth ||
+         packed.colorOutput.height !== dlssStatus.outputHeight)) {
+      throw new RangeError("frame.colorOutput dimensions do not match the configured DLSS output dimensions");
+    }
+    encoder._commands.push(["rayReconstructionEvaluate", packed]);
+    return immutableSnapshot({
+      queued: true,
+      viewport: packed.viewport,
+      status: getStatus(),
+      note: "Native DLSS-RR evaluation is queued. Active becomes true only after Streamline accepts every denoiser input during submission.",
+    });
+  };
+
+  const dedicatedNativeEncoder = (provided, operation) => {
+    const encoder = provided ?? activeNativeDevice?.createCommandEncoder({
+      label: `ThreeBrowser ${operation}`,
+    });
+    if (!(encoder instanceof GPUCommandEncoder) || !encoder._h || !Array.isArray(encoder._commands)) {
+      throw new TypeError(
+        `${operation}.commandEncoder must be a native GPUCommandEncoder, or an active native GPUDevice must exist`,
+      );
+    }
+    if (encoder._finished) {
+      throw new TypeError(`${operation}.commandEncoder has already been finished`);
+    }
+    if (encoder._commands.length !== 0) {
+      throw new TypeError(`${operation} requires a dedicated empty command encoder`);
+    }
+    return { encoder, autoSubmit: provided == null };
+  };
+
+  const submitNativeEncoderIfNeeded = ({ encoder, autoSubmit }) => {
+    if (!autoSubmit) return false;
+    if (!activeNativeDevice) throw new Error("The active native GPUDevice was destroyed before submission");
+    activeNativeDevice.queue.submit([encoder.finish()]);
+    return true;
+  };
+
+  const registerStaticScene = (scene = {}) => {
+    if (!scene || typeof scene !== "object") {
+      throw new TypeError("threeBrowserRTX.registerStaticScene expects a scene object");
+    }
+    const positions = rtxFloat32Positions(scene.positions);
+    const vertexCount = positions.length / 3;
+    const indices = rtxUint32Indices(scene.indices, vertexCount);
+    const nativeEncoder = dedicatedNativeEncoder(scene.commandEncoder, "registerStaticScene");
+    nativeEncoder.encoder._commands.push(
+      ["rtxSceneBegin"],
+      ["rtxScenePositions", positions],
+      ["rtxSceneIndices", indices],
+      ["rtxSceneCommit"],
+    );
+    staticRaySceneQueued = true;
+    const submitted = submitNativeEncoderIfNeeded(nativeEncoder);
+    return immutableSnapshot({
+      queued: true,
+      submitted,
+      vertexCount,
+      triangleCount: indices.length / 3,
+      note: "World-space geometry is uploaded once; native owns the BLAS and identity TLAS after this command buffer completes.",
+    });
+  };
+
+  const destroyStaticScene = () => {
+    cmd.rtxSceneDestroy();
+    cmd.submitNow(true);
+    staticRaySceneQueued = false;
+    rayLightingQueued = false;
+    return true;
+  };
+
+  const evaluateRayLighting = (frame = {}) => {
+    if (!frame || typeof frame !== "object") {
+      throw new TypeError("threeBrowserRTX.evaluateRayLighting expects a frame object");
+    }
+    if (!staticRaySceneQueued) {
+      throw new Error("registerStaticScene must be submitted before native ray-query lighting can be evaluated");
+    }
+    const nativeEncoder = dedicatedNativeEncoder(frame.commandEncoder, "evaluateRayLighting");
+    const color = rtxTextureResource(
+      frame.color ?? frame.colorTexture,
+      "color",
+      "rgba16float",
+      0x08,
+      frame.colorVulkanLayout ?? frame.colorLayout,
+      VULKAN_IMAGE_LAYOUTS.colorAttachment,
+    );
+    const depth = rtxTextureResource(
+      frame.depth ?? frame.depthTexture,
+      "depth",
+      "depth32float",
+      0x04,
+      frame.depthVulkanLayout ?? frame.depthLayout,
+      VULKAN_IMAGE_LAYOUTS.depthStencilAttachment,
+    );
+    const width = positiveDimension(frame.width, "width", Math.min(color.texture.width, depth.texture.width));
+    const height = positiveDimension(frame.height, "height", Math.min(color.texture.height, depth.texture.height));
+    if (width > color.texture.width || height > color.texture.height ||
+        width > depth.texture.width || height > depth.texture.height) {
+      throw new RangeError("Ray-query lighting dimensions must fit inside both color and depth textures");
+    }
+
+    const inverseViewProjection = numericArray(
+      frame.inverseViewProjection,
+      16,
+      "inverseViewProjection",
+    );
+    const cameraPosition = rtxVector4(frame.cameraPosition, "cameraPosition", 1);
+    const sun = rtxVector4(frame.sunDirection, "sunDirection", 0);
+    const sunLength = Math.hypot(sun[0], sun[1], sun[2]);
+    if (!(sunLength > 1e-6)) throw new RangeError("sunDirection must be non-zero");
+    const intensity = finiteNumber(frame.intensity, "intensity", sun[3] || 1);
+    if (intensity < 0) throw new RangeError("intensity cannot be negative");
+    const shadowStrength = finiteNumber(frame.shadowStrength, "shadowStrength", 0.9);
+    const aoStrength = finiteNumber(frame.aoStrength, "aoStrength", 0.22);
+    const aoRadius = finiteNumber(frame.aoRadius, "aoRadius", 0.8);
+    const aoMaxDistance = finiteNumber(frame.aoMaxDistance, "aoMaxDistance", 40);
+    if (shadowStrength < 0 || aoStrength < 0 || aoRadius <= 0 || aoMaxDistance <= 0) {
+      throw new RangeError("shadow/AO strengths must be non-negative and AO radius/distances must be positive");
+    }
+    const waterSource = frame.water && typeof frame.water === "object" ? frame.water : {};
+    const waterTime = finiteNumber(waterSource.time, "water.time", 0);
+    const waterSurfaceY = finiteNumber(waterSource.surfaceY, "water.surfaceY", 0);
+    const causticStrength = finiteNumber(waterSource.strength, "water.strength", 0);
+    const waterIor = finiteNumber(waterSource.ior, "water.ior", 1.333);
+    if (causticStrength < 0 || waterIor < 1) {
+      throw new RangeError("water.strength must be non-negative and water.ior must be at least 1");
+    }
+
+    const packed = {
+      colorTextureHandle: color.textureHandle,
+      colorVulkanLayout: color.vulkanLayout,
+      depthTextureHandle: depth.textureHandle,
+      depthVulkanLayout: depth.vulkanLayout,
+      width,
+      height,
+      inverseViewProjection,
+      cameraPosition,
+      sunDirectionIntensity: [
+        sun[0] / sunLength,
+        sun[1] / sunLength,
+        sun[2] / sunLength,
+        intensity,
+      ],
+      params: [shadowStrength, aoStrength, aoRadius, aoMaxDistance],
+      flags: frame.depthInverted ? 1 : 0,
+      water: [waterTime, waterSurfaceY, causticStrength, waterIor],
+    };
+    nativeEncoder.encoder._commands.push(["rtxLightingEvaluate", packed]);
+    rayLightingQueued = true;
+    const submitted = submitNativeEncoderIfNeeded(nativeEncoder);
+    return immutableSnapshot({
+      queued: true,
+      submitted,
+      width,
+      height,
+      effects: Object.freeze({
+        sunVisibility: shadowStrength > 0,
+        rayTracedAmbientOcclusion: aoStrength > 0,
+        refractedWaterCaustics: causticStrength > 0,
+      }),
+      note: "Native Vulkan ray queries shade the HDR target in place and restore both supplied image layouts.",
+    });
+  };
+
+  const releaseViewport = (viewport = 0) => {
+    const normalized = Math.max(0, Math.trunc(finiteNumber(viewport, "viewport", 0)));
+    nativeCall(() => n.WebGpuDLSSReleaseViewport?.(normalized), undefined);
+  };
+
   Object.defineProperty(gpu, "threeBrowserRTX", {
     configurable: false,
     enumerable: true,
     value: Object.freeze({
-      get capabilities() { return n.WebGpuCapabilities?.() || {}; },
-      get reflexMode() { return Number(n.WebGpuReflexMode?.() || 0); },
+      get capabilities() { return immutableSnapshot(readCapabilities()); },
+      get status() { return getStatus(); },
+      get reflexMode() { return Number(nativeCall(() => n.WebGpuReflexMode?.(), 0)) || 0; },
+      getStatus,
+      requestFeatures,
+      getOptimalSettings,
+      evaluateSuperResolution,
+      tagFrameGeneration,
+      evaluateRayReconstruction,
+      registerStaticScene,
+      destroyStaticScene,
+      evaluateRayLighting,
+      releaseViewport,
+      vulkanImageLayouts: VULKAN_IMAGE_LAYOUTS,
       setReflexMode(mode) {
-        const normalized = Math.max(0, Math.min(2, Number(mode) | 0));
-        return Boolean(n.WebGpuSetReflexMode?.(normalized));
+        const status = requestFeatures({ reflexMode: mode });
+        return Boolean(status.features?.reflex?.configured);
       },
     }),
   });

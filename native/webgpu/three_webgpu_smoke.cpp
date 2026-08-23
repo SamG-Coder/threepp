@@ -13,6 +13,7 @@
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -86,7 +87,13 @@ int main() {
     std::cout << "backend=" << tw_backend_name() << '\n';
     TWGpuCapabilities gpuCapabilities{};
     gpuCapabilities.struct_size = sizeof(gpuCapabilities);
-    if (!tw_gpu_capabilities(&gpuCapabilities) || gpuCapabilities.adapter_name[0] == '\0') {
+    const auto capabilityDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    do {
+        tw_gpu_capabilities(&gpuCapabilities);
+        if (gpuCapabilities.adapter_name[0] != '\0') break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    } while (std::chrono::steady_clock::now() < capabilityDeadline);
+    if (gpuCapabilities.adapter_name[0] == '\0') {
         std::cerr << "GPU capability query failed\n";
         tw_shutdown();
         return 13;
@@ -105,6 +112,51 @@ int main() {
               << " rayreconstruction=" << gpuCapabilities.dlss_ray_reconstruction
               << " reflex=" << gpuCapabilities.reflex
               << " status=\"" << gpuCapabilities.status << "\"\n";
+
+    TWGpuFeatureStatus featureStatus{};
+    featureStatus.struct_size = sizeof(featureStatus);
+    if (!tw_gpu_feature_status(&featureStatus)) {
+        std::cerr << "GPU feature-state query failed\n";
+        tw_shutdown();
+        return 15;
+    }
+    if (gpuCapabilities.dlss_super_resolution) {
+        TWGpuFeatureRequest request{};
+        request.struct_size = sizeof(request);
+        request.dlss_mode = TW_DLSS_MAX_QUALITY;
+        request.output_width = 640;
+        request.output_height = 480;
+        request.pre_exposure = 1.0f;
+        request.exposure_scale = 1.0f;
+        request.color_buffers_hdr = 1;
+        request.ray_reconstruction = gpuCapabilities.dlss_ray_reconstruction ? 1 : 0;
+        if (!tw_request_gpu_features(&request)) {
+            std::cerr << "DLSS request failed: " << tw_last_error() << '\n';
+            tw_shutdown();
+            return 16;
+        }
+        featureStatus = {};
+        featureStatus.struct_size = sizeof(featureStatus);
+        if (!tw_gpu_feature_status(&featureStatus) || !featureStatus.dlss_requested ||
+            !featureStatus.dlss_configured || featureStatus.dlss_active) {
+            std::cerr << "DLSS request state was not truthful: "
+                      << featureStatus.dlss_reason << '\n';
+            tw_shutdown();
+            return 17;
+        }
+        if (gpuCapabilities.dlss_ray_reconstruction &&
+            (!featureStatus.ray_reconstruction_supported ||
+             !featureStatus.ray_reconstruction_api_loaded ||
+             !featureStatus.ray_reconstruction_requested ||
+             featureStatus.ray_reconstruction_configured ||
+             featureStatus.ray_reconstruction_active ||
+             featureStatus.ray_reconstruction_evaluation_count != 0)) {
+            std::cerr << "Ray Reconstruction claimed activation without real denoiser inputs: "
+                      << featureStatus.ray_reconstruction_reason << '\n';
+            tw_shutdown();
+            return 18;
+        }
+    }
 
     if (testExclusiveFullscreen) {
         DEVMODEW mode{};

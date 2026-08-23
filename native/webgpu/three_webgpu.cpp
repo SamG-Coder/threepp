@@ -1,5 +1,6 @@
 #include "three_webgpu.h"
 #include "cmd_ops_webgpu.hpp"
+#include "ray_query_bridge.h"
 #include "streamline_bridge.h"
 
 #ifndef WGPU_SHARED_LIBRARY
@@ -13,6 +14,10 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <windowsx.h>
+
+#if defined(THREEBROWSER_STREAMLINE) || defined(THREEBROWSER_RAY_QUERY)
+#include <vulkan/vulkan.h>
+#endif
 
 #include <algorithm>
 #include <cctype>
@@ -91,7 +96,10 @@ struct Slot {
     uint32_t texH{0};
     uint32_t texD{0};
     uint32_t texSampleCount{1};
+    uint32_t texMipLevels{1};
+    uint32_t textureHandle{0};
     WGPUTextureFormat texFormat{WGPUTextureFormat_Undefined};
+    WGPUTextureUsage texUsage{WGPUTextureUsage_None};
     WGPUBufferUsage bufUsage{WGPUBufferUsage_None};
     uint64_t bufSize{0};
     std::string wgsl;
@@ -200,6 +208,7 @@ struct Runtime {
     std::string gpuDeviceName;
     bool streamlineSimulationEnded{false};
     bool rtxAdapter{false};
+    bool rayQueryFeatureEnabled{false};
 
     WGPUInstance instance{};
     WGPUAdapter adapter{};
@@ -787,7 +796,15 @@ void releaseSlot(Slot& s) {
             if (s.buffer) wgpuBufferRelease(s.buffer);
             break;
         case Kind::Texture:
-            if (s.texture) wgpuTextureRelease(s.texture);
+            if (s.texture) {
+#if defined(THREEBROWSER_RAY_QUERY)
+                rayQueryBridgeForgetImage(wgpuTextureGetNativeVulkanImage(s.texture));
+#endif
+#if defined(THREEBROWSER_STREAMLINE)
+                streamlineForgetVulkanImage(wgpuTextureGetNativeVulkanImage(s.texture));
+#endif
+                wgpuTextureRelease(s.texture);
+            }
             break;
         case Kind::TextureView:
             if (s.view) wgpuTextureViewRelease(s.view);
@@ -961,6 +978,8 @@ bool configureSurface(int w, int h) {
     if (!g.surface || !g.device) {
         return false;
     }
+    streamlineSuspendFrameGeneration(
+        "Frame Generation suspended before swapchain configuration", false);
     w = std::max(1, w);
     h = std::max(1, h);
     dropCurrentTexture();
@@ -1046,6 +1065,8 @@ bool setVulkanExclusiveRequest(bool enabled, HMONITOR monitor) {
 }
 
 void unconfigureSurfaceForDisplayTransition() {
+    streamlineSuspendFrameGeneration(
+        "Frame Generation suspended before a display-mode transition", false);
     dropCurrentTexture();
     if (g.surface && g.surfaceConfigured) {
         wgpuSurfaceUnconfigure(g.surface);
@@ -1387,6 +1408,16 @@ bool requestAdapterAndDevice() {
             enabledFeatures.push_back(desired);
         }
     }
+#if defined(THREEBROWSER_RAY_QUERY)
+    g.rayQueryFeatureEnabled = false;
+    const auto nativeRayQueryFeature =
+        static_cast<WGPUFeatureName>(WGPUNativeFeature_RayQuery);
+    if (std::find(supported.features, supported.features + supported.featureCount,
+                  nativeRayQueryFeature) != supported.features + supported.featureCount) {
+        enabledFeatures.push_back(nativeRayQueryFeature);
+        g.rayQueryFeatureEnabled = true;
+    }
+#endif
     wgpuSupportedFeaturesFreeMembers(supported);
     dd.requiredFeatureCount = enabledFeatures.size();
     dd.requiredFeatures = enabledFeatures.data();
@@ -1433,6 +1464,18 @@ bool requestAdapterAndDevice() {
         WGPUVulkanContextInfo nativeContext{};
         const WGPUStatus nativeStatus = wgpuDeviceGetNativeVulkanContext(g.device, &nativeContext);
         if (nativeStatus == WGPUStatus_Success) {
+#if defined(THREEBROWSER_RAY_QUERY)
+            rayQueryBridgeAttachVulkan(RayQueryVulkanContext{
+                nativeContext.instance,
+                nativeContext.physicalDevice,
+                nativeContext.device,
+                nativeContext.queue,
+                nativeContext.queueFamilyIndex,
+                nativeContext.queueIndex,
+                g.rayQueryFeatureEnabled,
+            });
+#endif
+#if defined(THREEBROWSER_STREAMLINE)
             if (streamlineAttachVulkan(StreamlineVulkanContext{
                 nativeContext.instance,
                 nativeContext.physicalDevice,
@@ -1444,6 +1487,7 @@ bool requestAdapterAndDevice() {
                 streamlineFrameBegin(0);
                 g.streamlineSimulationEnded = false;
             }
+#endif
         } else {
             logLine("wgpu-native did not expose its Vulkan device context");
         }
@@ -2038,6 +2082,7 @@ void buildOverlayPixels(int width, int height, bool compactFps = false,
                  DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
         const StreamlineCapabilities streamline = streamlineCapabilities();
+        const StreamlineFeatureState featureState = streamlineFeatureState();
         const bool rtxAvailable = g.rtxAdapter && streamline.vulkanAttached;
         rounded(layout.dlssStatus,
                 rtxAvailable ? RGB(241, 248, 245) : RGB(248, 249, 251),
@@ -2062,7 +2107,7 @@ void buildOverlayPixels(int width, int height, bool compactFps = false,
                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
         auto drawFeature = [&](RECT rect, const wchar_t* name, const wchar_t* requirement,
-                               bool supported, const wchar_t* badgeText) {
+                               bool available, bool active, const wchar_t* badgeText) {
             rounded(rect, RGB(248, 249, 251), RGB(223, 227, 232), 9);
             RECT featureName{rect.left + 15, rect.top + 5, rect.right - 170, rect.top + 28};
             drawText(name, featureName, body, RGB(54, 65, 81),
@@ -2071,27 +2116,72 @@ void buildOverlayPixels(int width, int height, bool compactFps = false,
             drawText(requirement, featureRequirement, label, RGB(120, 130, 146),
                      DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
             RECT badge{rect.right - 137, rect.top + 12, rect.right - 14, rect.bottom - 12};
-            rounded(badge, RGB(239, 242, 246), RGB(214, 219, 226), 12);
+            rounded(badge, active ? RGB(235, 247, 240) : RGB(239, 242, 246),
+                    active ? RGB(175, 218, 193) : RGB(214, 219, 226), 12);
             drawText(badgeText, badge, label,
-                     supported ? RGB(25, 95, 60) : RGB(104, 113, 130),
+                     active ? RGB(25, 95, 60) :
+                     available ? RGB(20, 105, 220) : RGB(104, 113, 130),
                      DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         };
+        auto featureBadge = [](bool supported, bool functionsLoaded, bool requested,
+                               bool configured, bool active) -> const wchar_t* {
+            if (active) return L"ACTIVE";
+            if (configured) return L"CONFIGURED";
+            if (requested) return L"REQUESTED";
+            if (supported && functionsLoaded) return L"AVAILABLE";
+            if (supported) return L"API MISSING";
+            return L"UNAVAILABLE";
+        };
+        std::wstring dlssReason = wideFromUtf8(featureState.dlssReason.c_str());
+        if (dlssReason.empty()) dlssReason = L"No DLSS Super Resolution state is available";
+        if (featureState.dlssEvaluationCount != 0) {
+            dlssReason += L"  ·  ";
+            dlssReason += std::to_wstring(featureState.dlssEvaluationCount);
+            dlssReason += featureState.dlssEvaluationCount == 1 ? L" evaluation" : L" evaluations";
+        }
+        std::wstring frameGenerationReason =
+            wideFromUtf8(featureState.frameGenerationReason.c_str());
+        if (frameGenerationReason.empty()) {
+            frameGenerationReason = L"Frame Generation has not been requested";
+        }
+        std::wstring rayReconstructionReason =
+            wideFromUtf8(featureState.rayReconstructionReason.c_str());
+        if (rayReconstructionReason.empty()) {
+            rayReconstructionReason = L"Ray Reconstruction has not been requested";
+        }
         drawFeature(layout.dlssSuperResolutionButton, L"DLSS Super Resolution",
-                    L"Available to pages that provide depth and motion vectors",
-                    streamline.dlssSuperResolution,
-                    streamline.dlssSuperResolution ? L"API READY" : L"UNAVAILABLE");
+                    dlssReason.c_str(),
+                    featureState.dlssSupported && featureState.dlssFunctionsLoaded,
+                    featureState.dlssActive,
+                    featureBadge(featureState.dlssSupported,
+                                 featureState.dlssFunctionsLoaded,
+                                 featureState.dlssRequested,
+                                 featureState.dlssConfigured,
+                                 featureState.dlssActive));
         drawFeature(layout.dlssFrameGenerationButton, L"DLSS Frame Generation",
-                    L"Available to pages that provide HUD-less color and motion",
-                    streamline.dlssFrameGeneration,
-                    streamline.dlssFrameGeneration ? L"API READY" : L"UNAVAILABLE");
+                    frameGenerationReason.c_str(),
+                    featureState.frameGenerationSupported &&
+                        featureState.frameGenerationFunctionsLoaded,
+                    featureState.frameGenerationActive,
+                    featureBadge(featureState.frameGenerationSupported,
+                                 featureState.frameGenerationFunctionsLoaded,
+                                 featureState.frameGenerationRequested,
+                                 featureState.frameGenerationConfigured,
+                                 featureState.frameGenerationActive));
         drawFeature(layout.dlssRayReconstructionButton, L"DLSS Ray Reconstruction",
-                    L"Available to pages that provide ray-tracing denoiser inputs",
-                    streamline.dlssRayReconstruction,
-                    streamline.dlssRayReconstruction ? L"API READY" : L"UNAVAILABLE");
+                    rayReconstructionReason.c_str(),
+                    featureState.rayReconstructionSupported &&
+                        featureState.rayReconstructionFunctionsLoaded,
+                    featureState.rayReconstructionActive,
+                    featureBadge(featureState.rayReconstructionSupported,
+                                 featureState.rayReconstructionFunctionsLoaded,
+                                 featureState.rayReconstructionRequested,
+                                 featureState.rayReconstructionConfigured,
+                                 featureState.rayReconstructionActive));
         const int reflexMode = streamlineReflexMode();
         drawFeature(layout.reflexButton, L"NVIDIA Reflex",
                     L"Click to cycle Off, On and On + Boost",
-                    streamline.reflex,
+                    streamline.reflex, reflexMode != 0,
                     !streamline.reflex ? L"UNAVAILABLE" :
                     reflexMode == 2 ? L"ON + BOOST" : reflexMode == 1 ? L"ON" : L"OFF");
 
@@ -2369,6 +2459,9 @@ void destroyGpu() {
     dropCurrentTexture();
     clearSlots();
     releaseOverlayGpu();
+#if defined(THREEBROWSER_RAY_QUERY)
+    rayQueryBridgeShutdown();
+#endif
     if (g.surface && g.surfaceConfigured) {
         wgpuSurfaceUnconfigure(g.surface);
         g.surfaceConfigured = false;
@@ -2395,6 +2488,7 @@ void destroyGpu() {
     }
     g.backendName = "WebGPU";
     g.backendType = WGPUBackendType_Undefined;
+    g.rayQueryFeatureEnabled = false;
 }
 
 void destroyHwnd() {
@@ -2495,6 +2589,8 @@ bool implStart(void* parentHwnd, int x, int y, int w, int h) {
 }
 
 void releaseSurfaceOnly() {
+    streamlineSuspendFrameGeneration(
+        "Frame Generation suspended before the Vulkan surface was released", false);
     dropCurrentTexture();
     if (g.surface && g.surfaceConfigured) {
         wgpuSurfaceUnconfigure(g.surface);
@@ -2646,11 +2742,17 @@ bool implPresent() {
             return false;
         }
     }
+    const bool nativeOverlayHidden =
+        g.loading.load(std::memory_order_relaxed) == 0 &&
+        g.overlayOpen.load(std::memory_order_relaxed) == 0 &&
+        g.fpsOverlay.load(std::memory_order_relaxed) == 0;
+    streamlineFrameGenerationBeforePresent(nativeOverlayHidden);
     if (!g.overlayRecordedForCurrentTexture) renderOverlay();
     const bool firstPresent = g.statsPresents.load(std::memory_order_relaxed) == 0;
     streamlinePresentBegin();
     wgpuSurfacePresent(g.surface);
     streamlinePresentEnd();
+    streamlineFrameGenerationAfterPresent();
     dropCurrentTexture();
     if (g.device) {
         wgpuDevicePoll(g.device, 0, nullptr);
@@ -3083,7 +3185,9 @@ void execOne(uint32_t op, Reader& r) {
             s.texH = tdsc.size.height;
             s.texD = tdsc.size.depthOrArrayLayers;
             s.texSampleCount = tdsc.sampleCount;
+            s.texMipLevels = tdsc.mipLevelCount;
             s.texFormat = tdsc.format;
+            s.texUsage = tdsc.usage;
             if (!s.texture) {
                 setError("texture create failed");
                 return;
@@ -3133,7 +3237,10 @@ void execOne(uint32_t op, Reader& r) {
             s.texH = std::max(1u, actualH >> std::min(baseMip, 31u));
             s.texD = actualD;
             s.texSampleCount = ts->texSampleCount;
+            s.texMipLevels = ts->texMipLevels;
+            s.textureHandle = tex;
             s.texFormat = vd.format;
+            s.texUsage = ts->texUsage;
             s.view = wgpuTextureCreateView(ts->texture, &vd);
             if (!s.view) {
                 setError("texture view failed");
@@ -4035,6 +4142,259 @@ void execOne(uint32_t op, Reader& r) {
             g.renderPipelineSet = false;
             g.skipRenderPass = false;
             return;
+        case OP_DLSS_EVALUATE: {
+            TWDLSSFrame frame{};
+            frame.struct_size = sizeof(frame);
+            frame.command_encoder_handle = r.u32();
+            frame.viewport = r.u32();
+            auto readResource = [&r](TWDLSSResource& resource) {
+                resource.texture_handle = r.u32();
+                resource.vulkan_layout = r.u32();
+                resource.left = r.u32();
+                resource.top = r.u32();
+                resource.width = r.u32();
+                resource.height = r.u32();
+            };
+            readResource(frame.color_input);
+            readResource(frame.color_output);
+            readResource(frame.depth);
+            readResource(frame.motion_vectors);
+            readResource(frame.exposure);
+            frame.has_exposure = static_cast<int>(r.u32());
+            auto readFloats = [&r](float* values, uint32_t count) {
+                for (uint32_t i = 0; i < count; ++i) values[i] = r.f32();
+            };
+            readFloats(frame.constants.camera_view_to_clip, 16);
+            readFloats(frame.constants.clip_to_camera_view, 16);
+            readFloats(frame.constants.clip_to_lens_clip, 16);
+            readFloats(frame.constants.clip_to_prev_clip, 16);
+            readFloats(frame.constants.prev_clip_to_clip, 16);
+            readFloats(frame.constants.jitter_offset, 2);
+            readFloats(frame.constants.motion_vector_scale, 2);
+            readFloats(frame.constants.camera_pinhole_offset, 2);
+            readFloats(frame.constants.camera_position, 3);
+            readFloats(frame.constants.camera_up, 3);
+            readFloats(frame.constants.camera_right, 3);
+            readFloats(frame.constants.camera_forward, 3);
+            frame.constants.camera_near = r.f32();
+            frame.constants.camera_far = r.f32();
+            frame.constants.camera_fov = r.f32();
+            frame.constants.camera_aspect_ratio = r.f32();
+            frame.constants.depth_inverted = static_cast<int>(r.u32());
+            frame.constants.camera_motion_included = static_cast<int>(r.u32());
+            frame.constants.motion_vectors_3d = static_cast<int>(r.u32());
+            frame.constants.reset = static_cast<int>(r.u32());
+            frame.constants.orthographic_projection = static_cast<int>(r.u32());
+            frame.constants.motion_vectors_dilated = static_cast<int>(r.u32());
+            frame.constants.motion_vectors_jittered = static_cast<int>(r.u32());
+            if (!r.ok) {
+                setError("DLSS command payload is truncated");
+                return;
+            }
+            // This call is executing on the native worker, after OP_ENC_BEGIN and
+            // before OP_SUBMIT, so encoder/resource lifetime and ordering match WebGPU.
+            tw_dlss_evaluate(&frame);
+            return;
+        }
+        case OP_DLSSG_TAG: {
+            TWFrameGenerationFrame frame{};
+            frame.struct_size = sizeof(frame);
+            frame.command_encoder_handle = r.u32();
+            frame.viewport = r.u32();
+            auto readResource = [&r](TWDLSSResource& resource) {
+                resource.texture_handle = r.u32();
+                resource.vulkan_layout = r.u32();
+                resource.left = r.u32();
+                resource.top = r.u32();
+                resource.width = r.u32();
+                resource.height = r.u32();
+            };
+            readResource(frame.hudless_color);
+            readResource(frame.depth);
+            readResource(frame.motion_vectors);
+            readResource(frame.ui);
+            frame.has_ui = static_cast<int>(r.u32());
+            frame.ui_alpha_only = static_cast<int>(r.u32());
+            frame.frames_to_generate = r.u32();
+            auto readFloats = [&r](float* values, uint32_t count) {
+                for (uint32_t i = 0; i < count; ++i) values[i] = r.f32();
+            };
+            readFloats(frame.constants.camera_view_to_clip, 16);
+            readFloats(frame.constants.clip_to_camera_view, 16);
+            readFloats(frame.constants.clip_to_lens_clip, 16);
+            readFloats(frame.constants.clip_to_prev_clip, 16);
+            readFloats(frame.constants.prev_clip_to_clip, 16);
+            readFloats(frame.constants.jitter_offset, 2);
+            readFloats(frame.constants.motion_vector_scale, 2);
+            readFloats(frame.constants.camera_pinhole_offset, 2);
+            readFloats(frame.constants.camera_position, 3);
+            readFloats(frame.constants.camera_up, 3);
+            readFloats(frame.constants.camera_right, 3);
+            readFloats(frame.constants.camera_forward, 3);
+            frame.constants.camera_near = r.f32();
+            frame.constants.camera_far = r.f32();
+            frame.constants.camera_fov = r.f32();
+            frame.constants.camera_aspect_ratio = r.f32();
+            frame.constants.depth_inverted = static_cast<int>(r.u32());
+            frame.constants.camera_motion_included = static_cast<int>(r.u32());
+            frame.constants.motion_vectors_3d = static_cast<int>(r.u32());
+            frame.constants.reset = static_cast<int>(r.u32());
+            frame.constants.orthographic_projection = static_cast<int>(r.u32());
+            frame.constants.motion_vectors_dilated = static_cast<int>(r.u32());
+            frame.constants.motion_vectors_jittered = static_cast<int>(r.u32());
+            if (!r.ok) {
+                setError("DLSS Frame Generation command payload is truncated");
+                return;
+            }
+            tw_frame_generation_tag(&frame);
+            return;
+        }
+        case OP_RAY_RECONSTRUCTION_EVALUATE: {
+            TWRayReconstructionFrame frame{};
+            frame.struct_size = sizeof(frame);
+            frame.command_encoder_handle = r.u32();
+            frame.viewport = r.u32();
+            auto readResource = [&r](TWDLSSResource& resource) {
+                resource.texture_handle = r.u32();
+                resource.vulkan_layout = r.u32();
+                resource.left = r.u32();
+                resource.top = r.u32();
+                resource.width = r.u32();
+                resource.height = r.u32();
+            };
+            readResource(frame.noisy_color);
+            readResource(frame.color_output);
+            readResource(frame.depth);
+            readResource(frame.motion_vectors);
+            readResource(frame.diffuse_albedo);
+            readResource(frame.specular_albedo);
+            readResource(frame.normal_roughness);
+            readResource(frame.roughness);
+            readResource(frame.specular_motion_vectors);
+            readResource(frame.specular_hit_distance);
+            frame.normal_roughness_packed = static_cast<int>(r.u32());
+            frame.has_roughness = static_cast<int>(r.u32());
+            frame.has_specular_motion_vectors = static_cast<int>(r.u32());
+            frame.has_specular_hit_distance = static_cast<int>(r.u32());
+            auto readFloats = [&r](float* values, uint32_t count) {
+                for (uint32_t i = 0; i < count; ++i) values[i] = r.f32();
+            };
+            readFloats(frame.world_to_camera_view, 16);
+            readFloats(frame.camera_view_to_world, 16);
+            readFloats(frame.constants.camera_view_to_clip, 16);
+            readFloats(frame.constants.clip_to_camera_view, 16);
+            readFloats(frame.constants.clip_to_lens_clip, 16);
+            readFloats(frame.constants.clip_to_prev_clip, 16);
+            readFloats(frame.constants.prev_clip_to_clip, 16);
+            readFloats(frame.constants.jitter_offset, 2);
+            readFloats(frame.constants.motion_vector_scale, 2);
+            readFloats(frame.constants.camera_pinhole_offset, 2);
+            readFloats(frame.constants.camera_position, 3);
+            readFloats(frame.constants.camera_up, 3);
+            readFloats(frame.constants.camera_right, 3);
+            readFloats(frame.constants.camera_forward, 3);
+            frame.constants.camera_near = r.f32();
+            frame.constants.camera_far = r.f32();
+            frame.constants.camera_fov = r.f32();
+            frame.constants.camera_aspect_ratio = r.f32();
+            frame.constants.depth_inverted = static_cast<int>(r.u32());
+            frame.constants.camera_motion_included = static_cast<int>(r.u32());
+            frame.constants.motion_vectors_3d = static_cast<int>(r.u32());
+            frame.constants.reset = static_cast<int>(r.u32());
+            frame.constants.orthographic_projection = static_cast<int>(r.u32());
+            frame.constants.motion_vectors_dilated = static_cast<int>(r.u32());
+            frame.constants.motion_vectors_jittered = static_cast<int>(r.u32());
+            if (!r.ok) {
+                setError("DLSS Ray Reconstruction command payload is truncated");
+                return;
+            }
+            tw_ray_reconstruction_evaluate(&frame);
+            return;
+        }
+        case OP_RTX_SCENE_BEGIN: {
+            const uint32_t version = r.u32();
+            if (!r.ok || version != 1u) {
+                setError("Unsupported or truncated RTX scene-begin command");
+                return;
+            }
+            tw_ray_query_scene_begin();
+            return;
+        }
+        case OP_RTX_SCENE_POSITIONS: {
+            const uint32_t version = r.u32();
+            const uint32_t vertexCount = r.u32();
+            if (!r.ok || version != 1u || vertexCount == 0u ||
+                static_cast<uint64_t>(vertexCount) * 12ull > r.remaining()) {
+                setError("Unsupported or truncated RTX position chunk");
+                return;
+            }
+            std::vector<float> positions(static_cast<std::size_t>(vertexCount) * 3u);
+            for (float& value : positions) value = r.f32();
+            if (!r.ok || !tw_ray_query_scene_positions(positions.data(), vertexCount)) {
+                if (!r.ok) setError("RTX position chunk ended before vertexCount");
+                return;
+            }
+            return;
+        }
+        case OP_RTX_SCENE_INDICES: {
+            const uint32_t version = r.u32();
+            const uint32_t indexCount = r.u32();
+            if (!r.ok || version != 1u || indexCount == 0u || indexCount % 3u != 0u ||
+                static_cast<uint64_t>(indexCount) * 4ull > r.remaining()) {
+                setError("Unsupported, unaligned or truncated RTX index chunk");
+                return;
+            }
+            std::vector<uint32_t> indices(indexCount);
+            for (uint32_t& value : indices) value = r.u32();
+            if (!r.ok || !tw_ray_query_scene_indices(indices.data(), indexCount)) {
+                if (!r.ok) setError("RTX index chunk ended before indexCount");
+                return;
+            }
+            return;
+        }
+        case OP_RTX_SCENE_COMMIT: {
+            const uint32_t version = r.u32();
+            const uint32_t encoder = r.u32();
+            if (!r.ok || version != 1u) {
+                setError("Unsupported or truncated RTX scene-commit command");
+                return;
+            }
+            tw_ray_query_scene_commit(encoder);
+            return;
+        }
+        case OP_RTX_SCENE_DESTROY: {
+            const uint32_t version = r.u32();
+            if (!r.ok || version != 1u) {
+                setError("Unsupported or truncated RTX scene-destroy command");
+                return;
+            }
+            tw_ray_query_scene_destroy();
+            return;
+        }
+        case OP_RTX_LIGHTING_EVALUATE: {
+            TWRayQueryLightingFrame frame{};
+            frame.struct_size = sizeof(frame);
+            const uint32_t version = r.u32();
+            frame.command_encoder_handle = r.u32();
+            frame.color_texture_handle = r.u32();
+            frame.color_vulkan_layout = r.u32();
+            frame.depth_texture_handle = r.u32();
+            frame.depth_vulkan_layout = r.u32();
+            frame.width = r.u32();
+            frame.height = r.u32();
+            for (float& value : frame.inverse_view_projection) value = r.f32();
+            for (float& value : frame.camera_position) value = r.f32();
+            for (float& value : frame.sun_direction_intensity) value = r.f32();
+            for (float& value : frame.parameters) value = r.f32();
+            frame.flags = r.u32();
+            for (float& value : frame.water) value = r.f32();
+            if (!r.ok || version != 1u) {
+                setError("Unsupported or truncated RTX lighting command");
+                return;
+            }
+            tw_ray_query_lighting_evaluate(&frame);
+            return;
+        }
         case OP_SUBMIT:
             finishEncoderSubmit();
             return;
@@ -4240,6 +4600,9 @@ void implShutdown() {
 void implReset() {
     dropCurrentTexture();
     clearSlots();
+#if defined(THREEBROWSER_RAY_QUERY)
+    rayQueryBridgeDestroyScene();
+#endif
 }
 
 void workerMain() {
@@ -4298,6 +4661,222 @@ void ensureWorker() {
     g.worker = std::thread(workerMain);
     g.workerStarted = true;
 }
+
+#if defined(THREEBROWSER_STREAMLINE)
+VkFormat toVulkanFormat(WGPUTextureFormat format) {
+    switch (format) {
+        case WGPUTextureFormat_R8Unorm: return VK_FORMAT_R8_UNORM;
+        case WGPUTextureFormat_R8Snorm: return VK_FORMAT_R8_SNORM;
+        case WGPUTextureFormat_R8Uint: return VK_FORMAT_R8_UINT;
+        case WGPUTextureFormat_R8Sint: return VK_FORMAT_R8_SINT;
+        case WGPUTextureFormat_R16Uint: return VK_FORMAT_R16_UINT;
+        case WGPUTextureFormat_R16Sint: return VK_FORMAT_R16_SINT;
+        case WGPUTextureFormat_R16Float: return VK_FORMAT_R16_SFLOAT;
+        case WGPUTextureFormat_RG8Unorm: return VK_FORMAT_R8G8_UNORM;
+        case WGPUTextureFormat_RG8Snorm: return VK_FORMAT_R8G8_SNORM;
+        case WGPUTextureFormat_RG8Uint: return VK_FORMAT_R8G8_UINT;
+        case WGPUTextureFormat_RG8Sint: return VK_FORMAT_R8G8_SINT;
+        case WGPUTextureFormat_R32Float: return VK_FORMAT_R32_SFLOAT;
+        case WGPUTextureFormat_R32Uint: return VK_FORMAT_R32_UINT;
+        case WGPUTextureFormat_R32Sint: return VK_FORMAT_R32_SINT;
+        case WGPUTextureFormat_RG16Uint: return VK_FORMAT_R16G16_UINT;
+        case WGPUTextureFormat_RG16Sint: return VK_FORMAT_R16G16_SINT;
+        case WGPUTextureFormat_RG16Float: return VK_FORMAT_R16G16_SFLOAT;
+        case WGPUTextureFormat_RGBA8Unorm: return VK_FORMAT_R8G8B8A8_UNORM;
+        case WGPUTextureFormat_RGBA8UnormSrgb: return VK_FORMAT_R8G8B8A8_SRGB;
+        case WGPUTextureFormat_RGBA8Snorm: return VK_FORMAT_R8G8B8A8_SNORM;
+        case WGPUTextureFormat_RGBA8Uint: return VK_FORMAT_R8G8B8A8_UINT;
+        case WGPUTextureFormat_RGBA8Sint: return VK_FORMAT_R8G8B8A8_SINT;
+        case WGPUTextureFormat_BGRA8Unorm: return VK_FORMAT_B8G8R8A8_UNORM;
+        case WGPUTextureFormat_BGRA8UnormSrgb: return VK_FORMAT_B8G8R8A8_SRGB;
+        case WGPUTextureFormat_RGB10A2Uint: return VK_FORMAT_A2B10G10R10_UINT_PACK32;
+        case WGPUTextureFormat_RGB10A2Unorm: return VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+        case WGPUTextureFormat_RG11B10Ufloat: return VK_FORMAT_B10G11R11_UFLOAT_PACK32;
+        case WGPUTextureFormat_RG32Float: return VK_FORMAT_R32G32_SFLOAT;
+        case WGPUTextureFormat_RG32Uint: return VK_FORMAT_R32G32_UINT;
+        case WGPUTextureFormat_RG32Sint: return VK_FORMAT_R32G32_SINT;
+        case WGPUTextureFormat_RGBA16Uint: return VK_FORMAT_R16G16B16A16_UINT;
+        case WGPUTextureFormat_RGBA16Sint: return VK_FORMAT_R16G16B16A16_SINT;
+        case WGPUTextureFormat_RGBA16Float: return VK_FORMAT_R16G16B16A16_SFLOAT;
+        case WGPUTextureFormat_RGBA32Float: return VK_FORMAT_R32G32B32A32_SFLOAT;
+        case WGPUTextureFormat_RGBA32Uint: return VK_FORMAT_R32G32B32A32_UINT;
+        case WGPUTextureFormat_RGBA32Sint: return VK_FORMAT_R32G32B32A32_SINT;
+        case WGPUTextureFormat_Depth16Unorm: return VK_FORMAT_D16_UNORM;
+        case WGPUTextureFormat_Depth32Float: return VK_FORMAT_D32_SFLOAT;
+        case WGPUTextureFormat_Stencil8: return VK_FORMAT_S8_UINT;
+        case WGPUTextureFormat_Depth32FloatStencil8: return VK_FORMAT_D32_SFLOAT_S8_UINT;
+        default: return VK_FORMAT_UNDEFINED;
+    }
+}
+
+VkImageUsageFlags toVulkanUsage(WGPUTextureUsage usage, bool depth) {
+    VkImageUsageFlags out{};
+    if (usage & WGPUTextureUsage_CopySrc) out |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    if (usage & WGPUTextureUsage_CopyDst) out |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    if (usage & WGPUTextureUsage_TextureBinding) out |= VK_IMAGE_USAGE_SAMPLED_BIT;
+    if (usage & WGPUTextureUsage_StorageBinding) out |= VK_IMAGE_USAGE_STORAGE_BIT;
+    if (usage & WGPUTextureUsage_RenderAttachment) {
+        out |= depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
+                     : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    }
+    return out;
+}
+
+Slot* textureSlotFromHandle(uint32_t handle) {
+    Slot* slot = getSlot(handle);
+    if (slot && slot->kind == Kind::TextureView) slot = getSlot(slot->textureHandle);
+    return slot && slot->kind == Kind::Texture ? slot : nullptr;
+}
+
+bool makeStreamlineResource(const TWDLSSResource& input, bool depth, bool outputResource,
+                             StreamlineVulkanResource& output, std::string& error) {
+    Slot* slot = textureSlotFromHandle(input.texture_handle);
+    if (!slot || !slot->texture) {
+        error = "DLSS texture handle " + std::to_string(input.texture_handle) + " is invalid";
+        return false;
+    }
+    if (slot->texSampleCount != 1) {
+        error = "DLSS resources must be single-sampled";
+        return false;
+    }
+    if (slot->texD != 1 || slot->texMipLevels != 1) {
+        error = "DLSS resources must be single-layer 2D textures with one mip level";
+        return false;
+    }
+    const WGPUTextureUsage requiredUsage = outputResource
+        ? WGPUTextureUsage_StorageBinding
+        : WGPUTextureUsage_TextureBinding;
+    if ((slot->texUsage & requiredUsage) == 0) {
+        error = outputResource
+            ? "The DLSS output texture requires GPUTextureUsage.STORAGE_BINDING"
+            : "DLSS input textures require GPUTextureUsage.TEXTURE_BINDING";
+        return false;
+    }
+    if (input.vulkan_layout == VK_IMAGE_LAYOUT_UNDEFINED) {
+        error = "DLSS requires the current Vulkan image layout for every resource";
+        return false;
+    }
+    const VkFormat format = toVulkanFormat(slot->texFormat);
+    if (format == VK_FORMAT_UNDEFINED) {
+        error = "DLSS does not support this WebGPU texture format through the native bridge";
+        return false;
+    }
+    output.image = wgpuTextureGetNativeVulkanImage(slot->texture);
+    output.width = slot->texW;
+    output.height = slot->texH;
+    output.format = static_cast<uint32_t>(format);
+    output.layout = input.vulkan_layout;
+    output.usage = toVulkanUsage(slot->texUsage, depth);
+    output.aspectMask = depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+    output.mipLevels = slot->texMipLevels;
+    output.arrayLayers = slot->texD;
+    output.left = input.left;
+    output.top = input.top;
+    output.extentWidth = input.width;
+    output.extentHeight = input.height;
+    const uint32_t extentWidth = output.extentWidth ? output.extentWidth : output.width;
+    const uint32_t extentHeight = output.extentHeight ? output.extentHeight : output.height;
+    if (output.left >= output.width || output.top >= output.height ||
+        extentWidth > output.width - output.left ||
+        extentHeight > output.height - output.top) {
+        error = "DLSS resource extent is outside the texture bounds";
+        return false;
+    }
+    if (!output.image) {
+        error = "wgpu-native did not expose a Vulkan image for a DLSS resource";
+        return false;
+    }
+    return true;
+}
+
+enum class RayReconstructionResourceKind {
+    HdrColor,
+    Depth,
+    MotionVectors,
+    LinearAlbedo,
+    Normal,
+    Scalar,
+};
+
+bool validateRayReconstructionFormat(uint32_t textureHandle,
+                                     RayReconstructionResourceKind kind,
+                                     const char* name, std::string& error) {
+    const Slot* slot = textureSlotFromHandle(textureHandle);
+    if (!slot) {
+        error = std::string("Ray Reconstruction ") + name + " texture is invalid";
+        return false;
+    }
+    const WGPUTextureFormat format = slot->texFormat;
+    bool valid = false;
+    switch (kind) {
+        case RayReconstructionResourceKind::HdrColor:
+            valid = format == WGPUTextureFormat_RG11B10Ufloat ||
+                    format == WGPUTextureFormat_RGBA16Float ||
+                    format == WGPUTextureFormat_RGBA32Float;
+            break;
+        case RayReconstructionResourceKind::Depth:
+            valid = format == WGPUTextureFormat_Depth16Unorm ||
+                    format == WGPUTextureFormat_Depth32Float ||
+                    format == WGPUTextureFormat_Depth32FloatStencil8;
+            break;
+        case RayReconstructionResourceKind::MotionVectors:
+            valid = format == WGPUTextureFormat_RG16Float ||
+                    format == WGPUTextureFormat_RG32Float;
+            break;
+        case RayReconstructionResourceKind::LinearAlbedo:
+            valid = format == WGPUTextureFormat_RGBA8Unorm ||
+                    format == WGPUTextureFormat_RGB10A2Unorm ||
+                    format == WGPUTextureFormat_RG11B10Ufloat ||
+                    format == WGPUTextureFormat_RGBA16Float ||
+                    format == WGPUTextureFormat_RGBA32Float;
+            break;
+        case RayReconstructionResourceKind::Normal:
+            valid = format == WGPUTextureFormat_RGBA16Float ||
+                    format == WGPUTextureFormat_RGBA32Float;
+            break;
+        case RayReconstructionResourceKind::Scalar:
+            valid = format == WGPUTextureFormat_R16Float ||
+                    format == WGPUTextureFormat_R32Float;
+            break;
+    }
+    if (!valid) {
+        error = std::string("Ray Reconstruction ") + name +
+                " texture format does not satisfy the Streamline DLSS-RR input contract";
+    }
+    return valid;
+}
+
+bool finiteMatrix(const float* matrix) {
+    return matrix && std::all_of(matrix, matrix + 16,
+                                 [](float value) { return std::isfinite(value); });
+}
+
+void copyConstants(const TWDLSSFrameConstants& source, StreamlineFrameConstants& target) {
+    std::copy_n(source.camera_view_to_clip, 16, target.cameraViewToClip.begin());
+    std::copy_n(source.clip_to_camera_view, 16, target.clipToCameraView.begin());
+    std::copy_n(source.clip_to_lens_clip, 16, target.clipToLensClip.begin());
+    std::copy_n(source.clip_to_prev_clip, 16, target.clipToPrevClip.begin());
+    std::copy_n(source.prev_clip_to_clip, 16, target.prevClipToClip.begin());
+    std::copy_n(source.jitter_offset, 2, target.jitterOffset.begin());
+    std::copy_n(source.motion_vector_scale, 2, target.motionVectorScale.begin());
+    std::copy_n(source.camera_pinhole_offset, 2, target.cameraPinholeOffset.begin());
+    std::copy_n(source.camera_position, 3, target.cameraPosition.begin());
+    std::copy_n(source.camera_up, 3, target.cameraUp.begin());
+    std::copy_n(source.camera_right, 3, target.cameraRight.begin());
+    std::copy_n(source.camera_forward, 3, target.cameraForward.begin());
+    target.cameraNear = source.camera_near;
+    target.cameraFar = source.camera_far;
+    target.cameraFov = source.camera_fov;
+    target.cameraAspectRatio = source.camera_aspect_ratio;
+    target.depthInverted = source.depth_inverted != 0;
+    target.cameraMotionIncluded = source.camera_motion_included != 0;
+    target.motionVectors3D = source.motion_vectors_3d != 0;
+    target.reset = source.reset != 0;
+    target.orthographicProjection = source.orthographic_projection != 0;
+    target.motionVectorsDilated = source.motion_vectors_dilated != 0;
+    target.motionVectorsJittered = source.motion_vectors_jittered != 0;
+}
+#endif
 
 }// namespace
 
@@ -4775,6 +5354,7 @@ const char* tw_backend_name(void) {
 int tw_gpu_capabilities(TWGpuCapabilities* capabilities) {
     if (!capabilities || capabilities->struct_size < sizeof(TWGpuCapabilities)) return 0;
     const auto streamline = streamlineCapabilities();
+    const auto rayQuery = rayQueryBridgeCapabilities();
     TWGpuCapabilities result{};
     result.struct_size = sizeof(result);
     result.vendor_id = g.gpuVendorId;
@@ -4789,8 +5369,506 @@ int tw_gpu_capabilities(TWGpuCapabilities* capabilities) {
     result.reflex = streamline.reflex ? 1 : 0;
     std::snprintf(result.adapter_name, sizeof(result.adapter_name), "%s", g.gpuDeviceName.c_str());
     std::snprintf(result.status, sizeof(result.status), "%s", streamline.status.c_str());
+    const bool nativeRayTracing = rayQuery.webgpuFeatureEnabled &&
+                                  rayQuery.accelerationStructureSupported &&
+                                  rayQuery.rayQuerySupported;
+    result.native_ray_tracing = nativeRayTracing ? 1 : 0;
+    result.ray_query = nativeRayTracing ? 1 : 0;
     *capabilities = result;
     return 1;
+}
+
+int tw_request_gpu_features(const TWGpuFeatureRequest* request) {
+    if (!request || request->struct_size < sizeof(TWGpuFeatureRequest)) return 0;
+    const TWGpuFeatureRequest copy = *request;
+    try {
+        return onWorker([copy] {
+            StreamlineDLSSOptions options{};
+            options.mode = copy.dlss_mode <= TW_DLSS_DLAA
+                ? static_cast<StreamlineDLSSMode>(copy.dlss_mode)
+                : StreamlineDLSSMode::Off;
+            options.outputWidth = copy.output_width ? copy.output_width : g.config.width;
+            options.outputHeight = copy.output_height ? copy.output_height : g.config.height;
+            options.preExposure = copy.pre_exposure;
+            options.exposureScale = copy.exposure_scale;
+            options.colorBuffersHDR = copy.color_buffers_hdr != 0;
+            options.useAutoExposure = copy.auto_exposure != 0;
+            options.alphaUpscaling = copy.alpha_upscaling != 0;
+            const bool result = streamlineRequestFeatures(
+                options, copy.frame_generation != 0, copy.ray_reconstruction != 0);
+            if (result && (options.mode != StreamlineDLSSMode::Off ||
+                           copy.frame_generation != 0 ||
+                           copy.ray_reconstruction != 0)) {
+                streamlineFrameBegin(static_cast<uint32_t>(
+                    g.statsPresents.load(std::memory_order_relaxed)));
+            }
+            return result ? 1 : 0;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+}
+
+int tw_gpu_feature_status(TWGpuFeatureStatus* status) {
+    if (!status || status->struct_size < sizeof(TWGpuFeatureStatus)) return 0;
+    const StreamlineFeatureState state = streamlineFeatureState();
+    const auto rayQuery = rayQueryBridgeCapabilities();
+    TWGpuFeatureStatus result{};
+    result.struct_size = sizeof(result);
+    result.dlss_supported = state.dlssSupported ? 1 : 0;
+    result.dlss_api_loaded = state.dlssFunctionsLoaded ? 1 : 0;
+    result.dlss_requested = state.dlssRequested ? 1 : 0;
+    result.dlss_configured = state.dlssConfigured ? 1 : 0;
+    result.dlss_active = state.dlssActive ? 1 : 0;
+    result.dlss_mode = static_cast<uint32_t>(state.dlssMode);
+    result.render_width = state.renderWidth;
+    result.render_height = state.renderHeight;
+    result.output_width = state.outputWidth;
+    result.output_height = state.outputHeight;
+    result.estimated_vram_bytes = state.estimatedVramBytes;
+    result.dlss_evaluation_count = state.dlssEvaluationCount;
+    result.dlss_failure_count = state.dlssFailureCount;
+    result.dlss_last_result = state.dlssLastResult;
+    result.frame_generation_supported = state.frameGenerationSupported ? 1 : 0;
+    result.frame_generation_api_loaded = state.frameGenerationFunctionsLoaded ? 1 : 0;
+    result.frame_generation_requested = state.frameGenerationRequested ? 1 : 0;
+    result.frame_generation_configured = state.frameGenerationConfigured ? 1 : 0;
+    result.frame_generation_active = state.frameGenerationActive ? 1 : 0;
+    result.ray_reconstruction_supported = state.rayReconstructionSupported ? 1 : 0;
+    result.ray_reconstruction_api_loaded = state.rayReconstructionFunctionsLoaded ? 1 : 0;
+    result.ray_reconstruction_requested = state.rayReconstructionRequested ? 1 : 0;
+    result.ray_reconstruction_configured = state.rayReconstructionConfigured ? 1 : 0;
+    result.ray_reconstruction_active = state.rayReconstructionActive ? 1 : 0;
+    result.ray_reconstruction_evaluation_count =
+        state.rayReconstructionEvaluationCount;
+    result.ray_reconstruction_failure_count =
+        state.rayReconstructionFailureCount;
+    result.ray_reconstruction_estimated_vram_bytes =
+        state.rayReconstructionEstimatedVramBytes;
+    result.ray_reconstruction_last_result =
+        state.rayReconstructionLastResult;
+    std::snprintf(result.dlss_reason, sizeof(result.dlss_reason), "%s",
+                  state.dlssReason.c_str());
+    std::snprintf(result.frame_generation_reason, sizeof(result.frame_generation_reason), "%s",
+                  state.frameGenerationReason.c_str());
+    std::snprintf(result.ray_reconstruction_reason,
+                  sizeof(result.ray_reconstruction_reason), "%s",
+                  state.rayReconstructionReason.c_str());
+    result.native_ray_tracing_supported =
+        rayQuery.webgpuFeatureEnabled && rayQuery.accelerationStructureSupported &&
+        rayQuery.rayQuerySupported ? 1 : 0;
+    result.native_ray_tracing_configured = rayQuery.pipelineReady ? 1 : 0;
+    result.native_ray_tracing_active = rayQuery.sceneReady ? 1 : 0;
+    std::snprintf(result.native_ray_tracing_reason,
+                  sizeof(result.native_ray_tracing_reason), "%s",
+                  rayQuery.status ? rayQuery.status : "Ray query status is unavailable");
+    *status = result;
+    return 1;
+}
+
+int tw_dlss_optimal_settings(const TWGpuFeatureRequest* request,
+                             TWDLSSOptimalSettings* settings) {
+    if (!request || request->struct_size < sizeof(TWGpuFeatureRequest) || !settings ||
+        settings->struct_size < sizeof(TWDLSSOptimalSettings)) return 0;
+    StreamlineDLSSOptions options{};
+    options.mode = request->dlss_mode <= TW_DLSS_DLAA
+        ? static_cast<StreamlineDLSSMode>(request->dlss_mode)
+        : StreamlineDLSSMode::Off;
+    options.outputWidth = request->output_width;
+    options.outputHeight = request->output_height;
+    options.preExposure = request->pre_exposure;
+    options.exposureScale = request->exposure_scale;
+    options.colorBuffersHDR = request->color_buffers_hdr != 0;
+    options.useAutoExposure = request->auto_exposure != 0;
+    options.alphaUpscaling = request->alpha_upscaling != 0;
+    StreamlineDLSSOptimalSettings native{};
+    try {
+        if (!onWorker([options, &native] {
+                return streamlineDLSSGetOptimalSettings(options, native);
+            })) return 0;
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+    TWDLSSOptimalSettings result{};
+    result.struct_size = sizeof(result);
+    result.optimal_render_width = native.optimalRenderWidth;
+    result.optimal_render_height = native.optimalRenderHeight;
+    result.render_width_min = native.renderWidthMin;
+    result.render_height_min = native.renderHeightMin;
+    result.render_width_max = native.renderWidthMax;
+    result.render_height_max = native.renderHeightMax;
+    result.optimal_sharpness = native.optimalSharpness;
+    *settings = result;
+    return 1;
+}
+
+int tw_dlss_evaluate(const TWDLSSFrame* frame) {
+    if (!frame || frame->struct_size < sizeof(TWDLSSFrame)) return 0;
+#if !defined(THREEBROWSER_STREAMLINE)
+    (void)frame;
+    return 0;
+#else
+    const TWDLSSFrame copy = *frame;
+    try {
+        return onWorker([copy] {
+            endPasses();
+            WGPUCommandEncoder encoder = g.currentEncoder;
+            if (copy.command_encoder_handle) {
+                Slot* slot = getSlot(copy.command_encoder_handle);
+                encoder = slot && slot->kind == Kind::Encoder ? slot->encoder : nullptr;
+            }
+            if (!encoder) {
+                setError("DLSS evaluation requires an active WebGPU command encoder");
+                return 0;
+            }
+            StreamlineDLSSFrame native{};
+            native.viewport = copy.viewport;
+            std::string error;
+            if (!makeStreamlineResource(copy.color_input, false, false,
+                                        native.colorInput, error) ||
+                !makeStreamlineResource(copy.color_output, false, true,
+                                        native.colorOutput, error) ||
+                !makeStreamlineResource(copy.depth, true, false, native.depth, error) ||
+                !makeStreamlineResource(copy.motion_vectors, false, false,
+                                        native.motionVectors, error) ||
+                (copy.has_exposure && !makeStreamlineResource(copy.exposure, false, false,
+                                                               native.exposure, error))) {
+                setError(error.c_str());
+                return 0;
+            }
+            native.hasExposure = copy.has_exposure != 0;
+            copyConstants(copy.constants, native.constants);
+            struct Evaluation {
+                StreamlineDLSSFrame* frame;
+                bool result{};
+            } evaluation{&native, false};
+            const WGPUStatus status = wgpuCommandEncoderWithNativeVulkanCommandBuffer(
+                encoder,
+                [](void* commandBuffer, void* userdata) {
+                    auto* value = static_cast<Evaluation*>(userdata);
+                    value->frame->commandBuffer = commandBuffer;
+                    value->result = streamlineDLSSEvaluate(*value->frame);
+                },
+                &evaluation);
+            if (status != WGPUStatus_Success || !evaluation.result) {
+                if (status != WGPUStatus_Success) {
+                    setError("wgpu-native rejected the native DLSS command-buffer callback");
+                }
+                return 0;
+            }
+            return 1;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+#endif
+}
+
+int tw_ray_reconstruction_evaluate(const TWRayReconstructionFrame* frame) {
+    if (!frame || frame->struct_size < sizeof(TWRayReconstructionFrame)) return 0;
+#if !defined(THREEBROWSER_STREAMLINE)
+    setError("DLSS Ray Reconstruction support was not compiled into this build");
+    return 0;
+#else
+    const TWRayReconstructionFrame copy = *frame;
+    try {
+        return onWorker([copy] {
+            endPasses();
+            WGPUCommandEncoder encoder = g.currentEncoder;
+            if (copy.command_encoder_handle) {
+                Slot* slot = getSlot(copy.command_encoder_handle);
+                encoder = slot && slot->kind == Kind::Encoder ? slot->encoder : nullptr;
+            }
+            if (!encoder) {
+                setError("Ray Reconstruction evaluation requires an active WebGPU command encoder");
+                return 0;
+            }
+            const bool packedNormalRoughness = copy.normal_roughness_packed != 0;
+            const bool hasRoughness = copy.has_roughness != 0;
+            const bool hasSpecularMotion = copy.has_specular_motion_vectors != 0;
+            const bool hasSpecularHitDistance = copy.has_specular_hit_distance != 0;
+            if (packedNormalRoughness == hasRoughness) {
+                setError("Ray Reconstruction requires packed normal/roughness or separate normal and roughness inputs");
+                return 0;
+            }
+            if (hasSpecularMotion == hasSpecularHitDistance) {
+                setError("Ray Reconstruction requires exactly one specular reflection motion guide");
+                return 0;
+            }
+            if (copy.noisy_color.texture_handle == copy.color_output.texture_handle) {
+                setError("Ray Reconstruction noisy input and denoised output must be different textures");
+                return 0;
+            }
+            if (hasSpecularHitDistance &&
+                (!finiteMatrix(copy.world_to_camera_view) ||
+                 !finiteMatrix(copy.camera_view_to_world) ||
+                 (std::all_of(copy.world_to_camera_view,
+                              copy.world_to_camera_view + 16,
+                              [](float value) { return value == 0.0f; })) ||
+                 (std::all_of(copy.camera_view_to_world,
+                              copy.camera_view_to_world + 16,
+                              [](float value) { return value == 0.0f; })))) {
+                setError("Specular hit distance requires finite, non-zero world/view matrices");
+                return 0;
+            }
+
+            std::string error;
+            const auto validateFormat = [&error](const TWDLSSResource& resource,
+                                                 RayReconstructionResourceKind kind,
+                                                 const char* name) {
+                return validateRayReconstructionFormat(resource.texture_handle, kind,
+                                                       name, error);
+            };
+            if (!validateFormat(copy.noisy_color,
+                                RayReconstructionResourceKind::HdrColor,
+                                "noisy HDR color") ||
+                !validateFormat(copy.color_output,
+                                RayReconstructionResourceKind::HdrColor,
+                                "denoised output") ||
+                !validateFormat(copy.depth, RayReconstructionResourceKind::Depth,
+                                "depth") ||
+                !validateFormat(copy.motion_vectors,
+                                RayReconstructionResourceKind::MotionVectors,
+                                "dense motion vectors") ||
+                !validateFormat(copy.diffuse_albedo,
+                                RayReconstructionResourceKind::LinearAlbedo,
+                                "diffuse albedo") ||
+                !validateFormat(copy.specular_albedo,
+                                RayReconstructionResourceKind::LinearAlbedo,
+                                "specular albedo") ||
+                !validateFormat(copy.normal_roughness,
+                                RayReconstructionResourceKind::Normal,
+                                packedNormalRoughness ? "packed normal/roughness" : "normals") ||
+                (hasRoughness &&
+                 !validateFormat(copy.roughness,
+                                 RayReconstructionResourceKind::Scalar,
+                                 "roughness")) ||
+                (hasSpecularMotion &&
+                 !validateFormat(copy.specular_motion_vectors,
+                                 RayReconstructionResourceKind::MotionVectors,
+                                 "specular motion vectors")) ||
+                (hasSpecularHitDistance &&
+                 !validateFormat(copy.specular_hit_distance,
+                                 RayReconstructionResourceKind::Scalar,
+                                 "specular hit distance"))) {
+                setError(error.c_str());
+                return 0;
+            }
+
+            StreamlineRayReconstructionFrame native{};
+            native.viewport = copy.viewport;
+            if (!makeStreamlineResource(copy.noisy_color, false, false,
+                                        native.noisyColor, error) ||
+                !makeStreamlineResource(copy.color_output, false, true,
+                                        native.colorOutput, error) ||
+                !makeStreamlineResource(copy.depth, true, false,
+                                        native.depth, error) ||
+                !makeStreamlineResource(copy.motion_vectors, false, false,
+                                        native.motionVectors, error) ||
+                !makeStreamlineResource(copy.diffuse_albedo, false, false,
+                                        native.diffuseAlbedo, error) ||
+                !makeStreamlineResource(copy.specular_albedo, false, false,
+                                        native.specularAlbedo, error) ||
+                !makeStreamlineResource(copy.normal_roughness, false, false,
+                                        native.normalRoughness, error) ||
+                (hasRoughness &&
+                 !makeStreamlineResource(copy.roughness, false, false,
+                                         native.roughness, error)) ||
+                (hasSpecularMotion &&
+                 !makeStreamlineResource(copy.specular_motion_vectors, false, false,
+                                         native.specularMotionVectors, error)) ||
+                (hasSpecularHitDistance &&
+                 !makeStreamlineResource(copy.specular_hit_distance, false, false,
+                                         native.specularHitDistance, error))) {
+                setError(error.c_str());
+                return 0;
+            }
+
+            const auto extentWidth = [](const StreamlineVulkanResource& resource) {
+                return resource.extentWidth ? resource.extentWidth : resource.width;
+            };
+            const auto extentHeight = [](const StreamlineVulkanResource& resource) {
+                return resource.extentHeight ? resource.extentHeight : resource.height;
+            };
+            const uint32_t inputWidth = extentWidth(native.noisyColor);
+            const uint32_t inputHeight = extentHeight(native.noisyColor);
+            const auto matchesInput = [inputWidth, inputHeight, &extentWidth, &extentHeight](
+                                          const StreamlineVulkanResource& resource) {
+                return extentWidth(resource) == inputWidth &&
+                       extentHeight(resource) == inputHeight;
+            };
+            if (!matchesInput(native.depth) || !matchesInput(native.motionVectors) ||
+                !matchesInput(native.diffuseAlbedo) ||
+                !matchesInput(native.specularAlbedo) ||
+                !matchesInput(native.normalRoughness) ||
+                (hasRoughness && !matchesInput(native.roughness)) ||
+                (hasSpecularMotion && !matchesInput(native.specularMotionVectors)) ||
+                (hasSpecularHitDistance && !matchesInput(native.specularHitDistance))) {
+                setError("Every Ray Reconstruction guide must match the noisy input extent");
+                return 0;
+            }
+            const StreamlineFeatureState featureState = streamlineFeatureState();
+            if (featureState.outputWidth && featureState.outputHeight &&
+                (extentWidth(native.colorOutput) != featureState.outputWidth ||
+                 extentHeight(native.colorOutput) != featureState.outputHeight)) {
+                setError("Ray Reconstruction output extent does not match the configured DLSS output size");
+                return 0;
+            }
+
+            native.normalRoughnessPacked = packedNormalRoughness;
+            native.hasRoughness = hasRoughness;
+            native.hasSpecularMotionVectors = hasSpecularMotion;
+            native.hasSpecularHitDistance = hasSpecularHitDistance;
+            std::copy_n(copy.world_to_camera_view, 16,
+                        native.worldToCameraView.begin());
+            std::copy_n(copy.camera_view_to_world, 16,
+                        native.cameraViewToWorld.begin());
+            copyConstants(copy.constants, native.constants);
+
+            struct Evaluation {
+                StreamlineRayReconstructionFrame* frame;
+                bool result{};
+            } evaluation{&native, false};
+            const WGPUStatus status = wgpuCommandEncoderWithNativeVulkanCommandBuffer(
+                encoder,
+                [](void* commandBuffer, void* userdata) {
+                    auto* value = static_cast<Evaluation*>(userdata);
+                    value->frame->commandBuffer = commandBuffer;
+                    value->result =
+                        streamlineRayReconstructionEvaluate(*value->frame);
+                },
+                &evaluation);
+            if (status != WGPUStatus_Success || !evaluation.result) {
+                if (status != WGPUStatus_Success) {
+                    setError("wgpu-native rejected the native Ray Reconstruction command-buffer callback");
+                } else {
+                    const StreamlineFeatureState failed = streamlineFeatureState();
+                    setError(failed.rayReconstructionReason.c_str());
+                }
+                return 0;
+            }
+            return 1;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+#endif
+}
+
+int tw_frame_generation_tag(const TWFrameGenerationFrame* frame) {
+    if (!frame || frame->struct_size < sizeof(TWFrameGenerationFrame)) return 0;
+#if !defined(THREEBROWSER_STREAMLINE)
+    (void)frame;
+    return 0;
+#else
+    const TWFrameGenerationFrame copy = *frame;
+    try {
+        return onWorker([copy] {
+            if (g.vsync.load(std::memory_order_relaxed) != 0) {
+                streamlineSuspendFrameGeneration(
+                    "Frame Generation is suspended because Vulkan VSync is enabled",
+                    false);
+                setError("DLSS Frame Generation with VSync is not supported on Vulkan");
+                return 0;
+            }
+            endPasses();
+            WGPUCommandEncoder encoder = g.currentEncoder;
+            if (copy.command_encoder_handle) {
+                Slot* slot = getSlot(copy.command_encoder_handle);
+                encoder = slot && slot->kind == Kind::Encoder ? slot->encoder : nullptr;
+            }
+            if (!encoder) {
+                setError("Frame Generation tagging requires an active WebGPU command encoder");
+                return 0;
+            }
+            StreamlineFrameGenerationFrame native{};
+            native.viewport = copy.viewport;
+            std::string error;
+            if (!makeStreamlineResource(copy.hudless_color, false, false,
+                                        native.hudlessColor, error) ||
+                !makeStreamlineResource(copy.depth, true, false, native.depth, error) ||
+                !makeStreamlineResource(copy.motion_vectors, false, false,
+                                        native.motionVectors, error) ||
+                (copy.has_ui && !makeStreamlineResource(copy.ui, false, false,
+                                                        native.ui, error))) {
+                setError(error.c_str());
+                return 0;
+            }
+            native.hasUi = copy.has_ui != 0;
+            native.uiAlphaOnly = copy.ui_alpha_only != 0;
+            native.backbufferWidth = g.config.width;
+            native.backbufferHeight = g.config.height;
+            native.backbufferFormat = static_cast<uint32_t>(
+                toVulkanFormat(g.surfaceFormat));
+            native.framesToGenerate = copy.frames_to_generate
+                ? copy.frames_to_generate
+                : 1u;
+            if (!native.backbufferFormat) {
+                setError("Frame Generation does not support the active swapchain format");
+                return 0;
+            }
+            copyConstants(copy.constants, native.constants);
+            struct Tagging {
+                StreamlineFrameGenerationFrame* frame;
+                bool result{};
+            } tagging{&native, false};
+            const WGPUStatus status = wgpuCommandEncoderWithNativeVulkanCommandBuffer(
+                encoder,
+                [](void* commandBuffer, void* userdata) {
+                    auto* value = static_cast<Tagging*>(userdata);
+                    value->frame->commandBuffer = commandBuffer;
+                    value->result = streamlineFrameGenerationTag(*value->frame);
+                },
+                &tagging);
+            if (status != WGPUStatus_Success || !tagging.result) {
+                if (status != WGPUStatus_Success) {
+                    setError("wgpu-native rejected the native Frame Generation tag callback");
+                }
+                return 0;
+            }
+            return 1;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+#endif
+}
+
+int tw_frame_generation_status(TWFrameGenerationStatus* status) {
+    if (!status || status->struct_size < sizeof(TWFrameGenerationStatus)) return 0;
+    const StreamlineFeatureState state = streamlineFeatureState();
+    TWFrameGenerationStatus result{};
+    result.struct_size = sizeof(result);
+    result.supported = state.frameGenerationSupported ? 1 : 0;
+    result.api_loaded = state.frameGenerationFunctionsLoaded ? 1 : 0;
+    result.requested = state.frameGenerationRequested ? 1 : 0;
+    result.configured = state.frameGenerationConfigured ? 1 : 0;
+    result.active = state.frameGenerationActive ? 1 : 0;
+    result.frames_to_generate = state.frameGenerationFramesToGenerate;
+    result.frames_to_generate_max = state.frameGenerationFramesToGenerateMax;
+    result.last_frames_presented = state.frameGenerationLastFramesPresented;
+    result.generated_frame_count = state.frameGenerationPresentedFrameCount;
+    result.failure_count = state.frameGenerationFailureCount;
+    result.estimated_vram_bytes = state.frameGenerationEstimatedVramBytes;
+    result.last_result = state.frameGenerationLastResult;
+    result.last_status = state.frameGenerationLastStatus;
+    std::snprintf(result.reason, sizeof(result.reason), "%s",
+                  state.frameGenerationReason.c_str());
+    *status = result;
+    return 1;
+}
+
+void tw_dlss_release_viewport(uint32_t viewport) {
+    try {
+        onWorker([viewport] { streamlineReleaseViewport(viewport); });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+    }
 }
 
 int tw_set_reflex_mode(int mode) {
@@ -4799,6 +5877,230 @@ int tw_set_reflex_mode(int mode) {
 
 int tw_reflex_mode(void) {
     return streamlineReflexMode();
+}
+
+int tw_ray_query_capabilities(TWRayQueryCapabilities* capabilities) {
+    if (!capabilities || capabilities->struct_size < sizeof(TWRayQueryCapabilities)) return 0;
+    const auto native = rayQueryBridgeCapabilities();
+    TWRayQueryCapabilities result{};
+    result.struct_size = sizeof(result);
+    result.supported = native.webgpuFeatureEnabled &&
+                       native.accelerationStructureSupported &&
+                       native.rayQuerySupported ? 1 : 0;
+    result.configured = native.pipelineReady ? 1 : 0;
+    result.active = native.sceneReady ? 1 : 0;
+    result.webgpu_feature_enabled = native.webgpuFeatureEnabled ? 1 : 0;
+    result.acceleration_structure_supported =
+        native.accelerationStructureSupported ? 1 : 0;
+    result.ray_query_supported = native.rayQuerySupported ? 1 : 0;
+    result.triangle_count = native.triangleCount;
+    result.build_count = native.buildCount;
+    result.evaluation_count = native.evaluationCount;
+    result.failure_count = native.failureCount;
+    std::snprintf(result.reason, sizeof(result.reason), "%s",
+                  native.status ? native.status : "Ray query status is unavailable");
+    *capabilities = result;
+    return 1;
+}
+
+int tw_ray_query_scene_begin(void) {
+    try {
+        return onWorker([] {
+            rayQueryBridgeSceneBegin();
+            return rayQueryBridgeCapabilities().vulkanAttached ? 1 : 0;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+}
+
+int tw_ray_query_scene_positions(const float* xyz, uint32_t vertexCount) {
+    if (!xyz || vertexCount == 0) return 0;
+    try {
+        return onWorker([xyz, vertexCount] {
+            const bool result = rayQueryBridgeSetPositions(xyz, vertexCount);
+            if (!result) setError(rayQueryBridgeCapabilities().status);
+            return result ? 1 : 0;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+}
+
+int tw_ray_query_scene_indices(const uint32_t* indices, uint32_t indexCount) {
+    if (!indices || indexCount == 0) return 0;
+    try {
+        return onWorker([indices, indexCount] {
+            const bool result = rayQueryBridgeSetIndices(indices, indexCount);
+            if (!result) setError(rayQueryBridgeCapabilities().status);
+            return result ? 1 : 0;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+}
+
+int tw_ray_query_scene_commit(uint32_t commandEncoderHandle) {
+#if !defined(THREEBROWSER_RAY_QUERY)
+    (void)commandEncoderHandle;
+    return 0;
+#else
+    try {
+        return onWorker([commandEncoderHandle] {
+            endPasses();
+            WGPUCommandEncoder encoder = g.currentEncoder;
+            if (commandEncoderHandle) {
+                Slot* slot = getSlot(commandEncoderHandle);
+                encoder = slot && slot->kind == Kind::Encoder ? slot->encoder : nullptr;
+            }
+            if (!encoder) {
+                setError("Ray-query scene commit requires an active WebGPU command encoder");
+                return 0;
+            }
+            struct Build {
+                bool result{};
+            } build{};
+            const WGPUStatus status = wgpuCommandEncoderWithNativeVulkanCommandBuffer(
+                encoder,
+                [](void* commandBuffer, void* userdata) {
+                    auto* value = static_cast<Build*>(userdata);
+                    value->result = rayQueryBridgeCommit(commandBuffer);
+                },
+                &build);
+            if (status != WGPUStatus_Success || !build.result) {
+                const auto rayQuery = rayQueryBridgeCapabilities();
+                setError(status != WGPUStatus_Success
+                    ? "wgpu-native rejected the Vulkan BLAS/TLAS recording callback"
+                    : rayQuery.status);
+                return 0;
+            }
+            return 1;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+#endif
+}
+
+void tw_ray_query_scene_destroy(void) {
+    try {
+        onWorker([] { rayQueryBridgeDestroyScene(); });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+    }
+}
+
+int tw_ray_query_lighting_evaluate(const TWRayQueryLightingFrame* frame) {
+    if (!frame || frame->struct_size < sizeof(TWRayQueryLightingFrame)) return 0;
+#if !defined(THREEBROWSER_RAY_QUERY)
+    (void)frame;
+    return 0;
+#else
+    const TWRayQueryLightingFrame copy = *frame;
+    const auto acceptedColorLayout = [](uint32_t value) {
+        switch (static_cast<VkImageLayout>(value)) {
+            case VK_IMAGE_LAYOUT_GENERAL:
+            case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+            case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+            case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+            case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+                return true;
+            default:
+                return false;
+        }
+    };
+    const auto acceptedDepthLayout = [](uint32_t value) {
+        switch (static_cast<VkImageLayout>(value)) {
+            case VK_IMAGE_LAYOUT_GENERAL:
+            case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+            case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
+            case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+            case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+            case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+                return true;
+            default:
+                return false;
+        }
+    };
+    if (!acceptedColorLayout(copy.color_vulkan_layout)) {
+        setError("Ray-query lighting received an unsupported color VkImageLayout");
+        return 0;
+    }
+    if (!acceptedDepthLayout(copy.depth_vulkan_layout)) {
+        setError("Ray-query lighting received an unsupported depth VkImageLayout");
+        return 0;
+    }
+    try {
+        return onWorker([copy] {
+            endPasses();
+            WGPUCommandEncoder encoder = g.currentEncoder;
+            if (copy.command_encoder_handle) {
+                Slot* slot = getSlot(copy.command_encoder_handle);
+                encoder = slot && slot->kind == Kind::Encoder ? slot->encoder : nullptr;
+            }
+            Slot* color = getSlot(copy.color_texture_handle);
+            Slot* depth = getSlot(copy.depth_texture_handle);
+            if (!encoder || !color || color->kind != Kind::Texture ||
+                !depth || depth->kind != Kind::Texture) {
+                setError("Ray-query lighting received an invalid encoder or texture handle");
+                return 0;
+            }
+            if (color->texFormat != WGPUTextureFormat_RGBA16Float ||
+                (color->texUsage & WGPUTextureUsage_StorageBinding) == 0 ||
+                depth->texFormat != WGPUTextureFormat_Depth32Float ||
+                (depth->texUsage & WGPUTextureUsage_TextureBinding) == 0) {
+                setError("Ray-query lighting requires rgba16float STORAGE_BINDING color and depth32float TEXTURE_BINDING depth");
+                return 0;
+            }
+            if (copy.width == 0 || copy.height == 0 ||
+                copy.width > color->texW || copy.height > color->texH ||
+                copy.width > depth->texW || copy.height > depth->texH) {
+                setError("Ray-query lighting extent exceeds its color or depth texture");
+                return 0;
+            }
+            RayQueryLightingFrame native{};
+            native.colorImage = wgpuTextureGetNativeVulkanImage(color->texture);
+            native.colorLayout = copy.color_vulkan_layout;
+            native.depthImage = wgpuTextureGetNativeVulkanImage(depth->texture);
+            native.depthLayout = copy.depth_vulkan_layout;
+            native.width = copy.width;
+            native.height = copy.height;
+            std::copy_n(copy.inverse_view_projection, 16, native.inverseViewProjection);
+            std::copy_n(copy.camera_position, 4, native.cameraPosition);
+            std::copy_n(copy.sun_direction_intensity, 4, native.sunDirectionIntensity);
+            std::copy_n(copy.parameters, 4, native.parameters);
+            native.flags = copy.flags;
+            std::copy_n(copy.water, 4, native.water);
+            struct Evaluation {
+                RayQueryLightingFrame* frame;
+                bool result{};
+            } evaluation{&native, false};
+            const WGPUStatus status = wgpuCommandEncoderWithNativeVulkanCommandBuffer(
+                encoder,
+                [](void* commandBuffer, void* userdata) {
+                    auto* value = static_cast<Evaluation*>(userdata);
+                    value->frame->commandBuffer = commandBuffer;
+                    value->result = rayQueryBridgeEvaluate(*value->frame);
+                },
+                &evaluation);
+            if (status != WGPUStatus_Success || !evaluation.result) {
+                const auto rayQuery = rayQueryBridgeCapabilities();
+                setError(status != WGPUStatus_Success
+                    ? "wgpu-native rejected the Vulkan ray-query lighting callback"
+                    : rayQuery.status);
+                return 0;
+            }
+            return 1;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+#endif
 }
 
 int tw_cmd_submit(const uint8_t* data, int nbytes) {

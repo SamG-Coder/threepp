@@ -49,6 +49,15 @@ export const OP = {
   SET_BLEND: 71,
   DRAW_INDIRECT: 72,
   DRAW_INDEXED_INDIRECT: 73,
+  DLSS_EVALUATE: 74,
+  DLSSG_TAG: 75,
+  RAY_RECONSTRUCTION_EVALUATE: 76,
+  RTX_SCENE_BEGIN: 77,
+  RTX_SCENE_POSITIONS: 78,
+  RTX_SCENE_INDICES: 79,
+  RTX_SCENE_COMMIT: 80,
+  RTX_SCENE_DESTROY: 81,
+  RTX_LIGHTING_EVALUATE: 82,
 };
 
 // wgpu-native webgpu.h numeric enums (WGPUTextureFormat, …).
@@ -1007,6 +1016,259 @@ function renderEnd(encoder) {
   end(s);
 }
 
+// DLSS_EVALUATE is recorded between ENC_BEGIN and SUBMIT. Keeping evaluation
+// in the command stream is required: the native encoder does not exist until
+// the worker replays ENC_BEGIN and is released by SUBMIT.
+function dlssEvaluate(encoder, frame) {
+  const resources = [
+    frame.colorInput,
+    frame.colorOutput,
+    frame.depth,
+    frame.motionVectors,
+    frame.exposure,
+  ];
+  const constants = frame.constants;
+  const s = begin(OP.DLSS_EVALUATE, 568);
+  wu32(encoder);
+  wu32(frame.viewport >>> 0);
+  for (const resource of resources) {
+    wu32((resource?.textureHandle ?? 0) >>> 0);
+    wu32((resource?.vulkanLayout ?? 0) >>> 0);
+    wu32((resource?.left ?? 0) >>> 0);
+    wu32((resource?.top ?? 0) >>> 0);
+    wu32((resource?.width ?? 0) >>> 0);
+    wu32((resource?.height ?? 0) >>> 0);
+  }
+  wu32(frame.exposure ? 1 : 0);
+  for (const values of [
+    constants.cameraViewToClip,
+    constants.clipToCameraView,
+    constants.clipToLensClip,
+    constants.clipToPrevClip,
+    constants.prevClipToClip,
+    constants.jitterOffset,
+    constants.motionVectorScale,
+    constants.cameraPinholeOffset,
+    constants.cameraPosition,
+    constants.cameraUp,
+    constants.cameraRight,
+    constants.cameraForward,
+  ]) {
+    for (const value of values) wf32(value);
+  }
+  wf32(constants.cameraNear);
+  wf32(constants.cameraFar);
+  wf32(constants.cameraFov);
+  wf32(constants.cameraAspectRatio);
+  wu32(constants.depthInverted ? 1 : 0);
+  wu32(constants.cameraMotionIncluded ? 1 : 0);
+  wu32(constants.motionVectors3D ? 1 : 0);
+  wu32(constants.reset ? 1 : 0);
+  wu32(constants.orthographicProjection ? 1 : 0);
+  wu32(constants.motionVectorsDilated ? 1 : 0);
+  wu32(constants.motionVectorsJittered ? 1 : 0);
+  end(s);
+}
+
+// DLSS-G consumes these tags during the Present that follows submission.  The
+// native bridge therefore keeps the resources valid-until-present and proves
+// ACTIVE only from the state reported after that Present.
+function frameGenerationTag(encoder, frame) {
+  const resources = [
+    frame.hudlessColor,
+    frame.depth,
+    frame.motionVectors,
+    frame.ui,
+  ];
+  const constants = frame.constants;
+  const s = begin(OP.DLSSG_TAG, 552);
+  wu32(encoder);
+  wu32(frame.viewport >>> 0);
+  for (const resource of resources) {
+    wu32((resource?.textureHandle ?? 0) >>> 0);
+    wu32((resource?.vulkanLayout ?? 0) >>> 0);
+    wu32((resource?.left ?? 0) >>> 0);
+    wu32((resource?.top ?? 0) >>> 0);
+    wu32((resource?.width ?? 0) >>> 0);
+    wu32((resource?.height ?? 0) >>> 0);
+  }
+  wu32(frame.ui ? 1 : 0);
+  wu32(frame.uiAlphaOnly ? 1 : 0);
+  wu32(frame.framesToGenerate >>> 0);
+  for (const values of [
+    constants.cameraViewToClip,
+    constants.clipToCameraView,
+    constants.clipToLensClip,
+    constants.clipToPrevClip,
+    constants.prevClipToClip,
+    constants.jitterOffset,
+    constants.motionVectorScale,
+    constants.cameraPinholeOffset,
+    constants.cameraPosition,
+    constants.cameraUp,
+    constants.cameraRight,
+    constants.cameraForward,
+  ]) {
+    for (const value of values) wf32(value);
+  }
+  wf32(constants.cameraNear);
+  wf32(constants.cameraFar);
+  wf32(constants.cameraFov);
+  wf32(constants.cameraAspectRatio);
+  wu32(constants.depthInverted ? 1 : 0);
+  wu32(constants.cameraMotionIncluded ? 1 : 0);
+  wu32(constants.motionVectors3D ? 1 : 0);
+  wu32(constants.reset ? 1 : 0);
+  wu32(constants.orthographicProjection ? 1 : 0);
+  wu32(constants.motionVectorsDilated ? 1 : 0);
+  wu32(constants.motionVectorsJittered ? 1 : 0);
+  end(s);
+}
+
+// Ray Reconstruction is intentionally a separate raw-only command.  The ten
+// resources and their current Vulkan layouts are validated again natively
+// before Streamline sees them.
+function rayReconstructionEvaluate(encoder, frame) {
+  const resources = [
+    frame.noisyColor,
+    frame.colorOutput,
+    frame.depth,
+    frame.motionVectors,
+    frame.diffuseAlbedo,
+    frame.specularAlbedo,
+    frame.normalRoughness,
+    frame.roughness,
+    frame.specularMotionVectors,
+    frame.specularHitDistance,
+  ];
+  const constants = frame.constants;
+  const s = begin(OP.RAY_RECONSTRUCTION_EVALUATE, 828);
+  wu32(encoder);
+  wu32(frame.viewport >>> 0);
+  for (const resource of resources) {
+    wu32((resource?.textureHandle ?? 0) >>> 0);
+    wu32((resource?.vulkanLayout ?? 0) >>> 0);
+    wu32((resource?.left ?? 0) >>> 0);
+    wu32((resource?.top ?? 0) >>> 0);
+    wu32((resource?.width ?? 0) >>> 0);
+    wu32((resource?.height ?? 0) >>> 0);
+  }
+  wu32(frame.normalRoughnessPacked ? 1 : 0);
+  wu32(frame.roughness ? 1 : 0);
+  wu32(frame.specularMotionVectors ? 1 : 0);
+  wu32(frame.specularHitDistance ? 1 : 0);
+  for (const values of [frame.worldToCameraView, frame.cameraViewToWorld]) {
+    for (const value of values) wf32(value);
+  }
+  for (const values of [
+    constants.cameraViewToClip,
+    constants.clipToCameraView,
+    constants.clipToLensClip,
+    constants.clipToPrevClip,
+    constants.prevClipToClip,
+    constants.jitterOffset,
+    constants.motionVectorScale,
+    constants.cameraPinholeOffset,
+    constants.cameraPosition,
+    constants.cameraUp,
+    constants.cameraRight,
+    constants.cameraForward,
+  ]) {
+    for (const value of values) wf32(value);
+  }
+  wf32(constants.cameraNear);
+  wf32(constants.cameraFar);
+  wf32(constants.cameraFov);
+  wf32(constants.cameraAspectRatio);
+  wu32(constants.depthInverted ? 1 : 0);
+  wu32(constants.cameraMotionIncluded ? 1 : 0);
+  wu32(constants.motionVectors3D ? 1 : 0);
+  wu32(constants.reset ? 1 : 0);
+  wu32(constants.orthographicProjection ? 1 : 0);
+  wu32(constants.motionVectorsDilated ? 1 : 0);
+  wu32(constants.motionVectorsJittered ? 1 : 0);
+  end(s);
+}
+
+// Version 1 of the native ray-query bridge owns a single world-space static
+// triangle scene. Scene upload is recorded in the same command buffer as the
+// Vulkan BLAS/TLAS build so no mesh bytes cross the bridge on later frames.
+const RTX_PROTOCOL_VERSION = 1;
+
+function rtxSceneBegin() {
+  const s = begin(OP.RTX_SCENE_BEGIN, 4);
+  wu32(RTX_PROTOCOL_VERSION);
+  end(s);
+}
+
+function rtxScenePositions(positions) {
+  const src = asU8(positions);
+  if ((src.byteLength % 12) !== 0) {
+    throw new RangeError("RTX scene positions must contain tightly packed vec3<f32> values");
+  }
+  const chunkBytes = Math.floor((maxPayload() - 8) / 12) * 12;
+  if (chunkBytes <= 0) throw new RangeError("Native command buffer is too small for an RTX position chunk");
+  for (let offset = 0; offset < src.byteLength; offset += chunkBytes) {
+    const chunk = src.subarray(offset, Math.min(offset + chunkBytes, src.byteLength));
+    const s = begin(OP.RTX_SCENE_POSITIONS, 8 + chunk.byteLength);
+    wu32(RTX_PROTOCOL_VERSION);
+    wu32(chunk.byteLength / 12);
+    wbytes(chunk);
+    end(s);
+  }
+}
+
+function rtxSceneIndices(indices) {
+  const src = asU8(indices);
+  if ((src.byteLength % 4) !== 0) {
+    throw new RangeError("RTX scene indices must contain tightly packed uint32 values");
+  }
+  // Keep whole triangle triplets together even though native accepts each
+  // u32 independently; this makes partial/corrupt uploads impossible to use.
+  const chunkBytes = Math.floor((maxPayload() - 8) / 12) * 12;
+  if (chunkBytes <= 0) throw new RangeError("Native command buffer is too small for an RTX index chunk");
+  for (let offset = 0; offset < src.byteLength; offset += chunkBytes) {
+    const chunk = src.subarray(offset, Math.min(offset + chunkBytes, src.byteLength));
+    const s = begin(OP.RTX_SCENE_INDICES, 8 + chunk.byteLength);
+    wu32(RTX_PROTOCOL_VERSION);
+    wu32(chunk.byteLength / 4);
+    wbytes(chunk);
+    end(s);
+  }
+}
+
+function rtxSceneCommit(encoder) {
+  const s = begin(OP.RTX_SCENE_COMMIT, 8);
+  wu32(RTX_PROTOCOL_VERSION);
+  wu32(encoder >>> 0);
+  end(s);
+}
+
+function rtxSceneDestroy() {
+  const s = begin(OP.RTX_SCENE_DESTROY, 4);
+  wu32(RTX_PROTOCOL_VERSION);
+  end(s);
+}
+
+function rtxLightingEvaluate(encoder, frame) {
+  const s = begin(OP.RTX_LIGHTING_EVALUATE, 164);
+  wu32(RTX_PROTOCOL_VERSION);
+  wu32(encoder >>> 0);
+  wu32(frame.colorTextureHandle >>> 0);
+  wu32(frame.colorVulkanLayout >>> 0);
+  wu32(frame.depthTextureHandle >>> 0);
+  wu32(frame.depthVulkanLayout >>> 0);
+  wu32(frame.width >>> 0);
+  wu32(frame.height >>> 0);
+  for (const value of frame.inverseViewProjection) wf32(value);
+  for (const value of frame.cameraPosition) wf32(value);
+  for (const value of frame.sunDirectionIntensity) wf32(value);
+  for (const value of frame.params) wf32(value);
+  wu32(frame.flags >>> 0);
+  for (const value of frame.water) wf32(value);
+  end(s);
+}
+
 // SUBMIT: count, handles[count]
 function pipeBgl(handle, pipeline, index) {
   const s = begin(OP.PIPE_BGL, 12);
@@ -1142,6 +1404,15 @@ const cmd = {
   setBlend,
   drawIndirect,
   renderEnd,
+  dlssEvaluate,
+  frameGenerationTag,
+  rayReconstructionEvaluate,
+  rtxSceneBegin,
+  rtxScenePositions,
+  rtxSceneIndices,
+  rtxSceneCommit,
+  rtxSceneDestroy,
+  rtxLightingEvaluate,
   submitEncoders,
   pipeBgl,
   copyBuf,

@@ -7,7 +7,10 @@ The checked-in Windows GNU binaries are based on:
 
 They retain the existing ThreeBrowser Vulkan exclusive-fullscreen changes and
 add native Vulkan context, command-buffer and texture-image accessors used by
-the runtime. When `THREEBROWSER_STREAMLINE_VULKAN` is set, the Vulkan backend
+the runtime. The device-descriptor conversion opts into wgpu experimental
+features only when the caller explicitly requests an experimental feature such
+as `EXPERIMENTAL_RAY_QUERY`; ordinary devices retain wgpu's disabled-by-default
+experimental policy. When `THREEBROWSER_STREAMLINE_VULKAN` is set, the Vulkan backend
 loads entry points from the signed `sl.interposer.dll`; otherwise it loads the
 system Vulkan loader exactly as upstream does. This keeps Streamline isolated
 to opted-in Windows runtime builds.

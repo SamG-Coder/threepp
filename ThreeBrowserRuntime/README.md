@@ -106,6 +106,100 @@ DLSS rendering features are exposed only when the adapter and Streamline plugin
 support them; a page must still provide the feature's semantic inputs (for
 example depth and motion vectors) before evaluation can be enabled safely.
 
+WebGPU pages can inspect and request those features through
+`navigator.gpu.threeBrowserRTX`. The status contract keeps adapter support,
+page request, successful native configuration, and per-frame activity separate;
+callers must use `active`, rather than the support flag, when describing a
+feature as enabled:
+
+```js
+const rtx = navigator.gpu.threeBrowserRTX;
+const status = rtx.requestFeatures({
+  reflex: "boost",
+  dlssSuperResolution: rtx.capabilities.dlssSuperResolution && {
+    mode: "quality",
+    outputWidth: innerWidth,
+    outputHeight: innerHeight,
+    colorBuffersHDR: true,
+  },
+  // These remain inactive unless their complete native frame contracts exist.
+  dlssFrameGeneration: false,
+  dlssRayReconstruction: false,
+});
+
+console.log(status.features.dlssSuperResolution.active);
+console.log(rtx.getStatus());
+```
+
+`getOptimalSettings()` queries the native DLSS plugin for render dimensions.
+`evaluateSuperResolution()` accepts native `GPUTexture` inputs plus the
+`GPUCommandEncoder` they belong to. Evaluation is recorded into that encoder's
+command stream and replayed between encoder creation and submission; it is not
+called out of order from JavaScript. Every resource includes its current
+non-zero Vulkan image layout, region, and texture. Matrices, motion-vector
+scale, jitter, and camera constants are validated before the command is queued.
+The returned `queued` flag is not an activation claim: `getStatus()` reports
+`active: true` only after native Streamline evaluation succeeds.
+
+Ray Reconstruction is exposed as a real denoising/upscaling pass; it is not a
+substitute for ray traversal. A page requests it together with the underlying
+HDR DLSS mode, renders genuine noisy ray-traced lighting and all denoiser
+guides, then records `evaluateRayReconstruction()` on a dedicated empty command
+encoder. The frame must contain noisy HDR color, a distinct output, depth,
+dense motion vectors, diffuse and specular albedo, and either packed
+normal/roughness or separate normal and roughness textures. It must also contain
+exactly one reflection guide: specular motion vectors, or specular hit distance
+with the world/view inverse matrix pair. Set `rayTracedInput: true` to attest
+that the input really came from ray traversal; raster-only pages must not opt
+in. Texture formats, Vulkan layouts and usages, extents, matrices, and the
+configured output size are validated by both JavaScript and the native bridge.
+
+`evaluateRayReconstruction()` returns `queued: true` after serialization only.
+The Shift+Tab panel and `getStatus()` report Ray Reconstruction as active only
+after `slEvaluateFeature(kFeatureDLSS_RR)` succeeds for a submitted frame.
+Failures and evaluation counts remain observable independently, so adapter
+support is never presented as successful per-frame use.
+
+The runtime also exposes a focused Vulkan ray-query bridge on adapters that
+advertise `EXPERIMENTAL_RAY_QUERY`. This is separate from Streamline and DLSS:
+it supplies native ray traversal to a WebGPU page while preserving the page's
+command ordering and texture ownership. The first contract intentionally owns
+one static world-space triangle scene:
+
+```js
+const rtx = navigator.gpu.threeBrowserRTX;
+const registration = rtx.registerStaticScene({
+  positions, // Float32Array of world-space xyz values
+  indices,   // Uint32Array, one indexed triangle list
+});
+
+if (registration.queued) {
+  rtx.evaluateRayLighting({
+    commandEncoder,
+    color: hdrColorResource, // rgba16float storage + render attachment
+    depth: depthResource,    // depth32float
+    inverseViewProjection,
+    cameraPosition,
+    sunDirection,
+    shadowStrength: 0.6,
+    aoStrength: 0.2,
+    aoRadius: 0.9,
+    water: { time, surfaceY, strength: 0.8, ior: 1.333 },
+  });
+}
+```
+
+`registerStaticScene()` builds one native BLAS and identity TLAS. The lighting
+evaluation is recorded into the supplied WebGPU command encoder, reconstructs
+receivers from depth, traces sun visibility and ambient occlusion, and can apply
+wave-surface Snell refraction plus convergence-derived underwater caustics.
+The bridge restores the supplied Vulkan image layouts before later WebGPU/DLSS
+work. Dynamic BLAS updates, skinned geometry, general trace-ray pipelines and
+path tracing are not part of this first contract; pages must retain a normal
+WebGPU fallback when `capabilities.rayQuery` is false.
+
+The legacy `reflexMode` and `setReflexMode()` members remain supported.
+
 Framework effects may create their renderer after module evaluation, so the
 runtime keeps the browser event loop alive during a bounded startup window.
 Because the native host deliberately has no CSS layout engine, unmeasured DOM
