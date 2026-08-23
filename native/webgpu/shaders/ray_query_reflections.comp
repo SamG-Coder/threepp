@@ -158,7 +158,7 @@ bool shadowed(vec3 origin, vec3 direction, float minimumDistance,
 vec3 directLightAtHit(uint primitive, vec3 hitPoint, vec3 incomingDirection) {
     uint surfaceCount = uint(surfaceResponse.length());
     vec4 surface = surfaceCount == 0u
-        ? vec4(0.5, 0.5, 0.5, 0.5)
+        ? vec4(0.0)
         : surfaceResponse[min(primitive, surfaceCount - 1u)];
     vec3 albedo = max(surface.rgb, vec3(0.0));
     vec3 normal = primitiveNormal(primitive, incomingDirection);
@@ -245,7 +245,7 @@ vec3 traceTerminalRadiance(vec3 origin, vec3 direction, float maximumDistance) {
     vec3 hitPoint = origin + direction * distanceToHit;
     uint count = uint(terminalRadiance.length());
     vec3 terminal = count == 0u
-        ? vec3(0.18, 0.20, 0.24)
+        ? vec3(0.0)
         : max(terminalRadiance[min(primitive, count - 1u)].rgb, vec3(0.0));
     // A second ray-query pass supplies direct light visibility at the reflected
     // hit. Transparent panes are deliberately absent from the static TLAS, so

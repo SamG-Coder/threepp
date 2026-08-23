@@ -52,6 +52,7 @@ export class NativeDlssSuperResolution {
     this.frameGenerationWarmupFrames = 0;
     this.rayLighting = null;
     this.rayLightingFailure = "";
+    this.rayLightingFrameIndex = 0;
     this.resetHistory = true;
     this.failure = "";
 
@@ -101,6 +102,7 @@ export class NativeDlssSuperResolution {
   configureRayLighting(options = null) {
     this.rayLighting = options ? { ...options, enabled: options.enabled !== false } : null;
     this.rayLightingFailure = "";
+    this.rayLightingFrameIndex = 0;
     return Boolean(this.rayLighting?.enabled);
   }
 
@@ -385,7 +387,7 @@ export class NativeDlssSuperResolution {
       if (this.rayLighting?.enabled && typeof this.rtx.evaluateRayLighting === "function") {
         try {
           const rayEncoder = this.device.createCommandEncoder({
-            label: "RTX sun visibility, caustics and ambient occlusion",
+            label: "RTX directional visibility and ambient occlusion",
           });
           this.rtx.evaluateRayLighting({
             commandEncoder: rayEncoder,
@@ -405,21 +407,21 @@ export class NativeDlssSuperResolution {
             height: this.renderHeight,
             inverseViewProjection: this._inverseCurrentViewProjection.toArray(),
             cameraPosition: this._cameraPosition,
-            sunDirection: this.rayLighting.sunDirection,
-            intensity: this.rayLighting.intensity ?? 1,
+            directionalLightDirection: this.rayLighting.directionalLightDirection,
+            directionalLightIntensity: this.rayLighting.directionalLightIntensity,
+            directionalAngularRadius: this.rayLighting.directionalAngularRadius,
+            directionalSampleCount: this.rayLighting.directionalSampleCount,
+            aoSampleCount: this.rayLighting.aoSampleCount,
+            maxDistance: this.rayLighting.maxDistance,
+            rayBias: this.rayLighting.rayBias,
+            frameIndex: this.rayLightingFrameIndex,
             shadowStrength: this.rayLighting.shadowStrength ?? 0.62,
             aoStrength: this.rayLighting.aoStrength ?? 0.20,
             aoRadius: this.rayLighting.aoRadius ?? 0.82,
-            aoMaxDistance: this.rayLighting.aoMaxDistance ?? 70,
-            water: {
-              time: frameOptions.waterTime ?? 0,
-              surfaceY: this.rayLighting.waterSurfaceHeight ?? 2.72,
-              strength: this.rayLighting.causticStrength ?? 0.72,
-              ior: this.rayLighting.waterIOR ?? 1.333,
-            },
             depthInverted: false,
           });
           this.device.queue.submit([rayEncoder.finish()]);
+          this.rayLightingFrameIndex += 1;
         } catch (error) {
           this.rayLighting.enabled = false;
           this.rayLightingFailure = String(error?.message || error);
@@ -592,6 +594,7 @@ export class NativeDlssSuperResolution {
     this.frameGenerationEnabled = false;
     this.frameGenerationWarmupFrames = 0;
     this.rayLighting = null;
+    this.rayLightingFrameIndex = 0;
     this.rtx?.releaseViewport?.(VIEWPORT);
     this._disposeTargets();
     this._displayGeometry.dispose();

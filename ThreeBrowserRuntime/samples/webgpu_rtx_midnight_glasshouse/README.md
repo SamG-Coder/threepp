@@ -30,8 +30,16 @@ keyboard controls.
 
 ## Native reflection path and fallback
 
+ThreeBrowser RTX is a generic Three.js renderer extension for functionality
+absent upstream. Its native shaders are safe, reusable defaults; this project's
+JavaScript owns the moon direction and intensity, angular radius, ray counts,
+trace distance, bias, frame sequence, materials, and every artistic value. A
+project may instead upload profile-compatible SPIR-V through
+`createRayQueryPipeline()`. This sample deliberately keeps the built-in
+pipelines and its planar fallback rather than supplying a custom shader.
+
 When `navigator.gpu.threeBrowserRTX.evaluateRayReflections()` is available, the
-sample uses two explicit public-native boundaries end to end:
+sample uses explicit public-native boundaries end to end:
 
 - OP83, `registerStaticScene`, receives static atrium geometry flattened into
   world-space indexed triangles plus one linear HDR RGBA hit-radiance value per
@@ -46,9 +54,9 @@ sample uses two explicit public-native boundaries end to end:
 - before OP84, the storage-capable primary HDR target receives a restrained
   native ray-query moon-visibility/contact-AO pass. It grounds the visible
   architecture without replacing the authored raster lights or double-lighting
-  the room. This sample opts into four deterministic area-light visibility rays
-  and eight cosine-weighted AO rays per visible pixel, while normal pages keep
-  the one-plus-two-ray compatibility tier;
+  the room. JavaScript explicitly selects four deterministic directional-light
+  visibility samples, eight cosine-weighted AO samples, angular radius, trace
+  distance, bias and frame index;
 - one same-size MRT writes linear `rgba16float` source color, direct world normal
   xyz plus perceptual roughness, linear F0 plus a reflection mask, and
   `depth32float` depth;

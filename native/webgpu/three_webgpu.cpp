@@ -4423,33 +4423,76 @@ void execOne(uint32_t op, Reader& r) {
             return;
         }
         case OP_RTX_LIGHTING_EVALUATE: {
-            TWRayQueryLightingFrame frame{};
-            frame.struct_size = sizeof(frame);
             const uint32_t version = r.u32();
-            frame.command_encoder_handle = r.u32();
-            frame.color_texture_handle = r.u32();
-            frame.color_vulkan_layout = r.u32();
-            frame.depth_texture_handle = r.u32();
-            frame.depth_vulkan_layout = r.u32();
-            frame.width = r.u32();
-            frame.height = r.u32();
-            for (float& value : frame.inverse_view_projection) value = r.f32();
-            for (float& value : frame.camera_position) value = r.f32();
-            for (float& value : frame.sun_direction_intensity) value = r.f32();
-            for (float& value : frame.parameters) value = r.f32();
-            frame.flags = r.u32();
-            for (float& value : frame.water) value = r.f32();
-            if (!r.ok || version != 1u) {
+            if (version == 1u) {
+                TWRayQueryLightingFrame frame{};
+                frame.struct_size = sizeof(frame);
+                frame.command_encoder_handle = r.u32();
+                frame.color_texture_handle = r.u32();
+                frame.color_vulkan_layout = r.u32();
+                frame.depth_texture_handle = r.u32();
+                frame.depth_vulkan_layout = r.u32();
+                frame.width = r.u32();
+                frame.height = r.u32();
+                for (float& value : frame.inverse_view_projection) value = r.f32();
+                for (float& value : frame.camera_position) value = r.f32();
+                for (float& value : frame.sun_direction_intensity) value = r.f32();
+                for (float& value : frame.parameters) value = r.f32();
+                frame.flags = r.u32();
+                for (float& value : frame.water) value = r.f32();
+                if (!r.ok) {
+                    setError("Unsupported or truncated RTX lighting command");
+                    return;
+                }
+                tw_ray_query_lighting_evaluate(&frame);
+                return;
+            }
+            if (version == 2u) {
+                TWRayQueryLightingFrameV2 frame{};
+                frame.struct_size = sizeof(frame);
+                frame.command_encoder_handle = r.u32();
+                frame.color_texture_handle = r.u32();
+                frame.color_vulkan_layout = r.u32();
+                frame.depth_texture_handle = r.u32();
+                frame.depth_vulkan_layout = r.u32();
+                frame.width = r.u32();
+                frame.height = r.u32();
+                for (float& value : frame.inverse_view_projection) value = r.f32();
+                for (float& value : frame.camera_position) value = r.f32();
+                for (float& value : frame.directional_light_direction_intensity) {
+                    value = r.f32();
+                }
+                frame.directional_visibility_strength = r.f32();
+                frame.ao_strength = r.f32();
+                frame.ao_radius = r.f32();
+                frame.directional_angular_radius = r.f32();
+                frame.flags = r.u32();
+                frame.max_distance = r.f32();
+                frame.ray_bias = r.f32();
+                frame.directional_sample_count = r.u32();
+                frame.ao_sample_count = r.u32();
+                frame.frame_index = r.u32();
+                frame.pipeline_handle = r.u32();
+                if (!r.ok) {
+                    setError("Unsupported or truncated RTX lighting command");
+                    return;
+                }
+                tw_ray_query_lighting_evaluate_v2(&frame);
+                return;
+            }
+            {
                 setError("Unsupported or truncated RTX lighting command");
                 return;
             }
-            tw_ray_query_lighting_evaluate(&frame);
-            return;
         }
         case OP_RTX_REFLECTIONS_EVALUATE: {
-            TWRayQueryReflectionFrame frame{};
-            frame.struct_size = sizeof(frame);
             const uint32_t version = r.u32();
+            if (version != 1u && version != 2u) {
+                setError("Unsupported or truncated RTX reflection command");
+                return;
+            }
+            TWRayQueryReflectionFrameV2 frame{};
+            frame.struct_size = sizeof(frame);
             frame.command_encoder_handle = r.u32();
             frame.source_color_texture_handle = r.u32();
             frame.source_color_vulkan_layout = r.u32();
@@ -4469,11 +4512,53 @@ void execOne(uint32_t op, Reader& r) {
             for (float& value : frame.environment) value = r.f32();
             frame.flags = r.u32();
             frame.frame_index = r.u32();
-            if (!r.ok || version != 1u) {
+            if (version == 2u) frame.pipeline_handle = r.u32();
+            if (!r.ok) {
                 setError("Unsupported or truncated RTX reflection command");
                 return;
             }
-            tw_ray_query_reflections_evaluate(&frame);
+            tw_ray_query_reflections_evaluate_v2(&frame);
+            return;
+        }
+        case OP_RTX_PIPELINE_CREATE: {
+            const uint32_t version = r.u32();
+            const uint32_t handle = r.u32();
+            const uint32_t profile = r.u32();
+            const uint32_t entryPointLength = r.u32();
+            const uint32_t spirvByteLength = r.u32();
+            if (version != 1u || handle == 0u || entryPointLength == 0u ||
+                entryPointLength > 255u || spirvByteLength < 20u ||
+                spirvByteLength > 1024u * 1024u ||
+                (spirvByteLength & 3u) != 0u) {
+                setError("Invalid RTX custom-pipeline command");
+                return;
+            }
+            const uint8_t* entryBytes = r.bytes(entryPointLength);
+            const uint32_t entryPadding = (4u - (entryPointLength & 3u)) & 3u;
+            if (entryPadding) r.bytes(entryPadding);
+            const uint8_t* spirvBytes = r.bytes(spirvByteLength);
+            if (!r.ok || !entryBytes || !spirvBytes ||
+                std::memchr(entryBytes, '\0', entryPointLength)) {
+                setError("Truncated or invalid RTX custom-pipeline command");
+                return;
+            }
+            std::string entryPoint(reinterpret_cast<const char*>(entryBytes),
+                                   entryPointLength);
+            std::vector<uint32_t> spirv(spirvByteLength / sizeof(uint32_t));
+            std::memcpy(spirv.data(), spirvBytes, spirvByteLength);
+            tw_ray_query_pipeline_create(handle, profile, spirv.data(),
+                                         spirvByteLength, entryPoint.data(),
+                                         entryPointLength);
+            return;
+        }
+        case OP_RTX_PIPELINE_DESTROY: {
+            const uint32_t version = r.u32();
+            const uint32_t handle = r.u32();
+            if (!r.ok || version != 1u || handle == 0u) {
+                setError("Invalid RTX custom-pipeline destroy command");
+                return;
+            }
+            tw_ray_query_pipeline_destroy(handle);
             return;
         }
         case OP_SUBMIT:
@@ -4683,6 +4768,7 @@ void implReset() {
     clearSlots();
 #if defined(THREEBROWSER_RAY_QUERY)
     rayQueryBridgeDestroyScene();
+    rayQueryBridgeResetPipelines();
 #endif
 }
 
@@ -6123,12 +6209,43 @@ void tw_ray_query_scene_destroy(void) {
 }
 
 int tw_ray_query_lighting_evaluate(const TWRayQueryLightingFrame* frame) {
+    static_assert(sizeof(TWRayQueryLightingFrame) == 164u);
     if (!frame || frame->struct_size < sizeof(TWRayQueryLightingFrame)) return 0;
+    const TWRayQueryLightingFrame legacy = *frame;
+    TWRayQueryLightingFrameV2 upgraded{};
+    upgraded.struct_size = sizeof(upgraded);
+    upgraded.command_encoder_handle = legacy.command_encoder_handle;
+    upgraded.color_texture_handle = legacy.color_texture_handle;
+    upgraded.color_vulkan_layout = legacy.color_vulkan_layout;
+    upgraded.depth_texture_handle = legacy.depth_texture_handle;
+    upgraded.depth_vulkan_layout = legacy.depth_vulkan_layout;
+    upgraded.width = legacy.width;
+    upgraded.height = legacy.height;
+    std::copy_n(legacy.inverse_view_projection, 16, upgraded.inverse_view_projection);
+    std::copy_n(legacy.camera_position, 4, upgraded.camera_position);
+    std::copy_n(legacy.sun_direction_intensity, 4,
+                upgraded.directional_light_direction_intensity);
+    upgraded.directional_visibility_strength = legacy.parameters[0];
+    upgraded.ao_strength = legacy.parameters[1];
+    upgraded.ao_radius = legacy.parameters[2];
+    upgraded.directional_angular_radius = 0.0065f;
+    upgraded.flags = legacy.flags & 1u;
+    upgraded.max_distance = 10000.0f;
+    upgraded.ray_bias = std::max(0.002f, legacy.parameters[2] * 0.002f);
+    const bool highQuality = (legacy.flags & 2u) != 0u;
+    upgraded.directional_sample_count = highQuality ? 4u : 1u;
+    upgraded.ao_sample_count = highQuality ? 8u : 2u;
+    return tw_ray_query_lighting_evaluate_v2(&upgraded);
+}
+
+int tw_ray_query_lighting_evaluate_v2(const TWRayQueryLightingFrameV2* frame) {
+    static_assert(sizeof(TWRayQueryLightingFrameV2) == 172u);
+    if (!frame || frame->struct_size < sizeof(TWRayQueryLightingFrameV2)) return 0;
 #if !defined(THREEBROWSER_RAY_QUERY)
     (void)frame;
     return 0;
 #else
-    const TWRayQueryLightingFrame copy = *frame;
+    const TWRayQueryLightingFrameV2 copy = *frame;
     const auto acceptedColorLayout = [](uint32_t value) {
         switch (static_cast<VkImageLayout>(value)) {
             case VK_IMAGE_LAYOUT_GENERAL:
@@ -6199,10 +6316,20 @@ int tw_ray_query_lighting_evaluate(const TWRayQueryLightingFrame* frame) {
             native.height = copy.height;
             std::copy_n(copy.inverse_view_projection, 16, native.inverseViewProjection);
             std::copy_n(copy.camera_position, 4, native.cameraPosition);
-            std::copy_n(copy.sun_direction_intensity, 4, native.sunDirectionIntensity);
-            std::copy_n(copy.parameters, 4, native.parameters);
+            std::copy_n(copy.directional_light_direction_intensity, 4,
+                        native.directionalLightDirectionIntensity);
+            native.directionalVisibilityStrength =
+                copy.directional_visibility_strength;
+            native.aoStrength = copy.ao_strength;
+            native.aoRadius = copy.ao_radius;
+            native.directionalAngularRadius = copy.directional_angular_radius;
+            native.maxDistance = copy.max_distance;
+            native.rayBias = copy.ray_bias;
+            native.directionalSampleCount = copy.directional_sample_count;
+            native.aoSampleCount = copy.ao_sample_count;
+            native.frameIndex = copy.frame_index;
+            native.pipelineHandle = copy.pipeline_handle;
             native.flags = copy.flags;
-            std::copy_n(copy.water, 4, native.water);
             struct Evaluation {
                 RayQueryLightingFrame* frame;
                 bool result{};
@@ -6232,12 +6359,41 @@ int tw_ray_query_lighting_evaluate(const TWRayQueryLightingFrame* frame) {
 }
 
 int tw_ray_query_reflections_evaluate(const TWRayQueryReflectionFrame* frame) {
+    static_assert(sizeof(TWRayQueryReflectionFrame) == 176u);
     if (!frame || frame->struct_size < sizeof(TWRayQueryReflectionFrame)) return 0;
+    const TWRayQueryReflectionFrame legacy = *frame;
+    TWRayQueryReflectionFrameV2 upgraded{};
+    upgraded.struct_size = sizeof(upgraded);
+    upgraded.command_encoder_handle = legacy.command_encoder_handle;
+    upgraded.source_color_texture_handle = legacy.source_color_texture_handle;
+    upgraded.source_color_vulkan_layout = legacy.source_color_vulkan_layout;
+    upgraded.output_color_texture_handle = legacy.output_color_texture_handle;
+    upgraded.output_color_vulkan_layout = legacy.output_color_vulkan_layout;
+    upgraded.depth_texture_handle = legacy.depth_texture_handle;
+    upgraded.depth_vulkan_layout = legacy.depth_vulkan_layout;
+    upgraded.normal_roughness_texture_handle = legacy.normal_roughness_texture_handle;
+    upgraded.normal_roughness_vulkan_layout = legacy.normal_roughness_vulkan_layout;
+    upgraded.specular_albedo_texture_handle = legacy.specular_albedo_texture_handle;
+    upgraded.specular_albedo_vulkan_layout = legacy.specular_albedo_vulkan_layout;
+    upgraded.width = legacy.width;
+    upgraded.height = legacy.height;
+    std::copy_n(legacy.inverse_view_projection, 16, upgraded.inverse_view_projection);
+    std::copy_n(legacy.camera_position, 4, upgraded.camera_position);
+    std::copy_n(legacy.parameters, 4, upgraded.parameters);
+    std::copy_n(legacy.environment, 4, upgraded.environment);
+    upgraded.flags = legacy.flags;
+    upgraded.frame_index = legacy.frame_index;
+    return tw_ray_query_reflections_evaluate_v2(&upgraded);
+}
+
+int tw_ray_query_reflections_evaluate_v2(const TWRayQueryReflectionFrameV2* frame) {
+    static_assert(sizeof(TWRayQueryReflectionFrameV2) == 180u);
+    if (!frame || frame->struct_size < sizeof(TWRayQueryReflectionFrameV2)) return 0;
 #if !defined(THREEBROWSER_RAY_QUERY)
     (void)frame;
     return 0;
 #else
-    const TWRayQueryReflectionFrame copy = *frame;
+    const TWRayQueryReflectionFrameV2 copy = *frame;
     const auto acceptedColorLayout = [](uint32_t value) {
         switch (static_cast<VkImageLayout>(value)) {
             case VK_IMAGE_LAYOUT_GENERAL:
@@ -6355,6 +6511,7 @@ int tw_ray_query_reflections_evaluate(const TWRayQueryReflectionFrame* frame) {
             std::copy_n(copy.environment, 4, native.environment);
             native.flags = copy.flags;
             native.frameIndex = copy.frame_index;
+            native.pipelineHandle = copy.pipeline_handle;
             struct Evaluation {
                 RayQueryReflectionFrame* frame;
                 bool result{};
@@ -6381,6 +6538,53 @@ int tw_ray_query_reflections_evaluate(const TWRayQueryReflectionFrame* frame) {
         return 0;
     }
 #endif
+}
+
+int tw_ray_query_pipeline_create(uint32_t handle, uint32_t profile,
+                                 const uint32_t* spirvWords,
+                                 uint32_t spirvByteLength,
+                                 const char* entryPoint,
+                                 uint32_t entryPointLength) {
+    if (handle == 0u || !spirvWords || spirvByteLength < 20u ||
+        spirvByteLength > 1024u * 1024u ||
+        (spirvByteLength & 3u) != 0u || !entryPoint ||
+        entryPointLength == 0u || entryPointLength > 255u ||
+        std::memchr(entryPoint, '\0', entryPointLength) ||
+        (profile != static_cast<uint32_t>(RayQueryPipelineProfile::LightingV1) &&
+         profile != static_cast<uint32_t>(RayQueryPipelineProfile::ReflectionsV1))) {
+        setError("Invalid custom ray-query pipeline creation request");
+        return 0;
+    }
+    std::vector<uint32_t> code(spirvByteLength / sizeof(uint32_t));
+    std::memcpy(code.data(), spirvWords, spirvByteLength);
+    std::string entry(entryPoint, entryPointLength);
+    try {
+        return onWorker([handle, profile, code = std::move(code),
+                         entry = std::move(entry)] {
+            const bool result = rayQueryBridgeCreatePipeline(
+                handle, static_cast<RayQueryPipelineProfile>(profile),
+                code.data(), code.size(), entry.c_str());
+            if (!result) setError(rayQueryBridgeCapabilities().status);
+            return result ? 1 : 0;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+}
+
+int tw_ray_query_pipeline_destroy(uint32_t handle) {
+    if (handle == 0u) return 0;
+    try {
+        return onWorker([handle] {
+            const bool result = rayQueryBridgeDestroyPipeline(handle);
+            if (!result) setError(rayQueryBridgeCapabilities().status);
+            return result ? 1 : 0;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
 }
 
 int tw_cmd_submit(const uint8_t* data, int nbytes) {

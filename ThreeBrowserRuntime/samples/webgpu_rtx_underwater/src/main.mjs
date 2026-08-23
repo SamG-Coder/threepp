@@ -240,8 +240,8 @@ async function main() {
   // request Frame Generation only when the native API is available and then
   // supplies a post-tonemapped HUD-less target, depth and dense motion vectors.
   // Ray Reconstruction remains off because the native ray-query pass produces
-  // deterministic visibility/caustic lighting rather than a noisy radiance
-  // buffer with the complete denoiser guide set.
+  // deterministic visibility and AO rather than a noisy radiance buffer with
+  // the complete denoiser guide set.
   const rtx = navigator.gpu?.threeBrowserRTX ?? null;
   const capabilities = rtx?.capabilities ?? {};
   const previousReflexMode = rtx?.reflexMode ?? 0;
@@ -260,7 +260,7 @@ async function main() {
   if (!dlssConfigured) {
     console.warn(`[DLSS] Full-resolution fallback is active. ${dlssPipeline.failure}`);
   }
-  console.warn("[RTX boundary] DLSS Super Resolution is evaluated only when native configuration succeeds. Frame Generation is requested only when supported and is tagged with the sample's real post-tonemapped RGBA8 HUD-less color, native depth and dense TSL motion vectors; it is reported active only after Streamline confirms more than one frame from Present. On a ray-query-capable Vulkan device, static world geometry is registered in a native BLAS/TLAS and the HDR pass receives traced sun visibility, RTAO and refracted-water caustic focusing. Ray Reconstruction remains off because this deterministic pass does not manufacture noisy radiance or denoiser guides.");
+  console.warn("[RTX boundary] DLSS Super Resolution is evaluated only when native configuration succeeds. Frame Generation is requested only when supported and is tagged with the sample's real post-tonemapped RGBA8 HUD-less color, native depth and dense TSL motion vectors; it is reported active only after Streamline confirms more than one frame from Present. On a ray-query-capable Vulkan device, static world geometry is registered in a native BLAS/TLAS and the HDR pass receives generic directional-light visibility and RTAO. The page's TSL water material owns its wave-matched caustic field. Ray Reconstruction remains off because this deterministic pass does not manufacture noisy radiance or denoiser guides.");
 
   const sky = new THREE.Mesh(new THREE.SphereGeometry(72, 56, 32), createSkyMaterial());
   sky.material.side = THREE.BackSide;
@@ -438,24 +438,21 @@ async function main() {
       }
       if (nativeRayLightingActive) {
         dlssPipeline.configureRayLighting({
-          sunDirection: new THREE.Vector3(0.42, 0.88, -0.22).normalize(),
-          intensity: 1,
+          directionalLightDirection: new THREE.Vector3(0.42, 0.88, -0.22).normalize(),
+          directionalLightIntensity: 1,
+          directionalAngularRadius: 0.0065,
+          directionalSampleCount: 1,
+          aoSampleCount: 2,
+          maxDistance: 10000,
+          rayBias: 0.002,
           shadowStrength: 0.56,
           aoStrength: 0.18,
           aoRadius: 0.92,
-          aoMaxDistance: 72,
-          waterSurfaceHeight: 2.72,
-          waterIOR: 1.333,
-          causticStrength: 0.78,
         });
-        // The old analytic pattern remains a restrained sub-pixel fallback and
-        // material detail; focused energy now comes from the native water-light
-        // transport pass rather than being painted directly into every surface.
-        causticStrength.value = 0.22;
         console.log(
           `[RTX lighting] Static BLAS/TLAS ready: ${staticScene.vertexCount.toLocaleString()} vertices` +
           ` · ${staticScene.triangleCount.toLocaleString()} triangles` +
-          " · ray-query shadows, RTAO and refracted-water caustics enabled.",
+          " · generic ray-query shadows and RTAO enabled; TSL owns water caustics.",
         );
       }
     } catch (error) {
@@ -463,7 +460,7 @@ async function main() {
     }
   }
 
-  if (!nativeRayLightingActive) causticStrength.value = 0.76;
+  causticStrength.value = 0.76;
   let previousFrameTime = performance.now();
   let elapsed = 0;
   let diagnosticTimer = 0;
@@ -629,7 +626,7 @@ async function main() {
   });
 
   console.log("[underwater] Ready: 67k-triangle procedural seabed, 58k-triangle deforming surface, irregular rocks, instanced stones, one-draw-call GPU-swaying seagrass/kelp, dynamic fish/leaves, " +
-    (nativeRayLightingActive ? "native ray-query sun visibility, RTAO and refracted caustics" : "phase-locked analytic caustic fallback") +
+    (nativeRayLightingActive ? "native ray-query directional-light visibility and RTAO plus phase-locked TSL caustics" : "phase-locked TSL caustics") +
     ", soft shadows, particles and depth haze." +
     (dlssConfigured
       ? ` Native DLSS DLAA uses ${dlssPipeline.renderWidth}×${dlssPipeline.renderHeight} inputs for ${dlssPipeline.outputWidth}×${dlssPipeline.outputHeight} output.`

@@ -7,18 +7,25 @@ layout(set = 0, binding = 0) uniform accelerationStructureEXT topLevelScene;
 layout(rgba16f, set = 0, binding = 1) uniform image2D hdrColor;
 layout(set = 0, binding = 2) uniform sampler2D sceneDepth;
 
+// Profile lighting-v1. Every ray/sampling policy value is supplied by the
+// caller; the native bridge only packs this fixed 128-byte ABI.
 layout(push_constant) uniform FrameConstants {
     mat4 inverseViewProjection;
-    vec4 cameraPosition;
-    vec4 sunDirectionIntensity;
-    // x shadow strength, y AO strength, z AO radius, w caustic strength.
-    vec4 parameters;
-    // xy extent, z flags, w = packHalf2x16(surfaceY, waterIOR).
+    // xyz camera position, w directional-light maximum ray distance.
+    vec4 cameraPositionMaximumDistance;
+    // xyz direction from the surface toward the light, w angular radius.
+    vec4 directionalLightDirectionAngularRadius;
+    // x directional visibility strength, y AO strength, z AO radius,
+    // w ray-origin bias.
+    vec4 lightingParameters;
+    // xy extent, z flags and packed sample counts, w frame index.
     uvec4 extentFlags;
 } frame;
 
 const uint kDepthInverted = 1u;
-const uint kHighQuality = 2u;
+const uint kDirectionalSampleShift = 8u;
+const uint kAoSampleShift = 16u;
+const uint kSampleMask = 0xffu;
 
 float readDepth(ivec2 pixel) {
     pixel = clamp(pixel, ivec2(0), ivec2(frame.extentFlags.xy) - ivec2(1));
@@ -26,7 +33,9 @@ float readDepth(ivec2 pixel) {
 }
 
 bool isBackground(float depth) {
-    return (frame.extentFlags.z & kDepthInverted) != 0u ? depth <= 1e-6 : depth >= 0.999999;
+    return (frame.extentFlags.z & kDepthInverted) != 0u
+        ? depth <= 1e-6
+        : depth >= 0.999999;
 }
 
 vec3 reconstructWorld(ivec2 pixel, float depth) {
@@ -41,7 +50,7 @@ bool occluded(vec3 origin, vec3 direction, float maximumDistance) {
     rayQueryEXT query;
     rayQueryInitializeEXT(query, topLevelScene,
         gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT,
-        0xffu, origin, 0.002, direction, maximumDistance);
+        0xffu, origin, 0.0, direction, maximumDistance);
     while (rayQueryProceedEXT(query)) {}
     return rayQueryGetIntersectionTypeEXT(query, true) !=
            gl_RayQueryCommittedIntersectionNoneEXT;
@@ -74,100 +83,6 @@ vec3 cosineHemisphere(vec3 normal, inout uint state) {
                      normal * sqrt(max(0.0, 1.0 - u1)));
 }
 
-// Keep this phase model identical to the six components used by the sample's
-// displaced water.  The native pass therefore focuses the same moving surface
-// that the page draws instead of laying an unrelated caustic texture over it.
-const vec4 kWaveDirectionFrequency[6] = vec4[6](
-    vec4( 0.94,  0.34, 0.62,  0.72),
-    vec4(-0.38,  0.92, 1.08, -0.66),
-    vec4( 0.67, -0.74, 1.92,  1.04),
-    vec4(-0.86, -0.51, 3.15, -1.28),
-    vec4( 0.18, -0.98, 5.80,  1.86),
-    vec4(-0.73,  0.68, 9.10, -2.22)
-);
-const float kWaveAmplitude[6] = float[6](
-    0.135, 0.080, 0.045, 0.022, 0.010, 0.0045
-);
-
-void waterSurface(vec2 xz, float time, out float height,
-                  out vec2 gradient) {
-    height = 0.0;
-    gradient = vec2(0.0);
-    for (int waveIndex = 0; waveIndex < 6; ++waveIndex) {
-        vec4 wave = kWaveDirectionFrequency[waveIndex];
-        float phase = dot(xz, wave.xy) * wave.z + time * wave.w;
-        height += sin(phase) * kWaveAmplitude[waveIndex];
-        gradient += cos(phase) * (kWaveAmplitude[waveIndex] * wave.z) * wave.xy;
-    }
-}
-
-vec3 transmittedSunRay(vec2 surfaceXZ, float time, vec3 towardSun,
-                       float waterIOR, out float surfaceHeight,
-                       out vec3 surfaceNormal) {
-    vec2 gradient;
-    waterSurface(surfaceXZ, time, surfaceHeight, gradient);
-    // Upward normal points from water into air. Incoming light travels from
-    // the sun toward the water; refract it from air (1.0) into water (IOR).
-    surfaceNormal = normalize(vec3(-gradient.x, 1.0, -gradient.y));
-    vec3 transmitted = refract(-normalize(towardSun), surfaceNormal,
-                               1.0 / max(waterIOR, 1.0001));
-    if (dot(transmitted, transmitted) < 1e-8) transmitted = -normalize(towardSun);
-    return normalize(transmitted);
-}
-
-vec2 receiverFromSurface(vec2 surfaceXZ, float receiverY, float time,
-                         float surfaceY, vec3 towardSun, float waterIOR,
-                         out vec3 transmitted, out float height,
-                         out vec3 normal) {
-    transmitted = transmittedSunRay(surfaceXZ, time, towardSun, waterIOR,
-                                    height, normal);
-    height += surfaceY;
-    float distance = (receiverY - height) / min(transmitted.y, -1e-4);
-    return surfaceXZ + transmitted.xz * max(distance, 0.0);
-}
-
-// Solve the inverse water-lens mapping for this receiver, then estimate its
-// local Jacobian.  A small determinant means neighbouring surface rays
-// converge: the physical source of a caustic. Finite differences keep the
-// result stable for the mixed six-wave surface and avoid a brittle closed-form
-// Hessian. The result is deliberately bounded for temporal stability.
-float refractedCaustic(vec3 receiver, float time, float surfaceY,
-                       vec3 towardSun, float waterIOR,
-                       out vec3 surfacePoint, out vec3 waterDirection) {
-    vec2 surfaceXZ = receiver.xz;
-    float height = surfaceY;
-    vec3 normal = vec3(0.0, 1.0, 0.0);
-    for (int iteration = 0; iteration < 3; ++iteration) {
-        vec2 mapped = receiverFromSurface(surfaceXZ, receiver.y, time,
-                                          surfaceY, towardSun, waterIOR,
-                                          waterDirection, height, normal);
-        surfaceXZ += clamp(receiver.xz - mapped, vec2(-0.8), vec2(0.8));
-    }
-    vec2 mapped = receiverFromSurface(surfaceXZ, receiver.y, time,
-                                      surfaceY, towardSun, waterIOR,
-                                      waterDirection, height, normal);
-    const float epsilon = 0.035;
-    vec3 ignoredDirection;
-    float ignoredHeight;
-    vec3 ignoredNormal;
-    vec2 mappedX = receiverFromSurface(surfaceXZ + vec2(epsilon, 0.0), receiver.y,
-                                       time, surfaceY, towardSun, waterIOR,
-                                       ignoredDirection, ignoredHeight, ignoredNormal);
-    vec2 mappedZ = receiverFromSurface(surfaceXZ + vec2(0.0, epsilon), receiver.y,
-                                       time, surfaceY, towardSun, waterIOR,
-                                       ignoredDirection, ignoredHeight, ignoredNormal);
-    vec2 derivativeX = (mappedX - mapped) / epsilon;
-    vec2 derivativeZ = (mappedZ - mapped) / epsilon;
-    float determinant = abs(derivativeX.x * derivativeZ.y -
-                            derivativeX.y * derivativeZ.x);
-    float focus = clamp(1.0 / max(determinant, 0.12), 0.35, 4.0);
-    // Only the energy above an unfocused ray becomes a bright caustic.
-    focus = smoothstep(1.05, 3.8, focus);
-    surfacePoint = vec3(surfaceXZ, 0.0).xzy;
-    surfacePoint.y = height;
-    return focus;
-}
-
 void main() {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
     if (any(greaterThanEqual(pixel, ivec2(frame.extentFlags.xy)))) return;
@@ -181,66 +96,54 @@ void main() {
     vec3 worldX = reconstructWorld(pixel + ivec2(1, 0), depthX);
     vec3 worldY = reconstructWorld(pixel + ivec2(0, 1), depthY);
     vec3 normal = normalize(cross(worldY - world, worldX - world));
-    vec3 toCamera = normalize(frame.cameraPosition.xyz - world);
+    vec3 toCamera = normalize(frame.cameraPositionMaximumDistance.xyz - world);
     if (any(isnan(normal)) || any(isinf(normal))) normal = vec3(0.0, 1.0, 0.0);
     if (dot(normal, toCamera) < 0.0) normal = -normal;
 
-    vec3 origin = world + normal * max(0.002, frame.parameters.z * 0.002);
-    vec3 sunDirection = normalize(frame.sunDirectionIntensity.xyz);
-    bool highQuality = (frame.extentFlags.z & kHighQuality) != 0u;
+    float rayBias = frame.lightingParameters.w;
+    vec3 origin = world + normal * rayBias;
+    vec3 directionalLightDirection =
+        normalize(frame.directionalLightDirectionAngularRadius.xyz);
     uint state = uint(pixel.x) * 1973u ^ uint(pixel.y) * 9277u ^ 0x68bc21ebu;
-    vec2 waterSurfaceIor = unpackHalf2x16(frame.extentFlags.w);
-    float waterTime = frame.cameraPosition.w;
-    float surfaceY = waterSurfaceIor.x;
-    float waterIOR = max(waterSurfaceIor.y, 1.0001);
-    vec3 surfacePoint;
-    vec3 transmittedLight;
-    float caustic = 0.0;
-    float sunVisible = 1.0;
-    if (frame.parameters.w > 0.0 && world.y < surfaceY - 0.01) {
-        caustic = refractedCaustic(world, waterTime, surfaceY, sunDirection,
-                                   waterIOR, surfacePoint, transmittedLight);
-        vec3 towardSurface = normalize(surfacePoint - world);
-        float waterDistance = max(length(surfacePoint - world) - 0.006, 0.002);
-        bool blockedInWater = occluded(origin, towardSurface, waterDistance);
-        bool blockedAboveWater = occluded(surfacePoint + sunDirection * 0.01,
-                                          sunDirection, 10000.0);
-        sunVisible = blockedInWater || blockedAboveWater ? 0.0 : 1.0;
-    } else {
-        int sunRayCount = highQuality ? 4 : 1;
-        vec3 sunTangent = normalize(cross(
-            abs(sunDirection.y) < 0.98 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0),
-            sunDirection));
-        vec3 sunBitangent = cross(sunDirection, sunTangent);
-        float diskRotation = random01(state) * 6.28318530718;
-        sunVisible = 0.0;
-        for (int rayIndex = 0; rayIndex < sunRayCount; ++rayIndex) {
-            float u = (float(rayIndex) + 0.5) / float(sunRayCount);
-            float angle = diskRotation + float(rayIndex) * 2.39996322973;
-            vec2 disk = sqrt(u) * vec2(cos(angle), sin(angle));
-            // A restrained angular radius gives the moon/architectural fill a
-            // stable penumbra instead of a brittle binary shadow boundary.
-            vec3 direction = normalize(sunDirection +
-                (sunTangent * disk.x + sunBitangent * disk.y) * 0.0065);
-            sunVisible += occluded(origin, direction, 10000.0) ? 0.0 : 1.0;
-        }
-        sunVisible /= float(sunRayCount);
-    }
+    state ^= frame.extentFlags.w * 26699u;
 
-    float aoVisible = 0.0;
-    int aoRayCount = highQuality ? 8 : 2;
-    for (int rayIndex = 0; rayIndex < aoRayCount; ++rayIndex) {
+    uint directionalSampleCount =
+        (frame.extentFlags.z >> kDirectionalSampleShift) & kSampleMask;
+    vec3 lightTangent = normalize(cross(
+        abs(directionalLightDirection.y) < 0.98
+            ? vec3(0.0, 1.0, 0.0)
+            : vec3(1.0, 0.0, 0.0),
+        directionalLightDirection));
+    vec3 lightBitangent = cross(directionalLightDirection, lightTangent);
+    float diskRotation = random01(state) * 6.28318530718;
+    float angularScale = tan(frame.directionalLightDirectionAngularRadius.w);
+    float directionalVisibility = 0.0;
+    for (uint rayIndex = 0u; rayIndex < directionalSampleCount; ++rayIndex) {
+        float u = (float(rayIndex) + 0.5) / float(directionalSampleCount);
+        float angle = diskRotation + float(rayIndex) * 2.39996322973;
+        vec2 disk = sqrt(u) * vec2(cos(angle), sin(angle));
+        vec3 direction = normalize(directionalLightDirection +
+            (lightTangent * disk.x + lightBitangent * disk.y) * angularScale);
+        directionalVisibility += occluded(
+            origin, direction, frame.cameraPositionMaximumDistance.w) ? 0.0 : 1.0;
+    }
+    directionalVisibility /= float(directionalSampleCount);
+
+    uint aoSampleCount = (frame.extentFlags.z >> kAoSampleShift) & kSampleMask;
+    float aoVisibility = 0.0;
+    for (uint rayIndex = 0u; rayIndex < aoSampleCount; ++rayIndex) {
         vec3 direction = cosineHemisphere(normal, state);
-        aoVisible += occluded(origin, direction, max(frame.parameters.z, 0.02)) ? 0.0 : 1.0;
+        aoVisibility += occluded(origin, direction, frame.lightingParameters.z)
+            ? 0.0
+            : 1.0;
     }
-    aoVisible /= float(aoRayCount);
+    aoVisibility /= float(aoSampleCount);
 
-    float shadow = mix(1.0, sunVisible,
-                       clamp(frame.parameters.x * frame.sunDirectionIntensity.w, 0.0, 1.0));
-    float ao = mix(1.0, aoVisible, clamp(frame.parameters.y, 0.0, 1.0));
+    float directionalFactor = mix(
+        1.0, directionalVisibility, clamp(frame.lightingParameters.x, 0.0, 1.0));
+    float aoFactor = mix(
+        1.0, aoVisibility, clamp(frame.lightingParameters.y, 0.0, 1.0));
     vec4 color = imageLoad(hdrColor, pixel);
-    float focusedTransmission = 1.0 + sunVisible * caustic *
-                                clamp(frame.parameters.w, 0.0, 2.0);
-    color.rgb *= shadow * ao * min(focusedTransmission, 2.75);
+    color.rgb *= directionalFactor * aoFactor;
     imageStore(hdrColor, pixel, color);
 }

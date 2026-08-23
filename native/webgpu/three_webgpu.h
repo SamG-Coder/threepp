@@ -254,6 +254,11 @@ typedef struct TWRayQueryCapabilities {
     char reason[256];
 } TWRayQueryCapabilities;
 
+enum {
+    TW_RAY_QUERY_PIPELINE_PROFILE_LIGHTING_V1 = 1,
+    TW_RAY_QUERY_PIPELINE_PROFILE_REFLECTIONS_V1 = 2
+};
+
 typedef struct TWRayQueryLightingFrame {
     uint32_t struct_size;
     uint32_t command_encoder_handle;
@@ -268,8 +273,38 @@ typedef struct TWRayQueryLightingFrame {
     float sun_direction_intensity[4];
     float parameters[4];
     uint32_t flags;
+    // Deprecated v1 payload retained solely for source/binary ABI stability.
+    // Generic ray lighting does not interpret these values.
     float water[4];
 } TWRayQueryLightingFrame;
+
+// Version 2 is additive and leaves TWRayQueryLightingFrame's original ABI
+// untouched. The direction points from the shaded surface toward the
+// directional light. Angular radius is in radians; sample counts are explicit.
+typedef struct TWRayQueryLightingFrameV2 {
+    uint32_t struct_size;
+    uint32_t command_encoder_handle;
+    uint32_t color_texture_handle;
+    uint32_t color_vulkan_layout;
+    uint32_t depth_texture_handle;
+    uint32_t depth_vulkan_layout;
+    uint32_t width;
+    uint32_t height;
+    float inverse_view_projection[16];
+    float camera_position[4];
+    float directional_light_direction_intensity[4];
+    float directional_visibility_strength;
+    float ao_strength;
+    float ao_radius;
+    float directional_angular_radius;
+    uint32_t flags;
+    float max_distance;
+    float ray_bias;
+    uint32_t directional_sample_count;
+    uint32_t ao_sample_count;
+    uint32_t frame_index;
+    uint32_t pipeline_handle;
+} TWRayQueryLightingFrameV2;
 
 // Additive reflection ABI. Keep separate from TWRayQueryLightingFrame so
 // callers compiled against the original OP82 contract remain compatible.
@@ -298,6 +333,30 @@ typedef struct TWRayQueryReflectionFrame {
     uint32_t flags;
     uint32_t frame_index;
 } TWRayQueryReflectionFrame;
+
+typedef struct TWRayQueryReflectionFrameV2 {
+    uint32_t struct_size;
+    uint32_t command_encoder_handle;
+    uint32_t source_color_texture_handle;
+    uint32_t source_color_vulkan_layout;
+    uint32_t output_color_texture_handle;
+    uint32_t output_color_vulkan_layout;
+    uint32_t depth_texture_handle;
+    uint32_t depth_vulkan_layout;
+    uint32_t normal_roughness_texture_handle;
+    uint32_t normal_roughness_vulkan_layout;
+    uint32_t specular_albedo_texture_handle;
+    uint32_t specular_albedo_vulkan_layout;
+    uint32_t width;
+    uint32_t height;
+    float inverse_view_projection[16];
+    float camera_position[4];
+    float parameters[4];
+    float environment[4];
+    uint32_t flags;
+    uint32_t frame_index;
+    uint32_t pipeline_handle;
+} TWRayQueryReflectionFrameV2;
 
 TW_API int tw_start(void* parent_hwnd, int x, int y, int w, int h);
 TW_API void tw_set_standalone_ui(int on);
@@ -360,7 +419,15 @@ TW_API int tw_ray_query_scene_lights(const float* light_records,
 TW_API int tw_ray_query_scene_commit(uint32_t command_encoder_handle);
 TW_API void tw_ray_query_scene_destroy(void);
 TW_API int tw_ray_query_lighting_evaluate(const TWRayQueryLightingFrame* frame);
+TW_API int tw_ray_query_lighting_evaluate_v2(const TWRayQueryLightingFrameV2* frame);
 TW_API int tw_ray_query_reflections_evaluate(const TWRayQueryReflectionFrame* frame);
+TW_API int tw_ray_query_reflections_evaluate_v2(const TWRayQueryReflectionFrameV2* frame);
+TW_API int tw_ray_query_pipeline_create(uint32_t handle, uint32_t profile,
+                                        const uint32_t* spirv_words,
+                                        uint32_t spirv_byte_length,
+                                        const char* entry_point,
+                                        uint32_t entry_point_length);
+TW_API int tw_ray_query_pipeline_destroy(uint32_t handle);
 TW_API int tw_cmd_submit(const uint8_t* data, int nbytes);
 TW_API int tw_map_read(uint32_t buffer_handle, uint64_t offset, uint64_t size, void* dst, int dst_bytes);
 

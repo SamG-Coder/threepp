@@ -46,33 +46,37 @@ presented frame. A capability flag, request, or queued tag alone is never
 reported as activation.
 
 Ray Reconstruction is explicitly disabled. The ray-query lighting pass is a
-deterministic visibility and caustic calculation, not a noisy path-traced
+deterministic visibility and AO calculation, not a noisy path-traced
 radiance buffer with the complete denoiser guide set. If DLSS cannot be
 configured or a native evaluation is rejected, the sample immediately falls
 back to the ordinary full-resolution Three.js render path. Frame Generation
 also remains off on unsupported adapters, with Vulkan VSync, or while native
 loading/diagnostic overlays are visible.
 
-On Vulkan adapters that expose `EXPERIMENTAL_RAY_QUERY`, the bridge provides a
-deliberately narrow static-scene contract:
+ThreeBrowser RTX is a generic Three.js renderer extension for functionality
+absent upstream. On Vulkan adapters that expose `EXPERIMENTAL_RAY_QUERY`, its
+built-in pipeline provides a deliberately narrow static-scene contract:
 
 - `registerStaticScene()` uploads world-space indexed triangles and builds one
   native BLAS plus an identity TLAS;
 - `evaluateRayLighting()` records a compute pass into the page's WebGPU command
   encoder and modifies its `rgba16float` HDR target in place;
-- the pass reconstructs each receiver from `depth32float`, traces sun visibility
-  and two ambient-occlusion rays, then solves the inverse water-lens mapping;
-- the exact six water waves drawn by the TSL material provide the moving surface
-  normal. Snell refraction maps sunlight through that surface, and the local
-  Jacobian measures ray convergence to form the bright caustic network;
-- separate receiver-to-water and water-to-sun ray queries stop caustic energy
-  passing through registered rocks or terrain.
+- the pass reconstructs each receiver from `depth32float` and traces the
+  directional-light visibility and AO samples selected explicitly by this
+  project's JavaScript;
+- the TSL water material independently owns the exact animated wave phases and
+  phase-locked analytic caustic detail, so no sample constants are embedded in
+  the native lighting implementation.
 
 This first bridge intentionally handles static opaque world geometry only.
 The animated water surface supplies its exact analytic intersection and normal;
 fish, vegetation and other deforming meshes are not represented in the TLAS.
-It does not claim a trace-ray pipeline, dynamic BLAS updates, path tracing, ray
-counts, or Ray Reconstruction.
+It does not claim dynamic BLAS updates, path tracing, or Ray Reconstruction.
+The native shader is a generic safe default rather than scene policy. Project
+JavaScript owns every light and sampling value, and may upload a
+profile-compatible SPIR-V implementation through `createRayQueryPipeline()`.
+This sample keeps the generic built-in and its normal WebGPU fallback; it does
+not upload a custom shader.
 
 The public sample-facing contract is:
 
@@ -111,11 +115,17 @@ if (staticWorld.queued) {
     depth: depthResource,
     inverseViewProjection,
     cameraPosition,
-    sunDirection,
+    directionalLightDirection,
+    directionalLightIntensity: 1,
+    directionalAngularRadius: 0.0065,
+    directionalSampleCount: 1,
+    aoSampleCount: 2,
+    maxDistance: 10000,
+    rayBias: 0.002,
+    frameIndex,
     shadowStrength: 0.56,
     aoStrength: 0.18,
     aoRadius: 0.92,
-    water: { time, surfaceY: 2.72, strength: 0.78, ior: 1.333 },
   });
 }
 ```
@@ -131,7 +141,7 @@ fallbacks:
 - a transparent Fresnel-tinted water underside (an explicit raster
   approximation; the fixed bridge exposes no refraction ray API);
 - a restrained analytic caustic detail/fallback derived from the same wave
-  phases (reduced when the ray-query pass is active);
+  phases;
 - exponential underwater attenuation/haze and translucent sun shafts;
 - dynamic fish, tail, leaf and particle transforms.
 

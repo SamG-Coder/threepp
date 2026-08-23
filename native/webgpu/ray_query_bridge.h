@@ -33,6 +33,11 @@ struct RayQueryBridgeCapabilities {
     const char* status{};
 };
 
+enum class RayQueryPipelineProfile : uint32_t {
+    LightingV1 = 1,
+    ReflectionsV1 = 2,
+};
+
 struct RayQueryLightingFrame {
     void* commandBuffer{};
     void* colorImage{};
@@ -43,15 +48,21 @@ struct RayQueryLightingFrame {
     uint32_t height{};
     float inverseViewProjection[16]{};
     float cameraPosition[4]{};
-    // xyz points from the shaded surface toward the sun; w is intensity.
-    float sunDirectionIntensity[4]{};
-    // shadow strength, AO strength, AO radius; fourth input is retained for
-    // protocol compatibility (the native pass uses a bounded ray distance).
-    float parameters[4]{};
+    // xyz points from the shaded surface toward the directional light; w is
+    // the legacy visibility-intensity multiplier.
+    float directionalLightDirectionIntensity[4]{};
+    float directionalVisibilityStrength{};
+    float aoStrength{};
+    float aoRadius{};
+    float directionalAngularRadius{};
+    float maxDistance{};
+    float rayBias{};
+    uint32_t directionalSampleCount{};
+    uint32_t aoSampleCount{};
+    uint32_t frameIndex{};
+    uint32_t pipelineHandle{};
     // bit 0: reverse/inverted depth (background is zero instead of one).
     uint32_t flags{};
-    // time, mean surface Y, caustic strength, water index of refraction.
-    float water[4]{};
 };
 
 struct RayQueryReflectionFrame {
@@ -77,10 +88,19 @@ struct RayQueryReflectionFrame {
     // bit 0: reverse/inverted depth; bit 1: include frame index in sample jitter.
     uint32_t flags{};
     uint32_t frameIndex{};
+    uint32_t pipelineHandle{};
 };
 
 bool rayQueryBridgeAttachVulkan(const RayQueryVulkanContext& context);
 RayQueryBridgeCapabilities rayQueryBridgeCapabilities();
+
+bool rayQueryBridgeCreatePipeline(uint32_t handle,
+                                  RayQueryPipelineProfile profile,
+                                  const uint32_t* spirvWords,
+                                  std::size_t wordCount,
+                                  const char* entryPoint);
+bool rayQueryBridgeDestroyPipeline(uint32_t handle);
+void rayQueryBridgeResetPipelines();
 
 void rayQueryBridgeSceneBegin();
 bool rayQueryBridgeSetPositions(const float* xyz, std::size_t vertexCount);

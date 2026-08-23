@@ -1,0 +1,42 @@
+{
+  "format": 2,
+  "projectId": "6d6f6f6e77617472",
+  "virtualURL": "https://6d6f6f6e77617472.runtime.threebrowser.local/",
+  "source": "https://webgpu-rtx-moonlit-open-ocean.runtime.threebrowser.local/",
+  "pulledAt": "2026-08-23T00:00:00.000Z",
+  "entry": "site-entry.mjs",
+  "requiresWebGPU": true,
+  "html": "index.html",
+  "files": [
+    { "url": "https://webgpu-rtx-moonlit-open-ocean.runtime.threebrowser.local/", "path": "index.html", "type": "html", "bytes": 622 },
+    { "url": "https://webgpu-rtx-moonlit-open-ocean.runtime.threebrowser.local/site-entry.mjs", "path": "site-entry.mjs", "type": "module", "bytes": 297 },
+    { "url": "https://webgpu-rtx-moonlit-open-ocean.runtime.threebrowser.local/src/main.mjs", "path": "src/main.mjs", "type": "module", "bytes": 20409 },
+    { "url": "https://webgpu-rtx-moonlit-open-ocean.runtime.threebrowser.local/src/materials.mjs", "path": "src/materials.mjs", "type": "module", "bytes": 62712 },
+    { "url": "https://webgpu-rtx-moonlit-open-ocean.runtime.threebrowser.local/src/cloud-model.mjs", "path": "src/cloud-model.mjs", "type": "module", "bytes": 8429 },
+    { "url": "https://webgpu-rtx-moonlit-open-ocean.runtime.threebrowser.local/src/foam-field.mjs", "path": "src/foam-field.mjs", "type": "module", "bytes": 9252 },
+    { "url": "https://webgpu-rtx-moonlit-open-ocean.runtime.threebrowser.local/src/lunar-surface.mjs", "path": "src/lunar-surface.mjs", "type": "module", "bytes": 5518 },
+    { "url": "https://webgpu-rtx-moonlit-open-ocean.runtime.threebrowser.local/src/open-ocean-scene.mjs", "path": "src/open-ocean-scene.mjs", "type": "module", "bytes": 18127 },
+    { "url": "https://webgpu-rtx-moonlit-open-ocean.runtime.threebrowser.local/src/hud.mjs", "path": "src/hud.mjs", "type": "module", "bytes": 14534 },
+    { "url": "https://webgpu-rtx-moonlit-open-ocean.runtime.threebrowser.local/src/native-rtx-renderer.mjs", "path": "src/native-rtx-renderer.mjs", "type": "module", "bytes": 25496 },
+    { "url": "https://webgpu-rtx-moonlit-open-ocean.runtime.threebrowser.local/src/rtx-scene.mjs", "path": "src/rtx-scene.mjs", "type": "module", "bytes": 7446 }
+  ],
+  "compatibility": {
+    "threeImportable": true,
+    "bundledThree": false,
+    "rendererCandidates": ["webgpu"],
+    "canvasOnly": true,
+    "htmlOverlay": false,
+    "domRequired": false,
+    "notes": [
+      "Native WebGPU/TSL-only sample with an explicit public-WebGPU optical fallback; no WebGL path.",
+      "All visible controls are a second Three.js scene using a JavaScript-generated RGBA bitmap font atlas.",
+      "The JS/TSL sample owns the directional wave spectrum, displacement, normals, roughness, foam, sky and camera composition.",
+      "The native path consumes only standard Three.js color, depth, world-normal/roughness and F0/reflection-mask guides.",
+      "Native code is limited to reusable scene registration, ray-tested directional visibility/AO and PBR reflection features; it does not embed this sample's shaders.",
+      "All water displacement, optical transport, Fresnel, caustics, Moon glint, foam, atmosphere and artistic composition remain JavaScript/TSL source content.",
+      "The optional native path uses only evaluateRayLighting and evaluateRayReflections generic APIs.",
+      "Press X to compare generic native visibility/reflections against the public WebGPU path; both retain the same JS/TSL ocean optics.",
+      "No downloaded models, images, textures, fonts, style sheets or HTML UI are used."
+    ]
+  }
+}

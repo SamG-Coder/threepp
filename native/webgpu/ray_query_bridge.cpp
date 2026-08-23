@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -142,6 +143,11 @@ struct ReflectionDescriptorRecord {
     VkImageView specularAlbedoView{VK_NULL_HANDLE};
 };
 
+struct CustomPipeline {
+    RayQueryPipelineProfile profile{RayQueryPipelineProfile::LightingV1};
+    VkPipeline pipeline{VK_NULL_HANDLE};
+};
+
 struct State {
     std::mutex mutex;
     VkInstance instance{VK_NULL_HANDLE};
@@ -168,6 +174,7 @@ struct State {
     VkPipeline reflectionPipeline{VK_NULL_HANDLE};
     std::unordered_map<ReflectionDescriptorKey, ReflectionDescriptorRecord,
                        ReflectionDescriptorKeyHash> reflectionDescriptors;
+    std::unordered_map<uint32_t, CustomPipeline> customPipelines;
 
     std::vector<float> pendingPositions;
     std::vector<uint32_t> pendingIndices;
@@ -291,27 +298,79 @@ void fail(const std::string& message) {
     g.status = message;
 }
 
-uint16_t floatToHalf(float value) {
-    uint32_t bits{};
-    std::memcpy(&bits, &value, sizeof(bits));
-    const uint32_t sign = (bits >> 16u) & 0x8000u;
-    int32_t exponent = static_cast<int32_t>((bits >> 23u) & 0xffu) - 127 + 15;
-    uint32_t mantissa = bits & 0x007fffffu;
-    if (exponent <= 0) {
-        if (exponent < -10) return static_cast<uint16_t>(sign);
-        mantissa = (mantissa | 0x00800000u) >> static_cast<uint32_t>(1 - exponent);
-        return static_cast<uint16_t>(sign | ((mantissa + 0x00001000u) >> 13u));
+constexpr uint32_t kSpirvMagic = 0x07230203u;
+constexpr std::size_t kMaximumCustomSpirvWords = (1024u * 1024u) / 4u;
+constexpr std::size_t kMaximumCustomPipelines = 256u;
+constexpr std::size_t kMaximumEntryPointBytes = 255u;
+constexpr uint16_t kSpirvOpEntryPoint = 15u;
+constexpr uint16_t kSpirvOpExecutionMode = 16u;
+constexpr uint32_t kSpirvExecutionModelGlCompute = 5u;
+constexpr uint32_t kSpirvExecutionModeLocalSize = 17u;
+constexpr std::array<uint32_t, 3> kProfileWorkgroupSize{{8u, 8u, 1u}};
+
+bool validEntryPointName(const char* entryPoint) {
+    if (!entryPoint) return false;
+    const std::size_t length = std::strlen(entryPoint);
+    if (length == 0 || length > kMaximumEntryPointBytes) return false;
+    const auto first = static_cast<unsigned char>(entryPoint[0]);
+    if (!(std::isalpha(first) || entryPoint[0] == '_')) return false;
+    for (std::size_t index = 1; index < length; ++index) {
+        const auto value = static_cast<unsigned char>(entryPoint[index]);
+        if (!(std::isalnum(value) || entryPoint[index] == '_')) return false;
     }
-    if (exponent >= 31) {
-        return static_cast<uint16_t>(sign | 0x7c00u);
-    }
-    return static_cast<uint16_t>(sign | (static_cast<uint32_t>(exponent) << 10u) |
-                                 ((mantissa + 0x00001000u) >> 13u));
+    return true;
 }
 
-uint32_t packHalf2(float low, float high) {
-    return static_cast<uint32_t>(floatToHalf(low)) |
-           (static_cast<uint32_t>(floatToHalf(high)) << 16u);
+bool hasComputeEntryPoint(const uint32_t* words, std::size_t wordCount,
+                          const char* entryPoint) {
+    if (!words || wordCount < 5u || words[0] != kSpirvMagic || words[3] == 0u ||
+        !validEntryPointName(entryPoint)) {
+        return false;
+    }
+    const std::size_t wantedLength = std::strlen(entryPoint);
+    uint32_t matchingEntryPointId = 0u;
+    for (std::size_t offset = 5u; offset < wordCount;) {
+        const uint32_t instruction = words[offset];
+        const uint16_t instructionWords = static_cast<uint16_t>(instruction >> 16u);
+        const uint16_t opcode = static_cast<uint16_t>(instruction & 0xffffu);
+        if (instructionWords == 0u || offset + instructionWords > wordCount) return false;
+        if (opcode == kSpirvOpEntryPoint && instructionWords >= 4u &&
+            words[offset + 1u] == kSpirvExecutionModelGlCompute) {
+            const char* encodedName = reinterpret_cast<const char*>(words + offset + 3u);
+            const std::size_t encodedCapacity =
+                static_cast<std::size_t>(instructionWords - 3u) * sizeof(uint32_t);
+            const void* terminator = std::memchr(encodedName, '\0', encodedCapacity);
+            if (!terminator) return false;
+            const auto* end = static_cast<const char*>(terminator);
+            const std::size_t encodedLength = static_cast<std::size_t>(end - encodedName);
+            if (encodedLength == wantedLength &&
+                std::memcmp(encodedName, entryPoint, wantedLength) == 0) {
+                const uint32_t entryPointId = words[offset + 2u];
+                if (matchingEntryPointId != 0u && matchingEntryPointId != entryPointId) {
+                    return false;
+                }
+                matchingEntryPointId = entryPointId;
+            }
+        }
+        offset += instructionWords;
+    }
+    if (matchingEntryPointId == 0u) return false;
+
+    for (std::size_t offset = 5u; offset < wordCount;) {
+        const uint32_t instruction = words[offset];
+        const uint16_t instructionWords = static_cast<uint16_t>(instruction >> 16u);
+        const uint16_t opcode = static_cast<uint16_t>(instruction & 0xffffu);
+        if (instructionWords == 0u || offset + instructionWords > wordCount) return false;
+        if (opcode == kSpirvOpExecutionMode && instructionWords == 6u &&
+            words[offset + 1u] == matchingEntryPointId &&
+            words[offset + 2u] == kSpirvExecutionModeLocalSize) {
+            return words[offset + 3u] == kProfileWorkgroupSize[0] &&
+                   words[offset + 4u] == kProfileWorkgroupSize[1] &&
+                   words[offset + 5u] == kProfileWorkgroupSize[2];
+        }
+        offset += instructionWords;
+    }
+    return false;
 }
 
 uint32_t findMemoryType(uint32_t bits, VkMemoryPropertyFlags required,
@@ -737,10 +796,97 @@ bool createReflectionPipeline() {
     return true;
 }
 
+VkPipelineLayout pipelineLayoutForProfile(RayQueryPipelineProfile profile) {
+    switch (profile) {
+        case RayQueryPipelineProfile::LightingV1:
+            return g.pipelineLayout;
+        case RayQueryPipelineProfile::ReflectionsV1:
+            return g.reflectionPipelineLayout;
+    }
+    return VK_NULL_HANDLE;
+}
+
+bool createCustomPipeline(uint32_t handle, RayQueryPipelineProfile profile,
+                          const uint32_t* spirvWords, std::size_t wordCount,
+                          const char* entryPoint) {
+    if (!g.attached || !g.device || handle == 0u ||
+        wordCount < 5u || wordCount > kMaximumCustomSpirvWords ||
+        g.customPipelines.size() >= kMaximumCustomPipelines ||
+        (reinterpret_cast<std::uintptr_t>(spirvWords) &
+         (alignof(uint32_t) - 1u)) != 0u ||
+        !hasComputeEntryPoint(spirvWords, wordCount, entryPoint)) {
+        fail("Invalid custom ray-query compute pipeline payload");
+        return false;
+    }
+    if (g.customPipelines.contains(handle)) {
+        fail("Custom ray-query pipeline handle is already in use");
+        return false;
+    }
+    const VkPipelineLayout layout = pipelineLayoutForProfile(profile);
+    if (!layout) {
+        fail("Custom ray-query pipeline profile is unsupported");
+        return false;
+    }
+
+    VkShaderModuleCreateInfo shader{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    shader.codeSize = wordCount * sizeof(uint32_t);
+    shader.pCode = spirvWords;
+    VkShaderModule shaderModule{VK_NULL_HANDLE};
+    if (g.vk.createShaderModule(g.device, &shader, nullptr, &shaderModule) != VK_SUCCESS) {
+        fail("Creating a custom ray-query shader module failed");
+        return false;
+    }
+    VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    stage.module = shaderModule;
+    stage.pName = entryPoint;
+    VkComputePipelineCreateInfo create{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+    create.stage = stage;
+    create.layout = layout;
+    VkPipeline pipeline{VK_NULL_HANDLE};
+    const VkResult result = g.vk.createComputePipelines(
+        g.device, VK_NULL_HANDLE, 1, &create, nullptr, &pipeline);
+    g.vk.destroyShaderModule(g.device, shaderModule, nullptr);
+    if (result != VK_SUCCESS || !pipeline) {
+        fail("Creating a custom ray-query compute pipeline failed");
+        return false;
+    }
+    g.customPipelines.emplace(handle, CustomPipeline{profile, pipeline});
+    g.status = "Custom ray-query compute pipeline created";
+    return true;
+}
+
+void destroyCustomPipelines(bool wait) {
+    if (!g.device) {
+        g.customPipelines.clear();
+        return;
+    }
+    if (wait && g.vk.deviceWaitIdle) g.vk.deviceWaitIdle(g.device);
+    for (const auto& [handle, record] : g.customPipelines) {
+        (void)handle;
+        if (record.pipeline) g.vk.destroyPipeline(g.device, record.pipeline, nullptr);
+    }
+    g.customPipelines.clear();
+}
+
+VkPipeline customPipeline(uint32_t handle, RayQueryPipelineProfile requiredProfile) {
+    const auto iterator = g.customPipelines.find(handle);
+    if (iterator == g.customPipelines.end()) {
+        fail("Ray-query evaluation references an unknown custom pipeline handle");
+        return VK_NULL_HANDLE;
+    }
+    if (iterator->second.profile != requiredProfile) {
+        fail("Custom ray-query pipeline profile does not match the evaluation pass");
+        return VK_NULL_HANDLE;
+    }
+    return iterator->second.pipeline;
+}
+
 void destroyPipelineResources() {
     if (!g.device) return;
     resetDescriptorCache();
     resetReflectionDescriptorCache();
+    destroyCustomPipelines(false);
     if (g.depthSampler) g.vk.destroySampler(g.device, g.depthSampler, nullptr);
     if (g.reflectionPipeline) {
         g.vk.destroyPipeline(g.device, g.reflectionPipeline, nullptr);
@@ -1065,6 +1211,40 @@ RayQueryBridgeCapabilities rayQueryBridgeCapabilities() {
     };
 }
 
+bool rayQueryBridgeCreatePipeline(uint32_t handle,
+                                  RayQueryPipelineProfile profile,
+                                  const uint32_t* spirvWords,
+                                  std::size_t wordCount,
+                                  const char* entryPoint) {
+    std::scoped_lock lock(g.mutex);
+    return createCustomPipeline(handle, profile, spirvWords, wordCount, entryPoint);
+}
+
+bool rayQueryBridgeDestroyPipeline(uint32_t handle) {
+    std::scoped_lock lock(g.mutex);
+    if (!g.attached || !g.device || handle == 0u) {
+        fail("Invalid custom ray-query pipeline handle");
+        return false;
+    }
+    const auto iterator = g.customPipelines.find(handle);
+    if (iterator == g.customPipelines.end()) {
+        fail("Custom ray-query pipeline handle does not exist");
+        return false;
+    }
+    if (g.vk.deviceWaitIdle) g.vk.deviceWaitIdle(g.device);
+    if (iterator->second.pipeline) {
+        g.vk.destroyPipeline(g.device, iterator->second.pipeline, nullptr);
+    }
+    g.customPipelines.erase(iterator);
+    g.status = "Custom ray-query compute pipeline destroyed";
+    return true;
+}
+
+void rayQueryBridgeResetPipelines() {
+    std::scoped_lock lock(g.mutex);
+    destroyCustomPipelines(true);
+}
+
 void rayQueryBridgeSceneBegin() {
     std::scoped_lock lock(g.mutex);
     destroySceneResources(true);
@@ -1235,27 +1415,16 @@ bool rayQueryBridgeCommit(void* commandBufferValue) {
     std::vector<float> defaultTriangleRadiance;
     const std::vector<float>* triangleRadiance = &g.pendingTriangleRadiance;
     if (triangleRadiance->empty()) {
-        defaultTriangleRadiance.resize(static_cast<std::size_t>(primitiveCount) * 4u);
-        for (uint32_t primitive = 0; primitive < primitiveCount; ++primitive) {
-            const std::size_t offset = static_cast<std::size_t>(primitive) * 4u;
-            defaultTriangleRadiance[offset + 0u] = 0.18f;
-            defaultTriangleRadiance[offset + 1u] = 0.20f;
-            defaultTriangleRadiance[offset + 2u] = 0.24f;
-            defaultTriangleRadiance[offset + 3u] = 1.0f;
-        }
+        // Descriptor plumbing requires a buffer even when JS provides no
+        // authored terminal radiance. A single neutral record is sufficient;
+        // the shader clamps primitive indices to the available record count.
+        defaultTriangleRadiance.resize(4u, 0.0f);
         triangleRadiance = &defaultTriangleRadiance;
     }
     std::vector<float> defaultTriangleSurface;
     const std::vector<float>* triangleSurface = &g.pendingTriangleSurface;
     if (triangleSurface->empty()) {
-        defaultTriangleSurface.resize(static_cast<std::size_t>(primitiveCount) * 4u);
-        for (uint32_t primitive = 0; primitive < primitiveCount; ++primitive) {
-            const std::size_t offset = static_cast<std::size_t>(primitive) * 4u;
-            defaultTriangleSurface[offset + 0u] = 0.5f;
-            defaultTriangleSurface[offset + 1u] = 0.5f;
-            defaultTriangleSurface[offset + 2u] = 0.5f;
-            defaultTriangleSurface[offset + 3u] = 0.5f;
-        }
+        defaultTriangleSurface.resize(4u, 0.0f);
         triangleSurface = &defaultTriangleSurface;
     }
     std::array<float, 16> defaultStaticLight{};
@@ -1489,12 +1658,45 @@ bool rayQueryBridgeEvaluate(const RayQueryLightingFrame& frame) {
             return false;
         }
     }
-    for (float value : frame.water) {
+    for (float value : frame.cameraPosition) {
         if (!std::isfinite(value)) {
-            fail("Ray-query water parameters must be finite");
+            fail("Ray-query lighting cameraPosition must be finite");
             return false;
         }
     }
+    for (float value : frame.directionalLightDirectionIntensity) {
+        if (!std::isfinite(value)) {
+            fail("Ray-query directional-light data must be finite");
+            return false;
+        }
+    }
+    const float directionLength = std::sqrt(
+        frame.directionalLightDirectionIntensity[0] *
+            frame.directionalLightDirectionIntensity[0] +
+        frame.directionalLightDirectionIntensity[1] *
+            frame.directionalLightDirectionIntensity[1] +
+        frame.directionalLightDirectionIntensity[2] *
+            frame.directionalLightDirectionIntensity[2]);
+    const std::array<float, 6> configuration{{
+        frame.directionalVisibilityStrength, frame.aoStrength, frame.aoRadius,
+        frame.directionalAngularRadius, frame.maxDistance, frame.rayBias,
+    }};
+    if (std::any_of(configuration.begin(), configuration.end(),
+                    [](float value) { return !std::isfinite(value); }) ||
+        directionLength <= 1e-6f || frame.directionalLightDirectionIntensity[3] < 0.0f ||
+        frame.directionalVisibilityStrength < 0.0f || frame.aoStrength < 0.0f ||
+        frame.aoRadius <= 0.0f || frame.directionalAngularRadius < 0.0f ||
+        frame.directionalAngularRadius >= 1.57079632679f || frame.maxDistance <= 0.0f ||
+        frame.rayBias <= 0.0f || frame.rayBias >= frame.maxDistance ||
+        frame.directionalSampleCount == 0u || frame.directionalSampleCount > 64u ||
+        frame.aoSampleCount == 0u || frame.aoSampleCount > 64u) {
+        fail("Ray-query lighting configuration is outside the generic profile limits");
+        return false;
+    }
+    const VkPipeline pipeline = frame.pipelineHandle
+        ? customPipeline(frame.pipelineHandle, RayQueryPipelineProfile::LightingV1)
+        : g.pipeline;
+    if (!pipeline) return false;
     const auto color = static_cast<VkImage>(frame.colorImage);
     const auto depth = static_cast<VkImage>(frame.depthImage);
     const VkDescriptorSet descriptor = descriptorFor(color, depth);
@@ -1517,24 +1719,35 @@ bool rayQueryBridgeEvaluate(const RayQueryLightingFrame& frame) {
 
     struct PushConstants {
         float inverseViewProjection[16];
-        float cameraPosition[4];
-        float sunDirectionIntensity[4];
-        float parameters[4];
+        // xyz camera position, w directional maximum distance.
+        float cameraPositionMaximumDistance[4];
+        // xyz normalized direction, w angular radius in radians.
+        float directionalLightDirectionAngularRadius[4];
+        // directional visibility strength, AO strength/radius and ray bias.
+        float lightingParameters[4];
         uint32_t extentFlags[4];
     } push{};
     static_assert(sizeof(PushConstants) == 128);
     std::copy_n(frame.inverseViewProjection, 16, push.inverseViewProjection);
-    std::copy_n(frame.cameraPosition, 4, push.cameraPosition);
-    std::copy_n(frame.sunDirectionIntensity, 4, push.sunDirectionIntensity);
-    std::copy_n(frame.parameters, 4, push.parameters);
-    push.cameraPosition[3] = frame.water[0];
-    push.parameters[3] = std::max(0.0f, frame.water[2]);
+    std::copy_n(frame.cameraPosition, 3, push.cameraPositionMaximumDistance);
+    push.cameraPositionMaximumDistance[3] = frame.maxDistance;
+    for (std::size_t axis = 0; axis < 3u; ++axis) {
+        push.directionalLightDirectionAngularRadius[axis] =
+            frame.directionalLightDirectionIntensity[axis] / directionLength;
+    }
+    push.directionalLightDirectionAngularRadius[3] = frame.directionalAngularRadius;
+    push.lightingParameters[0] = frame.directionalVisibilityStrength *
+                                 frame.directionalLightDirectionIntensity[3];
+    push.lightingParameters[1] = frame.aoStrength;
+    push.lightingParameters[2] = frame.aoRadius;
+    push.lightingParameters[3] = frame.rayBias;
     push.extentFlags[0] = frame.width;
     push.extentFlags[1] = frame.height;
-    push.extentFlags[2] = frame.flags;
-    push.extentFlags[3] = packHalf2(frame.water[1],
-                                    std::clamp(frame.water[3], 1.0001f, 4.0f));
-    g.vk.cmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, g.pipeline);
+    push.extentFlags[2] = (frame.flags & 1u) |
+                          (frame.directionalSampleCount << 8u) |
+                          (frame.aoSampleCount << 16u);
+    push.extentFlags[3] = frame.frameIndex;
+    g.vk.cmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
     g.vk.cmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                                g.pipelineLayout, 0, 1, &descriptor, 0, nullptr);
     g.vk.cmdPushConstants(commandBuffer, g.pipelineLayout,
@@ -1555,7 +1768,7 @@ bool rayQueryBridgeEvaluate(const RayQueryLightingFrame& frame) {
                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                  VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
     ++g.evaluationCount;
-    g.status = "Hardware ray-query sun visibility and RTAO dispatched";
+    g.status = "Hardware ray-query directional-light visibility and RTAO dispatched";
     return true;
 }
 
@@ -1605,6 +1818,10 @@ bool rayQueryBridgeEvaluateReflections(const RayQueryReflectionFrame& frame) {
         fail("Ray-query reflection strengths, distances, bias, cutoff and environment must be valid");
         return false;
     }
+    const VkPipeline pipeline = frame.pipelineHandle
+        ? customPipeline(frame.pipelineHandle, RayQueryPipelineProfile::ReflectionsV1)
+        : g.reflectionPipeline;
+    if (!pipeline) return false;
 
     const ReflectionDescriptorKey key{
         static_cast<VkImage>(frame.sourceColorImage),
@@ -1682,7 +1899,7 @@ bool rayQueryBridgeEvaluateReflections(const RayQueryReflectionFrame& frame) {
     push.extentFlags[2] = frame.flags;
     push.extentFlags[3] = frame.frameIndex;
     g.vk.cmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-                         g.reflectionPipeline);
+                         pipeline);
     g.vk.cmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                                g.reflectionPipelineLayout, 0, 1, &descriptor,
                                0, nullptr);
@@ -1808,8 +2025,13 @@ void rayQueryBridgeShutdown() {
 bool rayQueryBridgeAttachVulkan(const RayQueryVulkanContext&) { return false; }
 RayQueryBridgeCapabilities rayQueryBridgeCapabilities() {
     return {false, false, false, false, false, false, 0, 0, 0, 0,
-            "Ray query bridge was not compiled"};
+             "Ray query bridge was not compiled"};
 }
+bool rayQueryBridgeCreatePipeline(uint32_t, RayQueryPipelineProfile,
+                                  const uint32_t*, std::size_t,
+                                  const char*) { return false; }
+bool rayQueryBridgeDestroyPipeline(uint32_t) { return false; }
+void rayQueryBridgeResetPipelines() {}
 void rayQueryBridgeSceneBegin() {}
 bool rayQueryBridgeSetPositions(const float*, std::size_t) { return false; }
 bool rayQueryBridgeSetIndices(const uint32_t*, std::size_t) { return false; }

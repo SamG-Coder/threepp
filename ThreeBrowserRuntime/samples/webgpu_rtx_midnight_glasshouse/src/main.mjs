@@ -395,7 +395,7 @@ async function main() {
     let nativeRendered = false;
     if (state.nativeReflections) {
       nativeRendered = reflectionRenderer.render(scene, camera, {
-        sunDirection: rayMoonDirection,
+        directionalLightDirection: rayMoonDirection,
       });
     }
     if (!nativeRendered) {

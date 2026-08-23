@@ -66,20 +66,23 @@ constexpr uint32_t OP_DLSS_EVALUATE = 74;
 // DLSS Ray Reconstruction evaluate.  Payload carries ten resources, packed /
 // alternate-guide flags, world/view matrices and the common frame constants.
 constexpr uint32_t OP_RAY_RECONSTRUCTION_EVALUATE = 76;
-// Native Vulkan ray-query lighting bridge. The first milestone owns one
-// world-space static scene (one BLAS + identity TLAS) per WebGPU context.
-// Every payload starts with u32 protocolVersion (= 1).
+// Native Vulkan ray-query bridge. The runtime owns one world-space static
+// scene (one BLAS + identity TLAS) per WebGPU context. Every payload starts
+// with a u32 protocol version. Scene-upload commands remain version 1.
 constexpr uint32_t OP_RTX_SCENE_BEGIN = 77;     // version
 constexpr uint32_t OP_RTX_SCENE_POSITIONS = 78; // version, vertexCount, vertexCount * vec3f
 constexpr uint32_t OP_RTX_SCENE_INDICES = 79;   // version, indexCount, indexCount * u32
 constexpr uint32_t OP_RTX_SCENE_COMMIT = 80;    // version, encoder; build BLAS/TLAS
 constexpr uint32_t OP_RTX_SCENE_DESTROY = 81;   // version
-// version, encoder, rgba16f color texture/layout, depth32f texture/layout,
-// width, height, inverseViewProjection[16], cameraPosition[4],
-// sunDirectionIntensity[4], params[4] (shadow, AO strength/radius/maxDistance),
-// flags (bit 0 = reversed/inverted depth), water[4] (time, surfaceY,
-// causticStrength, IOR). Color is modified in place and the native pass
-// restores both incoming Vulkan layouts before returning.
+// Version 1: encoder, rgba16f color texture/layout, depth32f texture/layout,
+// width, height, inverseViewProjection[16], cameraPosition[4], legacy
+// directional-light direction/intensity[4], parameters[4], flags and four
+// legacy extension floats.
+// Version 2 keeps the common prefix, with parameters = directional visibility
+// strength, AO strength, AO radius and directional angular radius. It then
+// carries flags, maxDistance, rayBias, directionalSampleCount, aoSampleCount,
+// frameIndex and an optional custom pipeline handle. Color is modified in
+// place and both incoming Vulkan layouts are restored before returning.
 constexpr uint32_t OP_RTX_LIGHTING_EVALUATE = 82;
 // Optional terminal radiance for each primitive in the single static BLAS.
 // Chunks are concatenated until scene commit. Payload:
@@ -90,7 +93,8 @@ constexpr uint32_t OP_RTX_SCENE_TRIANGLE_RADIANCE = 83;
 // {texture, VkImageLayout}; width, height; inverseViewProjection[16],
 // cameraPosition[4], parameters[4] (strength, maxDistance, bias,
 // roughnessCutoff), environment[4] (linear RGB, intensity), flags and
-// frameIndex. Source and output must be distinct rgba16f images.
+// frameIndex. Version 2 appends an optional custom pipeline handle. Source and
+// output must be distinct rgba16f images.
 constexpr uint32_t OP_RTX_REFLECTIONS_EVALUATE = 84;
 // Optional material response for each primitive in the single static BLAS.
 // Chunks are concatenated until scene commit. Payload:
@@ -101,6 +105,13 @@ constexpr uint32_t OP_RTX_SCENE_TRIANGLE_SURFACE = 85;
 // position/range, direction/outerCos, linear color/intensity and
 // innerCos/type/decay/reserved. Type 0 is point and type 1 is spot.
 constexpr uint32_t OP_RTX_SCENE_LIGHTS = 86;
+// Create a device-scoped custom ray-query compute pipeline. Payload:
+// version (= 1), handle, profile, entryPointByteLength, spirvByteLength,
+// entry-point UTF-8 padded to four bytes, then aligned SPIR-V bytes. Profile 1
+// is lighting-v1 and profile 2 is reflections-v1.
+constexpr uint32_t OP_RTX_PIPELINE_CREATE = 87;
+// Destroy a custom pipeline by handle. Payload: version (= 1), handle.
+constexpr uint32_t OP_RTX_PIPELINE_DESTROY = 88;
 // DLSS Frame Generation resource tag/options command, replayed after rendering
 // and before OP_SUBMIT/OP_PRESENT. Payload:
 // u32 encoder, viewport; 4x {texture, VkImageLayout, left, top, width, height};

@@ -339,12 +339,18 @@ function rtxTriangleSurface(value, triangleCount) {
 function rtxStaticLights(value) {
   if (value == null) return null;
   const source = value?.array ?? value;
-  if (!source || typeof source.length !== "number" || source.length === 0 ||
+  if (!source || typeof source.length !== "number" ||
       (source.length % 16) !== 0 || source.length > 8 * 16) {
     throw new TypeError(
-      "lights must contain between one and eight packed 4xvec4 records (16 floats per light)",
+      "lights must contain zero to eight packed 4xvec4 records (16 floats per light)",
     );
   }
+  // Static point/spot lights are optional. Directional visibility is supplied
+  // per frame by evaluateRayLighting, and reflection queries can validly use
+  // only triangle radiance plus the environment. Treat an empty typed array as
+  // an omitted light chunk; native already binds a zero-intensity sentinel so
+  // the descriptor layout remains valid.
+  if (source.length === 0) return null;
   const lights = source instanceof Float32Array
     ? new Float32Array(source)
     : Float32Array.from(source, Number);
@@ -421,6 +427,146 @@ function rtxVector4(value, name, defaultW) {
     throw new TypeError(`${name} must contain only finite numbers`);
   }
   return result;
+}
+
+const RTX_PIPELINE_PROFILES = Object.freeze({
+  "lighting-v1": 1,
+  "reflections-v1": 2,
+});
+const RTX_MAX_SPIRV_BYTES = 1024 * 1024;
+const RTX_MAX_ENTRY_POINT_BYTES = 255;
+const SPIRV_MAGIC = 0x07230203;
+const SPIRV_OP_ENTRY_POINT = 15;
+const SPIRV_OP_EXECUTION_MODE = 16;
+const SPIRV_EXECUTION_MODEL_GL_COMPUTE = 5;
+const SPIRV_EXECUTION_MODE_LOCAL_SIZE = 17;
+const RTX_WORKGROUP_SIZE = Object.freeze([8, 8, 1]);
+
+function rtxPipelineProfile(value) {
+  if (typeof value !== "string" || !Object.prototype.hasOwnProperty.call(RTX_PIPELINE_PROFILES, value)) {
+    throw new TypeError('profile must be "lighting-v1" or "reflections-v1"');
+  }
+  return { name: value, id: RTX_PIPELINE_PROFILES[value] };
+}
+
+function rtxPipelineEntryPoint(value) {
+  const entryPoint = value === undefined ? "main" : value;
+  if (typeof entryPoint !== "string" ||
+      !/^[A-Za-z_][A-Za-z0-9_]*$/.test(entryPoint) ||
+      entryPoint.length > RTX_MAX_ENTRY_POINT_BYTES) {
+    throw new TypeError(
+      `entryPoint must be a non-empty ASCII identifier no longer than ${RTX_MAX_ENTRY_POINT_BYTES} bytes`,
+    );
+  }
+  return entryPoint;
+}
+
+function rtxPipelineCode(value, entryPoint) {
+  let source;
+  if (value instanceof Uint32Array) {
+    source = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  } else if (value instanceof ArrayBuffer) {
+    source = new Uint8Array(value);
+  } else {
+    throw new TypeError("code must be a Uint32Array or ArrayBuffer containing SPIR-V");
+  }
+  if (source.byteLength < 20 || (source.byteLength & 3) !== 0) {
+    throw new RangeError("SPIR-V code must contain an aligned five-word header and instructions");
+  }
+  if (source.byteLength > RTX_MAX_SPIRV_BYTES) {
+    throw new RangeError(`SPIR-V code cannot exceed ${RTX_MAX_SPIRV_BYTES} bytes`);
+  }
+
+  // Always detach the command payload from caller-owned memory before either
+  // validation or command-ring serialization.
+  const bytes = new Uint8Array(source.byteLength);
+  bytes.set(source);
+  const words = new Uint32Array(bytes.buffer);
+  const version = words[1];
+  const majorVersion = (version >>> 16) & 0xff;
+  const minorVersion = (version >>> 8) & 0xff;
+  if (words[0] !== SPIRV_MAGIC || majorVersion !== 1 || minorVersion > 6 ||
+      (version & 0xff0000ff) !== 0 || words[3] === 0 || words[4] !== 0) {
+    throw new TypeError("code does not contain a supported SPIR-V 1.0-1.6 module header");
+  }
+
+  const wantedName = new TextEncoder().encode(entryPoint);
+  let matchingComputeEntryPointId = 0;
+  for (let offset = 5; offset < words.length;) {
+    const instruction = words[offset];
+    const instructionWords = instruction >>> 16;
+    const opcode = instruction & 0xffff;
+    if (instructionWords === 0 || offset + instructionWords > words.length) {
+      throw new TypeError("code contains a malformed SPIR-V instruction stream");
+    }
+    if (opcode === SPIRV_OP_ENTRY_POINT) {
+      if (instructionWords < 4) {
+        throw new TypeError("code contains a malformed SPIR-V entry-point instruction");
+      }
+      const nameStart = (offset + 3) * 4;
+      const nameLimit = (offset + instructionWords) * 4;
+      let nameEnd = nameStart;
+      while (nameEnd < nameLimit && bytes[nameEnd] !== 0) nameEnd++;
+      if (nameEnd === nameLimit) {
+        throw new TypeError("code contains an unterminated SPIR-V entry-point name");
+      }
+      if (words[offset + 1] === SPIRV_EXECUTION_MODEL_GL_COMPUTE &&
+          nameEnd - nameStart === wantedName.byteLength) {
+        let matches = true;
+        for (let index = 0; index < wantedName.byteLength; index++) {
+          if (bytes[nameStart + index] !== wantedName[index]) {
+            matches = false;
+            break;
+          }
+        }
+        if (matches) {
+          const entryPointId = words[offset + 2] >>> 0;
+          if (matchingComputeEntryPointId && matchingComputeEntryPointId !== entryPointId) {
+            throw new TypeError(`SPIR-V code has ambiguous GLCompute entry points named "${entryPoint}"`);
+          }
+          matchingComputeEntryPointId = entryPointId;
+        }
+      }
+    }
+    offset += instructionWords;
+  }
+  if (!matchingComputeEntryPointId) {
+    throw new TypeError(`SPIR-V code has no GLCompute entry point named "${entryPoint}"`);
+  }
+
+  let compatibleLocalSize = false;
+  for (let offset = 5; offset < words.length;) {
+    const instruction = words[offset];
+    const instructionWords = instruction >>> 16;
+    const opcode = instruction & 0xffff;
+    if (opcode === SPIRV_OP_EXECUTION_MODE &&
+        words[offset + 1] === matchingComputeEntryPointId &&
+        words[offset + 2] === SPIRV_EXECUTION_MODE_LOCAL_SIZE) {
+      if (instructionWords !== 6) {
+        throw new TypeError("SPIR-V code contains a malformed LocalSize execution mode");
+      }
+      compatibleLocalSize =
+        words[offset + 3] === RTX_WORKGROUP_SIZE[0] &&
+        words[offset + 4] === RTX_WORKGROUP_SIZE[1] &&
+        words[offset + 5] === RTX_WORKGROUP_SIZE[2];
+      break;
+    }
+    offset += instructionWords;
+  }
+  if (!compatibleLocalSize) {
+    throw new TypeError(
+      `SPIR-V entry point "${entryPoint}" must declare LocalSize ${RTX_WORKGROUP_SIZE.join("x")}`,
+    );
+  }
+  return bytes;
+}
+
+function rtxUint32(value, name, fallback, minimum = 0, maximum = 0xffffffff) {
+  const number = finiteNumber(value, name, fallback);
+  if (!Number.isInteger(number) || number < minimum || number > maximum) {
+    throw new RangeError(`${name} must be an integer from ${minimum} to ${maximum}`);
+  }
+  return number;
 }
 
 function dlssFrameConstants(value) {
@@ -853,6 +999,37 @@ class GPUShaderModule {
   }
   getCompilationInfo() {
     return Promise.resolve({ messages: [] });
+  }
+}
+
+class ThreeBrowserRayQueryPipeline {
+  constructor(handle, device, profile, profileId, entryPoint, label, codeByteLength) {
+    this._h = handle;
+    this._kind = "threebrowser-ray-query-pipeline";
+    this._device = device;
+    this._profileId = profileId;
+    this._destroyed = false;
+    this.profile = profile;
+    this.entryPoint = entryPoint;
+    this.label = label;
+    this.codeByteLength = codeByteLength;
+    device._rtxPipelines.add(this);
+  }
+  get destroyed() {
+    return this._destroyed;
+  }
+  _destroy(flush) {
+    if (this._destroyed) return false;
+    const handle = this._h;
+    this._destroyed = true;
+    this._h = 0;
+    this._device?._rtxPipelines.delete(this);
+    cmd.rtxPipelineDestroy(handle);
+    if (flush) cmd.submitNow(true);
+    return true;
+  }
+  destroy() {
+    this._destroy(true);
   }
 }
 
@@ -1368,6 +1545,8 @@ class GPUDevice extends Emitter {
     this.lost = new Promise(() => {});
     this.label = desc.label || "";
     this._errStack = [];
+    this._destroyed = false;
+    this._rtxPipelines = new Set();
     activeNativeDevice = this;
     ensureStarted(globalThis.innerWidth || 1, globalThis.innerHeight || 1);
   }
@@ -1471,6 +1650,12 @@ class GPUDevice extends Emitter {
     return Promise.resolve(null);
   }
   destroy() {
+    if (this._destroyed) return;
+    this._destroyed = true;
+    const pipelines = Array.from(this._rtxPipelines);
+    for (const pipeline of pipelines) pipeline._destroy(false);
+    this._rtxPipelines.clear();
+    if (pipelines.length > 0) cmd.submitNow(true);
     if (activeNativeDevice === this) activeNativeDevice = null;
   }
   importExternalTexture() {
@@ -1708,6 +1893,71 @@ export function install() {
       adapterName: String(raw.adapterName || ""),
       status: String(raw.status || ""),
     };
+  };
+
+  const requireActiveRtxDevice = () => {
+    if (!activeNativeDevice || activeNativeDevice._destroyed) {
+      throw new Error("A live native GPUDevice is required for a ray-query pipeline");
+    }
+    return activeNativeDevice;
+  };
+
+  const rayQueryPipelineHandle = (pipeline, expectedProfile) => {
+    if (pipeline == null) return 0;
+    if (!(pipeline instanceof ThreeBrowserRayQueryPipeline) ||
+        pipeline._kind !== "threebrowser-ray-query-pipeline") {
+      throw new TypeError("pipeline must be created by threeBrowserRTX.createRayQueryPipeline");
+    }
+    if (pipeline._destroyed || !pipeline._h) {
+      throw new Error("pipeline has been destroyed");
+    }
+    if (!pipeline._device || pipeline._device._destroyed ||
+        pipeline._device !== activeNativeDevice) {
+      throw new Error("pipeline belongs to a different or destroyed GPUDevice");
+    }
+    const expectedProfileId = RTX_PIPELINE_PROFILES[expectedProfile];
+    if (pipeline._profileId !== expectedProfileId) {
+      throw new TypeError(`pipeline must use the ${expectedProfile} profile`);
+    }
+    return pipeline._h;
+  };
+
+  const evaluationPipelineHandle = (encoder, pipeline, expectedProfile) => {
+    const handle = rayQueryPipelineHandle(pipeline, expectedProfile);
+    if (pipeline != null) {
+      encoder._submissionValidators.push(() => {
+        if (rayQueryPipelineHandle(pipeline, expectedProfile) !== handle) {
+          throw new Error("pipeline changed before the ray-query evaluation was submitted");
+        }
+      });
+    }
+    return handle;
+  };
+
+  const createRayQueryPipeline = (options) => {
+    if (!options || typeof options !== "object") {
+      throw new TypeError("threeBrowserRTX.createRayQueryPipeline expects an options object");
+    }
+    const device = requireActiveRtxDevice();
+    if (!readCapabilities().rayQuery) {
+      throw new Error("The active native GPUDevice does not support Vulkan ray-query pipelines");
+    }
+    const profile = rtxPipelineProfile(options.profile);
+    const entryPoint = rtxPipelineEntryPoint(options.entryPoint);
+    const code = rtxPipelineCode(options.code, entryPoint);
+    const label = options.label === undefined ? "" : String(options.label);
+    const handle = cmd.allocHandle();
+    cmd.rtxPipelineCreate(handle, profile.id, entryPoint, code);
+    cmd.submitNow(true);
+    return new ThreeBrowserRayQueryPipeline(
+      handle,
+      device,
+      profile.name,
+      profile.id,
+      entryPoint,
+      label,
+      code.byteLength,
+    );
   };
 
   const featureState = (supported, request, configured, active, reason, extra = {}) => ({
@@ -2272,6 +2522,11 @@ export function install() {
       sceneGeneration,
       "ray-query lighting",
     );
+    const pipelineHandle = evaluationPipelineHandle(
+      nativeEncoder.encoder,
+      frame.pipeline,
+      "lighting-v1",
+    );
     const color = rtxTextureResource(
       frame.color ?? frame.colorTexture,
       "color",
@@ -2301,25 +2556,66 @@ export function install() {
       "inverseViewProjection",
     );
     const cameraPosition = rtxVector4(frame.cameraPosition, "cameraPosition", 1);
-    const sun = rtxVector4(frame.sunDirection, "sunDirection", 0);
-    const sunLength = Math.hypot(sun[0], sun[1], sun[2]);
-    if (!(sunLength > 1e-6)) throw new RangeError("sunDirection must be non-zero");
-    const intensity = finiteNumber(frame.intensity, "intensity", sun[3] || 1);
-    if (intensity < 0) throw new RangeError("intensity cannot be negative");
+    const directionalLight = rtxVector4(
+      frame.directionalLightDirection,
+      "directionalLightDirection",
+      0,
+    );
+    const directionalLength = Math.hypot(
+      directionalLight[0],
+      directionalLight[1],
+      directionalLight[2],
+    );
+    if (!(directionalLength > 1e-6)) {
+      throw new RangeError("directionalLightDirection must be non-zero");
+    }
+    const directionalLightIntensity = finiteNumber(
+      frame.directionalLightIntensity,
+      "directionalLightIntensity",
+      1,
+    );
+    if (directionalLightIntensity < 0) {
+      throw new RangeError("directionalLightIntensity cannot be negative");
+    }
     const shadowStrength = finiteNumber(frame.shadowStrength, "shadowStrength", 0.9);
     const aoStrength = finiteNumber(frame.aoStrength, "aoStrength", 0.22);
     const aoRadius = finiteNumber(frame.aoRadius, "aoRadius", 0.8);
-    const aoMaxDistance = finiteNumber(frame.aoMaxDistance, "aoMaxDistance", 40);
-    if (shadowStrength < 0 || aoStrength < 0 || aoRadius <= 0 || aoMaxDistance <= 0) {
-      throw new RangeError("shadow/AO strengths must be non-negative and AO radius/distances must be positive");
-    }
-    const waterSource = frame.water && typeof frame.water === "object" ? frame.water : {};
-    const waterTime = finiteNumber(waterSource.time, "water.time", 0);
-    const waterSurfaceY = finiteNumber(waterSource.surfaceY, "water.surfaceY", 0);
-    const causticStrength = finiteNumber(waterSource.strength, "water.strength", 0);
-    const waterIor = finiteNumber(waterSource.ior, "water.ior", 1.333);
-    if (causticStrength < 0 || waterIor < 1) {
-      throw new RangeError("water.strength must be non-negative and water.ior must be at least 1");
+    const directionalAngularRadius = finiteNumber(
+      frame.directionalAngularRadius,
+      "directionalAngularRadius",
+      0.0065,
+    );
+    const maxDistance = finiteNumber(
+      frame.maxDistance,
+      "maxDistance",
+      10000,
+    );
+    const rayBias = finiteNumber(frame.rayBias, "rayBias", 0.002);
+    const directionalSampleCount = rtxUint32(
+      frame.directionalSampleCount,
+      "directionalSampleCount",
+      1,
+      1,
+      64,
+    );
+    const aoSampleCount = rtxUint32(
+      frame.aoSampleCount,
+      "aoSampleCount",
+      2,
+      1,
+      64,
+    );
+    const frameIndex = rtxUint32(
+      frame.frameIndex,
+      "frameIndex",
+      0,
+    );
+    if (shadowStrength < 0 || aoStrength < 0 || aoRadius <= 0 ||
+        directionalAngularRadius < 0 || directionalAngularRadius >= Math.PI / 2 ||
+        maxDistance <= 0 || rayBias <= 0 || rayBias >= maxDistance) {
+      throw new RangeError(
+        "Lighting strengths/angular radius must be in range; AO radius/maxDistance/rayBias must be positive and rayBias must be below maxDistance",
+      );
     }
 
     const packed = {
@@ -2331,15 +2627,20 @@ export function install() {
       height,
       inverseViewProjection,
       cameraPosition,
-      sunDirectionIntensity: [
-        sun[0] / sunLength,
-        sun[1] / sunLength,
-        sun[2] / sunLength,
-        intensity,
+      directionalDirectionIntensity: [
+        directionalLight[0] / directionalLength,
+        directionalLight[1] / directionalLength,
+        directionalLight[2] / directionalLength,
+        directionalLightIntensity,
       ],
-      params: [shadowStrength, aoStrength, aoRadius, aoMaxDistance],
-      flags: (frame.depthInverted ? 1 : 0) | (frame.highQuality ? 2 : 0),
-      water: [waterTime, waterSurfaceY, causticStrength, waterIor],
+      params: [shadowStrength, aoStrength, aoRadius, directionalAngularRadius],
+      flags: frame.depthInverted ? 1 : 0,
+      maxDistance,
+      rayBias,
+      directionalSampleCount,
+      aoSampleCount,
+      frameIndex,
+      pipelineHandle,
     };
     nativeEncoder.encoder._commands.push(["rtxLightingEvaluate", packed]);
     rayLightingQueued = true;
@@ -2350,11 +2651,10 @@ export function install() {
       width,
       height,
       effects: Object.freeze({
-        sunVisibility: shadowStrength > 0,
+        directionalLightVisibility: shadowStrength > 0,
         rayTracedAmbientOcclusion: aoStrength > 0,
-        refractedWaterCaustics: causticStrength > 0,
-        stableSunSamples: frame.highQuality ? 4 : 1,
-        stableAoSamples: frame.highQuality ? 8 : 2,
+        directionalSampleCount,
+        aoSampleCount,
       }),
       note: "Native Vulkan ray queries shade the HDR target in place and restore both supplied image layouts.",
     });
@@ -2370,6 +2670,11 @@ export function install() {
       nativeEncoder.encoder,
       sceneGeneration,
       "ray reflections",
+    );
+    const pipelineHandle = evaluationPipelineHandle(
+      nativeEncoder.encoder,
+      frame.pipeline,
+      "reflections-v1",
     );
     const sourceColor = rtxTextureResource(
       frame.sourceColor ?? frame.colorInput,
@@ -2464,8 +2769,7 @@ export function install() {
         environmentIntensity < 0) {
       throw new RangeError("environmentColor and environmentIntensity must be non-negative");
     }
-    const frameIndex = Math.trunc(finiteNumber(frame.frameIndex, "frameIndex", 0));
-    if (frameIndex < 0) throw new RangeError("frameIndex cannot be negative");
+    const frameIndex = rtxUint32(frame.frameIndex, "frameIndex", 0);
 
     const packed = {
       sourceColor: {
@@ -2500,6 +2804,7 @@ export function install() {
         (frame.temporalJitter ? 2 : 0) |
         (frame.highQuality ? 4 : 0),
       frameIndex,
+      pipelineHandle,
     };
     nativeEncoder.encoder._commands.push(["rtxReflectionsEvaluate", packed]);
     rayReflectionsQueued = true;
@@ -2537,6 +2842,7 @@ export function install() {
       evaluateSuperResolution,
       tagFrameGeneration,
       evaluateRayReconstruction,
+      createRayQueryPipeline,
       registerStaticScene,
       destroyStaticScene,
       evaluateRayLighting,

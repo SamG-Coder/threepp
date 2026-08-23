@@ -29,8 +29,8 @@
       "Exercises native DLSS Super Resolution evaluation with real HDR color, depth and TSL motion-vector resources, plus Reflex.",
       "When supported, Frame Generation consumes a real post-tonemapped RGBA8 HUD-less target, native depth and dense TSL motion vectors; native post-Present state remains authoritative.",
       "Ray Reconstruction is deliberately not requested because the sample has no noisy ray-traced lighting inputs.",
-      "Registers static terrain, rocks and debris through navigator.gpu.threeBrowserRTX, then evaluates native Vulkan ray-query sun visibility, RTAO and refracted-water caustics in the HDR frame path.",
-      "Keeps a full-resolution analytic caustic fallback when native ray query is unavailable or the BLAS/TLAS does not become ready."
+      "Registers static terrain, rocks and debris through navigator.gpu.threeBrowserRTX, then evaluates generic native Vulkan directional-light visibility and RTAO in the HDR frame path.",
+      "The full-resolution TSL water material owns its exact wave phases and matching analytic caustics; no sample wave constants live in the native lighting bridge."
     ]
   }
 }

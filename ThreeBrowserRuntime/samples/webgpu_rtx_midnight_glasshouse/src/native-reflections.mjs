@@ -261,7 +261,7 @@ export class NativeReflectionRenderer {
     });
     sceneTarget.textures[0].name = "output";
     // The primary HDR image is shaded in place by the optional native
-    // sun-visibility/contact-AO pass before OP84 samples it.
+    // directional-light-visibility/contact-AO pass before OP84 samples it.
     sceneTarget.textures[0].isStorageTexture = true;
     sceneTarget.textures[1].name = "normalRoughness";
     sceneTarget.textures[2].name = "specularAlbedo";
@@ -371,17 +371,18 @@ export class NativeReflectionRenderer {
             height: this.height,
             inverseViewProjection: this._inverseViewProjection.toArray(),
             cameraPosition: this._cameraPosition,
-            sunDirection: frameOptions.sunDirection ?? [-0.42, 0.79, 0.45],
-            intensity: 0.9,
+            directionalLightDirection:
+              frameOptions.directionalLightDirection ?? [-0.42, 0.79, 0.45],
+            directionalLightIntensity: 0.9,
+            directionalAngularRadius: 0.0065,
+            directionalSampleCount: 4,
+            aoSampleCount: 8,
+            maxDistance: 10000,
+            rayBias: 0.002,
+            frameIndex: this.frameIndex,
             shadowStrength: 0.16,
             aoStrength: 0.085,
             aoRadius: 0.74,
-            aoMaxDistance: 52,
-            // Four deterministic area-light visibility rays plus eight AO rays
-            // remove the brittle single-ray/contact noise while the 5080 still
-            // has substantial headroom. Other pages retain the 1+2-ray tier.
-            highQuality: true,
-            water: { time: 0, surfaceY: 0, strength: 0, ior: 1.333 },
             depthInverted: false,
           });
           this.device.queue.submit([lightingEncoder.finish()]);

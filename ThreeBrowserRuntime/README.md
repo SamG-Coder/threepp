@@ -160,11 +160,12 @@ after `slEvaluateFeature(kFeatureDLSS_RR)` succeeds for a submitted frame.
 Failures and evaluation counts remain observable independently, so adapter
 support is never presented as successful per-frame use.
 
-The runtime also exposes a focused Vulkan ray-query bridge on adapters that
-advertise `EXPERIMENTAL_RAY_QUERY`. This is separate from Streamline and DLSS:
-it supplies native ray traversal to a WebGPU page while preserving the page's
-command ordering and texture ownership. The first contract intentionally owns
-one static world-space triangle scene:
+ThreeBrowser RTX is a generic Three.js renderer extension for functionality
+that upstream Three.js does not expose. On adapters that advertise
+`EXPERIMENTAL_RAY_QUERY`, it provides a focused Vulkan ray-query bridge. This is
+separate from Streamline and DLSS: it supplies native ray traversal to a WebGPU
+page while preserving the page's command ordering and texture ownership. The
+first contract intentionally owns one static world-space triangle scene:
 
 ```js
 const rtx = navigator.gpu.threeBrowserRTX;
@@ -189,17 +190,40 @@ if (registration.queued) {
     depth: depthResource,    // depth32float
     inverseViewProjection,
     cameraPosition,
-    sunDirection,
+    directionalLightDirection,
+    directionalLightIntensity: 1,
+    directionalAngularRadius: 0.0065,
+    directionalSampleCount: 1,
+    aoSampleCount: 2,
+    maxDistance: 10000,
+    rayBias: 0.002,
+    frameIndex,
     shadowStrength: 0.6,
     aoStrength: 0.2,
     aoRadius: 0.9,
-    // Optional stable four-ray area-light visibility plus eight-ray AO.
-    // The default remains one shadow ray plus two AO rays.
-    highQuality: false,
-    water: { time, surfaceY, strength: 0.8, ior: 1.333 },
   });
 }
 ```
+
+`evaluateRayLighting()` is deliberately scene-independent: it provides
+directional-light visibility/shadows and ray-traced ambient occlusion only.
+Water waves, caustics and other authored material behavior remain in the
+Three.js page. The native bridge deliberately does not provide scene-specific
+water, atmosphere, material or composition APIs.
+
+The native lighting and reflection pipelines are generic, safe defaults. The
+page's JavaScript owns the light data and naming, angular size, ray counts and
+sample sequence, trace distance and bias, material behavior, and every artistic
+value. A project that needs another implementation may upload
+profile-compatible SPIR-V from JavaScript with
+`createRayQueryPipeline({ profile: "lighting-v1" | "reflections-v1", code,
+entryPoint: "main", label })`, where `code` is a `Uint32Array` or
+`ArrayBuffer`. Profile shaders are compute entry points with an explicit
+`layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;`; uploads
+that do not match this dispatch contract are rejected before reaching Vulkan.
+Pass the returned device-scoped object as `pipeline` to the
+matching evaluation call and invoke its idempotent `destroy()` when finished.
+Projects that omit `pipeline` continue to use the built-in generic profile.
 
 Pages that provide reflection guides can record a separate one-bounce pass.
 The source and output must be distinct, equally sized persistent textures so
@@ -225,18 +249,19 @@ rtx.evaluateRayReflections({
   roughnessCutoff: 0.32,
   environmentColor: [0.018, 0.032, 0.052],
   environmentIntensity: 1,
-  highQuality: false, // true opts this page into stable 1/8/16-ray GGX tiers
   temporalJitter: true, // rotate deterministic rough-reflection samples per frame
   frameIndex,
 });
 ```
 
-`registerStaticScene()` builds one native BLAS and identity TLAS. The lighting
-evaluation is recorded into the supplied WebGPU command encoder, reconstructs
-receivers from depth, traces sun visibility and ambient occlusion, and can apply
-wave-surface Snell refraction plus convergence-derived underwater caustics.
-Lighting defaults to one visibility and two AO rays per visible pixel; pages
-with measured headroom may request the deterministic four-plus-eight-ray tier.
+`registerStaticScene()` builds one native BLAS and identity TLAS. The built-in
+lighting evaluation is recorded into the supplied WebGPU command encoder,
+reconstructs receivers from depth, and traces directional-light visibility and
+ambient occlusion. Its optional defaults are one visibility sample, two AO
+samples, a 0.0065-radian directional-light radius, a 10000-unit maximum trace
+distance and a 0.002-unit ray bias. These are generic compatibility defaults,
+not scene policy: JavaScript can explicitly override every value, as the
+example above does.
 The reflection evaluation reconstructs the visible receiver from depth, traces
 the static TLAS, reconstructs the hit triangle's geometric normal, evaluates
 the optional packed emitters with range/cone attenuation and shadow rays, then
