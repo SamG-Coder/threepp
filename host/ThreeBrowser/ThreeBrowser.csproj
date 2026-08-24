@@ -30,6 +30,7 @@
     <None Include="..\..\build\bin\three_native.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\..\build\bin\three_native.dll')" />
     <None Include="..\..\build\bin\three_webgpu.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\..\build\bin\three_webgpu.dll')" />
     <None Include="..\..\build\bin\wgpu_native.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\..\build\bin\wgpu_native.dll')" />
+    <None Include="..\..\build\bin\glslangValidator.exe" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\..\build\bin\glslangValidator.exe')" />
     <Content Include="web\**\*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

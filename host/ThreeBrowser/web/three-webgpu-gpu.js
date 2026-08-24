@@ -490,7 +490,15 @@ const RTX_PIPELINE_PROFILES = Object.freeze({
   "reflections-v2": 3,
 });
 const RTX_MAX_SPIRV_BYTES = 1024 * 1024;
+const RTX_MAX_GLSL_SOURCE_BYTES = 1024 * 1024;
 const RTX_MAX_ENTRY_POINT_BYTES = 255;
+const RTX_SHADER_COMPILER_INFO = Object.freeze({
+  language: "glsl",
+  stage: "compute",
+  target: "vulkan1.3",
+  cache: "content-addressed",
+  supportsPrecompiledSpirv: true,
+});
 const SPIRV_MAGIC = 0x07230203;
 const SPIRV_OP_ENTRY_POINT = 15;
 const SPIRV_OP_EXECUTION_MODE = 16;
@@ -615,6 +623,26 @@ function rtxPipelineCode(value, entryPoint) {
     );
   }
   return bytes;
+}
+
+function rtxPipelineSource(value, language, stage) {
+  if (language !== undefined && language !== "glsl") {
+    throw new TypeError('language must be "glsl"');
+  }
+  if (stage !== undefined && stage !== "compute") {
+    throw new TypeError('stage must be "compute"');
+  }
+  if (typeof value !== "string" || value.length === 0) {
+    throw new TypeError("source must be a non-empty GLSL string");
+  }
+  if (value.includes("\0")) {
+    throw new TypeError("source cannot contain null characters");
+  }
+  const byteLength = new TextEncoder().encode(value).byteLength;
+  if (byteLength > RTX_MAX_GLSL_SOURCE_BYTES) {
+    throw new RangeError(`GLSL source cannot exceed ${RTX_MAX_GLSL_SOURCE_BYTES} bytes`);
+  }
+  return { text: value, byteLength };
 }
 
 function rtxUint32(value, name, fallback, minimum = 0, maximum = 0xffffffff) {
@@ -1066,7 +1094,7 @@ class GPUShaderModule {
 }
 
 class ThreeBrowserRayQueryPipeline {
-  constructor(handle, device, profile, profileId, entryPoint, label, codeByteLength) {
+  constructor(handle, device, profile, profileId, entryPoint, label, codeByteLength, sourceByteLength = 0) {
     this._h = handle;
     this._kind = "threebrowser-ray-query-pipeline";
     this._device = device;
@@ -1076,6 +1104,8 @@ class ThreeBrowserRayQueryPipeline {
     this.entryPoint = entryPoint;
     this.label = label;
     this.codeByteLength = codeByteLength;
+    this.sourceByteLength = sourceByteLength;
+    this.compiledFromSource = sourceByteLength > 0;
     device._rtxPipelines.add(this);
   }
   get destroyed() {
@@ -2034,6 +2064,33 @@ export function install() {
       entryPoint,
       label,
       code.byteLength,
+    );
+  };
+
+  const compileRayQueryPipeline = (options) => {
+    if (!options || typeof options !== "object") {
+      throw new TypeError("threeBrowserRTX.compileRayQueryPipeline expects an options object");
+    }
+    const device = requireActiveRtxDevice();
+    if (!readCapabilities().rayQuery) {
+      throw new Error("The active native GPUDevice does not support Vulkan ray-query pipelines");
+    }
+    const profile = rtxPipelineProfile(options.profile);
+    const entryPoint = rtxPipelineEntryPoint(options.entryPoint);
+    const source = rtxPipelineSource(options.source, options.language, options.stage);
+    const label = options.label === undefined ? "" : String(options.label);
+    const handle = cmd.allocHandle();
+    cmd.rtxPipelineCreateSource(handle, profile.id, entryPoint, source.text);
+    cmd.submitNow(true);
+    return new ThreeBrowserRayQueryPipeline(
+      handle,
+      device,
+      profile.name,
+      profile.id,
+      entryPoint,
+      label,
+      0,
+      source.byteLength,
     );
   };
 
@@ -3158,6 +3215,8 @@ export function install() {
       tagFrameGeneration,
       evaluateRayReconstruction,
       createRayQueryPipeline,
+      compileRayQueryPipeline,
+      shaderCompiler: RTX_SHADER_COMPILER_INFO,
       registerStaticScene,
       updateInstanceGroup,
       destroyStaticScene,

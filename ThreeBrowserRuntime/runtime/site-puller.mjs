@@ -109,7 +109,7 @@ function resolveReference(value, baseURL, allowAssetLiteral = false, documentRel
     .filter(key => key.endsWith("/") && value.startsWith(key))
     .sort((a, b) => b.length - a.length)[0];
   if (prefix) return new URL(`${importMapEntries.get(prefix)}${value.slice(prefix.length)}`);
-  if (allowAssetLiteral && /[\\/].+\.(?:m?js|css|wasm|json|glsl|vert|frag|wgsl|png|jpe?g|webp|gif|svg|hdr|exr|gltf|glb|bin|dat)(?:[?#].*)?$/i.test(value)) {
+  if (allowAssetLiteral && /[\\/].+\.(?:m?js|css|wasm|json|glsl|vert|frag|comp|wgsl|spv|png|jpe?g|webp|gif|svg|hdr|exr|gltf|glb|bin|dat)(?:[?#].*)?$/i.test(value)) {
     try { return new URL(value, rootURL); } catch { return null; }
   }
   return null;
@@ -173,7 +173,7 @@ function inspectComposedAssetArrays(record, source) {
   for (const match of source.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(['"])([^\r\n]*?)\2\s*;/g)) {
     constants.set(match[1], simpleStringLiteral(`${match[2]}${match[3]}${match[2]}`));
   }
-  const assetPattern = /\.(?:m?js|css|wasm|json|glsl|vert|frag|wgsl|png|jpe?g|webp|gif|svg|hdr|exr|gltf|glb|bin|dat)(?:[?#].*)?$/i;
+  const assetPattern = /\.(?:m?js|css|wasm|json|glsl|vert|frag|comp|wgsl|spv|png|jpe?g|webp|gif|svg|hdr|exr|gltf|glb|bin|dat)(?:[?#].*)?$/i;
   for (const array of source.matchAll(/\b(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*\[([\s\S]*?)\]\s*;/g)) {
     for (const expression of array[1].split(",")) {
       let value = "";
@@ -268,14 +268,14 @@ function inspectJavaScript(record, source) {
   }
 
   const assetSource = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  const assetStrings = /["']([^"'\\\r\n]+\.(?:m?js|css|wasm|json|glsl|vert|frag|wgsl|png|jpe?g|webp|gif|svg|hdr|exr|gltf|glb|bin|dat)(?:[?#][^"']*)?)["']/gi;
+  const assetStrings = /["']([^"'\\\r\n]+\.(?:m?js|css|wasm|json|glsl|vert|frag|comp|wgsl|spv|png|jpe?g|webp|gif|svg|hdr|exr|gltf|glb|bin|dat)(?:[?#][^"']*)?)["']/gi;
   for (const match of assetSource.matchAll(assetStrings)) {
     collectReference(record, match[1], "asset", true, record.virtualSource !== undefined);
   }
   // A common optimized-loader shape is `${base}assets/file.ext`. The base is
   // normally the document path; collecting the static suffix preserves the
   // same result without trying to execute arbitrary bundle expressions.
-  const templateAssetStrings = /`(?:\$\{[^}]+\})?([^`$]+\.(?:wasm|json|glsl|vert|frag|wgsl|png|jpe?g|webp|gif|svg|hdr|exr|gltf|glb|bin|dat)(?:[?#][^`]*)?)`/gi;
+  const templateAssetStrings = /`(?:\$\{[^}]+\})?([^`$]+\.(?:wasm|json|glsl|vert|frag|comp|wgsl|spv|png|jpe?g|webp|gif|svg|hdr|exr|gltf|glb|bin|dat)(?:[?#][^`]*)?)`/gi;
   for (const match of assetSource.matchAll(templateAssetStrings)) {
     collectReference(record, match[1], "asset", true, true);
   }

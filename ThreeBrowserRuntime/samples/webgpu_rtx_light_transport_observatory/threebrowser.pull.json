@@ -16,8 +16,7 @@
     { "url": "https://webgpu-rtx-light-transport-observatory.runtime.threebrowser.local/src/hud.mjs", "path": "src/hud.mjs", "type": "module", "bytes": 0 },
     { "url": "https://webgpu-rtx-light-transport-observatory.runtime.threebrowser.local/src/native-reflections.mjs", "path": "src/native-reflections.mjs", "type": "module", "bytes": 0 },
     { "url": "https://webgpu-rtx-light-transport-observatory.runtime.threebrowser.local/src/rtx-scene.mjs", "path": "src/rtx-scene.mjs", "type": "module", "bytes": 0 },
-    { "url": "https://webgpu-rtx-light-transport-observatory.runtime.threebrowser.local/shaders/observatory_reflections.comp", "path": "shaders/observatory_reflections.comp", "type": "shader", "bytes": 0 },
-    { "url": "https://webgpu-rtx-light-transport-observatory.runtime.threebrowser.local/shaders/observatory_reflections.spv", "path": "shaders/observatory_reflections.spv", "type": "binary", "bytes": 0 }
+    { "url": "https://webgpu-rtx-light-transport-observatory.runtime.threebrowser.local/shaders/observatory_reflections.comp", "path": "shaders/observatory_reflections.comp", "type": "shader", "bytes": 0 }
   ],
   "compatibility": {
     "threeImportable": true,

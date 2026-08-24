@@ -1358,7 +1358,8 @@ let pulledVirtualFiles = new Map();
 const contentTypes = new Map([
   [".json", "application/json"], [".gltf", "model/gltf+json"], [".glb", "model/gltf-binary"],
   [".bin", "application/octet-stream"], [".dat", "application/octet-stream"], [".wasm", "application/wasm"], [".txt", "text/plain"],
-  [".glsl", "text/plain"], [".vert", "text/plain"], [".frag", "text/plain"], [".wgsl", "text/plain"],
+  [".glsl", "text/plain"], [".vert", "text/plain"], [".frag", "text/plain"], [".comp", "text/plain"],
+  [".wgsl", "text/plain"], [".spv", "application/vnd.khronos.spirv"],
   [".png", "image/png"], [".jpg", "image/jpeg"], [".jpeg", "image/jpeg"], [".webp", "image/webp"],
 ]);
 globalThis.fetch = async (input, init) => {

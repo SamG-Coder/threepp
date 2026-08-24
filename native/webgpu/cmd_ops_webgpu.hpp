@@ -118,6 +118,13 @@ constexpr uint32_t OP_RTX_PIPELINE_DESTROY = 88;
 constexpr uint32_t OP_RTX_SCENE_INSTANCE_GROUP = 89;
 // version, encoder, id, count, count * row-major mat3x4<f32>, count * u32 mask.
 constexpr uint32_t OP_RTX_INSTANCE_GROUP_UPDATE = 90;
+// Compile GLSL compute source through the bundled native shader compiler and
+// create a device-scoped custom ray-query pipeline. Payload:
+// version (= 1), handle, profile, entryPointByteLength, sourceByteLength,
+// entry-point UTF-8 padded to four bytes, then raw GLSL UTF-8 source. The
+// source compiler uses a content-addressed SPIR-V cache; opcode 87 remains the
+// direct/precompiled SPIR-V path.
+constexpr uint32_t OP_RTX_PIPELINE_CREATE_SOURCE = 91;
 // DLSS Frame Generation resource tag/options command, replayed after rendering
 // and before OP_SUBMIT/OP_PRESENT. Payload:
 // u32 encoder, viewport; 4x {texture, VkImageLayout, left, top, width, height};

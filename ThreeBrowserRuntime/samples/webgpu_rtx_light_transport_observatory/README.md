@@ -40,8 +40,13 @@ as demo content in C++ or in ThreeBrowser's native shaders.
 
 `shaders/observatory_reflections.comp` implements the public
 `reflections-v2` pipeline contract, including its generic binding 11
-world-space hit-distance output. Its generated SPIR-V is stored beside the
-source and loaded by `src/main.mjs`. The project uses only the generic runtime
-APIs for static-scene registration, ray-query pipeline creation, reflection
-evaluation, Ray Reconstruction / Super Resolution, Frame Generation, Reflex,
-and presentation. Resize, camera cuts, and marble spawns reset temporal history.
+world-space hit-distance output. The GLSL source is canonical: the generic
+runtime validates a content-addressed SPIR-V cache against the source,
+entry point, profile, compiler identity, Vulkan target, and runtime shader ABI.
+It loads a valid cached binary immediately or recompiles and atomically updates
+the local cache. Projects that deliberately ship precompiled SPIR-V can still
+use `createRayQueryPipeline({ code })` directly. The project uses only the
+generic runtime APIs for static-scene registration, ray-query pipeline creation,
+reflection evaluation, Ray Reconstruction / Super Resolution, Frame Generation,
+Reflex, and presentation. Resize, camera cuts, and marble spawns reset temporal
+history.

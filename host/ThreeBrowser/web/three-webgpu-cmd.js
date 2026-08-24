@@ -66,6 +66,7 @@ export const OP = {
   RTX_PIPELINE_DESTROY: 88,
   RTX_SCENE_INSTANCE_GROUP: 89,
   RTX_INSTANCE_GROUP_UPDATE: 90,
+  RTX_PIPELINE_CREATE_SOURCE: 91,
 };
 
 // wgpu-native webgpu.h numeric enums (WGPUTextureFormat, …).
@@ -1361,6 +1362,27 @@ function rtxPipelineCreate(handle, profile, entryPoint, spirv) {
   end(s);
 }
 
+function rtxPipelineCreateSource(handle, profile, entryPoint, source) {
+  const entryPointBytes = utf8(entryPoint);
+  const entryPointPaddedBytes = (entryPointBytes.byteLength + 3) & ~3;
+  const sourceBytes = utf8(source);
+  const s = begin(
+    OP.RTX_PIPELINE_CREATE_SOURCE,
+    20 + entryPointPaddedBytes + sourceBytes.byteLength,
+  );
+  wu32(RTX_PIPELINE_PROTOCOL_VERSION);
+  wu32(handle >>> 0);
+  wu32(profile >>> 0);
+  wu32(entryPointBytes.byteLength);
+  wu32(sourceBytes.byteLength);
+  wbytes(entryPointBytes);
+  if (entryPointPaddedBytes > entryPointBytes.byteLength) {
+    wbytes(new Uint8Array(entryPointPaddedBytes - entryPointBytes.byteLength));
+  }
+  wbytes(sourceBytes);
+  end(s);
+}
+
 function rtxPipelineDestroy(handle) {
   const s = begin(OP.RTX_PIPELINE_DESTROY, 8);
   wu32(RTX_PIPELINE_PROTOCOL_VERSION);
@@ -1572,6 +1594,7 @@ const cmd = {
   rtxSceneInstanceGroup,
   rtxInstanceGroupUpdate,
   rtxPipelineCreate,
+  rtxPipelineCreateSource,
   rtxPipelineDestroy,
   rtxLightingEvaluate,
   rtxReflectionsEvaluate,

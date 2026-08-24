@@ -468,6 +468,11 @@ TW_API int tw_ray_query_pipeline_create(uint32_t handle, uint32_t profile,
                                         uint32_t spirv_byte_length,
                                         const char* entry_point,
                                         uint32_t entry_point_length);
+TW_API int tw_ray_query_pipeline_create_glsl(uint32_t handle, uint32_t profile,
+                                             const char* glsl_source,
+                                             uint32_t glsl_source_byte_length,
+                                             const char* entry_point,
+                                             uint32_t entry_point_length);
 TW_API int tw_ray_query_pipeline_destroy(uint32_t handle);
 TW_API int tw_cmd_submit(const uint8_t* data, int nbytes);
 TW_API int tw_map_read(uint32_t buffer_handle, uint64_t offset, uint64_t size, void* dst, int dst_bytes);

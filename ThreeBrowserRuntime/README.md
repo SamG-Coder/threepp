@@ -214,8 +214,30 @@ water, atmosphere, material or composition APIs.
 The native lighting and reflection pipelines are generic, safe defaults. The
 page's JavaScript owns the light data and naming, angular size, ray counts and
 sample sequence, trace distance and bias, material behavior, and every artistic
-value. A project that needs another implementation may upload
-profile-compatible SPIR-V from JavaScript with
+value. Projects may keep profile-compatible GLSL compute source as their
+canonical shader and let ThreeBrowser compile and cache it:
+
+```js
+const pipeline = threeBrowserRTX.compileRayQueryPipeline({
+  profile: "lighting-v1", // or reflections-v1 / reflections-v2
+  source: glslSource,
+  language: "glsl",
+  stage: "compute",
+  entryPoint: "main",
+  label: "project lighting",
+});
+```
+
+The native runtime validates a content-addressed cache entry before loading it.
+Its key includes the complete source, profile ABI, entry point, compiler binary,
+compiler flags and Vulkan target. A matching validated SPIR-V entry is loaded
+directly; otherwise the bundled compiler produces SPIR-V, the result is
+validated and atomically published to the per-user shader cache, and that result
+is loaded. This is stronger than timestamp-only invalidation and does not modify
+the project directory.
+
+Projects that already ship a trusted precompiled shader may bypass compilation
+and upload it directly with
 `createRayQueryPipeline({ profile: "lighting-v1" | "reflections-v1" |
 "reflections-v2", code,
 entryPoint: "main", label })`, where `code` is a `Uint32Array` or

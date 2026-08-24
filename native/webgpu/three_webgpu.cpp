@@ -1,6 +1,7 @@
 #include "three_webgpu.h"
 #include "cmd_ops_webgpu.hpp"
 #include "ray_query_bridge.h"
+#include "shader_compiler.h"
 #include "streamline_bridge.h"
 
 #ifndef WGPU_SHARED_LIBRARY
@@ -4895,6 +4896,34 @@ void execOne(uint32_t op, Reader& r) {
                                          entryPointLength);
             return;
         }
+        case OP_RTX_PIPELINE_CREATE_SOURCE: {
+            const uint32_t version = r.u32();
+            const uint32_t handle = r.u32();
+            const uint32_t profile = r.u32();
+            const uint32_t entryPointLength = r.u32();
+            const uint32_t sourceByteLength = r.u32();
+            if (version != 1u || handle == 0u || entryPointLength == 0u ||
+                entryPointLength > 255u || sourceByteLength == 0u ||
+                sourceByteLength > 1024u * 1024u) {
+                setError("Invalid RTX GLSL custom-pipeline command");
+                return;
+            }
+            const uint8_t* entryBytes = r.bytes(entryPointLength);
+            const uint32_t entryPadding = (4u - (entryPointLength & 3u)) & 3u;
+            if (entryPadding) r.bytes(entryPadding);
+            const uint8_t* sourceBytes = r.bytes(sourceByteLength);
+            if (!r.ok || !entryBytes || !sourceBytes ||
+                std::memchr(entryBytes, '\0', entryPointLength) ||
+                std::memchr(sourceBytes, '\0', sourceByteLength)) {
+                setError("Truncated or invalid RTX GLSL custom-pipeline command");
+                return;
+            }
+            tw_ray_query_pipeline_create_glsl(
+                handle, profile,
+                reinterpret_cast<const char*>(sourceBytes), sourceByteLength,
+                reinterpret_cast<const char*>(entryBytes), entryPointLength);
+            return;
+        }
         case OP_RTX_PIPELINE_DESTROY: {
             const uint32_t version = r.u32();
             const uint32_t handle = r.u32();
@@ -7174,6 +7203,44 @@ int tw_ray_query_pipeline_create(uint32_t handle, uint32_t profile,
         setError(ex.what());
         return 0;
     }
+}
+
+int tw_ray_query_pipeline_create_glsl(uint32_t handle, uint32_t profile,
+                                      const char* glslSource,
+                                      uint32_t glslSourceByteLength,
+                                      const char* entryPoint,
+                                      uint32_t entryPointLength) {
+    if (handle == 0u || !glslSource || glslSourceByteLength == 0u ||
+        glslSourceByteLength > 1024u * 1024u ||
+        std::memchr(glslSource, '\0', glslSourceByteLength) || !entryPoint ||
+        entryPointLength == 0u || entryPointLength > 255u ||
+        std::memchr(entryPoint, '\0', entryPointLength) ||
+        (profile != static_cast<uint32_t>(RayQueryPipelineProfile::LightingV1) &&
+         profile != static_cast<uint32_t>(RayQueryPipelineProfile::ReflectionsV1) &&
+         profile != static_cast<uint32_t>(RayQueryPipelineProfile::ReflectionsV2))) {
+        setError("Invalid GLSL ray-query pipeline creation request");
+        return 0;
+    }
+
+    const std::string profileIdentity =
+        "ThreeBrowser.RayQueryPipeline/profile=" + std::to_string(profile) +
+        "/abi=1";
+    tw::VulkanShaderCompileRequest request{
+        std::string_view(glslSource, glslSourceByteLength),
+        std::string_view(entryPoint, entryPointLength),
+        profileIdentity,
+        tw::VulkanShaderStage::Compute};
+    tw::VulkanShaderCompileResult result;
+    if (!tw::compileVulkanShaderCached(request, result)) {
+        setError(result.diagnostic.empty()
+            ? "GLSL shader compilation failed"
+            : result.diagnostic.c_str());
+        return 0;
+    }
+    return tw_ray_query_pipeline_create(
+        handle, profile, result.spirv.data(),
+        static_cast<uint32_t>(result.spirv.size() * sizeof(uint32_t)),
+        entryPoint, entryPointLength);
 }
 
 int tw_ray_query_pipeline_destroy(uint32_t handle) {

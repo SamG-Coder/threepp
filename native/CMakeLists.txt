@@ -68,6 +68,7 @@ if (WIN32)
             webgpu/three_webgpu.cpp
             webgpu/streamline_bridge.cpp
             webgpu/ray_query_bridge.cpp
+            webgpu/shader_compiler.cpp
     )
     target_include_directories(three_webgpu PUBLIC
             "${CMAKE_CURRENT_SOURCE_DIR}/webgpu"
@@ -111,7 +112,7 @@ if (WIN32)
             VARIANT_SUFFIX reflections_v2_r32
             DEFINES THREEBROWSER_REFLECTIONS_V2=1 THREEBROWSER_HIT_DISTANCE_R32=1)
     endif ()
-    target_link_libraries(three_webgpu PRIVATE "${WGPU_NATIVE_LIB}" user32 gdi32)
+    target_link_libraries(three_webgpu PRIVATE "${WGPU_NATIVE_LIB}" user32 gdi32 bcrypt)
     target_link_libraries(three_native PRIVATE three_webgpu)
     set_target_properties(three_webgpu PROPERTIES
             PREFIX ""
@@ -126,6 +127,13 @@ if (WIN32)
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${WGPU_NATIVE_DLL}" "$<TARGET_FILE_DIR:three_webgpu>/wgpu_native.dll"
             COMMENT "Copy wgpu_native.dll next to three_webgpu.dll")
+    if (THREEBROWSER_ENABLE_RAY_QUERY)
+        add_custom_command(TARGET three_webgpu POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${GLSLANG_VALIDATOR}"
+                "$<TARGET_FILE_DIR:three_webgpu>/glslangValidator.exe"
+                COMMENT "Copy glslangValidator.exe next to three_webgpu.dll")
+    endif ()
     if (THREEBROWSER_ENABLE_STREAMLINE)
         foreach (_sl_runtime
                 sl.interposer.dll sl.common.dll sl.dlss.dll sl.dlss_g.dll sl.dlss_d.dll

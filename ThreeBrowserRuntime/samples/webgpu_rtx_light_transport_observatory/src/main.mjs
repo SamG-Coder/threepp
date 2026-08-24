@@ -79,21 +79,24 @@ function createObservatoryEnvironment(renderer, { mirrorSafe = false } = {}) {
 }
 
 async function createProjectReflectionPipeline(rtx) {
-  if (!rtx?.capabilities?.rayQuery || typeof rtx.createRayQueryPipeline !== "function") return null;
+  if (!rtx?.capabilities?.rayQuery || typeof rtx.compileRayQueryPipeline !== "function") return null;
   try {
-    const shaderUrl = new URL("../shaders/observatory_reflections.spv", import.meta.url);
+    const shaderUrl = new URL("../shaders/observatory_reflections.comp", import.meta.url);
     const response = await fetch(shaderUrl);
     if (!response.ok) throw new Error(`HTTP ${response.status} while loading ${shaderUrl.pathname}`);
-    const code = await response.arrayBuffer();
-    const pipeline = rtx.createRayQueryPipeline({
+    const source = await response.text();
+    const pipeline = await rtx.compileRayQueryPipeline({
       profile: "reflections-v2",
-      code,
+      source,
+      language: "glsl",
+      stage: "compute",
       entryPoint: "main",
       label: "Observatory deterministic multi-bounce reflections",
     });
     console.log(
       `[Light Transport Observatory] Project reflection pipeline ready` +
-      ` · ${pipeline.codeByteLength.toLocaleString()} bytes` +
+      ` · ${pipeline.sourceByteLength.toLocaleString()} source bytes` +
+      ` · ${pipeline.compiledFromSource ? "validated SPIR-V cache" : "precompiled SPIR-V"}` +
       " · 2 bounce balanced / 3 bounce cinematic.",
     );
     return pipeline;
