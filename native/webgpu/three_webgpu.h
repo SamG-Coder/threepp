@@ -358,6 +358,35 @@ typedef struct TWRayQueryReflectionFrameV2 {
     uint32_t pipeline_handle;
 } TWRayQueryReflectionFrameV2;
 
+// Additive reflection ABI with an optional storage texture containing the
+// linear world-space primary specular-ray hit distance. A zero handle keeps
+// the reflections-v1 descriptor contract and behavior.
+typedef struct TWRayQueryReflectionFrameV3 {
+    uint32_t struct_size;
+    uint32_t command_encoder_handle;
+    uint32_t source_color_texture_handle;
+    uint32_t source_color_vulkan_layout;
+    uint32_t output_color_texture_handle;
+    uint32_t output_color_vulkan_layout;
+    uint32_t depth_texture_handle;
+    uint32_t depth_vulkan_layout;
+    uint32_t normal_roughness_texture_handle;
+    uint32_t normal_roughness_vulkan_layout;
+    uint32_t specular_albedo_texture_handle;
+    uint32_t specular_albedo_vulkan_layout;
+    uint32_t width;
+    uint32_t height;
+    float inverse_view_projection[16];
+    float camera_position[4];
+    float parameters[4];
+    float environment[4];
+    uint32_t flags;
+    uint32_t frame_index;
+    uint32_t pipeline_handle;
+    uint32_t specular_hit_distance_texture_handle;
+    uint32_t specular_hit_distance_vulkan_layout;
+} TWRayQueryReflectionFrameV3;
+
 TW_API int tw_start(void* parent_hwnd, int x, int y, int w, int h);
 TW_API void tw_set_standalone_ui(int on);
 TW_API int tw_attach_host(void* parent_hwnd, int x, int y, int w, int h);
@@ -416,12 +445,24 @@ TW_API int tw_ray_query_scene_triangle_surface(const float* albedo_roughness,
                                                uint32_t triangle_count);
 TW_API int tw_ray_query_scene_lights(const float* light_records,
                                      uint32_t light_count);
+TW_API int tw_ray_query_scene_instance_group(uint32_t id, uint32_t capacity,
+                                             uint32_t vertex_offset,
+                                             uint32_t vertex_count,
+                                             uint32_t index_offset,
+                                             uint32_t index_count,
+                                             uint32_t primitive_base);
 TW_API int tw_ray_query_scene_commit(uint32_t command_encoder_handle);
+TW_API int tw_ray_query_instance_group_update(uint32_t command_encoder_handle,
+                                              uint32_t id,
+                                              const float* matrices_3x4,
+                                              const uint32_t* masks,
+                                              uint32_t instance_count);
 TW_API void tw_ray_query_scene_destroy(void);
 TW_API int tw_ray_query_lighting_evaluate(const TWRayQueryLightingFrame* frame);
 TW_API int tw_ray_query_lighting_evaluate_v2(const TWRayQueryLightingFrameV2* frame);
 TW_API int tw_ray_query_reflections_evaluate(const TWRayQueryReflectionFrame* frame);
 TW_API int tw_ray_query_reflections_evaluate_v2(const TWRayQueryReflectionFrameV2* frame);
+TW_API int tw_ray_query_reflections_evaluate_v3(const TWRayQueryReflectionFrameV3* frame);
 TW_API int tw_ray_query_pipeline_create(uint32_t handle, uint32_t profile,
                                         const uint32_t* spirv_words,
                                         uint32_t spirv_byte_length,

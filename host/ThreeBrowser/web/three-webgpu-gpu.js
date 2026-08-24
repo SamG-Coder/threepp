@@ -336,6 +336,60 @@ function rtxTriangleSurface(value, triangleCount) {
   return surface;
 }
 
+function rtxInstanceGroupIdentity(value) {
+  if (typeof value === "number") {
+    if (!Number.isInteger(value) || value <= 0 || value > 0xffffffff) {
+      throw new RangeError("instance-group numeric ids must be integers in [1, 0xffffffff]");
+    }
+    return { key: `n:${value}`, nativeId: value >>> 0, publicId: value };
+  }
+  if (typeof value !== "string" || value.length === 0) {
+    throw new TypeError("instance-group ids must be non-empty strings or positive uint32 values");
+  }
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  // Zero is reserved for the fixed world-space scene instance.
+  if (hash === 0) hash = 1;
+  return { key: `s:${value}`, nativeId: hash, publicId: value };
+}
+
+function rtxInstanceMatrices(value, capacity) {
+  const source = value?.array ?? value;
+  const expected = capacity * 12;
+  if (!source || typeof source.length !== "number" || source.length !== expected) {
+    throw new TypeError(
+      `matrices must contain exactly ${capacity} tightly packed row-major 3x4 transforms (${expected} floats)`,
+    );
+  }
+  const matrices = source instanceof Float32Array
+    ? new Float32Array(source)
+    : Float32Array.from(source, Number);
+  if (matrices.some(component => !Number.isFinite(component))) {
+    throw new TypeError("instance-group matrices must contain only finite values");
+  }
+  return matrices;
+}
+
+function rtxInstanceMasks(value, capacity) {
+  if (value == null) return new Uint32Array(capacity).fill(0xff);
+  const source = value?.array ?? value;
+  if (!source || typeof source.length !== "number" || source.length !== capacity) {
+    throw new TypeError(`masks must contain exactly ${capacity} uint8 visibility masks`);
+  }
+  const masks = new Uint32Array(capacity);
+  for (let i = 0; i < capacity; i++) {
+    const mask = Number(source[i]);
+    if (!Number.isInteger(mask) || mask < 0 || mask > 0xff) {
+      throw new RangeError(`masks[${i}] must be an integer in [0, 255]`);
+    }
+    masks[i] = mask;
+  }
+  return masks;
+}
+
 function rtxStaticLights(value) {
   if (value == null) return null;
   const source = value?.array ?? value;
@@ -399,8 +453,9 @@ function rtxTextureResource(value, name, requiredFormat, requiredUsage, layoutOv
       texture.mipLevelCount !== 1 || texture.sampleCount !== 1) {
     throw new TypeError(`${name} must be a single-sampled, single-layer 2D texture with one mip level`);
   }
-  if (texture.format !== requiredFormat) {
-    throw new TypeError(`${name} must use ${requiredFormat}; received ${texture.format || "undefined"}`);
+  const requiredFormats = Array.isArray(requiredFormat) ? requiredFormat : [requiredFormat];
+  if (!requiredFormats.includes(texture.format)) {
+    throw new TypeError(`${name} must use ${requiredFormats.join(" or ")}; received ${texture.format || "undefined"}`);
   }
   if ((texture.usage & requiredUsage) !== requiredUsage) {
     throw new TypeError(`${name} does not include the GPU usage bits required by native ray-query lighting`);
@@ -432,6 +487,7 @@ function rtxVector4(value, name, defaultW) {
 const RTX_PIPELINE_PROFILES = Object.freeze({
   "lighting-v1": 1,
   "reflections-v1": 2,
+  "reflections-v2": 3,
 });
 const RTX_MAX_SPIRV_BYTES = 1024 * 1024;
 const RTX_MAX_ENTRY_POINT_BYTES = 255;
@@ -444,7 +500,7 @@ const RTX_WORKGROUP_SIZE = Object.freeze([8, 8, 1]);
 
 function rtxPipelineProfile(value) {
   if (typeof value !== "string" || !Object.prototype.hasOwnProperty.call(RTX_PIPELINE_PROFILES, value)) {
-    throw new TypeError('profile must be "lighting-v1" or "reflections-v1"');
+    throw new TypeError('profile must be "lighting-v1", "reflections-v1" or "reflections-v2"');
   }
   return { name: value, id: RTX_PIPELINE_PROFILES[value] };
 }
@@ -976,6 +1032,13 @@ class GPUTexture {
   destroy() {
     if (this._swapchain || this._destroyed) return;
     const handle = this._h;
+    if (globalThis.process?.env?.THREEBROWSER_TRACE_WEBGPU_VIEWS) {
+      console.error("ThreeBrowser WebGPU texture destroy", JSON.stringify({
+        texture: handle,
+        label: this.label,
+        size: [this.width, this.height, this.depthOrArrayLayers],
+      }));
+    }
     this._destroyed = true;
     this._h = 0;
     cmd.texDestroy(handle);
@@ -1402,7 +1465,11 @@ function replayCommandBuffer(buffer) {
       case "rtxSceneTriangleRadiance": cmd.rtxSceneTriangleRadiance(entry[1]); break;
       case "rtxSceneTriangleSurface": cmd.rtxSceneTriangleSurface(entry[1]); break;
       case "rtxSceneLights": cmd.rtxSceneLights(entry[1]); break;
+      case "rtxSceneInstanceGroup": cmd.rtxSceneInstanceGroup(entry[1]); break;
       case "rtxSceneCommit": cmd.rtxSceneCommit(enc); break;
+      case "rtxInstanceGroupUpdate":
+        cmd.rtxInstanceGroupUpdate(enc, entry[1].id, entry[1].matrices, entry[1].masks);
+        break;
       case "rtxLightingEvaluate": cmd.rtxLightingEvaluate(enc, entry[1]); break;
       case "rtxReflectionsEvaluate": cmd.rtxReflectionsEvaluate(enc, entry[1]); break;
       case "copyBuf": cmd.copyBuf(enc, entry[1]._h, entry[3]._h, entry[2], entry[4], entry[5]); break;
@@ -1568,6 +1635,15 @@ class GPUDevice extends Emitter {
   createTexture(desc) {
     const h = cmd.allocHandle();
     cmd.texCreate(h, desc);
+    if (globalThis.process?.env?.THREEBROWSER_TRACE_WEBGPU_VIEWS) {
+      console.error("ThreeBrowser WebGPU texture", JSON.stringify({
+        texture: h,
+        label: desc?.label || "",
+        size: extent(desc?.size),
+        format: desc?.format,
+        usage: desc?.usage,
+      }));
+    }
     return new GPUTexture(h, desc, false);
   }
   createSampler(desc) {
@@ -1872,6 +1948,7 @@ export function install() {
   let staticRaySceneSubmitted = false;
   let staticRaySceneGeneration = 0;
   let activeStaticRaySceneGeneration = 0;
+  const dynamicRayInstanceGroups = new Map();
   let rayLightingQueued = false;
   let rayReflectionsQueued = false;
 
@@ -2058,6 +2135,20 @@ export function install() {
     return immutableSnapshot(fallbackStatus());
   };
 
+  const runtimeControlBlock = (feature, status, featureName, viewport) => {
+    const reason = typeof feature?.reason === "string" ? feature.reason : "";
+    const runtimeControlled = reason === "Disabled from runtime controls" ||
+      reason.startsWith("Blocked by runtime controls:");
+    if (!runtimeControlled || feature?.requested) return null;
+    return immutableSnapshot({
+      queued: false,
+      viewport,
+      reason,
+      status,
+      note: `${featureName} is disabled by the runtime controls; no native command was recorded.`,
+    });
+  };
+
   const requestFeatures = (options = {}) => {
     if (!options || typeof options !== "object") {
       throw new TypeError("threeBrowserRTX.requestFeatures expects an options object");
@@ -2153,8 +2244,18 @@ export function install() {
     if (encoder._finished) {
       throw new TypeError("frame.commandEncoder has already been finished; record DLSS evaluation before finish()");
     }
+    const viewport = Math.max(0, Math.trunc(finiteNumber(frame.viewport, "frame.viewport", 0)));
+    const statusBeforeQueue = getStatus();
+    const configured = statusBeforeQueue.features?.dlssSuperResolution;
+    const runtimeBlock = runtimeControlBlock(
+      configured,
+      statusBeforeQueue,
+      "DLSS Super Resolution",
+      viewport,
+    );
+    if (runtimeBlock) return runtimeBlock;
     const packed = {
-      viewport: Math.max(0, Math.trunc(finiteNumber(frame.viewport, "frame.viewport", 0))),
+      viewport,
       colorInput: dlssResource(frame.colorInput, "frame.colorInput", DLSS_COLOR_FORMATS, 0x04),
       colorOutput: dlssResource(frame.colorOutput, "frame.colorOutput", DLSS_COLOR_FORMATS, 0x08),
       depth: dlssResource(frame.depth, "frame.depth", DLSS_DEPTH_FORMATS, 0x04),
@@ -2172,7 +2273,6 @@ export function install() {
         throw new RangeError(`frame.${name} region must match frame.colorInput dimensions`);
       }
     }
-    const configured = getStatus().features?.dlssSuperResolution;
     if (configured?.configured && configured.renderWidth > 0 && configured.renderHeight > 0 &&
         (packed.colorInput.width !== configured.renderWidth || packed.colorInput.height !== configured.renderHeight)) {
       throw new RangeError("frame.colorInput dimensions do not match the configured DLSS render dimensions");
@@ -2182,11 +2282,10 @@ export function install() {
       throw new RangeError("frame.colorOutput dimensions do not match the configured DLSS output dimensions");
     }
     encoder._commands.push(["dlssEvaluate", packed]);
-    const status = getStatus();
     return immutableSnapshot({
       queued: true,
       viewport: packed.viewport,
-      status,
+      status: statusBeforeQueue,
       note: "Evaluation is recorded on the command encoder. Active state changes only after queue submission and successful native replay.",
     });
   };
@@ -2207,7 +2306,16 @@ export function install() {
         "Frame Generation tagging requires a dedicated empty command encoder; submit ordinary WebGPU work before tagging present inputs",
       );
     }
-    const feature = getStatus().features?.dlssFrameGeneration;
+    const viewport = Math.max(0, Math.trunc(finiteNumber(frame.viewport, "frame.viewport", 0)));
+    const statusBeforeQueue = getStatus();
+    const feature = statusBeforeQueue.features?.dlssFrameGeneration;
+    const runtimeBlock = runtimeControlBlock(
+      feature,
+      statusBeforeQueue,
+      "DLSS Frame Generation",
+      viewport,
+    );
+    if (runtimeBlock) return runtimeBlock;
     if (!feature?.requested) {
       throw new TypeError(
         "DLSS Frame Generation must be requested with requestFeatures before tagging present inputs",
@@ -2229,7 +2337,7 @@ export function install() {
       throw new TypeError("frame.uiAlphaOnly requires frame.ui");
     }
     const packed = {
-      viewport: Math.max(0, Math.trunc(finiteNumber(frame.viewport, "frame.viewport", 0))),
+      viewport,
       hudlessColor: dlssResource(
         frame.hudlessColor,
         "frame.hudlessColor",
@@ -2275,7 +2383,7 @@ export function install() {
     return immutableSnapshot({
       queued: true,
       viewport: packed.viewport,
-      status: getStatus(),
+      status: statusBeforeQueue,
       note: "Inputs are tagged until the following Present. Active changes only when Streamline reports an interpolated frame after that Present.",
     });
   };
@@ -2283,11 +2391,6 @@ export function install() {
   const evaluateRayReconstruction = (frame = {}) => {
     if (!frame || typeof frame !== "object") {
       throw new TypeError("threeBrowserRTX.evaluateRayReconstruction expects a frame object");
-    }
-    if (frame.rayTracedInput !== true) {
-      throw new TypeError(
-        "frame.rayTracedInput must be true: Ray Reconstruction denoises genuine noisy ray-traced lighting; it does not create rays",
-      );
     }
     const encoder = frame.commandEncoder;
     if (!(encoder instanceof GPUCommandEncoder) || !encoder._h || !Array.isArray(encoder._commands)) {
@@ -2299,6 +2402,26 @@ export function install() {
     if (encoder._commands.length !== 0) {
       throw new TypeError(
         "Ray Reconstruction requires a dedicated empty command encoder; submit ordinary WebGPU work before recording the native pass",
+      );
+    }
+    const viewport = Math.max(0, Math.trunc(finiteNumber(frame.viewport, "frame.viewport", 0)));
+    const statusBeforeQueue = getStatus();
+    const feature = statusBeforeQueue.features?.dlssRayReconstruction;
+    const runtimeBlock = runtimeControlBlock(
+      feature,
+      statusBeforeQueue,
+      "DLSS Ray Reconstruction",
+      viewport,
+    );
+    if (runtimeBlock) return runtimeBlock;
+    if (feature && !feature.requested) {
+      throw new TypeError(
+        "DLSS Ray Reconstruction must be requested with requestFeatures before recording evaluation",
+      );
+    }
+    if (frame.rayTracedInput !== true) {
+      throw new TypeError(
+        "frame.rayTracedInput must be true: Ray Reconstruction denoises genuine noisy ray-traced lighting; it does not create rays",
       );
     }
     const normalRoughnessPacked = frame.normalRoughnessPacked !== false;
@@ -2338,7 +2461,7 @@ export function install() {
     }
 
     const packed = {
-      viewport: Math.max(0, Math.trunc(finiteNumber(frame.viewport, "frame.viewport", 0))),
+      viewport,
       noisyColor: dlssResource(frame.noisyColor, "frame.noisyColor", RR_HDR_COLOR_FORMATS, 0x04),
       colorOutput: dlssResource(frame.colorOutput, "frame.colorOutput", RR_HDR_COLOR_FORMATS, 0x08),
       depth: dlssResource(frame.depth, "frame.depth", DLSS_DEPTH_FORMATS, 0x04),
@@ -2379,13 +2502,7 @@ export function install() {
         throw new RangeError(`frame.${name} region must match frame.noisyColor dimensions`);
       }
     }
-    const statusBeforeQueue = getStatus().features?.dlssRayReconstruction;
-    if (statusBeforeQueue && !statusBeforeQueue.requested) {
-      throw new TypeError(
-        "DLSS Ray Reconstruction must be requested with requestFeatures before recording evaluation",
-      );
-    }
-    const dlssStatus = getStatus().features?.dlssSuperResolution;
+    const dlssStatus = statusBeforeQueue.features?.dlssSuperResolution;
     if (dlssStatus?.outputWidth > 0 && dlssStatus?.outputHeight > 0 &&
         (packed.colorOutput.width !== dlssStatus.outputWidth ||
          packed.colorOutput.height !== dlssStatus.outputHeight)) {
@@ -2395,7 +2512,7 @@ export function install() {
     return immutableSnapshot({
       queued: true,
       viewport: packed.viewport,
-      status: getStatus(),
+      status: statusBeforeQueue,
       note: "Native DLSS-RR evaluation is queued. Active becomes true only after Streamline accepts every denoiser input during submission.",
     });
   };
@@ -2453,16 +2570,111 @@ export function install() {
     if (!scene || typeof scene !== "object") {
       throw new TypeError("threeBrowserRTX.registerStaticScene expects a scene object");
     }
-    const positions = rtxFloat32Positions(scene.positions);
-    const vertexCount = positions.length / 3;
-    const indices = rtxUint32Indices(scene.indices, vertexCount);
-    const triangleCount = indices.length / 3;
-    const triangleRadiance = rtxTriangleRadiance(
+    const staticPositions = rtxFloat32Positions(scene.positions);
+    const staticVertexCount = staticPositions.length / 3;
+    const staticIndices = rtxUint32Indices(scene.indices, staticVertexCount);
+    const staticTriangleCount = staticIndices.length / 3;
+    const staticTriangleRadiance = rtxTriangleRadiance(
       scene.triangleRadiance ?? scene.radiance,
-      triangleCount,
+      staticTriangleCount,
     );
-    const triangleSurface = rtxTriangleSurface(scene.triangleSurface, triangleCount);
+    const staticTriangleSurface = rtxTriangleSurface(scene.triangleSurface, staticTriangleCount);
     const lights = rtxStaticLights(scene.lights);
+    const instanceGroups = Array.from(scene.instanceGroups ?? []);
+    const groupIds = new Map();
+    const groups = [];
+    let vertexCount = staticVertexCount;
+    let indexCount = staticIndices.length;
+    let triangleCount = staticTriangleCount;
+    for (let groupIndex = 0; groupIndex < instanceGroups.length; groupIndex++) {
+      const source = instanceGroups[groupIndex];
+      if (!source || typeof source !== "object") {
+        throw new TypeError(`instanceGroups[${groupIndex}] must be an object`);
+      }
+      const identity = rtxInstanceGroupIdentity(source.id);
+      if (groupIds.has(identity.nativeId)) {
+        throw new RangeError(
+          `instanceGroups[${groupIndex}].id collides with ${groupIds.get(identity.nativeId)} after native id normalization`,
+        );
+      }
+      const capacity = Number(source.capacity);
+      if (!Number.isInteger(capacity) || capacity <= 0 || capacity > 1024) {
+        throw new RangeError(`instanceGroups[${groupIndex}].capacity must be an integer in [1, 1024]`);
+      }
+      const localPositions = rtxFloat32Positions(source.positions);
+      const localVertexCount = localPositions.length / 3;
+      const localIndices = rtxUint32Indices(source.indices, localVertexCount);
+      const localTriangleCount = localIndices.length / 3;
+      const radiance = rtxTriangleRadiance(
+        source.triangleRadiance ?? source.radiance,
+        localTriangleCount,
+      );
+      const surface = rtxTriangleSurface(source.triangleSurface, localTriangleCount);
+      groups.push({
+        ...identity,
+        capacity,
+        positions: localPositions,
+        indices: localIndices,
+        triangleRadiance: radiance,
+        triangleSurface: surface,
+        vertexOffset: vertexCount,
+        vertexCount: localVertexCount,
+        indexOffset: indexCount,
+        indexCount: localIndices.length,
+        primitiveBase: triangleCount,
+      });
+      groupIds.set(identity.nativeId, String(source.id));
+      vertexCount += localVertexCount;
+      indexCount += localIndices.length;
+      triangleCount += localTriangleCount;
+    }
+
+    let positions = staticPositions;
+    let indices = staticIndices;
+    let triangleRadiance = staticTriangleRadiance;
+    let triangleSurface = staticTriangleSurface;
+    if (groups.length > 0) {
+      positions = new Float32Array(vertexCount * 3);
+      positions.set(staticPositions);
+      indices = new Uint32Array(indexCount);
+      indices.set(staticIndices);
+      let positionCursor = staticPositions.length;
+      let indexCursor = staticIndices.length;
+      for (const group of groups) {
+        positions.set(group.positions, positionCursor);
+        for (let i = 0; i < group.indices.length; i++) {
+          indices[indexCursor + i] = group.indices[i] + group.vertexOffset;
+        }
+        positionCursor += group.positions.length;
+        indexCursor += group.indices.length;
+      }
+
+      if (staticTriangleRadiance || groups.some(group => group.triangleRadiance)) {
+        triangleRadiance = new Float32Array(triangleCount * 4);
+        if (staticTriangleRadiance) triangleRadiance.set(staticTriangleRadiance);
+        for (const group of groups) {
+          if (group.triangleRadiance) {
+            triangleRadiance.set(group.triangleRadiance, group.primitiveBase * 4);
+          }
+        }
+      }
+      if (staticTriangleSurface || groups.some(group => group.triangleSurface)) {
+        triangleSurface = new Float32Array(triangleCount * 4);
+        for (let triangle = 0; triangle < triangleCount; triangle++) {
+          const offset = triangle * 4;
+          triangleSurface[offset] = 0.65;
+          triangleSurface[offset + 1] = 0.65;
+          triangleSurface[offset + 2] = 0.65;
+          triangleSurface[offset + 3] = 0.5;
+        }
+        if (staticTriangleSurface) triangleSurface.set(staticTriangleSurface);
+        for (const group of groups) {
+          if (group.triangleSurface) {
+            triangleSurface.set(group.triangleSurface, group.primitiveBase * 4);
+          }
+        }
+      }
+    }
     const nativeEncoder = dedicatedNativeEncoder(scene.commandEncoder, "registerStaticScene");
     nativeEncoder.encoder._commands.push(["rtxSceneBegin"]);
     nativeEncoder.encoder._commands.push(["rtxScenePositions", positions]);
@@ -2476,15 +2688,37 @@ export function install() {
     if (lights) {
       nativeEncoder.encoder._commands.push(["rtxSceneLights", lights]);
     }
+    for (const group of groups) {
+      nativeEncoder.encoder._commands.push(["rtxSceneInstanceGroup", {
+        id: group.nativeId,
+        capacity: group.capacity,
+        vertexOffset: group.vertexOffset,
+        vertexCount: group.vertexCount,
+        indexOffset: group.indexOffset,
+        indexCount: group.indexCount,
+        primitiveBase: group.primitiveBase,
+      }]);
+    }
     nativeEncoder.encoder._commands.push(["rtxSceneCommit"]);
     const generation = ++staticRaySceneGeneration;
     staticRaySceneQueued = true;
     staticRaySceneSubmitted = false;
+    dynamicRayInstanceGroups.clear();
     rayLightingQueued = false;
     rayReflectionsQueued = false;
     nativeEncoder.encoder._submissionCallbacks.push(() => {
       activeStaticRaySceneGeneration = generation;
       staticRaySceneSubmitted = generation === staticRaySceneGeneration;
+      if (staticRaySceneSubmitted) {
+        for (const group of groups) {
+          dynamicRayInstanceGroups.set(group.key, immutableSnapshot({
+            id: group.publicId,
+            nativeId: group.nativeId,
+            capacity: group.capacity,
+            generation,
+          }));
+        }
+      }
     });
     const submitted = submitNativeEncoderIfNeeded(nativeEncoder);
     return immutableSnapshot({
@@ -2492,10 +2726,48 @@ export function install() {
       submitted,
       vertexCount,
       triangleCount,
+      instanceGroupCount: groups.length,
+      instanceCapacity: groups.reduce((sum, group) => sum + group.capacity, 0),
       hasTriangleRadiance: Boolean(triangleRadiance),
       hasTriangleSurface: Boolean(triangleSurface),
       staticLightCount: lights ? lights.length / 16 : 0,
-      note: "World-space geometry plus optional per-triangle radiance, surface response and static lights are uploaded once; native owns the BLAS and identity TLAS after this command buffer completes.",
+      note: groups.length > 0
+        ? "Static geometry and reusable instance-group geometries are uploaded once; native owns one shared BLAS per group and a fixed-capacity refittable TLAS."
+        : "World-space geometry plus optional per-triangle radiance, surface response and static lights are uploaded once; native owns the BLAS and identity TLAS after this command buffer completes.",
+    });
+  };
+
+  const updateInstanceGroup = (update = {}) => {
+    if (!update || typeof update !== "object") {
+      throw new TypeError("threeBrowserRTX.updateInstanceGroup expects an update object");
+    }
+    const generation = requireActiveStaticRayScene("instance-group update");
+    const identity = rtxInstanceGroupIdentity(update.id);
+    const group = dynamicRayInstanceGroups.get(identity.key);
+    if (!group || group.nativeId !== identity.nativeId || group.generation !== generation) {
+      throw new RangeError(`No active RTX instance group is registered for id ${String(update.id)}`);
+    }
+    const matrices = rtxInstanceMatrices(update.matrices, group.capacity);
+    const masks = rtxInstanceMasks(update.masks, group.capacity);
+    const nativeEncoder = dedicatedNativeEncoder(update.commandEncoder, "updateInstanceGroup");
+    bindEvaluationToStaticScene(
+      nativeEncoder.encoder,
+      generation,
+      "instance-group update",
+    );
+    nativeEncoder.encoder._commands.push(["rtxInstanceGroupUpdate", {
+      id: group.nativeId,
+      matrices,
+      masks,
+    }]);
+    const submitted = submitNativeEncoderIfNeeded(nativeEncoder);
+    return immutableSnapshot({
+      queued: true,
+      submitted,
+      id: group.id,
+      capacity: group.capacity,
+      visibleInstances: masks.reduce((sum, mask) => sum + (mask !== 0 ? 1 : 0), 0),
+      note: "The fixed-capacity instance buffer and top-level acceleration structure are updated in place; shared geometry is not rebuilt.",
     });
   };
 
@@ -2506,6 +2778,7 @@ export function install() {
     staticRaySceneSubmitted = false;
     staticRaySceneGeneration++;
     activeStaticRaySceneGeneration = 0;
+    dynamicRayInstanceGroups.clear();
     rayLightingQueued = false;
     rayReflectionsQueued = false;
     return true;
@@ -2671,10 +2944,33 @@ export function install() {
       sceneGeneration,
       "ray reflections",
     );
+    const canonicalHitDistance = frame.specularHitDistanceOutput;
+    const aliasedHitDistance = frame.hitDistanceOutput;
+    if (canonicalHitDistance != null && aliasedHitDistance != null) {
+      const canonicalTexture = canonicalHitDistance instanceof GPUTexture
+        ? canonicalHitDistance : canonicalHitDistance?.texture;
+      const aliasedTexture = aliasedHitDistance instanceof GPUTexture
+        ? aliasedHitDistance : aliasedHitDistance?.texture;
+      if (canonicalTexture !== aliasedTexture) {
+        throw new TypeError(
+          "specularHitDistanceOutput and hitDistanceOutput must reference the same texture when both are supplied",
+        );
+      }
+    }
+    const hitDistanceValue = canonicalHitDistance ?? aliasedHitDistance;
+    const specularHitDistance = hitDistanceValue == null ? null : rtxTextureResource(
+      hitDistanceValue,
+      "specularHitDistanceOutput",
+      ["r16float", "r32float"],
+      0x08,
+      frame.specularHitDistanceVulkanLayout ?? frame.hitDistanceVulkanLayout ??
+        frame.specularHitDistanceLayout ?? frame.hitDistanceLayout,
+      VULKAN_IMAGE_LAYOUTS.general,
+    );
     const pipelineHandle = evaluationPipelineHandle(
       nativeEncoder.encoder,
       frame.pipeline,
-      "reflections-v1",
+      specularHitDistance ? "reflections-v2" : "reflections-v1",
     );
     const sourceColor = rtxTextureResource(
       frame.sourceColor ?? frame.colorInput,
@@ -2724,6 +3020,17 @@ export function install() {
     if (uniqueInputHandles.size !== inputs.length) {
       throw new TypeError("Ray-reflection source, depth, normal/roughness and specular guides must be distinct textures");
     }
+    if (specularHitDistance) {
+      const occupiedHandles = new Set([
+        ...inputs.map(resource => resource.textureHandle),
+        outputColor.textureHandle,
+      ]);
+      if (occupiedHandles.has(specularHitDistance.textureHandle)) {
+        throw new TypeError(
+          "specularHitDistanceOutput must be distinct from every ray-reflection color and guide texture",
+        );
+      }
+    }
 
     const width = positiveDimension(frame.width, "width", sourceColor.texture.width);
     const height = positiveDimension(frame.height, "height", sourceColor.texture.height);
@@ -2733,6 +3040,7 @@ export function install() {
       ["depth", depth],
       ["normalRoughness", normalRoughness],
       ["specularAlbedo", specularAlbedo],
+      ...(specularHitDistance ? [["specularHitDistanceOutput", specularHitDistance]] : []),
     ]) {
       if (resource.texture.width !== width || resource.texture.height !== height) {
         throw new RangeError(`${name} must exactly match the ${width}x${height} ray-reflection extent`);
@@ -2805,6 +3113,10 @@ export function install() {
         (frame.highQuality ? 4 : 0),
       frameIndex,
       pipelineHandle,
+      specularHitDistance: specularHitDistance ? {
+        textureHandle: specularHitDistance.textureHandle,
+        vulkanLayout: specularHitDistance.vulkanLayout,
+      } : null,
     };
     nativeEncoder.encoder._commands.push(["rtxReflectionsEvaluate", packed]);
     rayReflectionsQueued = true;
@@ -2819,8 +3131,11 @@ export function install() {
         roughnessAware: true,
         offscreenStaticGeometry: true,
         stableSampleTiers: frame.highQuality ? "1/8/16" : "1/4/8",
+        specularHitDistance: !!specularHitDistance,
       }),
-      note: "Native Vulkan ray queries write one-bounce static-scene reflections to a distinct HDR output and restore all supplied image layouts.",
+      note: specularHitDistance
+        ? "Native Vulkan ray queries write one-bounce reflections plus a linear primary-hit distance guide and restore all supplied image layouts."
+        : "Native Vulkan ray queries write one-bounce static-scene reflections to a distinct HDR output and restore all supplied image layouts.",
     });
   };
 
@@ -2844,6 +3159,7 @@ export function install() {
       evaluateRayReconstruction,
       createRayQueryPipeline,
       registerStaticScene,
+      updateInstanceGroup,
       destroyStaticScene,
       evaluateRayLighting,
       evaluateRayReflections,

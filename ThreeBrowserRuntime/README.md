@@ -216,7 +216,8 @@ page's JavaScript owns the light data and naming, angular size, ray counts and
 sample sequence, trace distance and bias, material behavior, and every artistic
 value. A project that needs another implementation may upload
 profile-compatible SPIR-V from JavaScript with
-`createRayQueryPipeline({ profile: "lighting-v1" | "reflections-v1", code,
+`createRayQueryPipeline({ profile: "lighting-v1" | "reflections-v1" |
+"reflections-v2", code,
 entryPoint: "main", label })`, where `code` is a `Uint32Array` or
 `ArrayBuffer`. Profile shaders are compute entry points with an explicit
 `layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;`; uploads
@@ -239,6 +240,10 @@ rtx.evaluateRayReflections({
   depth,             // depth32float TEXTURE_BINDING
   normalRoughness,   // rgba16float TEXTURE_BINDING
   specularAlbedo,    // rgba16float TEXTURE_BINDING
+  // Optional Ray Reconstruction guide. `hitDistanceOutput` is retained as an
+  // alias. The texture must match the frame extent, be single-sampled R16F or
+  // R32F, and include STORAGE_BINDING usage.
+  specularHitDistanceOutput,
   width,
   height,
   inverseViewProjection,
@@ -253,6 +258,17 @@ rtx.evaluateRayReflections({
   frameIndex,
 });
 ```
+
+Supplying `specularHitDistanceOutput` selects the generic `reflections-v2`
+contract. Its additional `set=0, binding=11` storage image uses `r16f` or
+`r32f` to match the supplied texture. The built-in v2 shader writes the linear
+world-space distance along the first reflection ray, in the same units as the
+registered scene, and writes `0.0` for a miss, background pixel, non-reflective
+pixel, or roughness-cutoff pixel. The resulting texture can be passed directly
+as `specularHitDistance` to `evaluateRayReconstruction()` at the same extent.
+Custom `reflections-v2` pipelines must follow the same binding and sentinel
+contract. Omitting the guide preserves the original `reflections-v1` command,
+descriptor writes, and shader path exactly.
 
 `registerStaticScene()` builds one native BLAS and identity TLAS. The built-in
 lighting evaluation is recorded into the supplied WebGPU command encoder,

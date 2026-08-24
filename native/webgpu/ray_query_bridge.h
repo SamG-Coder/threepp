@@ -36,6 +36,7 @@ struct RayQueryBridgeCapabilities {
 enum class RayQueryPipelineProfile : uint32_t {
     LightingV1 = 1,
     ReflectionsV1 = 2,
+    ReflectionsV2 = 3,
 };
 
 struct RayQueryLightingFrame {
@@ -89,6 +90,9 @@ struct RayQueryReflectionFrame {
     uint32_t flags{};
     uint32_t frameIndex{};
     uint32_t pipelineHandle{};
+    void* specularHitDistanceImage{};
+    uint32_t specularHitDistanceLayout{};
+    uint32_t specularHitDistanceFormat{};
 };
 
 bool rayQueryBridgeAttachVulkan(const RayQueryVulkanContext& context);
@@ -111,7 +115,15 @@ bool rayQueryBridgeSetTriangleSurface(const float* albedoRoughness,
                                      std::size_t triangleCount);
 bool rayQueryBridgeSetStaticLights(const float* lightRecords,
                                    std::size_t lightCount);
+bool rayQueryBridgeAddInstanceGroup(uint32_t id, uint32_t capacity,
+                                    uint32_t vertexOffset, uint32_t vertexCount,
+                                    uint32_t indexOffset, uint32_t indexCount,
+                                    uint32_t primitiveBase);
 bool rayQueryBridgeCommit(void* commandBuffer);
+bool rayQueryBridgeUpdateInstanceGroup(void* commandBuffer, uint32_t id,
+                                       const float* matrices3x4,
+                                       const uint32_t* masks,
+                                       std::size_t instanceCount);
 void rayQueryBridgeDestroyScene();
 
 bool rayQueryBridgeEvaluate(const RayQueryLightingFrame& frame);

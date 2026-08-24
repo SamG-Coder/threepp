@@ -98,6 +98,18 @@ if (WIN32)
             "${CMAKE_CURRENT_SOURCE_DIR}/webgpu/shaders/ray_query_reflections.comp"
             kRayQueryReflectionsCompSpv
             _ray_query_reflections_spv_h)
+        compile_vulkan_shader(three_webgpu
+            "${CMAKE_CURRENT_SOURCE_DIR}/webgpu/shaders/ray_query_reflections.comp"
+            kRayQueryReflectionsV2R16CompSpv
+            _ray_query_reflections_v2_r16_spv_h
+            VARIANT_SUFFIX reflections_v2_r16
+            DEFINES THREEBROWSER_REFLECTIONS_V2=1)
+        compile_vulkan_shader(three_webgpu
+            "${CMAKE_CURRENT_SOURCE_DIR}/webgpu/shaders/ray_query_reflections.comp"
+            kRayQueryReflectionsV2R32CompSpv
+            _ray_query_reflections_v2_r32_spv_h
+            VARIANT_SUFFIX reflections_v2_r32
+            DEFINES THREEBROWSER_REFLECTIONS_V2=1 THREEBROWSER_HIT_DISTANCE_R32=1)
     endif ()
     target_link_libraries(three_webgpu PRIVATE "${WGPU_NATIVE_LIB}" user32 gdi32)
     target_link_libraries(three_native PRIVATE three_webgpu)

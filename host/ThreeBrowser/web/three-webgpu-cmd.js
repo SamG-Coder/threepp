@@ -64,6 +64,8 @@ export const OP = {
   RTX_SCENE_LIGHTS: 86,
   RTX_PIPELINE_CREATE: 87,
   RTX_PIPELINE_DESTROY: 88,
+  RTX_SCENE_INSTANCE_GROUP: 89,
+  RTX_INSTANCE_GROUP_UPDATE: 90,
 };
 
 // wgpu-native webgpu.h numeric enums (WGPUTextureFormat, …).
@@ -1308,6 +1310,36 @@ function rtxSceneDestroy() {
   end(s);
 }
 
+function rtxSceneInstanceGroup(group) {
+  const s = begin(OP.RTX_SCENE_INSTANCE_GROUP, 32);
+  wu32(RTX_PROTOCOL_VERSION);
+  wu32(group.id >>> 0);
+  wu32(group.capacity >>> 0);
+  wu32(group.vertexOffset >>> 0);
+  wu32(group.vertexCount >>> 0);
+  wu32(group.indexOffset >>> 0);
+  wu32(group.indexCount >>> 0);
+  wu32(group.primitiveBase >>> 0);
+  end(s);
+}
+
+function rtxInstanceGroupUpdate(encoder, id, matrices, masks) {
+  const matrixBytes = asU8(matrices);
+  const maskBytes = asU8(masks);
+  const count = masks.length >>> 0;
+  if (matrixBytes.byteLength !== count * 12 * 4 || maskBytes.byteLength !== count * 4) {
+    throw new RangeError("RTX instance-group updates require one 3x4 matrix and one uint32 mask per slot");
+  }
+  const s = begin(OP.RTX_INSTANCE_GROUP_UPDATE, 16 + matrixBytes.byteLength + maskBytes.byteLength);
+  wu32(RTX_PROTOCOL_VERSION);
+  wu32(encoder >>> 0);
+  wu32(id >>> 0);
+  wu32(count);
+  wbytes(matrixBytes);
+  wbytes(maskBytes);
+  end(s);
+}
+
 function rtxPipelineCreate(handle, profile, entryPoint, spirv) {
   const entryPointBytes = utf8(entryPoint);
   const entryPointPaddedBytes = (entryPointBytes.byteLength + 3) & ~3;
@@ -1361,8 +1393,9 @@ function rtxLightingEvaluate(encoder, frame) {
 }
 
 function rtxReflectionsEvaluate(encoder, frame) {
-  const s = begin(OP.RTX_REFLECTIONS_EVALUATE, 180);
-  wu32(RTX_EVALUATION_PROTOCOL_VERSION);
+  const hasSpecularHitDistance = !!frame.specularHitDistance;
+  const s = begin(OP.RTX_REFLECTIONS_EVALUATE, hasSpecularHitDistance ? 188 : 180);
+  wu32(hasSpecularHitDistance ? 3 : RTX_EVALUATION_PROTOCOL_VERSION);
   wu32(encoder >>> 0);
   for (const resource of [
     frame.sourceColor,
@@ -1383,6 +1416,10 @@ function rtxReflectionsEvaluate(encoder, frame) {
   wu32(frame.flags >>> 0);
   wu32(frame.frameIndex >>> 0);
   wu32(frame.pipelineHandle >>> 0);
+  if (hasSpecularHitDistance) {
+    wu32(frame.specularHitDistance.textureHandle >>> 0);
+    wu32(frame.specularHitDistance.vulkanLayout >>> 0);
+  }
   end(s);
 }
 
@@ -1532,6 +1569,8 @@ const cmd = {
   rtxSceneLights,
   rtxSceneCommit,
   rtxSceneDestroy,
+  rtxSceneInstanceGroup,
+  rtxInstanceGroupUpdate,
   rtxPipelineCreate,
   rtxPipelineDestroy,
   rtxLightingEvaluate,

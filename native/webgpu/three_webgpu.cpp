@@ -154,6 +154,26 @@ struct Runtime {
     std::atomic<int> overlayScrollPx{0};
     std::atomic<uint64_t> overlayRevision{0};
     std::atomic<void*> overlayWindow{nullptr};
+    std::mutex featureControlMu;
+    StreamlineDLSSOptions requestedDlssOptions{};
+    bool featureRequestValid{false};
+    bool requestedFrameGeneration{false};
+    bool requestedRayReconstruction{false};
+    int requestedReflexMode{-1};
+    std::atomic<int> dlssRuntimeEnabled{1};
+    std::atomic<int> frameGenerationRuntimeEnabled{1};
+    std::atomic<int> rayReconstructionRuntimeEnabled{1};
+    std::atomic<int> reflexRuntimeEnabled{1};
+    // Runtime controls are preferences.  Keep the last successfully applied
+    // state separate so public feature status never races ahead of Streamline.
+    std::atomic<int> dlssRuntimeApplied{1};
+    std::atomic<int> frameGenerationRuntimeApplied{1};
+    std::atomic<int> rayReconstructionRuntimeApplied{1};
+    std::atomic<int> reflexRuntimeApplied{1};
+    std::atomic<int> featureApplyPending{0};
+    std::atomic<uint64_t> featureControlRevision{0};
+    std::atomic<int> overlayFeatureHover{-1};
+    std::string featureControlError;
     std::atomic<int> fullscreenState{0};
     std::mutex displayMu;
     std::vector<DisplayMode> displayModes;
@@ -623,6 +643,227 @@ void onWorkerAsync(std::function<void()> fn) {
         g.jobs.emplace_back(std::move(fn));
     }
     g.cv.notify_one();
+}
+
+struct RuntimeFeatureIntent {
+    bool valid{false};
+    StreamlineDLSSOptions dlss{};
+    bool frameGeneration{false};
+    bool rayReconstruction{false};
+    int reflexMode{-1};
+};
+
+struct RuntimeFeaturePreferences {
+    bool dlss{true};
+    bool frameGeneration{true};
+    bool rayReconstruction{true};
+    bool reflex{true};
+};
+
+struct RuntimeFeatureApplyResult {
+    bool graphics{true};
+    bool reflex{true};
+};
+
+RuntimeFeatureIntent runtimeFeatureIntent() {
+    std::lock_guard<std::mutex> lock(g.featureControlMu);
+    RuntimeFeatureIntent intent{};
+    intent.valid = g.featureRequestValid;
+    intent.dlss = g.requestedDlssOptions;
+    intent.frameGeneration = g.requestedFrameGeneration;
+    intent.rayReconstruction = g.requestedRayReconstruction;
+    intent.reflexMode = g.requestedReflexMode;
+    return intent;
+}
+
+RuntimeFeaturePreferences runtimeFeaturePreferences() {
+    RuntimeFeaturePreferences preferences{};
+    preferences.dlss = g.dlssRuntimeEnabled.load(std::memory_order_acquire) != 0;
+    preferences.frameGeneration =
+        g.frameGenerationRuntimeEnabled.load(std::memory_order_acquire) != 0;
+    preferences.rayReconstruction =
+        g.rayReconstructionRuntimeEnabled.load(std::memory_order_acquire) != 0;
+    preferences.reflex = g.reflexRuntimeEnabled.load(std::memory_order_acquire) != 0;
+    return preferences;
+}
+
+RuntimeFeaturePreferences runtimeAppliedFeatures() {
+    RuntimeFeaturePreferences applied{};
+    applied.dlss = g.dlssRuntimeApplied.load(std::memory_order_acquire) != 0;
+    applied.frameGeneration =
+        g.frameGenerationRuntimeApplied.load(std::memory_order_acquire) != 0;
+    applied.rayReconstruction =
+        g.rayReconstructionRuntimeApplied.load(std::memory_order_acquire) != 0;
+    applied.reflex = g.reflexRuntimeApplied.load(std::memory_order_acquire) != 0;
+    return applied;
+}
+
+void storeRuntimeAppliedGraphics(const RuntimeFeaturePreferences& target) {
+    g.dlssRuntimeApplied.store(target.dlss ? 1 : 0, std::memory_order_release);
+    g.frameGenerationRuntimeApplied.store(target.frameGeneration ? 1 : 0,
+                                           std::memory_order_release);
+    // Ray Reconstruction is an SR-dependent feature.  Preserve the user's
+    // preference separately, but only report it applied while SR is applied.
+    g.rayReconstructionRuntimeApplied.store(
+        target.rayReconstruction && target.dlss ? 1 : 0,
+        std::memory_order_release);
+}
+
+std::string runtimeFeatureFailureReason(bool graphicsFailure, bool reflexFailure) {
+    const StreamlineFeatureState state = streamlineFeatureState();
+    if (graphicsFailure) {
+        if (!state.rayReconstructionReason.empty()) return state.rayReconstructionReason;
+        if (!state.frameGenerationReason.empty()) return state.frameGenerationReason;
+        if (!state.dlssReason.empty()) return state.dlssReason;
+        return "Streamline rejected the requested DLSS feature configuration";
+    }
+    if (reflexFailure) return "Streamline rejected the requested NVIDIA Reflex mode";
+    return {};
+}
+
+RuntimeFeatureApplyResult applyRuntimeFeatureTargetOnWorker(
+    const RuntimeFeaturePreferences& target, bool forceGraphics, bool forceReflex) {
+    const RuntimeFeatureIntent intent = runtimeFeatureIntent();
+    const RuntimeFeaturePreferences applied = runtimeAppliedFeatures();
+    RuntimeFeatureApplyResult result{};
+
+    const bool effectiveRayReconstruction = target.rayReconstruction && target.dlss;
+    const bool graphicsChanged = target.dlss != applied.dlss ||
+        target.frameGeneration != applied.frameGeneration ||
+        effectiveRayReconstruction != applied.rayReconstruction;
+    if (forceGraphics || graphicsChanged) {
+        if (intent.valid) {
+            StreamlineDLSSOptions options = intent.dlss;
+            if (!target.dlss) options.mode = StreamlineDLSSMode::Off;
+            const bool frameGeneration = intent.frameGeneration && target.frameGeneration;
+            const bool rayReconstruction = intent.rayReconstruction &&
+                effectiveRayReconstruction;
+            result.graphics = streamlineRequestFeatures(
+                options, frameGeneration, rayReconstruction);
+            if (result.graphics &&
+                (options.mode != StreamlineDLSSMode::Off || frameGeneration ||
+                 rayReconstruction)) {
+                streamlineFrameBegin(static_cast<uint32_t>(
+                    g.statsPresents.load(std::memory_order_relaxed)));
+            }
+        }
+        if (result.graphics) storeRuntimeAppliedGraphics(target);
+    }
+
+    const bool reflexChanged = target.reflex != applied.reflex;
+    if (forceReflex || reflexChanged) {
+        int requestedMode = intent.reflexMode;
+        if (!target.reflex) requestedMode = 0;
+        // No page has requested Reflex yet.  Enabling the runtime gate is
+        // still a successfully-applied permission, without forcing a mode.
+        if (requestedMode >= 0) {
+            result.reflex = streamlineSetReflexMode(requestedMode);
+        }
+        if (result.reflex) {
+            g.reflexRuntimeApplied.store(target.reflex ? 1 : 0,
+                                         std::memory_order_release);
+        }
+    }
+    return result;
+}
+
+bool applyRuntimeFeatureRequestOnWorker(bool forceGraphics = false) {
+    const RuntimeFeatureApplyResult result = applyRuntimeFeatureTargetOnWorker(
+        runtimeFeaturePreferences(), forceGraphics, false);
+    if (result.graphics) {
+        std::lock_guard<std::mutex> lock(g.featureControlMu);
+        g.featureControlError.clear();
+    }
+    g.overlayDirty.store(1, std::memory_order_release);
+    return result.graphics;
+}
+
+void reapplyRuntimeFeatureRequestAsync() {
+    const uint64_t revision =
+        g.featureControlRevision.fetch_add(1, std::memory_order_acq_rel) + 1;
+    g.featureApplyPending.store(1, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(g.featureControlMu);
+        g.featureControlError.clear();
+    }
+    onWorkerAsync([revision] {
+        const RuntimeFeaturePreferences target = runtimeFeaturePreferences();
+        const RuntimeFeatureApplyResult result = applyRuntimeFeatureTargetOnWorker(
+            target, false, false);
+        const bool current =
+            revision == g.featureControlRevision.load(std::memory_order_acquire);
+        if (current) {
+            if (!result.graphics || !result.reflex) {
+                const RuntimeFeaturePreferences applied = runtimeAppliedFeatures();
+                // Roll the effective gates back to the last state Streamline
+                // accepted.  RR's preference remains remembered while SR is
+                // deliberately off so re-enabling SR restores it.
+                g.dlssRuntimeEnabled.store(applied.dlss ? 1 : 0,
+                                           std::memory_order_release);
+                g.frameGenerationRuntimeEnabled.store(
+                    applied.frameGeneration ? 1 : 0, std::memory_order_release);
+                if (target.dlss) {
+                    g.rayReconstructionRuntimeEnabled.store(
+                        applied.rayReconstruction ? 1 : 0,
+                        std::memory_order_release);
+                }
+                g.reflexRuntimeEnabled.store(applied.reflex ? 1 : 0,
+                                             std::memory_order_release);
+                std::lock_guard<std::mutex> lock(g.featureControlMu);
+                g.featureControlError = runtimeFeatureFailureReason(
+                    !result.graphics, !result.reflex);
+            }
+            g.featureApplyPending.store(0, std::memory_order_release);
+        }
+        g.overlayDirty.store(1, std::memory_order_release);
+    });
+}
+
+StreamlineFeatureState runtimeFeatureState() {
+    StreamlineFeatureState state = streamlineFeatureState();
+    const bool dlssEnabled = g.dlssRuntimeApplied.load(std::memory_order_acquire) != 0;
+    const bool frameGenerationEnabled =
+        g.frameGenerationRuntimeApplied.load(std::memory_order_acquire) != 0;
+    const bool rayReconstructionEnabled =
+        g.rayReconstructionRuntimeApplied.load(std::memory_order_acquire) != 0;
+    const bool rayReconstructionPreferred =
+        g.rayReconstructionRuntimeEnabled.load(std::memory_order_acquire) != 0;
+
+    if (!dlssEnabled) {
+        state.dlssRequested = false;
+        state.dlssConfigured = false;
+        state.dlssActive = false;
+        state.dlssMode = StreamlineDLSSMode::Off;
+        state.renderWidth = 0;
+        state.renderHeight = 0;
+        state.outputWidth = 0;
+        state.outputHeight = 0;
+        state.estimatedVramBytes = 0;
+        state.dlssLastResult = 0;
+        state.dlssReason = "Disabled from runtime controls";
+    }
+    if (!frameGenerationEnabled) {
+        state.frameGenerationRequested = false;
+        state.frameGenerationConfigured = false;
+        state.frameGenerationActive = false;
+        state.frameGenerationFramesToGenerate = 0;
+        state.frameGenerationLastFramesPresented = 0;
+        state.frameGenerationEstimatedVramBytes = 0;
+        state.frameGenerationLastResult = 0;
+        state.frameGenerationLastStatus = 0;
+        state.frameGenerationReason = "Disabled from runtime controls";
+    }
+    if (!rayReconstructionEnabled || !dlssEnabled) {
+        state.rayReconstructionRequested = false;
+        state.rayReconstructionConfigured = false;
+        state.rayReconstructionActive = false;
+        state.rayReconstructionEstimatedVramBytes = 0;
+        state.rayReconstructionLastResult = 0;
+        state.rayReconstructionReason = !dlssEnabled && rayReconstructionPreferred
+            ? "Blocked by runtime controls: DLSS Super Resolution is disabled"
+            : "Disabled from runtime controls";
+    }
+    return state;
 }
 
 bool hasVulkanDll() {
@@ -2083,7 +2324,7 @@ void buildOverlayPixels(int width, int height, bool compactFps = false,
                  DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
         const StreamlineCapabilities streamline = streamlineCapabilities();
-        const StreamlineFeatureState featureState = streamlineFeatureState();
+        const StreamlineFeatureState featureState = runtimeFeatureState();
         const bool rtxAvailable = g.rtxAdapter && streamline.vulkanAttached;
         rounded(layout.dlssStatus,
                 rtxAvailable ? RGB(241, 248, 245) : RGB(248, 249, 251),
@@ -2098,6 +2339,13 @@ void buildOverlayPixels(int width, int height, bool compactFps = false,
         RECT gpuStatus{layout.dlssStatus.left + 16, layout.dlssStatus.top + 31,
                        layout.dlssStatus.right - 16, layout.dlssStatus.bottom - 7};
         std::wstring streamlineStatus = wideFromUtf8(streamline.status.c_str());
+        {
+            std::lock_guard<std::mutex> lock(g.featureControlMu);
+            if (!g.featureControlError.empty()) {
+                streamlineStatus = L"Runtime controls: " +
+                    wideFromUtf8(g.featureControlError.c_str());
+            }
+        }
         if (streamlineStatus.empty()) {
             streamlineStatus = rtxAvailable
                 ? L"Streamline is connected to the Vulkan device"
@@ -2107,31 +2355,47 @@ void buildOverlayPixels(int width, int height, bool compactFps = false,
                  gpuStatus, label, RGB(104, 113, 130),
                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
-        auto drawFeature = [&](RECT rect, const wchar_t* name, const wchar_t* requirement,
-                               bool available, bool active, const wchar_t* badgeText) {
-            rounded(rect, RGB(248, 249, 251), RGB(223, 227, 232), 9);
+        auto drawFeature = [&](int featureIndex, RECT rect, const wchar_t* name,
+                               const wchar_t* requirement, bool available, bool active,
+                               bool desiredEnabled, bool appliedEnabled, bool pending,
+                               bool blocked) {
+            const bool hovered = available &&
+                g.overlayFeatureHover.load(std::memory_order_relaxed) == featureIndex;
+            rounded(rect,
+                    hovered ? RGB(239, 246, 255) :
+                    desiredEnabled ? RGB(248, 249, 251) : RGB(241, 243, 246),
+                    hovered ? RGB(134, 177, 240) :
+                    desiredEnabled ? RGB(223, 227, 232) : RGB(207, 213, 221), 9);
             RECT featureName{rect.left + 15, rect.top + 5, rect.right - 170, rect.top + 28};
-            drawText(name, featureName, body, RGB(54, 65, 81),
+            drawText(name, featureName, body,
+                     desiredEnabled ? RGB(54, 65, 81) : RGB(112, 121, 135),
                      DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
             RECT featureRequirement{rect.left + 15, rect.top + 27, rect.right - 145, rect.bottom - 4};
-            drawText(requirement, featureRequirement, label, RGB(120, 130, 146),
+            drawText(requirement, featureRequirement, label,
+                     desiredEnabled ? RGB(120, 130, 146) : RGB(137, 145, 158),
                      DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
             RECT badge{rect.right - 137, rect.top + 12, rect.right - 14, rect.bottom - 12};
-            rounded(badge, active ? RGB(235, 247, 240) : RGB(239, 242, 246),
-                    active ? RGB(175, 218, 193) : RGB(214, 219, 226), 12);
-            drawText(badgeText, badge, label,
-                     active ? RGB(25, 95, 60) :
-                     available ? RGB(20, 105, 220) : RGB(104, 113, 130),
+            const wchar_t* actionText = !available ? L"UNAVAILABLE" :
+                pending ? L"APPLYING..." : desiredEnabled ? L"TURN OFF" : L"TURN ON";
+            rounded(badge,
+                    hovered ? RGB(224, 238, 255) :
+                    pending ? RGB(239, 242, 246) :
+                    !desiredEnabled ? RGB(231, 234, 239) :
+                    active && appliedEnabled ? RGB(235, 247, 240) : RGB(245, 248, 252),
+                    hovered ? RGB(113, 164, 238) :
+                    pending ? RGB(203, 209, 218) :
+                    !desiredEnabled ? RGB(198, 204, 213) :
+                    active && appliedEnabled ? RGB(175, 218, 193) : RGB(190, 210, 239), 12);
+            drawText(actionText, badge, label,
+                     !available ? RGB(104, 113, 130) :
+                     pending ? RGB(104, 113, 130) :
+                     desiredEnabled ? RGB(31, 91, 176) : RGB(20, 105, 220),
                      DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        };
-        auto featureBadge = [](bool supported, bool functionsLoaded, bool requested,
-                               bool configured, bool active) -> const wchar_t* {
-            if (active) return L"ACTIVE";
-            if (configured) return L"CONFIGURED";
-            if (requested) return L"REQUESTED";
-            if (supported && functionsLoaded) return L"AVAILABLE";
-            if (supported) return L"API MISSING";
-            return L"UNAVAILABLE";
+            if (blocked) {
+                RECT blockedMark{rect.left + 3, rect.top + 10, rect.left + 6,
+                                 rect.bottom - 10};
+                rounded(blockedMark, RGB(229, 173, 64), RGB(229, 173, 64), 2);
+            }
         };
         std::wstring dlssReason = wideFromUtf8(featureState.dlssReason.c_str());
         if (dlssReason.empty()) dlssReason = L"No DLSS Super Resolution state is available";
@@ -2150,41 +2414,56 @@ void buildOverlayPixels(int width, int height, bool compactFps = false,
         if (rayReconstructionReason.empty()) {
             rayReconstructionReason = L"Ray Reconstruction has not been requested";
         }
-        drawFeature(layout.dlssSuperResolutionButton, L"DLSS Super Resolution",
+        const bool dlssRuntimeEnabled =
+            g.dlssRuntimeEnabled.load(std::memory_order_acquire) != 0;
+        const bool frameGenerationRuntimeEnabled =
+            g.frameGenerationRuntimeEnabled.load(std::memory_order_acquire) != 0;
+        const bool rayReconstructionRuntimeEnabled =
+            g.rayReconstructionRuntimeEnabled.load(std::memory_order_acquire) != 0;
+        const bool reflexRuntimeEnabled =
+            g.reflexRuntimeEnabled.load(std::memory_order_acquire) != 0;
+        const RuntimeFeaturePreferences appliedFeatures = runtimeAppliedFeatures();
+        const bool dlssPending = dlssRuntimeEnabled != appliedFeatures.dlss;
+        const bool frameGenerationPending =
+            frameGenerationRuntimeEnabled != appliedFeatures.frameGeneration;
+        const bool rayReconstructionBlocked =
+            rayReconstructionRuntimeEnabled && !dlssRuntimeEnabled;
+        const bool rayReconstructionPending = dlssRuntimeEnabled &&
+            rayReconstructionRuntimeEnabled != appliedFeatures.rayReconstruction;
+        const bool reflexPending = reflexRuntimeEnabled != appliedFeatures.reflex;
+        if (rayReconstructionBlocked) {
+            rayReconstructionReason =
+                L"Blocked while Super Resolution is off · preference is remembered";
+        }
+        drawFeature(0, layout.dlssSuperResolutionButton, L"DLSS Super Resolution",
                     dlssReason.c_str(),
                     featureState.dlssSupported && featureState.dlssFunctionsLoaded,
                     featureState.dlssActive,
-                    featureBadge(featureState.dlssSupported,
-                                 featureState.dlssFunctionsLoaded,
-                                 featureState.dlssRequested,
-                                 featureState.dlssConfigured,
-                                 featureState.dlssActive));
-        drawFeature(layout.dlssFrameGenerationButton, L"DLSS Frame Generation",
+                    dlssRuntimeEnabled,
+                    appliedFeatures.dlss, dlssPending, false);
+        drawFeature(1, layout.dlssFrameGenerationButton, L"DLSS Frame Generation",
                     frameGenerationReason.c_str(),
                     featureState.frameGenerationSupported &&
                         featureState.frameGenerationFunctionsLoaded,
                     featureState.frameGenerationActive,
-                    featureBadge(featureState.frameGenerationSupported,
-                                 featureState.frameGenerationFunctionsLoaded,
-                                 featureState.frameGenerationRequested,
-                                 featureState.frameGenerationConfigured,
-                                 featureState.frameGenerationActive));
-        drawFeature(layout.dlssRayReconstructionButton, L"DLSS Ray Reconstruction",
+                    frameGenerationRuntimeEnabled,
+                    appliedFeatures.frameGeneration, frameGenerationPending, false);
+        drawFeature(2, layout.dlssRayReconstructionButton, L"DLSS Ray Reconstruction",
                     rayReconstructionReason.c_str(),
                     featureState.rayReconstructionSupported &&
                         featureState.rayReconstructionFunctionsLoaded,
                     featureState.rayReconstructionActive,
-                    featureBadge(featureState.rayReconstructionSupported,
-                                 featureState.rayReconstructionFunctionsLoaded,
-                                 featureState.rayReconstructionRequested,
-                                 featureState.rayReconstructionConfigured,
-                                 featureState.rayReconstructionActive));
-        const int reflexMode = streamlineReflexMode();
-        drawFeature(layout.reflexButton, L"NVIDIA Reflex",
-                    L"Click to cycle Off, On and On + Boost",
-                    streamline.reflex, reflexMode != 0,
-                    !streamline.reflex ? L"UNAVAILABLE" :
-                    reflexMode == 2 ? L"ON + BOOST" : reflexMode == 1 ? L"ON" : L"OFF");
+                    rayReconstructionRuntimeEnabled,
+                    appliedFeatures.rayReconstruction, rayReconstructionPending,
+                    rayReconstructionBlocked);
+        const int reflexMode = appliedFeatures.reflex ? streamlineReflexMode() : 0;
+        drawFeature(3, layout.reflexButton, L"NVIDIA Reflex",
+                    reflexRuntimeEnabled
+                        ? L"Enabled · Click to disable"
+                        : L"Disabled from runtime controls · Click to enable",
+                    streamline.reflex, reflexRuntimeEnabled && reflexMode != 0,
+                    reflexRuntimeEnabled,
+                    appliedFeatures.reflex, reflexPending, false);
 
         RECT hint{panel.left + 24, layout.reflexButton.bottom + 12,
                   panel.right - 24, layout.reflexButton.bottom + 38};
@@ -3171,6 +3450,8 @@ void execOne(uint32_t op, Reader& r) {
                 return;
             }
             WGPUTextureDescriptor tdsc{};
+            const std::string textureLabel = "ThreeBrowser texture " + std::to_string(handle);
+            tdsc.label = twSv(textureLabel.c_str());
             tdsc.size.width = std::max(1u, tw);
             tdsc.size.height = std::max(1u, th);
             tdsc.size.depthOrArrayLayers = std::max(1u, td);
@@ -3221,6 +3502,9 @@ void execOne(uint32_t op, Reader& r) {
                 return;
             }
             WGPUTextureViewDescriptor vd{};
+            const std::string viewLabel = "ThreeBrowser texture view " + std::to_string(handle) +
+                " (texture " + std::to_string(tex) + ")";
+            vd.label = twSv(viewLabel.c_str());
             vd.format = format ? static_cast<WGPUTextureFormat>(format) : ts->texFormat;
             vd.dimension = viewDim ? static_cast<WGPUTextureViewDimension>(viewDim)
                                    : WGPUTextureViewDimension_Undefined;
@@ -3926,6 +4210,15 @@ void execOne(uint32_t op, Reader& r) {
                 da.stencilClearValue = stencilClear;
             }
             WGPURenderPassDescriptor rd{};
+            std::string passLabel = "ThreeBrowser render pass colors";
+            for (const auto& input : colorInputs) {
+                passLabel += " " + std::to_string(input.view);
+                if (input.resolve != 0xffffffffu) {
+                    passLabel += "->" + std::to_string(input.resolve);
+                }
+            }
+            if (depthView) passLabel += " depth " + std::to_string(depthView);
+            rd.label = twSv(passLabel.c_str());
             rd.colorAttachmentCount = colorAttachments.size();
             rd.colorAttachments = colorAttachments.data();
             if (dv) {
@@ -4403,6 +4696,26 @@ void execOne(uint32_t op, Reader& r) {
             }
             return;
         }
+        case OP_RTX_SCENE_INSTANCE_GROUP: {
+            const uint32_t version = r.u32();
+            const uint32_t id = r.u32();
+            const uint32_t capacity = r.u32();
+            const uint32_t vertexOffset = r.u32();
+            const uint32_t vertexCount = r.u32();
+            const uint32_t indexOffset = r.u32();
+            const uint32_t indexCount = r.u32();
+            const uint32_t primitiveBase = r.u32();
+            if (!r.ok || version != 1u || id == 0u || capacity == 0u ||
+                capacity > 1024u || vertexCount == 0u || indexCount == 0u ||
+                indexCount % 3u != 0u || r.remaining() != 0u) {
+                setError("Unsupported or malformed RTX instance-group descriptor");
+                return;
+            }
+            tw_ray_query_scene_instance_group(
+                id, capacity, vertexOffset, vertexCount, indexOffset,
+                indexCount, primitiveBase);
+            return;
+        }
         case OP_RTX_SCENE_COMMIT: {
             const uint32_t version = r.u32();
             const uint32_t encoder = r.u32();
@@ -4420,6 +4733,33 @@ void execOne(uint32_t op, Reader& r) {
                 return;
             }
             tw_ray_query_scene_destroy();
+            return;
+        }
+        case OP_RTX_INSTANCE_GROUP_UPDATE: {
+            const uint32_t version = r.u32();
+            const uint32_t encoder = r.u32();
+            const uint32_t id = r.u32();
+            const uint32_t instanceCount = r.u32();
+            const uint64_t expectedBytes =
+                static_cast<uint64_t>(instanceCount) *
+                (12ull * sizeof(float) + sizeof(uint32_t));
+            if (!r.ok || version != 1u || id == 0u || instanceCount == 0u ||
+                instanceCount > 1024u || expectedBytes != r.remaining()) {
+                setError("Unsupported or malformed RTX instance-group update");
+                return;
+            }
+            std::vector<float> matrices(
+                static_cast<std::size_t>(instanceCount) * 12u);
+            std::vector<uint32_t> masks(instanceCount);
+            for (float& value : matrices) value = r.f32();
+            for (uint32_t& value : masks) value = r.u32();
+            if (!r.ok || !tw_ray_query_instance_group_update(
+                    encoder, id, matrices.data(), masks.data(), instanceCount)) {
+                if (!r.ok) {
+                    setError("RTX instance-group update ended before instanceCount");
+                }
+                return;
+            }
             return;
         }
         case OP_RTX_LIGHTING_EVALUATE: {
@@ -4487,11 +4827,11 @@ void execOne(uint32_t op, Reader& r) {
         }
         case OP_RTX_REFLECTIONS_EVALUATE: {
             const uint32_t version = r.u32();
-            if (version != 1u && version != 2u) {
+            if (version != 1u && version != 2u && version != 3u) {
                 setError("Unsupported or truncated RTX reflection command");
                 return;
             }
-            TWRayQueryReflectionFrameV2 frame{};
+            TWRayQueryReflectionFrameV3 frame{};
             frame.struct_size = sizeof(frame);
             frame.command_encoder_handle = r.u32();
             frame.source_color_texture_handle = r.u32();
@@ -4512,12 +4852,16 @@ void execOne(uint32_t op, Reader& r) {
             for (float& value : frame.environment) value = r.f32();
             frame.flags = r.u32();
             frame.frame_index = r.u32();
-            if (version == 2u) frame.pipeline_handle = r.u32();
+            if (version >= 2u) frame.pipeline_handle = r.u32();
+            if (version >= 3u) {
+                frame.specular_hit_distance_texture_handle = r.u32();
+                frame.specular_hit_distance_vulkan_layout = r.u32();
+            }
             if (!r.ok) {
                 setError("Unsupported or truncated RTX reflection command");
                 return;
             }
-            tw_ray_query_reflections_evaluate_v2(&frame);
+            tw_ray_query_reflections_evaluate_v3(&frame);
             return;
         }
         case OP_RTX_PIPELINE_CREATE: {
@@ -5258,10 +5602,50 @@ void tw_overlay_click(int x, int y) {
         const bool enabled = !g.debugOverlay.load(std::memory_order_relaxed);
         g.debugOverlay.store(enabled, std::memory_order_relaxed);
         g.statsLog.store(enabled, std::memory_order_relaxed);
+    } else if (insideBody && PtInRect(&layout.dlssSuperResolutionButton, point)) {
+        const StreamlineFeatureState state = streamlineFeatureState();
+        if (state.dlssSupported && state.dlssFunctionsLoaded) {
+            const bool enabled = g.dlssRuntimeEnabled.load(std::memory_order_acquire) != 0;
+            g.dlssRuntimeEnabled.store(enabled ? 0 : 1, std::memory_order_release);
+            reapplyRuntimeFeatureRequestAsync();
+        }
+    } else if (insideBody && PtInRect(&layout.dlssFrameGenerationButton, point)) {
+        const StreamlineFeatureState state = streamlineFeatureState();
+        if (state.frameGenerationSupported && state.frameGenerationFunctionsLoaded) {
+            const bool enabled =
+                g.frameGenerationRuntimeEnabled.load(std::memory_order_acquire) != 0;
+            g.frameGenerationRuntimeEnabled.store(enabled ? 0 : 1,
+                                                   std::memory_order_release);
+            reapplyRuntimeFeatureRequestAsync();
+        }
+    } else if (insideBody && PtInRect(&layout.dlssRayReconstructionButton, point)) {
+        const StreamlineFeatureState state = streamlineFeatureState();
+        if (state.rayReconstructionSupported && state.rayReconstructionFunctionsLoaded) {
+            const bool enabled =
+                g.rayReconstructionRuntimeEnabled.load(std::memory_order_acquire) != 0;
+            g.rayReconstructionRuntimeEnabled.store(enabled ? 0 : 1,
+                                                     std::memory_order_release);
+            reapplyRuntimeFeatureRequestAsync();
+        }
     } else if (insideBody && PtInRect(&layout.reflexButton, point)) {
         const StreamlineCapabilities capabilities = streamlineCapabilities();
         if (capabilities.reflex) {
-            streamlineSetReflexMode((streamlineReflexMode() + 1) % 3);
+            const bool enabled = g.reflexRuntimeEnabled.load(std::memory_order_acquire) != 0;
+            if (enabled) {
+                const int activeMode = streamlineReflexMode();
+                if (activeMode > 0) {
+                    std::lock_guard<std::mutex> lock(g.featureControlMu);
+                    g.requestedReflexMode = activeMode;
+                }
+                g.reflexRuntimeEnabled.store(0, std::memory_order_release);
+            } else {
+                {
+                    std::lock_guard<std::mutex> lock(g.featureControlMu);
+                    if (g.requestedReflexMode <= 0) g.requestedReflexMode = 1;
+                }
+                g.reflexRuntimeEnabled.store(1, std::memory_order_release);
+            }
+            reapplyRuntimeFeatureRequestAsync();
         }
     }
     g.overlayDirty.store(1, std::memory_order_release);
@@ -5272,15 +5656,33 @@ void tw_overlay_pointer_move(int x, int y) {
     const OverlayLayout layout = overlayLayout(g.statsW.load(std::memory_order_relaxed),
                                                g.statsH.load(std::memory_order_relaxed));
     const POINT point{x, y};
-    std::lock_guard<std::mutex> lock(g.displayMu);
-    OverlayDropdown& dropdown = g.resolutionDropdown;
-    if (!dropdown.open) return;
-    const int hovered = PtInRect(&layout.bodyClip, point)
-        ? dropdownHitIndex(dropdown, layout.resolutionButton,
-                           static_cast<int>(g.displayModes.size()), point)
-        : -1;
-    if (hovered != dropdown.hoverIndex) {
-        dropdown.hoverIndex = hovered;
+    {
+        std::lock_guard<std::mutex> lock(g.displayMu);
+        OverlayDropdown& dropdown = g.resolutionDropdown;
+        if (dropdown.open) {
+            if (g.overlayFeatureHover.exchange(-1, std::memory_order_acq_rel) != -1) {
+                g.overlayDirty.store(1, std::memory_order_release);
+            }
+            const int hovered = PtInRect(&layout.bodyClip, point)
+                ? dropdownHitIndex(dropdown, layout.resolutionButton,
+                                   static_cast<int>(g.displayModes.size()), point)
+                : -1;
+            if (hovered != dropdown.hoverIndex) {
+                dropdown.hoverIndex = hovered;
+                g.overlayDirty.store(1, std::memory_order_release);
+            }
+            return;
+        }
+    }
+    int featureHover = -1;
+    if (PtInRect(&layout.bodyClip, point)) {
+        if (PtInRect(&layout.dlssSuperResolutionButton, point)) featureHover = 0;
+        else if (PtInRect(&layout.dlssFrameGenerationButton, point)) featureHover = 1;
+        else if (PtInRect(&layout.dlssRayReconstructionButton, point)) featureHover = 2;
+        else if (PtInRect(&layout.reflexButton, point)) featureHover = 3;
+    }
+    if (g.overlayFeatureHover.exchange(featureHover, std::memory_order_acq_rel) !=
+        featureHover) {
         g.overlayDirty.store(1, std::memory_order_release);
     }
 }
@@ -5561,15 +5963,14 @@ int tw_request_gpu_features(const TWGpuFeatureRequest* request) {
             options.colorBuffersHDR = copy.color_buffers_hdr != 0;
             options.useAutoExposure = copy.auto_exposure != 0;
             options.alphaUpscaling = copy.alpha_upscaling != 0;
-            const bool result = streamlineRequestFeatures(
-                options, copy.frame_generation != 0, copy.ray_reconstruction != 0);
-            if (result && (options.mode != StreamlineDLSSMode::Off ||
-                           copy.frame_generation != 0 ||
-                           copy.ray_reconstruction != 0)) {
-                streamlineFrameBegin(static_cast<uint32_t>(
-                    g.statsPresents.load(std::memory_order_relaxed)));
+            {
+                std::lock_guard<std::mutex> lock(g.featureControlMu);
+                g.requestedDlssOptions = options;
+                g.requestedFrameGeneration = copy.frame_generation != 0;
+                g.requestedRayReconstruction = copy.ray_reconstruction != 0;
+                g.featureRequestValid = true;
             }
-            return result ? 1 : 0;
+            return applyRuntimeFeatureRequestOnWorker(true) ? 1 : 0;
         });
     } catch (const std::exception& ex) {
         setError(ex.what());
@@ -5579,7 +5980,7 @@ int tw_request_gpu_features(const TWGpuFeatureRequest* request) {
 
 int tw_gpu_feature_status(TWGpuFeatureStatus* status) {
     if (!status || status->struct_size < sizeof(TWGpuFeatureStatus)) return 0;
-    const StreamlineFeatureState state = streamlineFeatureState();
+    const StreamlineFeatureState state = runtimeFeatureState();
     const auto rayQuery = rayQueryBridgeCapabilities();
     TWGpuFeatureStatus result{};
     result.struct_size = sizeof(result);
@@ -5638,6 +6039,25 @@ int tw_dlss_optimal_settings(const TWGpuFeatureRequest* request,
                              TWDLSSOptimalSettings* settings) {
     if (!request || request->struct_size < sizeof(TWGpuFeatureRequest) || !settings ||
         settings->struct_size < sizeof(TWDLSSOptimalSettings)) return 0;
+    if (g.dlssRuntimeApplied.load(std::memory_order_acquire) == 0) {
+        const uint32_t nativeWidth = request->output_width
+            ? request->output_width
+            : std::max<uint32_t>(1, g.config.width);
+        const uint32_t nativeHeight = request->output_height
+            ? request->output_height
+            : std::max<uint32_t>(1, g.config.height);
+        TWDLSSOptimalSettings result{};
+        result.struct_size = sizeof(result);
+        result.optimal_render_width = nativeWidth;
+        result.optimal_render_height = nativeHeight;
+        result.render_width_min = nativeWidth;
+        result.render_height_min = nativeHeight;
+        result.render_width_max = nativeWidth;
+        result.render_height_max = nativeHeight;
+        result.optimal_sharpness = 0.0f;
+        *settings = result;
+        return 1;
+    }
     StreamlineDLSSOptions options{};
     options.mode = request->dlss_mode <= TW_DLSS_DLAA
         ? static_cast<StreamlineDLSSMode>(request->dlss_mode)
@@ -5673,6 +6093,7 @@ int tw_dlss_optimal_settings(const TWGpuFeatureRequest* request,
 
 int tw_dlss_evaluate(const TWDLSSFrame* frame) {
     if (!frame || frame->struct_size < sizeof(TWDLSSFrame)) return 0;
+    if (g.dlssRuntimeApplied.load(std::memory_order_acquire) == 0) return 0;
 #if !defined(THREEBROWSER_STREAMLINE)
     (void)frame;
     return 0;
@@ -5680,6 +6101,7 @@ int tw_dlss_evaluate(const TWDLSSFrame* frame) {
     const TWDLSSFrame copy = *frame;
     try {
         return onWorker([copy] {
+            if (g.dlssRuntimeApplied.load(std::memory_order_acquire) == 0) return 0;
             endPasses();
             WGPUCommandEncoder encoder = g.currentEncoder;
             if (copy.command_encoder_handle) {
@@ -5736,6 +6158,8 @@ int tw_dlss_evaluate(const TWDLSSFrame* frame) {
 
 int tw_ray_reconstruction_evaluate(const TWRayReconstructionFrame* frame) {
     if (!frame || frame->struct_size < sizeof(TWRayReconstructionFrame)) return 0;
+    if (g.rayReconstructionRuntimeApplied.load(std::memory_order_acquire) == 0 ||
+        g.dlssRuntimeApplied.load(std::memory_order_acquire) == 0) return 0;
 #if !defined(THREEBROWSER_STREAMLINE)
     setError("DLSS Ray Reconstruction support was not compiled into this build");
     return 0;
@@ -5743,6 +6167,8 @@ int tw_ray_reconstruction_evaluate(const TWRayReconstructionFrame* frame) {
     const TWRayReconstructionFrame copy = *frame;
     try {
         return onWorker([copy] {
+            if (g.rayReconstructionRuntimeApplied.load(std::memory_order_acquire) == 0 ||
+                g.dlssRuntimeApplied.load(std::memory_order_acquire) == 0) return 0;
             endPasses();
             WGPUCommandEncoder encoder = g.currentEncoder;
             if (copy.command_encoder_handle) {
@@ -5928,6 +6354,7 @@ int tw_ray_reconstruction_evaluate(const TWRayReconstructionFrame* frame) {
 
 int tw_frame_generation_tag(const TWFrameGenerationFrame* frame) {
     if (!frame || frame->struct_size < sizeof(TWFrameGenerationFrame)) return 0;
+    if (g.frameGenerationRuntimeApplied.load(std::memory_order_acquire) == 0) return 0;
 #if !defined(THREEBROWSER_STREAMLINE)
     (void)frame;
     return 0;
@@ -5935,6 +6362,7 @@ int tw_frame_generation_tag(const TWFrameGenerationFrame* frame) {
     const TWFrameGenerationFrame copy = *frame;
     try {
         return onWorker([copy] {
+            if (g.frameGenerationRuntimeApplied.load(std::memory_order_acquire) == 0) return 0;
             if (g.vsync.load(std::memory_order_relaxed) != 0) {
                 streamlineSuspendFrameGeneration(
                     "Frame Generation is suspended because Vulkan VSync is enabled",
@@ -6008,7 +6436,7 @@ int tw_frame_generation_tag(const TWFrameGenerationFrame* frame) {
 
 int tw_frame_generation_status(TWFrameGenerationStatus* status) {
     if (!status || status->struct_size < sizeof(TWFrameGenerationStatus)) return 0;
-    const StreamlineFeatureState state = streamlineFeatureState();
+    const StreamlineFeatureState state = runtimeFeatureState();
     TWFrameGenerationStatus result{};
     result.struct_size = sizeof(result);
     result.supported = state.frameGenerationSupported ? 1 : 0;
@@ -6032,18 +6460,47 @@ int tw_frame_generation_status(TWFrameGenerationStatus* status) {
 
 void tw_dlss_release_viewport(uint32_t viewport) {
     try {
-        onWorker([viewport] { streamlineReleaseViewport(viewport); });
+        onWorker([viewport] {
+            streamlineReleaseViewport(viewport);
+            // Viewport 0 is the browser's retained swapchain contract.  Reapply
+            // the page's request only after its old Streamline resources have
+            // been released, while preserving the runtime-control gates.
+            if (viewport == 0) applyRuntimeFeatureRequestOnWorker(true);
+        });
     } catch (const std::exception& ex) {
         setError(ex.what());
     }
 }
 
 int tw_set_reflex_mode(int mode) {
-    return streamlineSetReflexMode(mode) ? 1 : 0;
+    if (mode < 0 || mode > 2) {
+        setError("Reflex mode must be 0 (Off), 1 (On), or 2 (On + Boost)");
+        return 0;
+    }
+    const int requestedMode = mode;
+    {
+        std::lock_guard<std::mutex> lock(g.featureControlMu);
+        g.requestedReflexMode = requestedMode;
+    }
+    if (g.reflexRuntimeApplied.load(std::memory_order_acquire) == 0) {
+        return 1;
+    }
+    try {
+        return onWorker([requestedMode] {
+            const bool result = streamlineSetReflexMode(requestedMode);
+            if (result) g.reflexRuntimeApplied.store(1, std::memory_order_release);
+            return result ? 1 : 0;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
 }
 
 int tw_reflex_mode(void) {
-    return streamlineReflexMode();
+    return g.reflexRuntimeApplied.load(std::memory_order_acquire) != 0
+        ? streamlineReflexMode()
+        : 0;
 }
 
 int tw_ray_query_capabilities(TWRayQueryCapabilities* capabilities) {
@@ -6157,6 +6614,30 @@ int tw_ray_query_scene_lights(const float* lightRecords,
     }
 }
 
+int tw_ray_query_scene_instance_group(uint32_t id, uint32_t capacity,
+                                      uint32_t vertexOffset,
+                                      uint32_t vertexCount,
+                                      uint32_t indexOffset,
+                                      uint32_t indexCount,
+                                      uint32_t primitiveBase) {
+    if (id == 0u || capacity == 0u || capacity > 1024u ||
+        vertexCount == 0u || indexCount == 0u || indexCount % 3u != 0u) {
+        return 0;
+    }
+    try {
+        return onWorker([=] {
+            const bool result = rayQueryBridgeAddInstanceGroup(
+                id, capacity, vertexOffset, vertexCount, indexOffset,
+                indexCount, primitiveBase);
+            if (!result) setError(rayQueryBridgeCapabilities().status);
+            return result ? 1 : 0;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+}
+
 int tw_ray_query_scene_commit(uint32_t commandEncoderHandle) {
 #if !defined(THREEBROWSER_RAY_QUERY)
     (void)commandEncoderHandle;
@@ -6188,6 +6669,69 @@ int tw_ray_query_scene_commit(uint32_t commandEncoderHandle) {
                 const auto rayQuery = rayQueryBridgeCapabilities();
                 setError(status != WGPUStatus_Success
                     ? "wgpu-native rejected the Vulkan BLAS/TLAS recording callback"
+                    : rayQuery.status);
+                return 0;
+            }
+            return 1;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+#endif
+}
+
+int tw_ray_query_instance_group_update(uint32_t commandEncoderHandle,
+                                       uint32_t id,
+                                       const float* matrices3x4,
+                                       const uint32_t* masks,
+                                       uint32_t instanceCount) {
+#if !defined(THREEBROWSER_RAY_QUERY)
+    (void)commandEncoderHandle;
+    (void)id;
+    (void)matrices3x4;
+    (void)masks;
+    (void)instanceCount;
+    return 0;
+#else
+    if (id == 0u || !matrices3x4 || !masks || instanceCount == 0u ||
+        instanceCount > 1024u) {
+        return 0;
+    }
+    try {
+        return onWorker([=] {
+            endPasses();
+            WGPUCommandEncoder encoder = g.currentEncoder;
+            if (commandEncoderHandle) {
+                Slot* slot = getSlot(commandEncoderHandle);
+                encoder = slot && slot->kind == Kind::Encoder
+                    ? slot->encoder
+                    : nullptr;
+            }
+            if (!encoder) {
+                setError("RTX instance-group update requires an active WebGPU command encoder");
+                return 0;
+            }
+            struct Update {
+                uint32_t id{};
+                const float* matrices{};
+                const uint32_t* masks{};
+                uint32_t count{};
+                bool result{};
+            } update{id, matrices3x4, masks, instanceCount, false};
+            const WGPUStatus status = wgpuCommandEncoderWithNativeVulkanCommandBuffer(
+                encoder,
+                [](void* commandBuffer, void* userdata) {
+                    auto* value = static_cast<Update*>(userdata);
+                    value->result = rayQueryBridgeUpdateInstanceGroup(
+                        commandBuffer, value->id, value->matrices,
+                        value->masks, value->count);
+                },
+                &update);
+            if (status != WGPUStatus_Success || !update.result) {
+                const auto rayQuery = rayQueryBridgeCapabilities();
+                setError(status != WGPUStatus_Success
+                    ? "wgpu-native rejected the Vulkan TLAS refit recording callback"
                     : rayQuery.status);
                 return 0;
             }
@@ -6389,11 +6933,40 @@ int tw_ray_query_reflections_evaluate(const TWRayQueryReflectionFrame* frame) {
 int tw_ray_query_reflections_evaluate_v2(const TWRayQueryReflectionFrameV2* frame) {
     static_assert(sizeof(TWRayQueryReflectionFrameV2) == 180u);
     if (!frame || frame->struct_size < sizeof(TWRayQueryReflectionFrameV2)) return 0;
+    const TWRayQueryReflectionFrameV2 legacy = *frame;
+    TWRayQueryReflectionFrameV3 upgraded{};
+    upgraded.struct_size = sizeof(upgraded);
+    upgraded.command_encoder_handle = legacy.command_encoder_handle;
+    upgraded.source_color_texture_handle = legacy.source_color_texture_handle;
+    upgraded.source_color_vulkan_layout = legacy.source_color_vulkan_layout;
+    upgraded.output_color_texture_handle = legacy.output_color_texture_handle;
+    upgraded.output_color_vulkan_layout = legacy.output_color_vulkan_layout;
+    upgraded.depth_texture_handle = legacy.depth_texture_handle;
+    upgraded.depth_vulkan_layout = legacy.depth_vulkan_layout;
+    upgraded.normal_roughness_texture_handle = legacy.normal_roughness_texture_handle;
+    upgraded.normal_roughness_vulkan_layout = legacy.normal_roughness_vulkan_layout;
+    upgraded.specular_albedo_texture_handle = legacy.specular_albedo_texture_handle;
+    upgraded.specular_albedo_vulkan_layout = legacy.specular_albedo_vulkan_layout;
+    upgraded.width = legacy.width;
+    upgraded.height = legacy.height;
+    std::copy_n(legacy.inverse_view_projection, 16, upgraded.inverse_view_projection);
+    std::copy_n(legacy.camera_position, 4, upgraded.camera_position);
+    std::copy_n(legacy.parameters, 4, upgraded.parameters);
+    std::copy_n(legacy.environment, 4, upgraded.environment);
+    upgraded.flags = legacy.flags;
+    upgraded.frame_index = legacy.frame_index;
+    upgraded.pipeline_handle = legacy.pipeline_handle;
+    return tw_ray_query_reflections_evaluate_v3(&upgraded);
+}
+
+int tw_ray_query_reflections_evaluate_v3(const TWRayQueryReflectionFrameV3* frame) {
+    static_assert(sizeof(TWRayQueryReflectionFrameV3) == 188u);
+    if (!frame || frame->struct_size < sizeof(TWRayQueryReflectionFrameV3)) return 0;
 #if !defined(THREEBROWSER_RAY_QUERY)
     (void)frame;
     return 0;
 #else
-    const TWRayQueryReflectionFrameV2 copy = *frame;
+    const TWRayQueryReflectionFrameV3 copy = *frame;
     const auto acceptedColorLayout = [](uint32_t value) {
         switch (static_cast<VkImageLayout>(value)) {
             case VK_IMAGE_LAYOUT_GENERAL:
@@ -6422,8 +6995,15 @@ int tw_ray_query_reflections_evaluate_v2(const TWRayQueryReflectionFrameV2* fram
     if (!acceptedColorLayout(copy.source_color_vulkan_layout) ||
         !acceptedColorLayout(copy.output_color_vulkan_layout) ||
         !acceptedColorLayout(copy.normal_roughness_vulkan_layout) ||
-        !acceptedColorLayout(copy.specular_albedo_vulkan_layout)) {
+        !acceptedColorLayout(copy.specular_albedo_vulkan_layout) ||
+        (copy.specular_hit_distance_texture_handle != 0u &&
+         !acceptedColorLayout(copy.specular_hit_distance_vulkan_layout))) {
         setError("Ray-query reflections received an unsupported color VkImageLayout");
+        return 0;
+    }
+    if (copy.specular_hit_distance_texture_handle == 0u &&
+        copy.specular_hit_distance_vulkan_layout != 0u) {
+        setError("Ray-query reflections received a hit-distance layout without a texture");
         return 0;
     }
     if (!acceptedDepthLayout(copy.depth_vulkan_layout)) {
@@ -6443,23 +7023,30 @@ int tw_ray_query_reflections_evaluate_v2(const TWRayQueryReflectionFrameV2* fram
             Slot* depth = getSlot(copy.depth_texture_handle);
             Slot* normal = getSlot(copy.normal_roughness_texture_handle);
             Slot* specular = getSlot(copy.specular_albedo_texture_handle);
+            Slot* hitDistance = copy.specular_hit_distance_texture_handle
+                ? getSlot(copy.specular_hit_distance_texture_handle)
+                : nullptr;
             if (!encoder || !source || source->kind != Kind::Texture ||
                 !output || output->kind != Kind::Texture ||
                 !depth || depth->kind != Kind::Texture ||
                 !normal || normal->kind != Kind::Texture ||
-                !specular || specular->kind != Kind::Texture) {
+                !specular || specular->kind != Kind::Texture ||
+                (copy.specular_hit_distance_texture_handle != 0u &&
+                 (!hitDistance || hitDistance->kind != Kind::Texture))) {
                 setError("Ray-query reflections received an invalid encoder or texture handle");
                 return 0;
             }
-            const std::array<uint32_t, 5> handles{{
+            const std::array<uint32_t, 6> handles{{
                 copy.source_color_texture_handle,
                 copy.output_color_texture_handle,
                 copy.depth_texture_handle,
                 copy.normal_roughness_texture_handle,
                 copy.specular_albedo_texture_handle,
+                copy.specular_hit_distance_texture_handle,
             }};
-            for (std::size_t first = 0; first < handles.size(); ++first) {
-                for (std::size_t second = first + 1; second < handles.size(); ++second) {
+            const std::size_t handleCount = hitDistance ? handles.size() : handles.size() - 1u;
+            for (std::size_t first = 0; first < handleCount; ++first) {
+                for (std::size_t second = first + 1; second < handleCount; ++second) {
                     if (handles[first] == handles[second]) {
                         setError("Ray-query reflection input and output textures must be distinct");
                         return 0;
@@ -6475,12 +7062,18 @@ int tw_ray_query_reflections_evaluate_v2(const TWRayQueryReflectionFrameV2* fram
                 normal->texFormat != WGPUTextureFormat_RGBA16Float ||
                 (normal->texUsage & WGPUTextureUsage_TextureBinding) == 0 ||
                 specular->texFormat != WGPUTextureFormat_RGBA16Float ||
-                (specular->texUsage & WGPUTextureUsage_TextureBinding) == 0) {
+                (specular->texUsage & WGPUTextureUsage_TextureBinding) == 0 ||
+                (hitDistance &&
+                 ((hitDistance->texFormat != WGPUTextureFormat_R16Float &&
+                   hitDistance->texFormat != WGPUTextureFormat_R32Float) ||
+                  (hitDistance->texUsage & WGPUTextureUsage_StorageBinding) == 0))) {
                 setError("Ray-query reflections require rgba16float sampled source/guides, rgba16float storage output and sampled depth32float");
                 return 0;
             }
-            const std::array<Slot*, 5> textures{{source, output, depth, normal, specular}};
-            for (const Slot* texture : textures) {
+            const std::array<Slot*, 6> textures{{source, output, depth, normal, specular, hitDistance}};
+            const std::size_t textureCount = hitDistance ? textures.size() : textures.size() - 1u;
+            for (std::size_t index = 0; index < textureCount; ++index) {
+                const Slot* texture = textures[index];
                 if (texture->texD != 1 || texture->texSampleCount != 1 ||
                     texture->texMipLevels != 1 || texture->texW != copy.width ||
                     texture->texH != copy.height) {
@@ -6503,6 +7096,15 @@ int tw_ray_query_reflections_evaluate_v2(const TWRayQueryReflectionFrameV2* fram
             native.normalRoughnessLayout = copy.normal_roughness_vulkan_layout;
             native.specularAlbedoImage = wgpuTextureGetNativeVulkanImage(specular->texture);
             native.specularAlbedoLayout = copy.specular_albedo_vulkan_layout;
+            if (hitDistance) {
+                native.specularHitDistanceImage =
+                    wgpuTextureGetNativeVulkanImage(hitDistance->texture);
+                native.specularHitDistanceLayout =
+                    copy.specular_hit_distance_vulkan_layout;
+                native.specularHitDistanceFormat = hitDistance->texFormat == WGPUTextureFormat_R16Float
+                    ? static_cast<uint32_t>(VK_FORMAT_R16_SFLOAT)
+                    : static_cast<uint32_t>(VK_FORMAT_R32_SFLOAT);
+            }
             native.width = copy.width;
             native.height = copy.height;
             std::copy_n(copy.inverse_view_projection, 16, native.inverseViewProjection);
@@ -6551,7 +7153,8 @@ int tw_ray_query_pipeline_create(uint32_t handle, uint32_t profile,
         entryPointLength == 0u || entryPointLength > 255u ||
         std::memchr(entryPoint, '\0', entryPointLength) ||
         (profile != static_cast<uint32_t>(RayQueryPipelineProfile::LightingV1) &&
-         profile != static_cast<uint32_t>(RayQueryPipelineProfile::ReflectionsV1))) {
+         profile != static_cast<uint32_t>(RayQueryPipelineProfile::ReflectionsV1) &&
+         profile != static_cast<uint32_t>(RayQueryPipelineProfile::ReflectionsV2))) {
         setError("Invalid custom ray-query pipeline creation request");
         return 0;
     }

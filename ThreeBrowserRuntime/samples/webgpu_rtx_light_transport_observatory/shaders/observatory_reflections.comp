@@ -1,0 +1,460 @@
+#version 460
+#extension GL_EXT_ray_query : require
+
+// Project-owned multi-bounce reflection pass for the Light Transport
+// Observatory.  The descriptor and push-constant layout intentionally matches
+// ThreeBrowser's public `reflections-v2` ABI; no demo-specific native code is
+// required to run this shader.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform accelerationStructureEXT topLevelScene;
+layout(rgba16f, set = 0, binding = 1) uniform writeonly image2D outputColor;
+layout(set = 0, binding = 2) uniform sampler2D sourceColor;
+layout(set = 0, binding = 3) uniform sampler2D sceneDepth;
+layout(set = 0, binding = 4) uniform sampler2D normalRoughness;
+layout(set = 0, binding = 5) uniform sampler2D specularAlbedo;
+layout(std430, set = 0, binding = 6) readonly buffer TriangleRadiance {
+    vec4 terminalRadiance[];
+};
+// The BLAS consumes tightly packed vec3 positions.  Scalar access keeps this
+// storage view byte-compatible with that vertex stream under std430 rules.
+layout(std430, set = 0, binding = 7) readonly buffer ScenePositions {
+    float worldPositions[];
+};
+layout(std430, set = 0, binding = 8) readonly buffer SceneIndices {
+    uint worldIndices[];
+};
+layout(std430, set = 0, binding = 9) readonly buffer TriangleSurface {
+    // linear albedo RGB and perceptual roughness.
+    vec4 surfaceResponse[];
+};
+layout(std430, set = 0, binding = 10) readonly buffer StaticLights {
+    // Four vec4s per light: position/range, direction/outerCos,
+    // linear color/intensity, innerCos/type/decay/reserved.
+    vec4 staticLightRecords[];
+};
+// Linear world-space distance of the first specular ray hit. Zero means miss,
+// background or a primary surface that did not launch a reflection ray. This
+// generic v2 guide is consumed directly by DLSS Ray Reconstruction.
+layout(r32f, set = 0, binding = 11) uniform writeonly image2D specularHitDistanceOutput;
+
+layout(push_constant) uniform ReflectionConstants {
+    mat4 inverseViewProjection;
+    vec4 cameraPosition;
+    // x reflection strength, y maximum path distance, z ray-origin bias,
+    // w primary-surface roughness cutoff.
+    vec4 parameters;
+    // linear RGB and intensity returned when a path leaves the TLAS.
+    vec4 environment;
+    // xy render extent, z feature flags, w frame index.
+    uvec4 extentFlags;
+} frame;
+
+const uint kDepthInverted = 1u;
+const uint kHighQuality = 4u;
+const float kPi = 3.14159265358979323846;
+const float kTwoPi = 6.28318530717958647692;
+const float kHalfMaximum = 65504.0;
+
+struct SurfaceHit {
+    uint primitive;
+    float distance;
+    vec3 position;
+    vec3 normal;
+    vec3 albedo;
+    float roughness;
+    vec3 radiance;
+};
+
+float saturate(float value) {
+    return clamp(value, 0.0, 1.0);
+}
+
+vec3 safeRadiance(vec3 value) {
+    if (any(isnan(value)) || any(isinf(value))) return vec3(0.0);
+    return clamp(value, vec3(0.0), vec3(kHalfMaximum));
+}
+
+float readDepth(ivec2 pixel) {
+    return texelFetch(sceneDepth, pixel, 0).r;
+}
+
+bool isBackground(float depth) {
+    return (frame.extentFlags.z & kDepthInverted) != 0u
+        ? depth <= 1e-6
+        : depth >= 0.999999;
+}
+
+vec3 reconstructWorld(ivec2 pixel, float depth) {
+    vec2 uv = (vec2(pixel) + vec2(0.5)) / vec2(frame.extentFlags.xy);
+    vec4 clip = vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0);
+    vec4 world = frame.inverseViewProjection * clip;
+    return world.xyz / max(abs(world.w), 1e-8);
+}
+
+vec3 positionAt(uint vertex) {
+    uint scalar = vertex * 3u;
+    return vec3(worldPositions[scalar + 0u],
+                worldPositions[scalar + 1u],
+                worldPositions[scalar + 2u]);
+}
+
+vec3 primitiveNormal(uint primitive, mat4x3 objectToWorld,
+                     vec3 incomingDirection) {
+    uint first = primitive * 3u;
+    uint indexCount = uint(worldIndices.length());
+    if (first + 2u >= indexCount) return normalize(-incomingDirection);
+    vec3 p0 = objectToWorld * vec4(positionAt(worldIndices[first + 0u]), 1.0);
+    vec3 p1 = objectToWorld * vec4(positionAt(worldIndices[first + 1u]), 1.0);
+    vec3 p2 = objectToWorld * vec4(positionAt(worldIndices[first + 2u]), 1.0);
+    vec3 faceNormal = cross(p1 - p0, p2 - p0);
+    float magnitude = length(faceNormal);
+    if (magnitude < 1e-8) return normalize(-incomingDirection);
+    faceNormal /= magnitude;
+    // Always return the face presented to the incoming path.  This prevents a
+    // mirrored back face from sending the next ray into its own primitive.
+    return dot(faceNormal, -incomingDirection) < 0.0
+        ? -faceNormal
+        : faceNormal;
+}
+
+vec4 surfaceAt(uint primitive) {
+    uint count = uint(surfaceResponse.length());
+    return count == 0u
+        ? vec4(0.18, 0.18, 0.18, 0.72)
+        : surfaceResponse[min(primitive, count - 1u)];
+}
+
+vec3 radianceAt(uint primitive) {
+    uint count = uint(terminalRadiance.length());
+    return count == 0u
+        ? vec3(0.0)
+        : safeRadiance(terminalRadiance[min(primitive, count - 1u)].rgb);
+}
+
+float rayBiasAt(vec3 position) {
+    float scale = max(1.0, max(abs(position.x),
+                              max(abs(position.y), abs(position.z))));
+    return max(max(frame.parameters.z, 1e-5), scale * 2e-6);
+}
+
+bool traceSurface(vec3 origin, vec3 direction, float maximumDistance,
+                  out SurfaceHit hit) {
+    rayQueryEXT query;
+    rayQueryInitializeEXT(query, topLevelScene, gl_RayFlagsOpaqueEXT,
+                          0xffu, origin, 0.0, direction, maximumDistance);
+    while (rayQueryProceedEXT(query)) {}
+    if (rayQueryGetIntersectionTypeEXT(query, true) ==
+        gl_RayQueryCommittedIntersectionNoneEXT) {
+        return false;
+    }
+
+    hit.primitive = rayQueryGetIntersectionInstanceCustomIndexEXT(query, true) +
+                    rayQueryGetIntersectionPrimitiveIndexEXT(query, true);
+    hit.distance = rayQueryGetIntersectionTEXT(query, true);
+    hit.position = origin + direction * hit.distance;
+    mat4x3 objectToWorld =
+        rayQueryGetIntersectionObjectToWorldEXT(query, true);
+    hit.normal = primitiveNormal(hit.primitive, objectToWorld, direction);
+    vec4 surface = surfaceAt(hit.primitive);
+    hit.albedo = max(surface.rgb, vec3(0.0));
+    hit.roughness = clamp(surface.a, 0.02, 1.0);
+    hit.radiance = radianceAt(hit.primitive);
+    return true;
+}
+
+bool shadowed(vec3 origin, vec3 direction, float minimumDistance,
+              float maximumDistance) {
+    if (maximumDistance <= minimumDistance) return false;
+    rayQueryEXT query;
+    rayQueryInitializeEXT(
+        query,
+        topLevelScene,
+        gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT,
+        0xffu,
+        origin,
+        minimumDistance,
+        direction,
+        maximumDistance);
+    while (rayQueryProceedEXT(query)) {}
+    return rayQueryGetIntersectionTypeEXT(query, true) !=
+           gl_RayQueryCommittedIntersectionNoneEXT;
+}
+
+vec3 evaluateStaticLights(SurfaceHit hit, vec3 incomingDirection) {
+    uint lightCount = min(uint(staticLightRecords.length()) / 4u, 8u);
+    if (lightCount == 0u) return vec3(0.0);
+
+    float bias = rayBiasAt(hit.position);
+    vec3 irradiance = vec3(0.0);
+    for (uint lightIndex = 0u; lightIndex < lightCount; ++lightIndex) {
+        uint first = lightIndex * 4u;
+        vec4 positionRange = staticLightRecords[first + 0u];
+        vec4 directionOuter = staticLightRecords[first + 1u];
+        vec4 colorIntensity = staticLightRecords[first + 2u];
+        vec4 coneTypeDecay = staticLightRecords[first + 3u];
+        float intensity = max(colorIntensity.a, 0.0);
+        if (intensity <= 0.0 ||
+            all(lessThanEqual(colorIntensity.rgb, vec3(0.0)))) {
+            continue;
+        }
+
+        vec3 toLight = positionRange.xyz - hit.position;
+        float distanceToLight = length(toLight);
+        if (distanceToLight <= bias) continue;
+        float range = max(positionRange.w, 0.0);
+        if (range > 0.0 && distanceToLight >= range) continue;
+
+        vec3 lightDirection = toLight / distanceToLight;
+        float normalDotLight = max(dot(hit.normal, lightDirection), 0.0);
+        if (normalDotLight <= 0.0) continue;
+
+        float cone = 1.0;
+        int type = int(round(coneTypeDecay.y));
+        if (type == 1) {
+            float directionLength = length(directionOuter.xyz);
+            if (directionLength <= 1e-6) continue;
+            vec3 emittedDirection = directionOuter.xyz / directionLength;
+            float angleCos = dot(emittedDirection, -lightDirection);
+            float outerCos = clamp(directionOuter.w, -1.0, 1.0);
+            float innerCos = clamp(coneTypeDecay.x, outerCos, 1.0);
+            cone = smoothstep(outerCos, max(innerCos, outerCos + 1e-5),
+                              angleCos);
+            if (cone <= 1e-5) continue;
+        }
+
+        float rangeFade = 1.0;
+        if (range > 0.0) {
+            float normalizedDistance = saturate(distanceToLight / range);
+            float edge = max(1.0 - pow(normalizedDistance, 4.0), 0.0);
+            rangeFade = edge * edge;
+        }
+        float decay = max(coneTypeDecay.z, 0.0);
+        float attenuation = rangeFade /
+            max(pow(max(distanceToLight, 1.0), decay), 1e-4);
+
+        vec3 shadowOrigin = hit.position + hit.normal * bias;
+        vec3 shadowVector = positionRange.xyz - shadowOrigin;
+        float shadowLength = length(shadowVector);
+        if (shadowLength <= bias) continue;
+        vec3 shadowDirection = shadowVector / shadowLength;
+        float shadowTMin = max(bias * 0.20, 1e-5);
+        float shadowTMax = shadowLength - shadowTMin;
+        if (shadowed(shadowOrigin, shadowDirection,
+                     shadowTMin, shadowTMax)) {
+            continue;
+        }
+
+        irradiance += max(colorIntensity.rgb, vec3(0.0)) * intensity *
+                      attenuation * cone * normalDotLight;
+    }
+
+    // Direct radiance from a Lambertian secondary surface.  Specular transport
+    // is continued explicitly below instead of being baked into this term.
+    return safeRadiance(hit.albedo * irradiance / kPi);
+}
+
+vec3 missRadiance(vec3 direction) {
+    // A restrained vertical gradient avoids a flat cut-out when the mirror
+    // sees beyond the registered architecture while respecting the public
+    // environment color supplied by the page.
+    float horizon = mix(0.24, 1.08,
+                        smoothstep(-0.24, 0.82, direction.y));
+    return safeRadiance(max(frame.environment.rgb, vec3(0.0)) *
+                        max(frame.environment.a, 0.0) * horizon);
+}
+
+void makeBasis(vec3 normal, out vec3 tangent, out vec3 bitangent) {
+    vec3 up = abs(normal.z) < 0.999
+        ? vec3(0.0, 0.0, 1.0)
+        : vec3(1.0, 0.0, 0.0);
+    tangent = normalize(cross(up, normal));
+    bitangent = cross(normal, tangent);
+}
+
+// A deterministic Hammersley/golden-ratio hybrid remains well distributed for
+// each adaptive sample count.  Every pixel deliberately shares the same
+// kernel: without a temporal history/denoiser, per-pixel random rotation turns
+// sub-pixel emitters into persistent salt-and-pepper grain.  Authored area
+// emitters and band-limited materials keep this smaller kernel stable without
+// paying for a brute-force sample count at every glossy pixel.
+vec2 stableSequence(int pathSample, int bounce, int sampleCount) {
+    float u = (float(pathSample) + 0.5) / float(sampleCount);
+    float v = fract(float(pathSample) * 0.6180339887498948 +
+                    float(bounce) * 0.3819660112501052 + 0.1732050807568877);
+    return vec2(u, v);
+}
+
+vec3 sampleSpecularDirection(vec3 viewDirection, vec3 normal,
+                             float roughness, int pathSample,
+                             int bounce, int sampleCount) {
+    vec3 perfect = normalize(reflect(-viewDirection, normal));
+    if (roughness <= 0.035) return perfect;
+
+    vec2 xi = stableSequence(pathSample, bounce, sampleCount);
+    float alpha = max(roughness * roughness, 0.0016);
+    float alphaSquared = alpha * alpha;
+    float cosTheta = sqrt((1.0 - xi.x) /
+        max(1.0 + (alphaSquared - 1.0) * xi.x, 1e-6));
+    float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+    float phi = kTwoPi * xi.y;
+    vec3 tangent;
+    vec3 bitangent;
+    makeBasis(normal, tangent, bitangent);
+    vec3 halfVector = normalize(
+        tangent * (sinTheta * cos(phi)) +
+        bitangent * (sinTheta * sin(phi)) +
+        normal * cosTheta);
+    vec3 sampled = reflect(-viewDirection, halfVector);
+    return dot(sampled, normal) > 1e-5 ? normalize(sampled) : perfect;
+}
+
+vec3 inferredSurfaceF0(vec3 albedo, float roughness) {
+    // reflections-v1 stores albedo + roughness, not secondary-hit metalness.
+    // The sample deliberately reserves very low roughness for its metallic and
+    // mirror architecture.  Preserve dielectric F0 on rough surfaces while
+    // allowing those authored low-roughness colors to tint later bounces.
+    float conductor = 1.0 - smoothstep(0.055, 0.24, roughness);
+    return clamp(mix(vec3(0.04), albedo, conductor), vec3(0.02), vec3(0.98));
+}
+
+vec3 traceReflectionPath(vec3 origin, vec3 direction,
+                         float maximumDistance, int pathSample,
+                         int pathSampleCount, int bounceLimit,
+                         out float primaryHitDistance) {
+    vec3 throughput = vec3(1.0);
+    vec3 result = vec3(0.0);
+    float remainingDistance = maximumDistance;
+    primaryHitDistance = 0.0;
+
+    for (int bounce = 0; bounce < 3; ++bounce) {
+        if (bounce >= bounceLimit || remainingDistance <= 1e-4 ||
+            max(throughput.r, max(throughput.g, throughput.b)) <= 1e-4) {
+            break;
+        }
+
+        SurfaceHit hit;
+        if (!traceSurface(origin, direction, remainingDistance, hit)) {
+            result += throughput * missRadiance(direction);
+            break;
+        }
+        if (bounce == 0) primaryHitDistance = hit.distance;
+        remainingDistance = max(remainingDistance - hit.distance, 0.0);
+
+        vec3 localRadiance = hit.radiance +
+                             evaluateStaticLights(hit, direction);
+        result += throughput * safeRadiance(localRadiance);
+        if (bounce + 1 >= bounceLimit) break;
+
+        vec3 viewDirection = normalize(-direction);
+        float normalDotView = saturate(dot(hit.normal, viewDirection));
+        vec3 f0 = inferredSurfaceF0(hit.albedo, hit.roughness);
+        vec3 fresnel = f0 + (vec3(1.0) - f0) *
+                       pow(1.0 - normalDotView, 5.0);
+        // Rough paths lose coherent specular energy at each vertex.  The
+        // bounded factor also prevents a bright mirror tunnel from exceeding
+        // FP16 storage after three bounces.
+        float roughnessRetention = mix(0.97, 0.58, hit.roughness);
+        throughput = min(throughput * fresnel * roughnessRetention,
+                         vec3(1.0));
+
+        vec3 nextDirection = sampleSpecularDirection(
+            viewDirection,
+            hit.normal,
+            hit.roughness,
+            pathSample,
+            bounce + 1,
+            pathSampleCount);
+        float bias = rayBiasAt(hit.position);
+        origin = hit.position + hit.normal * bias + nextDirection * bias * 0.25;
+        direction = nextDirection;
+    }
+    return safeRadiance(result);
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(pixel, ivec2(frame.extentFlags.xy)))) return;
+
+    vec4 base = texelFetch(sourceColor, pixel, 0);
+    vec3 safeBase = safeRadiance(base.rgb);
+    float depth = readDepth(pixel);
+    if (isBackground(depth)) {
+        imageStore(outputColor, pixel, vec4(safeBase, base.a));
+        imageStore(specularHitDistanceOutput, pixel, vec4(0.0));
+        return;
+    }
+
+    vec4 normalAndRoughness = texelFetch(normalRoughness, pixel, 0);
+    vec4 specular = texelFetch(specularAlbedo, pixel, 0);
+    float normalLength = length(normalAndRoughness.xyz);
+    float roughness = clamp(normalAndRoughness.w, 0.0, 1.0);
+    float roughnessCutoff = clamp(frame.parameters.w, 0.02, 1.0);
+    float reflectionMask = saturate(specular.a);
+    if (normalLength < 1e-4 || roughness >= roughnessCutoff ||
+        reflectionMask <= 1e-4 || frame.parameters.x <= 0.0) {
+        imageStore(outputColor, pixel, vec4(safeBase, base.a));
+        imageStore(specularHitDistanceOutput, pixel, vec4(0.0));
+        return;
+    }
+
+    vec3 world = reconstructWorld(pixel, depth);
+    vec3 viewDirection = normalize(frame.cameraPosition.xyz - world);
+    vec3 normal = normalAndRoughness.xyz / normalLength;
+    if (dot(normal, viewDirection) < 0.0) normal = -normal;
+    float bias = rayBiasAt(world);
+    vec3 origin = world + normal * bias;
+    float maximumDistance = max(frame.parameters.y, bias * 2.0);
+
+    bool highQuality = (frame.extentFlags.z & kHighQuality) != 0u;
+    int bounceLimit = highQuality ? 3 : 2;
+    // Perfect mirrors require one exact ray.  The material/source authoring
+    // deliberately removes sub-pixel highlights, so a compact deterministic
+    // kernel converges without temporal shimmer.  Keep the polished floor in
+    // the four-ray tier; it covers most of the screen and dominates cost.
+    int pathSampleCount = roughness <= 0.035
+        ? 1
+        : (roughness <= 0.18
+            ? (highQuality ? 4 : 2)
+            : (roughness <= 0.35
+                ? (highQuality ? 8 : 4)
+                : (highQuality ? 12 : 6)));
+    vec3 reflected = vec3(0.0);
+    float guideHitDistance = 0.0;
+    for (int pathSample = 0; pathSample < 12; ++pathSample) {
+        if (pathSample >= pathSampleCount) break;
+        vec3 direction = sampleSpecularDirection(
+            viewDirection,
+            normal,
+            roughness,
+            pathSample,
+            0,
+            pathSampleCount);
+        float sampleHitDistance = 0.0;
+        reflected += traceReflectionPath(
+            origin,
+            direction,
+            maximumDistance,
+            pathSample,
+            pathSampleCount,
+            bounceLimit,
+            sampleHitDistance);
+        if (pathSample == 0) guideHitDistance = sampleHitDistance;
+    }
+    reflected = safeRadiance(reflected / float(pathSampleCount));
+
+    float normalDotView = saturate(dot(normal, viewDirection));
+    vec3 f0 = clamp(specular.rgb, vec3(0.0), vec3(1.0));
+    vec3 fresnel = f0 + (vec3(1.0) - f0) *
+                   pow(1.0 - normalDotView, 5.0);
+    vec3 reflectionWeight = clamp(
+        fresnel * reflectionMask * max(frame.parameters.x, 0.0),
+        vec3(0.0),
+        vec3(1.0));
+    vec3 composite = safeBase * (vec3(1.0) - reflectionWeight) +
+                     reflected * reflectionWeight;
+    imageStore(outputColor, pixel,
+               vec4(safeRadiance(composite), clamp(base.a, 0.0, 1.0)));
+    imageStore(specularHitDistanceOutput, pixel,
+               vec4(max(guideHitDistance, 0.0), 0.0, 0.0, 0.0));
+}

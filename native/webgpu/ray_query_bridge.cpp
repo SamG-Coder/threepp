@@ -11,6 +11,8 @@
 
 #include "threepp/renderers/vulkan/shaders/ray_query_lighting.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/ray_query_reflections.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/ray_query_reflections.comp.reflections_v2_r16.spv.h"
+#include "threepp/renderers/vulkan/shaders/ray_query_reflections.comp.reflections_v2_r32.spv.h"
 
 #include <algorithm>
 #include <array>
@@ -63,6 +65,7 @@ struct VulkanFunctions {
     PFN_vkCreateImageView createImageView{};
     PFN_vkDestroyImageView destroyImageView{};
     PFN_vkCmdCopyBuffer cmdCopyBuffer{};
+    PFN_vkCmdUpdateBuffer cmdUpdateBuffer{};
     PFN_vkCmdPipelineBarrier cmdPipelineBarrier{};
     PFN_vkCmdBindPipeline cmdBindPipeline{};
     PFN_vkCmdBindDescriptorSets cmdBindDescriptorSets{};
@@ -114,6 +117,8 @@ struct ReflectionDescriptorKey {
     VkImage depth{VK_NULL_HANDLE};
     VkImage normalRoughness{VK_NULL_HANDLE};
     VkImage specularAlbedo{VK_NULL_HANDLE};
+    VkImage specularHitDistance{VK_NULL_HANDLE};
+    VkFormat specularHitDistanceFormat{VK_FORMAT_UNDEFINED};
 
     bool operator==(const ReflectionDescriptorKey&) const = default;
 };
@@ -130,6 +135,9 @@ struct ReflectionDescriptorKeyHash {
         combine(key.depth);
         combine(key.normalRoughness);
         combine(key.specularAlbedo);
+        combine(key.specularHitDistance);
+        value ^= static_cast<std::size_t>(key.specularHitDistanceFormat) +
+                 0x9e3779b97f4a7c15ull + (value << 6u) + (value >> 2u);
         return value;
     }
 };
@@ -141,11 +149,29 @@ struct ReflectionDescriptorRecord {
     VkImageView depthView{VK_NULL_HANDLE};
     VkImageView normalRoughnessView{VK_NULL_HANDLE};
     VkImageView specularAlbedoView{VK_NULL_HANDLE};
+    VkImageView specularHitDistanceView{VK_NULL_HANDLE};
 };
 
 struct CustomPipeline {
     RayQueryPipelineProfile profile{RayQueryPipelineProfile::LightingV1};
     VkPipeline pipeline{VK_NULL_HANDLE};
+};
+
+struct PendingInstanceGroup {
+    uint32_t id{};
+    uint32_t capacity{};
+    uint32_t vertexOffset{};
+    uint32_t vertexCount{};
+    uint32_t indexOffset{};
+    uint32_t indexCount{};
+    uint32_t primitiveBase{};
+};
+
+struct InstanceGroup {
+    PendingInstanceGroup descriptor{};
+    uint32_t firstInstance{};
+    AccelerationStructure blas{};
+    Buffer blasScratch{};
 };
 
 struct State {
@@ -172,6 +198,8 @@ struct State {
     VkDescriptorPool reflectionDescriptorPool{VK_NULL_HANDLE};
     VkPipelineLayout reflectionPipelineLayout{VK_NULL_HANDLE};
     VkPipeline reflectionPipeline{VK_NULL_HANDLE};
+    VkPipeline reflectionPipelineV2R16{VK_NULL_HANDLE};
+    VkPipeline reflectionPipelineV2R32{VK_NULL_HANDLE};
     std::unordered_map<ReflectionDescriptorKey, ReflectionDescriptorRecord,
                        ReflectionDescriptorKeyHash> reflectionDescriptors;
     std::unordered_map<uint32_t, CustomPipeline> customPipelines;
@@ -181,6 +209,7 @@ struct State {
     std::vector<float> pendingTriangleRadiance;
     std::vector<float> pendingTriangleSurface;
     std::vector<float> pendingStaticLights;
+    std::vector<PendingInstanceGroup> pendingInstanceGroups;
     Buffer vertices{};
     Buffer indices{};
     Buffer triangleRadiance{};
@@ -192,6 +221,9 @@ struct State {
     Buffer tlasScratch{};
     AccelerationStructure blas{};
     AccelerationStructure tlas{};
+    std::vector<InstanceGroup> instanceGroups;
+    std::vector<VkAccelerationStructureInstanceKHR> instanceRecords;
+    uint32_t tlasInstanceCount{};
     bool sceneReady{};
     uint32_t triangleCount{};
     uint64_t buildCount{};
@@ -267,6 +299,7 @@ bool loadFunctions() {
     LOAD_DEVICE(createImageView, vkCreateImageView);
     LOAD_DEVICE(destroyImageView, vkDestroyImageView);
     LOAD_DEVICE(cmdCopyBuffer, vkCmdCopyBuffer);
+    LOAD_DEVICE(cmdUpdateBuffer, vkCmdUpdateBuffer);
     LOAD_DEVICE(cmdPipelineBarrier, vkCmdPipelineBarrier);
     LOAD_DEVICE(cmdBindPipeline, vkCmdBindPipeline);
     LOAD_DEVICE(cmdBindDescriptorSets, vkCmdBindDescriptorSets);
@@ -288,7 +321,8 @@ bool loadFunctions() {
            f.createPipelineLayout && f.createShaderModule && f.createComputePipelines &&
            f.destroyPipelineLayout && f.destroyShaderModule && f.destroyPipeline &&
            f.createSampler && f.destroySampler && f.createImageView &&
-           f.destroyImageView && f.cmdCopyBuffer && f.cmdPipelineBarrier &&
+           f.destroyImageView && f.cmdCopyBuffer && f.cmdUpdateBuffer &&
+           f.cmdPipelineBarrier &&
            f.cmdBindPipeline && f.cmdBindDescriptorSets && f.cmdPushConstants &&
            f.cmdDispatch && f.deviceWaitIdle;
 }
@@ -557,11 +591,15 @@ void destroyReflectionViews(ReflectionDescriptorRecord& record) {
     if (record.specularAlbedoView) {
         g.vk.destroyImageView(g.device, record.specularAlbedoView, nullptr);
     }
+    if (record.specularHitDistanceView) {
+        g.vk.destroyImageView(g.device, record.specularHitDistanceView, nullptr);
+    }
     record.sourceColorView = VK_NULL_HANDLE;
     record.outputColorView = VK_NULL_HANDLE;
     record.depthView = VK_NULL_HANDLE;
     record.normalRoughnessView = VK_NULL_HANDLE;
     record.specularAlbedoView = VK_NULL_HANDLE;
+    record.specularHitDistanceView = VK_NULL_HANDLE;
 }
 
 void resetReflectionDescriptorCache() {
@@ -609,6 +647,13 @@ void destroySceneResources(bool wait) {
     resetDescriptorCache();
     resetReflectionDescriptorCache();
     destroyAccelerationStructure(g.tlas);
+    for (auto& group : g.instanceGroups) {
+        destroyAccelerationStructure(group.blas);
+        destroyBuffer(group.blasScratch);
+    }
+    g.instanceGroups.clear();
+    g.instanceRecords.clear();
+    g.tlasInstanceCount = 0u;
     destroyAccelerationStructure(g.blas);
     destroyBuffer(g.tlasScratch);
     destroyBuffer(g.instances);
@@ -708,7 +753,7 @@ bool createPipeline() {
 }
 
 bool createReflectionPipeline() {
-    const std::array<VkDescriptorSetLayoutBinding, 11> bindings{{
+    const std::array<VkDescriptorSetLayoutBinding, 12> bindings{{
         {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1,
          VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
         {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1,
@@ -731,6 +776,8 @@ bool createReflectionPipeline() {
          VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
         {10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
          VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {11, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1,
+         VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
     }};
     VkDescriptorSetLayoutCreateInfo descriptorLayout{
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
@@ -743,7 +790,7 @@ bool createReflectionPipeline() {
     }
     const std::array<VkDescriptorPoolSize, 4> poolSizes{{
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 256},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 256},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 512},
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1024},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1280},
     }};
@@ -793,6 +840,38 @@ bool createReflectionPipeline() {
         fail("Creating the ray-query reflection compute pipeline failed");
         return false;
     }
+    const auto createVariant = [](const uint32_t* code, std::size_t codeSize,
+                                  VkPipeline& output) {
+        VkShaderModuleCreateInfo moduleCreate{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+        moduleCreate.codeSize = codeSize;
+        moduleCreate.pCode = code;
+        VkShaderModule module{VK_NULL_HANDLE};
+        if (g.vk.createShaderModule(g.device, &moduleCreate, nullptr, &module) != VK_SUCCESS) {
+            return false;
+        }
+        VkPipelineShaderStageCreateInfo variantStage{
+            VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+        variantStage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        variantStage.module = module;
+        variantStage.pName = "main";
+        VkComputePipelineCreateInfo variantCreate{
+            VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+        variantCreate.stage = variantStage;
+        variantCreate.layout = g.reflectionPipelineLayout;
+        const VkResult result = g.vk.createComputePipelines(
+            g.device, VK_NULL_HANDLE, 1, &variantCreate, nullptr, &output);
+        g.vk.destroyShaderModule(g.device, module, nullptr);
+        return result == VK_SUCCESS && output != VK_NULL_HANDLE;
+    };
+    if (!createVariant(kRayQueryReflectionsV2R16CompSpv,
+                       sizeof(kRayQueryReflectionsV2R16CompSpv),
+                       g.reflectionPipelineV2R16) ||
+        !createVariant(kRayQueryReflectionsV2R32CompSpv,
+                       sizeof(kRayQueryReflectionsV2R32CompSpv),
+                       g.reflectionPipelineV2R32)) {
+        fail("Creating a reflections-v2 hit-distance compute pipeline failed");
+        return false;
+    }
     return true;
 }
 
@@ -801,6 +880,7 @@ VkPipelineLayout pipelineLayoutForProfile(RayQueryPipelineProfile profile) {
         case RayQueryPipelineProfile::LightingV1:
             return g.pipelineLayout;
         case RayQueryPipelineProfile::ReflectionsV1:
+        case RayQueryPipelineProfile::ReflectionsV2:
             return g.reflectionPipelineLayout;
     }
     return VK_NULL_HANDLE;
@@ -891,6 +971,12 @@ void destroyPipelineResources() {
     if (g.reflectionPipeline) {
         g.vk.destroyPipeline(g.device, g.reflectionPipeline, nullptr);
     }
+    if (g.reflectionPipelineV2R16) {
+        g.vk.destroyPipeline(g.device, g.reflectionPipelineV2R16, nullptr);
+    }
+    if (g.reflectionPipelineV2R32) {
+        g.vk.destroyPipeline(g.device, g.reflectionPipelineV2R32, nullptr);
+    }
     if (g.reflectionPipelineLayout) {
         g.vk.destroyPipelineLayout(g.device, g.reflectionPipelineLayout, nullptr);
     }
@@ -908,6 +994,8 @@ void destroyPipelineResources() {
     }
     g.depthSampler = VK_NULL_HANDLE;
     g.reflectionPipeline = VK_NULL_HANDLE;
+    g.reflectionPipelineV2R16 = VK_NULL_HANDLE;
+    g.reflectionPipelineV2R32 = VK_NULL_HANDLE;
     g.reflectionPipelineLayout = VK_NULL_HANDLE;
     g.reflectionDescriptorPool = VK_NULL_HANDLE;
     g.reflectionDescriptorLayout = VK_NULL_HANDLE;
@@ -1021,8 +1109,20 @@ VkDescriptorSet reflectionDescriptorFor(const ReflectionDescriptorKey& key) {
     record.specularAlbedoView = createImageView(
         key.specularAlbedo, VK_FORMAT_R16G16B16A16_SFLOAT,
         VK_IMAGE_ASPECT_COLOR_BIT);
+    if (key.specularHitDistance) {
+        if (key.specularHitDistanceFormat != VK_FORMAT_R16_SFLOAT &&
+            key.specularHitDistanceFormat != VK_FORMAT_R32_SFLOAT) {
+            destroyReflectionViews(record);
+            fail("Ray-query reflection hit distance must use R16_SFLOAT or R32_SFLOAT");
+            return VK_NULL_HANDLE;
+        }
+        record.specularHitDistanceView = createImageView(
+            key.specularHitDistance, key.specularHitDistanceFormat,
+            VK_IMAGE_ASPECT_COLOR_BIT);
+    }
     if (!record.sourceColorView || !record.outputColorView || !record.depthView ||
-        !record.normalRoughnessView || !record.specularAlbedoView) {
+        !record.normalRoughnessView || !record.specularAlbedoView ||
+        (key.specularHitDistance && !record.specularHitDistanceView)) {
         destroyReflectionViews(record);
         fail("Creating borrowed WebGPU image views for ray-query reflections failed");
         return VK_NULL_HANDLE;
@@ -1044,6 +1144,9 @@ VkDescriptorSet reflectionDescriptorFor(const ReflectionDescriptorKey& key) {
     VkDescriptorImageInfo outputInfo{};
     outputInfo.imageView = record.outputColorView;
     outputInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    VkDescriptorImageInfo hitDistanceInfo{};
+    hitDistanceInfo.imageView = record.specularHitDistanceView;
+    hitDistanceInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     const auto sampledInfo = [](VkSampler sampler, VkImageView view) {
         VkDescriptorImageInfo info{};
         info.sampler = sampler;
@@ -1080,7 +1183,7 @@ VkDescriptorSet reflectionDescriptorFor(const ReflectionDescriptorKey& key) {
     lightsInfo.offset = 0;
     lightsInfo.range = g.staticLights.size;
 
-    std::array<VkWriteDescriptorSet, 11> writes{};
+    std::array<VkWriteDescriptorSet, 12> writes{};
     writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     writes[0].pNext = &asWrite;
     writes[0].dstSet = record.set;
@@ -1121,7 +1224,17 @@ VkDescriptorSet reflectionDescriptorFor(const ReflectionDescriptorKey& key) {
         writes[7u + index].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[7u + index].pBufferInfo = sceneBuffers[index];
     }
-    g.vk.updateDescriptorSets(g.device, static_cast<uint32_t>(writes.size()),
+    uint32_t writeCount = 11u;
+    if (record.specularHitDistanceView) {
+        writes[11] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        writes[11].dstSet = record.set;
+        writes[11].dstBinding = 11;
+        writes[11].descriptorCount = 1;
+        writes[11].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[11].pImageInfo = &hitDistanceInfo;
+        writeCount = 12u;
+    }
+    g.vk.updateDescriptorSets(g.device, writeCount,
                               writes.data(), 0, nullptr);
     g.reflectionDescriptors.emplace(key, record);
     return record.set;
@@ -1253,6 +1366,7 @@ void rayQueryBridgeSceneBegin() {
     g.pendingTriangleRadiance.clear();
     g.pendingTriangleSurface.clear();
     g.pendingStaticLights.clear();
+    g.pendingInstanceGroups.clear();
     g.status = g.attached
         ? "Collecting static world-space triangles"
         : "Ray query bridge is unavailable";
@@ -1380,6 +1494,29 @@ bool rayQueryBridgeSetStaticLights(const float* lightRecords,
     return true;
 }
 
+bool rayQueryBridgeAddInstanceGroup(uint32_t id, uint32_t capacity,
+                                    uint32_t vertexOffset, uint32_t vertexCount,
+                                    uint32_t indexOffset, uint32_t indexCount,
+                                    uint32_t primitiveBase) {
+    std::scoped_lock lock(g.mutex);
+    if (!g.attached || id == 0u || capacity == 0u || capacity > 1024u ||
+        vertexCount == 0u || indexCount == 0u || indexCount % 3u != 0u ||
+        primitiveBase > 0x00ffffffu) {
+        fail("Invalid dynamic ray-query instance-group descriptor");
+        return false;
+    }
+    const auto duplicate = std::find_if(
+        g.pendingInstanceGroups.begin(), g.pendingInstanceGroups.end(),
+        [id](const PendingInstanceGroup& group) { return group.id == id; });
+    if (duplicate != g.pendingInstanceGroups.end()) {
+        fail("Dynamic ray-query instance-group IDs must be unique");
+        return false;
+    }
+    g.pendingInstanceGroups.push_back({id, capacity, vertexOffset, vertexCount,
+                                       indexOffset, indexCount, primitiveBase});
+    return true;
+}
+
 bool rayQueryBridgeCommit(void* commandBufferValue) {
     std::scoped_lock lock(g.mutex);
     if (!g.attached || !commandBufferValue || g.pendingPositions.empty() ||
@@ -1396,6 +1533,48 @@ bool rayQueryBridgeCommit(void* commandBufferValue) {
         }
     }
     const uint32_t primitiveCount = static_cast<uint32_t>(g.pendingIndices.size() / 3u);
+    uint32_t staticPrimitiveCount = primitiveCount;
+    uint32_t expectedVertexOffset = vertexCount;
+    uint32_t expectedIndexOffset = static_cast<uint32_t>(g.pendingIndices.size());
+    if (!g.pendingInstanceGroups.empty()) {
+        expectedVertexOffset = g.pendingInstanceGroups.front().vertexOffset;
+        expectedIndexOffset = g.pendingInstanceGroups.front().indexOffset;
+        if (expectedIndexOffset == 0u || expectedIndexOffset % 3u != 0u ||
+            expectedVertexOffset == 0u) {
+            fail("Dynamic instance-group geometry must follow a non-empty static scene");
+            return false;
+        }
+        staticPrimitiveCount = expectedIndexOffset / 3u;
+        uint32_t nextVertex = expectedVertexOffset;
+        uint32_t nextIndex = expectedIndexOffset;
+        for (const PendingInstanceGroup& group : g.pendingInstanceGroups) {
+            if (group.vertexOffset != nextVertex || group.indexOffset != nextIndex ||
+                group.primitiveBase != group.indexOffset / 3u ||
+                group.vertexOffset > vertexCount ||
+                group.vertexCount > vertexCount - group.vertexOffset ||
+                group.indexOffset > g.pendingIndices.size() ||
+                group.indexCount > g.pendingIndices.size() - group.indexOffset ||
+                static_cast<uint64_t>(group.primitiveBase) +
+                    static_cast<uint64_t>(group.indexCount / 3u) > 0x01000000ull) {
+                fail("Dynamic instance-group geometry ranges must be contiguous and match primitiveBase");
+                return false;
+            }
+            const uint32_t vertexEnd = group.vertexOffset + group.vertexCount;
+            for (uint32_t offset = 0u; offset < group.indexCount; ++offset) {
+                const uint32_t index = g.pendingIndices[group.indexOffset + offset];
+                if (index < group.vertexOffset || index >= vertexEnd) {
+                    fail("Dynamic instance-group indices must reference only their shared geometry");
+                    return false;
+                }
+            }
+            nextVertex = vertexEnd;
+            nextIndex += group.indexCount;
+        }
+        if (nextVertex != vertexCount || nextIndex != g.pendingIndices.size()) {
+            fail("Dynamic instance-group geometry must form the final scene suffix");
+            return false;
+        }
+    }
     if (!g.pendingTriangleRadiance.empty() &&
         g.pendingTriangleRadiance.size() != static_cast<std::size_t>(primitiveCount) * 4u) {
         fail("Ray-query triangle radiance must contain exactly one vec4 per primitive");
@@ -1440,7 +1619,8 @@ bool rayQueryBridgeCommit(void* commandBufferValue) {
     // usual SceneBegin -> Commit path has already cleared these resources.
     const bool replacingScene =
         g.sceneReady || g.tlas.handle || g.tlas.storage.buffer ||
-        g.blas.handle || g.blas.storage.buffer || g.tlasScratch.buffer ||
+        g.blas.handle || g.blas.storage.buffer || !g.instanceGroups.empty() ||
+        g.tlasScratch.buffer ||
         g.instances.buffer || g.blasScratch.buffer || g.indices.buffer ||
         g.vertices.buffer || g.triangleRadiance.buffer ||
         g.triangleSurface.buffer || g.staticLights.buffer ||
@@ -1473,63 +1653,120 @@ bool rayQueryBridgeCommit(void* commandBufferValue) {
         return false;
     }
 
-    VkAccelerationStructureGeometryTrianglesDataKHR triangles{
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR};
-    triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-    triangles.vertexData.deviceAddress = g.vertices.address;
-    triangles.vertexStride = 3u * sizeof(float);
-    triangles.maxVertex = vertexCount - 1u;
-    triangles.indexType = VK_INDEX_TYPE_UINT32;
-    triangles.indexData.deviceAddress = g.indices.address;
-    VkAccelerationStructureGeometryKHR geometry{
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
-    geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-    geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
-    geometry.geometry.triangles = triangles;
-    VkAccelerationStructureBuildGeometryInfoKHR blasBuild{
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
-    blasBuild.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-    blasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
-    blasBuild.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-    blasBuild.geometryCount = 1;
-    blasBuild.pGeometries = &geometry;
-    VkAccelerationStructureBuildSizesInfoKHR blasSizes{
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
-    g.vk.getAccelerationStructureBuildSizes(
-        g.device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-        &blasBuild, &primitiveCount, &blasSizes);
-    if (!createAccelerationStructure(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
-                                     blasSizes.accelerationStructureSize, g.blas) ||
-        !createBuffer(blasSizes.buildScratchSize,
-                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                      VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                      g.blasScratch)) {
+    const std::size_t blasCount = 1u + g.pendingInstanceGroups.size();
+    std::vector<VkAccelerationStructureGeometryKHR> blasGeometries(blasCount);
+    std::vector<VkAccelerationStructureBuildGeometryInfoKHR> blasBuilds(blasCount);
+    std::vector<VkAccelerationStructureBuildRangeInfoKHR> blasRanges(blasCount);
+    std::vector<const VkAccelerationStructureBuildRangeInfoKHR*> blasRangePointers(blasCount);
+    g.instanceGroups.resize(g.pendingInstanceGroups.size());
+
+    const auto configureBlas = [&](std::size_t slot, uint32_t indexOffset,
+                                   uint32_t buildPrimitiveCount,
+                                   AccelerationStructure& accelerationStructure,
+                                   Buffer& scratch) -> bool {
+        VkAccelerationStructureGeometryTrianglesDataKHR triangles{
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR};
+        triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+        triangles.vertexData.deviceAddress = g.vertices.address;
+        triangles.vertexStride = 3u * sizeof(float);
+        triangles.maxVertex = vertexCount - 1u;
+        triangles.indexType = VK_INDEX_TYPE_UINT32;
+        triangles.indexData.deviceAddress =
+            g.indices.address + static_cast<VkDeviceAddress>(indexOffset) * sizeof(uint32_t);
+        auto& geometry = blasGeometries[slot];
+        geometry = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+        geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+        geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+        geometry.geometry.triangles = triangles;
+        auto& build = blasBuilds[slot];
+        build = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+        build.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+        build.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+        build.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+        build.geometryCount = 1u;
+        build.pGeometries = &geometry;
+        VkAccelerationStructureBuildSizesInfoKHR sizes{
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+        g.vk.getAccelerationStructureBuildSizes(
+            g.device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+            &build, &buildPrimitiveCount, &sizes);
+        if (!createAccelerationStructure(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
+                                         sizes.accelerationStructureSize,
+                                         accelerationStructure) ||
+            !createBuffer(sizes.buildScratchSize,
+                          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                              VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, scratch)) {
+            return false;
+        }
+        build.dstAccelerationStructure = accelerationStructure.handle;
+        build.scratchData.deviceAddress = scratch.address;
+        VkAccelerationStructureDeviceAddressInfoKHR addressInfo{
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
+        addressInfo.accelerationStructure = accelerationStructure.handle;
+        accelerationStructure.address =
+            g.vk.getAccelerationStructureDeviceAddress(g.device, &addressInfo);
+        if (!accelerationStructure.address) return false;
+        blasRanges[slot].primitiveCount = buildPrimitiveCount;
+        blasRangePointers[slot] = &blasRanges[slot];
+        return true;
+    };
+
+    if (!configureBlas(0u, 0u, staticPrimitiveCount, g.blas, g.blasScratch)) {
+        fail("Creating the static ray-query BLAS failed");
         destroySceneResources(false);
         return false;
     }
-    blasBuild.dstAccelerationStructure = g.blas.handle;
-    blasBuild.scratchData.deviceAddress = g.blasScratch.address;
-    VkAccelerationStructureDeviceAddressInfoKHR blasAddressInfo{
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
-    blasAddressInfo.accelerationStructure = g.blas.handle;
-    g.blas.address = g.vk.getAccelerationStructureDeviceAddress(g.device, &blasAddressInfo);
-    if (!g.blas.address) {
-        fail("Vulkan returned no address for the static BLAS");
-        destroySceneResources(false);
-        return false;
+    for (std::size_t index = 0u; index < g.pendingInstanceGroups.size(); ++index) {
+        auto& group = g.instanceGroups[index];
+        group.descriptor = g.pendingInstanceGroups[index];
+        if (!configureBlas(index + 1u, group.descriptor.indexOffset,
+                           group.descriptor.indexCount / 3u,
+                           group.blas, group.blasScratch)) {
+            fail("Creating a shared dynamic instance-group BLAS failed");
+            destroySceneResources(false);
+            return false;
+        }
     }
 
-    VkAccelerationStructureInstanceKHR instance{};
-    instance.transform.matrix[0][0] = 1.0f;
-    instance.transform.matrix[1][1] = 1.0f;
-    instance.transform.matrix[2][2] = 1.0f;
-    instance.mask = 0xffu;
-    instance.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
-    instance.accelerationStructureReference = g.blas.address;
-    if (!createImmutableSceneBuffer(sizeof(instance), geometryUsage, &instance,
-                                    g.instances, pendingCopies)) {
+    uint32_t totalInstanceCount = 1u;
+    for (const PendingInstanceGroup& group : g.pendingInstanceGroups) {
+        if (group.capacity > std::numeric_limits<uint32_t>::max() - totalInstanceCount) {
+            fail("Dynamic instance-group capacity overflowed the TLAS");
+            destroySceneResources(false);
+            return false;
+        }
+        totalInstanceCount += group.capacity;
+    }
+    g.instanceRecords.assign(totalInstanceCount, {});
+    auto& staticInstance = g.instanceRecords[0];
+    staticInstance.transform.matrix[0][0] = 1.0f;
+    staticInstance.transform.matrix[1][1] = 1.0f;
+    staticInstance.transform.matrix[2][2] = 1.0f;
+    staticInstance.mask = 0xffu;
+    staticInstance.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+    staticInstance.accelerationStructureReference = g.blas.address;
+    uint32_t nextInstance = 1u;
+    for (auto& group : g.instanceGroups) {
+        group.firstInstance = nextInstance;
+        for (uint32_t slot = 0u; slot < group.descriptor.capacity; ++slot) {
+            auto& instance = g.instanceRecords[nextInstance + slot];
+            instance.transform.matrix[0][0] = 1.0f;
+            instance.transform.matrix[1][1] = 1.0f;
+            instance.transform.matrix[2][2] = 1.0f;
+            instance.instanceCustomIndex = group.descriptor.primitiveBase;
+            instance.mask = 0u;
+            instance.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+            instance.accelerationStructureReference = group.blas.address;
+        }
+        nextInstance += group.descriptor.capacity;
+    }
+    if (!createImmutableSceneBuffer(
+            static_cast<VkDeviceSize>(g.instanceRecords.size()) *
+                sizeof(VkAccelerationStructureInstanceKHR),
+            geometryUsage | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            g.instanceRecords.data(), g.instances, pendingCopies)) {
         destroySceneResources(false);
         return false;
     }
@@ -1543,11 +1780,12 @@ bool rayQueryBridgeCommit(void* commandBufferValue) {
     VkAccelerationStructureBuildGeometryInfoKHR tlasBuild{
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
     tlasBuild.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-    tlasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+    tlasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                      VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
     tlasBuild.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
     tlasBuild.geometryCount = 1;
     tlasBuild.pGeometries = &tlasGeometry;
-    const uint32_t instanceCount = 1;
+    const uint32_t instanceCount = totalInstanceCount;
     VkAccelerationStructureBuildSizesInfoKHR tlasSizes{
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
     g.vk.getAccelerationStructureBuildSizes(
@@ -1555,7 +1793,8 @@ bool rayQueryBridgeCommit(void* commandBufferValue) {
         &tlasBuild, &instanceCount, &tlasSizes);
     if (!createAccelerationStructure(VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
                                      tlasSizes.accelerationStructureSize, g.tlas) ||
-        !createBuffer(tlasSizes.buildScratchSize,
+        !createBuffer(std::max(tlasSizes.buildScratchSize,
+                               tlasSizes.updateScratchSize),
                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                       VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -1597,10 +1836,9 @@ bool rayQueryBridgeCommit(void* commandBufferValue) {
         VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         0, 1, &uploadBarrier, 0, nullptr, 0, nullptr);
-    VkAccelerationStructureBuildRangeInfoKHR blasRange{};
-    blasRange.primitiveCount = primitiveCount;
-    const VkAccelerationStructureBuildRangeInfoKHR* blasRangePtr = &blasRange;
-    g.vk.cmdBuildAccelerationStructures(commandBuffer, 1, &blasBuild, &blasRangePtr);
+    g.vk.cmdBuildAccelerationStructures(
+        commandBuffer, static_cast<uint32_t>(blasBuilds.size()),
+        blasBuilds.data(), blasRangePointers.data());
     VkMemoryBarrier buildBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
     buildBarrier.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
     buildBarrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
@@ -1609,7 +1847,7 @@ bool rayQueryBridgeCommit(void* commandBufferValue) {
                             VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                             0, 1, &buildBarrier, 0, nullptr, 0, nullptr);
     VkAccelerationStructureBuildRangeInfoKHR tlasRange{};
-    tlasRange.primitiveCount = 1;
+    tlasRange.primitiveCount = instanceCount;
     const VkAccelerationStructureBuildRangeInfoKHR* tlasRangePtr = &tlasRange;
     g.vk.cmdBuildAccelerationStructures(commandBuffer, 1, &tlasBuild, &tlasRangePtr);
     g.vk.cmdPipelineBarrier(commandBuffer,
@@ -1618,16 +1856,120 @@ bool rayQueryBridgeCommit(void* commandBufferValue) {
                             0, 1, &buildBarrier, 0, nullptr, 0, nullptr);
     g.sceneReady = true;
     g.triangleCount = primitiveCount;
+    g.tlasInstanceCount = instanceCount;
     ++g.buildCount;
     g.status = g.sceneReady
-        ? "Static BLAS/TLAS recorded on the WebGPU command buffer"
+        ? (g.instanceGroups.empty()
+               ? "Static BLAS/TLAS recorded on the WebGPU command buffer"
+               : "Static scene and dynamic instance-group BLAS/TLAS recorded")
         : "Vulkan returned no address for the static TLAS";
     g.pendingPositions.clear();
     g.pendingIndices.clear();
     g.pendingTriangleRadiance.clear();
     g.pendingTriangleSurface.clear();
     g.pendingStaticLights.clear();
+    g.pendingInstanceGroups.clear();
     return g.sceneReady;
+}
+
+bool rayQueryBridgeUpdateInstanceGroup(void* commandBufferValue, uint32_t id,
+                                       const float* matrices3x4,
+                                       const uint32_t* masks,
+                                       std::size_t instanceCount) {
+    std::scoped_lock lock(g.mutex);
+    if (!g.attached || !g.sceneReady || !commandBufferValue || id == 0u ||
+        !matrices3x4 || !masks) {
+        fail("Dynamic instance-group update requires a ready scene and command encoder");
+        return false;
+    }
+    const auto iterator = std::find_if(
+        g.instanceGroups.begin(), g.instanceGroups.end(),
+        [id](const InstanceGroup& group) { return group.descriptor.id == id; });
+    if (iterator == g.instanceGroups.end() ||
+        instanceCount != iterator->descriptor.capacity) {
+        fail("Dynamic instance-group update must match its registered fixed capacity");
+        return false;
+    }
+    const VkDeviceSize byteOffset =
+        static_cast<VkDeviceSize>(iterator->firstInstance) *
+        sizeof(VkAccelerationStructureInstanceKHR);
+    const VkDeviceSize byteSize =
+        static_cast<VkDeviceSize>(instanceCount) *
+        sizeof(VkAccelerationStructureInstanceKHR);
+    if (byteSize == 0u || byteSize > 65536u ||
+        byteOffset + byteSize > g.instances.size) {
+        fail("Dynamic instance-group update exceeds the Vulkan instance buffer");
+        return false;
+    }
+    std::vector<VkAccelerationStructureInstanceKHR> records(instanceCount);
+    for (std::size_t index = 0u; index < instanceCount; ++index) {
+        auto& record = records[index];
+        const float* matrix = matrices3x4 + index * 12u;
+        for (uint32_t row = 0u; row < 3u; ++row) {
+            for (uint32_t column = 0u; column < 4u; ++column) {
+                const float value = matrix[row * 4u + column];
+                if (!std::isfinite(value)) {
+                    fail("Dynamic instance-group transforms must be finite row-major 3x4 matrices");
+                    return false;
+                }
+                record.transform.matrix[row][column] = value;
+            }
+        }
+        record.instanceCustomIndex = iterator->descriptor.primitiveBase;
+        record.mask = masks[index] & 0xffu;
+        record.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+        record.accelerationStructureReference = iterator->blas.address;
+    }
+
+    const VkCommandBuffer commandBuffer = static_cast<VkCommandBuffer>(commandBufferValue);
+    g.vk.cmdUpdateBuffer(commandBuffer, g.instances.buffer, byteOffset, byteSize,
+                         records.data());
+    VkBufferMemoryBarrier instanceBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+    instanceBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    instanceBarrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+    instanceBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    instanceBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    instanceBarrier.buffer = g.instances.buffer;
+    instanceBarrier.offset = byteOffset;
+    instanceBarrier.size = byteSize;
+    g.vk.cmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                            0u, 0u, nullptr, 1u, &instanceBarrier, 0u, nullptr);
+
+    VkAccelerationStructureGeometryInstancesDataKHR instancesData{
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR};
+    instancesData.data.deviceAddress = g.instances.address;
+    VkAccelerationStructureGeometryKHR geometry{
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+    geometry.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+    geometry.geometry.instances = instancesData;
+    VkAccelerationStructureBuildGeometryInfoKHR build{
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+    build.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+    build.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                  VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+    build.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
+    build.srcAccelerationStructure = g.tlas.handle;
+    build.dstAccelerationStructure = g.tlas.handle;
+    build.geometryCount = 1u;
+    build.pGeometries = &geometry;
+    build.scratchData.deviceAddress = g.tlasScratch.address;
+    VkAccelerationStructureBuildRangeInfoKHR range{};
+    range.primitiveCount = g.tlasInstanceCount;
+    const VkAccelerationStructureBuildRangeInfoKHR* rangePointer = &range;
+    g.vk.cmdBuildAccelerationStructures(commandBuffer, 1u, &build, &rangePointer);
+    VkMemoryBarrier buildBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    buildBarrier.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+    buildBarrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                 VK_ACCESS_SHADER_READ_BIT;
+    g.vk.cmdPipelineBarrier(commandBuffer,
+                            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0u,
+                            1u, &buildBarrier, 0u, nullptr, 0u, nullptr);
+    std::copy(records.begin(), records.end(),
+              g.instanceRecords.begin() + iterator->firstInstance);
+    g.status = "Dynamic ray-query instance group updated and TLAS refit recorded";
+    return true;
 }
 
 void rayQueryBridgeDestroyScene() {
@@ -1638,6 +1980,7 @@ void rayQueryBridgeDestroyScene() {
     g.pendingTriangleRadiance.clear();
     g.pendingTriangleSurface.clear();
     g.pendingStaticLights.clear();
+    g.pendingInstanceGroups.clear();
     g.status = g.attached
         ? "Static ray-query scene destroyed"
         : "Ray query bridge is unavailable";
@@ -1774,6 +2117,7 @@ bool rayQueryBridgeEvaluate(const RayQueryLightingFrame& frame) {
 
 bool rayQueryBridgeEvaluateReflections(const RayQueryReflectionFrame& frame) {
     std::scoped_lock lock(g.mutex);
+    const bool hasSpecularHitDistance = frame.specularHitDistanceImage != nullptr;
     if (!g.attached || !g.sceneReady || !g.reflectionPipeline ||
         !frame.commandBuffer || !frame.sourceColorImage || !frame.outputColorImage ||
         !frame.depthImage || !frame.normalRoughnessImage ||
@@ -1782,8 +2126,18 @@ bool rayQueryBridgeEvaluateReflections(const RayQueryReflectionFrame& frame) {
         frame.outputColorLayout == VK_IMAGE_LAYOUT_UNDEFINED ||
         frame.depthLayout == VK_IMAGE_LAYOUT_UNDEFINED ||
         frame.normalRoughnessLayout == VK_IMAGE_LAYOUT_UNDEFINED ||
-        frame.specularAlbedoLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
+        frame.specularAlbedoLayout == VK_IMAGE_LAYOUT_UNDEFINED ||
+        (hasSpecularHitDistance &&
+         frame.specularHitDistanceLayout == VK_IMAGE_LAYOUT_UNDEFINED)) {
         fail("Ray-query reflections require a ready TLAS, an encoder and five valid images");
+        return false;
+    }
+    const auto hitDistanceFormat =
+        static_cast<VkFormat>(frame.specularHitDistanceFormat);
+    if (hasSpecularHitDistance &&
+        hitDistanceFormat != VK_FORMAT_R16_SFLOAT &&
+        hitDistanceFormat != VK_FORMAT_R32_SFLOAT) {
+        fail("Ray-query reflection hit distance must use R16_SFLOAT or R32_SFLOAT");
         return false;
     }
     for (float value : frame.inverseViewProjection) {
@@ -1818,9 +2172,17 @@ bool rayQueryBridgeEvaluateReflections(const RayQueryReflectionFrame& frame) {
         fail("Ray-query reflection strengths, distances, bias, cutoff and environment must be valid");
         return false;
     }
+    const RayQueryPipelineProfile requiredProfile = hasSpecularHitDistance
+        ? RayQueryPipelineProfile::ReflectionsV2
+        : RayQueryPipelineProfile::ReflectionsV1;
+    const VkPipeline defaultPipeline = !hasSpecularHitDistance
+        ? g.reflectionPipeline
+        : (hitDistanceFormat == VK_FORMAT_R16_SFLOAT
+            ? g.reflectionPipelineV2R16
+            : g.reflectionPipelineV2R32);
     const VkPipeline pipeline = frame.pipelineHandle
-        ? customPipeline(frame.pipelineHandle, RayQueryPipelineProfile::ReflectionsV1)
-        : g.reflectionPipeline;
+        ? customPipeline(frame.pipelineHandle, requiredProfile)
+        : defaultPipeline;
     if (!pipeline) return false;
 
     const ReflectionDescriptorKey key{
@@ -1829,13 +2191,17 @@ bool rayQueryBridgeEvaluateReflections(const RayQueryReflectionFrame& frame) {
         static_cast<VkImage>(frame.depthImage),
         static_cast<VkImage>(frame.normalRoughnessImage),
         static_cast<VkImage>(frame.specularAlbedoImage),
+        static_cast<VkImage>(frame.specularHitDistanceImage),
+        hasSpecularHitDistance ? hitDistanceFormat : VK_FORMAT_UNDEFINED,
     };
-    const std::array<VkImage, 5> images{{
+    const std::array<VkImage, 6> images{{
         key.sourceColor, key.outputColor, key.depth,
-        key.normalRoughness, key.specularAlbedo,
+        key.normalRoughness, key.specularAlbedo, key.specularHitDistance,
     }};
-    for (std::size_t first = 0; first < images.size(); ++first) {
-        for (std::size_t second = first + 1; second < images.size(); ++second) {
+    const std::size_t imageCount = hasSpecularHitDistance
+        ? images.size() : images.size() - 1u;
+    for (std::size_t first = 0; first < imageCount; ++first) {
+        for (std::size_t second = first + 1; second < imageCount; ++second) {
             if (images[first] == images[second]) {
                 fail("Ray-query reflection input and output images must be distinct");
                 return false;
@@ -1851,6 +2217,8 @@ bool rayQueryBridgeEvaluateReflections(const RayQueryReflectionFrame& frame) {
     const auto depthLayout = static_cast<VkImageLayout>(frame.depthLayout);
     const auto normalLayout = static_cast<VkImageLayout>(frame.normalRoughnessLayout);
     const auto specularLayout = static_cast<VkImageLayout>(frame.specularAlbedoLayout);
+    const auto hitDistanceLayout =
+        static_cast<VkImageLayout>(frame.specularHitDistanceLayout);
     imageBarrier(commandBuffer, key.outputColor, VK_IMAGE_ASPECT_COLOR_BIT,
                  outputLayout, VK_IMAGE_LAYOUT_GENERAL,
                  VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
@@ -1881,6 +2249,15 @@ bool rayQueryBridgeEvaluateReflections(const RayQueryReflectionFrame& frame) {
                  VK_ACCESS_SHADER_READ_BIT,
                  VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    if (hasSpecularHitDistance) {
+        imageBarrier(commandBuffer, key.specularHitDistance,
+                     VK_IMAGE_ASPECT_COLOR_BIT,
+                     hitDistanceLayout, VK_IMAGE_LAYOUT_GENERAL,
+                     VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+                     VK_ACCESS_SHADER_WRITE_BIT,
+                     VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    }
 
     struct PushConstants {
         float inverseViewProjection[16];
@@ -1908,6 +2285,15 @@ bool rayQueryBridgeEvaluateReflections(const RayQueryReflectionFrame& frame) {
     g.vk.cmdDispatch(commandBuffer, (frame.width + 7u) / 8u,
                      (frame.height + 7u) / 8u, 1);
 
+    if (hasSpecularHitDistance) {
+        imageBarrier(commandBuffer, key.specularHitDistance,
+                     VK_IMAGE_ASPECT_COLOR_BIT,
+                     VK_IMAGE_LAYOUT_GENERAL, hitDistanceLayout,
+                     VK_ACCESS_SHADER_WRITE_BIT,
+                     VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                     VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+    }
     imageBarrier(commandBuffer, key.specularAlbedo, VK_IMAGE_ASPECT_COLOR_BIT,
                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, specularLayout,
                  VK_ACCESS_SHADER_READ_BIT,
@@ -1939,7 +2325,9 @@ bool rayQueryBridgeEvaluateReflections(const RayQueryReflectionFrame& frame) {
                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                  VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
     ++g.evaluationCount;
-    g.status = "Hardware one-bounce roughness-aware reflections dispatched";
+    g.status = hasSpecularHitDistance
+        ? "Hardware reflections and a linear specular hit-distance guide dispatched"
+        : "Hardware one-bounce roughness-aware reflections dispatched";
     return true;
 }
 
@@ -1960,7 +2348,7 @@ void rayQueryBridgeForgetImage(void* imageValue) {
             (void)record;
             if (key.sourceColor == image || key.outputColor == image ||
                 key.depth == image || key.normalRoughness == image ||
-                key.specularAlbedo == image) {
+                key.specularAlbedo == image || key.specularHitDistance == image) {
                 found = true;
                 break;
             }
@@ -1990,7 +2378,7 @@ void rayQueryBridgeForgetImage(void* imageValue) {
         const auto& key = iterator->first;
         if (key.sourceColor == image || key.outputColor == image ||
             key.depth == image || key.normalRoughness == image ||
-            key.specularAlbedo == image) {
+            key.specularAlbedo == image || key.specularHitDistance == image) {
             if (iterator->second.set && g.reflectionDescriptorPool) {
                 g.vk.freeDescriptorSets(g.device, g.reflectionDescriptorPool, 1,
                                         &iterator->second.set);
@@ -2038,7 +2426,15 @@ bool rayQueryBridgeSetIndices(const uint32_t*, std::size_t) { return false; }
 bool rayQueryBridgeSetTriangleRadiance(const float*, std::size_t) { return false; }
 bool rayQueryBridgeSetTriangleSurface(const float*, std::size_t) { return false; }
 bool rayQueryBridgeSetStaticLights(const float*, std::size_t) { return false; }
+bool rayQueryBridgeAddInstanceGroup(uint32_t, uint32_t, uint32_t, uint32_t,
+                                    uint32_t, uint32_t, uint32_t) {
+    return false;
+}
 bool rayQueryBridgeCommit(void*) { return false; }
+bool rayQueryBridgeUpdateInstanceGroup(void*, uint32_t, const float*,
+                                       const uint32_t*, std::size_t) {
+    return false;
+}
 void rayQueryBridgeDestroyScene() {}
 bool rayQueryBridgeEvaluate(const RayQueryLightingFrame&) { return false; }
 bool rayQueryBridgeEvaluateReflections(const RayQueryReflectionFrame&) { return false; }

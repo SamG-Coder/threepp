@@ -29,6 +29,13 @@ layout(std430, set = 0, binding = 10) readonly buffer StaticLights {
     // linear color/intensity, innerCos/type/decay/reserved.
     vec4 staticLightRecords[];
 };
+#if defined(THREEBROWSER_REFLECTIONS_V2)
+    #if defined(THREEBROWSER_HIT_DISTANCE_R32)
+layout(r32f, set = 0, binding = 11) uniform writeonly image2D specularHitDistanceOutput;
+    #else
+layout(r16f, set = 0, binding = 11) uniform writeonly image2D specularHitDistanceOutput;
+    #endif
+#endif
 
 layout(push_constant) uniform ReflectionConstants {
     mat4 inverseViewProjection;
@@ -45,6 +52,16 @@ const uint kDepthInverted = 1u;
 const uint kTemporalJitter = 2u;
 const uint kHighQuality = 4u;
 const float kTwoPi = 6.28318530717958647692;
+
+void storeSpecularHitDistance(ivec2 pixel, float distanceToHit) {
+#if defined(THREEBROWSER_REFLECTIONS_V2)
+    // Zero is the portable no-guide sentinel consumed by Ray Reconstruction.
+    // Positive values are linear world-space distance along the reflection ray
+    // and therefore use the same units as the scene/TLAS.
+    imageStore(specularHitDistanceOutput, pixel,
+               vec4(max(distanceToHit, 0.0), 0.0, 0.0, 0.0));
+#endif
+}
 
 uint hash(uint value) {
     value ^= value >> 16u;
@@ -129,13 +146,14 @@ vec3 positionAt(uint vertex) {
                 worldPositions[scalar + 2u]);
 }
 
-vec3 primitiveNormal(uint primitive, vec3 incomingDirection) {
+vec3 primitiveNormal(uint primitive, mat4x3 objectToWorld,
+                     vec3 incomingDirection) {
     uint first = primitive * 3u;
     uint indexCount = uint(worldIndices.length());
     if (first + 2u >= indexCount) return normalize(-incomingDirection);
-    vec3 p0 = positionAt(worldIndices[first + 0u]);
-    vec3 p1 = positionAt(worldIndices[first + 1u]);
-    vec3 p2 = positionAt(worldIndices[first + 2u]);
+    vec3 p0 = objectToWorld * vec4(positionAt(worldIndices[first + 0u]), 1.0);
+    vec3 p1 = objectToWorld * vec4(positionAt(worldIndices[first + 1u]), 1.0);
+    vec3 p2 = objectToWorld * vec4(positionAt(worldIndices[first + 2u]), 1.0);
     vec3 normal = cross(p1 - p0, p2 - p0);
     float magnitude = length(normal);
     if (magnitude < 1e-8) return normalize(-incomingDirection);
@@ -155,13 +173,14 @@ bool shadowed(vec3 origin, vec3 direction, float minimumDistance,
            gl_RayQueryCommittedIntersectionNoneEXT;
 }
 
-vec3 directLightAtHit(uint primitive, vec3 hitPoint, vec3 incomingDirection) {
+vec3 directLightAtHit(uint primitive, mat4x3 objectToWorld,
+                      vec3 hitPoint, vec3 incomingDirection) {
     uint surfaceCount = uint(surfaceResponse.length());
     vec4 surface = surfaceCount == 0u
         ? vec4(0.0)
         : surfaceResponse[min(primitive, surfaceCount - 1u)];
     vec3 albedo = max(surface.rgb, vec3(0.0));
-    vec3 normal = primitiveNormal(primitive, incomingDirection);
+    vec3 normal = primitiveNormal(primitive, objectToWorld, incomingDirection);
     float positionScale = max(1.0, max(abs(hitPoint.x),
                                       max(abs(hitPoint.y), abs(hitPoint.z))));
     float rayBias = max(frame.parameters.z, positionScale * 2e-6);
@@ -231,7 +250,9 @@ vec3 directLightAtHit(uint primitive, vec3 hitPoint, vec3 incomingDirection) {
     return albedo * irradiance * inversePi;
 }
 
-vec3 traceTerminalRadiance(vec3 origin, vec3 direction, float maximumDistance) {
+vec3 traceTerminalRadiance(vec3 origin, vec3 direction, float maximumDistance,
+                           out float hitDistance) {
+    hitDistance = 0.0;
     rayQueryEXT query;
     rayQueryInitializeEXT(query, topLevelScene, gl_RayFlagsOpaqueEXT,
                           0xffu, origin, 0.0, direction, maximumDistance);
@@ -240,8 +261,12 @@ vec3 traceTerminalRadiance(vec3 origin, vec3 direction, float maximumDistance) {
         gl_RayQueryCommittedIntersectionNoneEXT) {
         return missRadiance(direction);
     }
-    uint primitive = rayQueryGetIntersectionPrimitiveIndexEXT(query, true);
+    uint primitive = rayQueryGetIntersectionInstanceCustomIndexEXT(query, true) +
+                     rayQueryGetIntersectionPrimitiveIndexEXT(query, true);
+    mat4x3 objectToWorld =
+        rayQueryGetIntersectionObjectToWorldEXT(query, true);
     float distanceToHit = rayQueryGetIntersectionTEXT(query, true);
+    hitDistance = distanceToHit;
     vec3 hitPoint = origin + direction * distanceToHit;
     uint count = uint(terminalRadiance.length());
     vec3 terminal = count == 0u
@@ -251,7 +276,8 @@ vec3 traceTerminalRadiance(vec3 origin, vec3 direction, float maximumDistance) {
     // hit. Transparent panes are deliberately absent from the static TLAS, so
     // light can enter through glazing while opaque walls and frames still cast
     // correct shadows. The shaded hit then becomes a true one-bounce source.
-    return terminal + directLightAtHit(primitive, hitPoint, direction);
+    return terminal + directLightAtHit(
+        primitive, objectToWorld, hitPoint, direction);
 }
 
 void main() {
@@ -262,6 +288,7 @@ void main() {
     float depth = readDepth(pixel);
     if (isBackground(depth)) {
         imageStore(outputColor, pixel, base);
+        storeSpecularHitDistance(pixel, 0.0);
         return;
     }
 
@@ -274,6 +301,7 @@ void main() {
     if (normalLength < 1e-4 || roughness >= roughnessCutoff ||
         reflectionMask <= 1e-4 || frame.parameters.x <= 0.0) {
         imageStore(outputColor, pixel, base);
+        storeSpecularHitDistance(pixel, 0.0);
         return;
     }
 
@@ -293,10 +321,14 @@ void main() {
             : (highQuality ? 16 : 8));
     float rotation = randomRotation(pixel);
     vec3 reflected = vec3(0.0);
+    float primaryHitDistance = 0.0;
     for (int sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex) {
         vec3 direction = ggxReflection(viewDirection, normal, roughness,
                                        sampleIndex, sampleCount, rotation);
-        reflected += traceTerminalRadiance(origin, direction, maximumDistance);
+        float sampleHitDistance = 0.0;
+        reflected += traceTerminalRadiance(origin, direction, maximumDistance,
+                                            sampleHitDistance);
+        if (sampleIndex == 0) primaryHitDistance = sampleHitDistance;
     }
     reflected /= float(sampleCount);
 
@@ -308,4 +340,5 @@ void main() {
                         vec3(0.0), vec3(1.0));
     vec3 composite = base.rgb * (vec3(1.0) - weight) + reflected * weight;
     imageStore(outputColor, pixel, vec4(composite, base.a));
+    storeSpecularHitDistance(pixel, primaryHitDistance);
 }

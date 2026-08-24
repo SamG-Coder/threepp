@@ -112,6 +112,12 @@ constexpr uint32_t OP_RTX_SCENE_LIGHTS = 86;
 constexpr uint32_t OP_RTX_PIPELINE_CREATE = 87;
 // Destroy a custom pipeline by handle. Payload: version (= 1), handle.
 constexpr uint32_t OP_RTX_PIPELINE_DESTROY = 88;
+// version, id, capacity, vertexOffset, vertexCount, indexOffset, indexCount,
+// primitiveBase. Geometry is appended to the scene upload and receives one
+// reusable BLAS plus fixed-capacity masked TLAS slots.
+constexpr uint32_t OP_RTX_SCENE_INSTANCE_GROUP = 89;
+// version, encoder, id, count, count * row-major mat3x4<f32>, count * u32 mask.
+constexpr uint32_t OP_RTX_INSTANCE_GROUP_UPDATE = 90;
 // DLSS Frame Generation resource tag/options command, replayed after rendering
 // and before OP_SUBMIT/OP_PRESENT. Payload:
 // u32 encoder, viewport; 4x {texture, VkImageLayout, left, top, width, height};
