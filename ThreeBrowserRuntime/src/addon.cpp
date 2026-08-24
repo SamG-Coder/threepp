@@ -11,6 +11,7 @@
 
 #include "three_native.h"
 #include "three_webgpu.h"
+#include "camera_capture.h"
 #include "canvas2d.h"
 
 #define STB_IMAGE_STATIC
@@ -79,6 +80,7 @@ void revealRuntimeWindow(HWND hwnd) {
 
 void stopActiveRuntime() {
     releasePointerLock();
+    threebrowser::camera::closeAll();
     if (!runtimeActive.exchange(false, std::memory_order_acq_rel)) return;
     const int mode = runtimeMode.exchange(0, std::memory_order_acq_rel);
     if (mode == 2) tw_shutdown();
@@ -187,6 +189,23 @@ std::string argString(napi_env env, napi_value value, const char* fallback) {
 
 void set(napi_env env, napi_value object, const char* name, napi_value value) {
     napi_set_named_property(env, object, name, value);
+}
+
+bool namedValue(napi_env env, napi_value object, const char* name, napi_value& value) {
+    bool has = false;
+    return napi_has_named_property(env, object, name, &has) == napi_ok && has &&
+           napi_get_named_property(env, object, name, &value) == napi_ok;
+}
+
+double namedNumber(napi_env env, napi_value object, const char* name, double fallback) {
+    napi_value value{};
+    return namedValue(env, object, name, value) ? argNumber(env, value, fallback) : fallback;
+}
+
+std::string namedString(napi_env env, napi_value object, const char* name,
+                        const char* fallback = "") {
+    napi_value value{};
+    return namedValue(env, object, name, value) ? argString(env, value, fallback) : fallback;
 }
 
 using threebrowser::canvas2d::CanvasSurface;
@@ -800,6 +819,137 @@ napi_value decodeImage(napi_env env, napi_callback_info info) {
     set(env, result, "height", number(env, height));
     set(env, result, "pixels", typedPixels);
     return result;
+}
+
+napi_value cameraDevices(napi_env env, napi_callback_info) {
+    std::string error;
+    const auto devices = threebrowser::camera::enumerate(error);
+    if (!error.empty()) {
+        napi_throw_error(env, nullptr, error.c_str());
+        return undefined(env);
+    }
+    napi_value result{};
+    napi_create_array_with_length(env, devices.size(), &result);
+    for (std::size_t index = 0; index < devices.size(); ++index) {
+        napi_value device{};
+        napi_create_object(env, &device);
+        set(env, device, "deviceId", string(env, devices[index].id.c_str()));
+        set(env, device, "label", string(env, devices[index].label.c_str()));
+        napi_set_element(env, result, index, device);
+    }
+    return result;
+}
+
+napi_value cameraOpen(napi_env env, napi_callback_info info) {
+    napi_value argv[1]{};
+    std::size_t argc = 1;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    threebrowser::camera::OpenRequest request;
+    if (argc > 0) {
+        napi_valuetype type{};
+        if (napi_typeof(env, argv[0], &type) == napi_ok && type == napi_object) {
+            request.deviceId = namedString(env, argv[0], "deviceId");
+            request.width = static_cast<std::uint32_t>(std::clamp(
+                namedNumber(env, argv[0], "width", 0), 0.0, 16384.0));
+            request.height = static_cast<std::uint32_t>(std::clamp(
+                namedNumber(env, argv[0], "height", 0), 0.0, 16384.0));
+            request.frameRate = std::clamp(namedNumber(env, argv[0], "frameRate", 0), 0.0, 240.0);
+        }
+    }
+
+    const auto opened = threebrowser::camera::open(request);
+    napi_value result{};
+    napi_create_object(env, &result);
+    set(env, result, "handle", number(env, opened.handle));
+    set(env, result, "deviceId", string(env, opened.deviceId.c_str()));
+    set(env, result, "label", string(env, opened.label.c_str()));
+    set(env, result, "width", number(env, opened.width));
+    set(env, result, "height", number(env, opened.height));
+    set(env, result, "frameRate", number(env, opened.frameRate));
+    set(env, result, "error", string(env, opened.error.c_str()));
+    return result;
+}
+
+bool cameraDestination(napi_env env, napi_value value, std::uint8_t*& data,
+                       std::size_t& byteLength) {
+    data = nullptr;
+    byteLength = 0;
+    napi_valuetype valueType{};
+    if (napi_typeof(env, value, &valueType) != napi_ok ||
+        valueType == napi_null || valueType == napi_undefined) {
+        return true;
+    }
+    bool isBuffer = false;
+    if (napi_is_buffer(env, value, &isBuffer) == napi_ok && isBuffer) {
+        void* raw = nullptr;
+        if (napi_get_buffer_info(env, value, &raw, &byteLength) != napi_ok) return false;
+        data = static_cast<std::uint8_t*>(raw);
+        return true;
+    }
+    bool isTypedArray = false;
+    if (napi_is_typedarray(env, value, &isTypedArray) != napi_ok || !isTypedArray) return false;
+    napi_typedarray_type type{};
+    std::size_t length = 0;
+    void* raw = nullptr;
+    napi_value arrayBuffer{};
+    std::size_t offset = 0;
+    if (napi_get_typedarray_info(env, value, &type, &length, &raw, &arrayBuffer, &offset) != napi_ok ||
+        (type != napi_uint8_array && type != napi_uint8_clamped_array)) {
+        return false;
+    }
+    data = static_cast<std::uint8_t*>(raw);
+    byteLength = length;
+    return true;
+}
+
+napi_value cameraRead(napi_env env, napi_callback_info info) {
+    napi_value argv[3]{};
+    std::size_t argc = 3;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (argc == 0) {
+        napi_throw_type_error(env, nullptr, "cameraRead requires a camera handle");
+        return undefined(env);
+    }
+    const auto handle = static_cast<std::uint32_t>(std::max(0.0, argNumber(env, argv[0], 0)));
+    const auto afterSequence = argc > 1
+        ? static_cast<std::uint64_t>(std::max(0.0, argNumber(env, argv[1], 0)))
+        : 0;
+    std::uint8_t* destination = nullptr;
+    std::size_t destinationSize = 0;
+    if (argc > 2 && !cameraDestination(env, argv[2], destination, destinationSize)) {
+        napi_throw_type_error(env, nullptr,
+                              "cameraRead destination must be a Uint8Array, Uint8ClampedArray or Buffer");
+        return undefined(env);
+    }
+    threebrowser::camera::ReadResult read;
+    std::string error;
+    if (!threebrowser::camera::read(handle, afterSequence, destination, destinationSize, read, error)) {
+        napi_throw_error(env, nullptr, error.c_str());
+        return undefined(env);
+    }
+    napi_value result{};
+    napi_create_object(env, &result);
+    set(env, result, "sequence", number(env, static_cast<double>(read.sequence)));
+    set(env, result, "timestampUs", number(env, static_cast<double>(read.timestampUs)));
+    set(env, result, "width", number(env, read.width));
+    set(env, result, "height", number(env, read.height));
+    set(env, result, "byteLength", number(env, static_cast<double>(read.byteLength)));
+    set(env, result, "hasNewFrame", boolean(env, read.hasNewFrame));
+    set(env, result, "copied", boolean(env, read.copied));
+    set(env, result, "ended", boolean(env, read.ended));
+    set(env, result, "error", string(env, read.error.c_str()));
+    return result;
+}
+
+napi_value cameraClose(napi_env env, napi_callback_info info) {
+    napi_value argv[1]{};
+    std::size_t argc = 1;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (argc > 0) {
+        const auto handle = static_cast<std::uint32_t>(std::max(0.0, argNumber(env, argv[0], 0)));
+        threebrowser::camera::close(handle);
+    }
+    return undefined(env);
 }
 
 napi_value resize(napi_env env, napi_callback_info info) {
@@ -1731,6 +1881,10 @@ napi_value init(napi_env env, napi_value exports) {
         {"submit", nullptr, submit, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"render", nullptr, render, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"decodeImage", nullptr, decodeImage, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"cameraDevices", nullptr, cameraDevices, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"cameraOpen", nullptr, cameraOpen, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"cameraRead", nullptr, cameraRead, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"cameraClose", nullptr, cameraClose, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"canvas2dCreate", nullptr, canvas2dCreate, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"canvas2dResize", nullptr, canvas2dResize, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"canvas2dSet", nullptr, canvas2dSet, nullptr, nullptr, nullptr, napi_default, nullptr},

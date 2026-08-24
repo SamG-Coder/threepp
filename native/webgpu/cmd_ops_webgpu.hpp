@@ -125,6 +125,14 @@ constexpr uint32_t OP_RTX_INSTANCE_GROUP_UPDATE = 90;
 // source compiler uses a content-addressed SPIR-V cache; opcode 87 remains the
 // direct/precompiled SPIR-V path.
 constexpr uint32_t OP_RTX_PIPELINE_CREATE_SOURCE = 91;
+// Attach one fixed-topology deformable BLAS to the reserved active-scene TLAS
+// slot. Positions come from one rgba32float texel per vertex. Create payload:
+// version, encoder, mesh, texture, VkImageLayout, width, height, vertexCount,
+// indexCount, followed by indexCount * u32. Refit has the same prefix through
+// vertexCount plus flags (bit 0 = rebuild). Destroy: version, encoder, mesh.
+constexpr uint32_t OP_RTX_DYNAMIC_MESH_CREATE = 92;
+constexpr uint32_t OP_RTX_DYNAMIC_MESH_REFIT = 93;
+constexpr uint32_t OP_RTX_DYNAMIC_MESH_DESTROY = 94;
 // DLSS Frame Generation resource tag/options command, replayed after rendering
 // and before OP_SUBMIT/OP_PRESENT. Payload:
 // u32 encoder, viewport; 4x {texture, VkImageLayout, left, top, width, height};

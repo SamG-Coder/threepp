@@ -254,6 +254,22 @@ typedef struct TWRayQueryCapabilities {
     char reason[256];
 } TWRayQueryCapabilities;
 
+// Generic fixed-topology deformable mesh input. positions_texture_handle must
+// name a single-layer rgba32float WebGPU texture created with COPY_SRC and
+// STORAGE_BINDING. Each texel supplies xyz for one vertex; w is ignored.
+typedef struct TWRayQueryDynamicTriangleMeshFrame {
+    uint32_t struct_size;
+    uint32_t command_encoder_handle;
+    uint32_t mesh_handle;
+    uint32_t positions_texture_handle;
+    uint32_t positions_vulkan_layout;
+    uint32_t width;
+    uint32_t height;
+    uint32_t vertex_count;
+    // Refit only: bit 0 requests a full BLAS rebuild for large deformation.
+    uint32_t flags;
+} TWRayQueryDynamicTriangleMeshFrame;
+
 enum {
     TW_RAY_QUERY_PIPELINE_PROFILE_LIGHTING_V1 = 1,
     TW_RAY_QUERY_PIPELINE_PROFILE_REFLECTIONS_V1 = 2
@@ -457,6 +473,13 @@ TW_API int tw_ray_query_instance_group_update(uint32_t command_encoder_handle,
                                               const float* matrices_3x4,
                                               const uint32_t* masks,
                                               uint32_t instance_count);
+TW_API int tw_ray_query_dynamic_triangle_mesh_create(
+    const TWRayQueryDynamicTriangleMeshFrame* frame,
+    const uint32_t* indices, uint32_t index_count);
+TW_API int tw_ray_query_dynamic_triangle_mesh_refit(
+    const TWRayQueryDynamicTriangleMeshFrame* frame);
+TW_API int tw_ray_query_dynamic_triangle_mesh_destroy(
+    uint32_t command_encoder_handle, uint32_t mesh_handle);
 TW_API void tw_ray_query_scene_destroy(void);
 TW_API int tw_ray_query_lighting_evaluate(const TWRayQueryLightingFrame* frame);
 TW_API int tw_ray_query_lighting_evaluate_v2(const TWRayQueryLightingFrameV2* frame);

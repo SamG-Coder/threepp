@@ -95,6 +95,22 @@ struct RayQueryReflectionFrame {
     uint32_t specularHitDistanceFormat{};
 };
 
+// Fixed-topology deformable geometry sourced from an rgba32float WebGPU
+// texture. Each texel supplies one xyz vertex (w is ignored). The bridge owns
+// the Vulkan AS-compatible vertex/index buffers; the borrowed image is copied
+// on the caller's WebGPU command buffer and its supplied layout is restored.
+struct RayQueryDynamicTriangleMeshFrame {
+    void* commandBuffer{};
+    void* positionsImage{};
+    uint32_t positionsLayout{};
+    uint32_t width{};
+    uint32_t height{};
+    uint32_t vertexCount{};
+    uint32_t handle{};
+    // bit 0: rebuild the BLAS instead of updating it in place.
+    uint32_t flags{};
+};
+
 bool rayQueryBridgeAttachVulkan(const RayQueryVulkanContext& context);
 RayQueryBridgeCapabilities rayQueryBridgeCapabilities();
 
@@ -124,6 +140,13 @@ bool rayQueryBridgeUpdateInstanceGroup(void* commandBuffer, uint32_t id,
                                        const float* matrices3x4,
                                        const uint32_t* masks,
                                        std::size_t instanceCount);
+bool rayQueryBridgeCreateDynamicTriangleMesh(
+    const RayQueryDynamicTriangleMeshFrame& frame,
+    const uint32_t* indices, std::size_t indexCount);
+bool rayQueryBridgeRefitDynamicTriangleMesh(
+    const RayQueryDynamicTriangleMeshFrame& frame);
+bool rayQueryBridgeDestroyDynamicTriangleMesh(void* commandBuffer,
+                                              uint32_t handle);
 void rayQueryBridgeDestroyScene();
 
 bool rayQueryBridgeEvaluate(const RayQueryLightingFrame& frame);

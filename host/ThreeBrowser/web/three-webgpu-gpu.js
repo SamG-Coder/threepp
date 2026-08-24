@@ -467,6 +467,17 @@ function rtxTextureResource(value, name, requiredFormat, requiredUsage, layoutOv
   return { texture, textureHandle: texture._h, vulkanLayout };
 }
 
+function rtxDynamicPositionsResource(value, layoutOverride) {
+  return rtxTextureResource(
+    value,
+    "positionsTexture",
+    "rgba32float",
+    0x01 | 0x08,
+    layoutOverride,
+    undefined,
+  );
+}
+
 function rtxVector4(value, name, defaultW) {
   let source = value?.elements ?? value;
   if (source && typeof source === "object" && typeof source.length !== "number" &&
@@ -938,6 +949,32 @@ function rasterize(image, w, h, flipY) {
   return ctx2d.getImageData(0, 0, w, h).data;
 }
 
+function externalFrame(source) {
+  if (!source) return null;
+  const frame = typeof source.__threeBrowserExternalFrame === "function"
+    ? source.__threeBrowserExternalFrame()
+    : source;
+  if (!frame) return null;
+  const width = Number(frame.displayWidth ?? frame.codedWidth ?? frame.videoWidth ?? frame.width ?? 0);
+  const height = Number(frame.displayHeight ?? frame.codedHeight ?? frame.videoHeight ?? frame.height ?? 0);
+  const data = frame.data ?? frame.pixels;
+  const requiredBytes = width * height * 4;
+  const bytes = externalRgbaView(data);
+  if (!Number.isInteger(width) || !Number.isInteger(height) ||
+      !(width > 0 && height > 0) || !Number.isSafeInteger(requiredBytes) ||
+      !bytes || !ArrayBuffer.isView(data) || data.BYTES_PER_ELEMENT !== 1 ||
+      bytes.byteLength < requiredBytes) {
+    return null;
+  }
+  return {
+    width,
+    height,
+    data: new Uint8Array(bytes.buffer, bytes.byteOffset, requiredBytes),
+    sequence: frame.sequence ?? frame.timestampUs ?? frame.timestamp ?? source._cameraSequence ?? 1,
+    cacheKey: frame.cacheKey ?? source,
+  };
+}
+
 class FeatureSet {
   constructor(list) {
     this._s = new Set(list);
@@ -1109,6 +1146,17 @@ class GPUTexture {
   }
 }
 
+class GPUExternalTexture {
+  constructor(record) {
+    this._h = record.view._h;
+    this._kind = "external";
+    this._tex = record.texture;
+    this._desc = record.view._desc;
+    this._view = record.view;
+    this.label = "";
+  }
+}
+
 class GPUSampler {
   constructor(handle) {
     this._h = handle;
@@ -1159,6 +1207,39 @@ class ThreeBrowserRayQueryPipeline {
   }
   destroy() {
     this._destroy(true);
+  }
+}
+
+class ThreeBrowserDynamicTriangleMesh {
+  constructor(handle, device, generation, width, height, vertexCount, indexCount, label) {
+    this._h = handle;
+    this._kind = "threebrowser-dynamic-triangle-mesh";
+    this._device = device;
+    this._sceneGeneration = generation;
+    this._submitted = false;
+    this._destroyed = false;
+    this._destroyQueued = false;
+    this._createEncoder = null;
+    this._refitCount = 0;
+    this._rebuildCount = 0;
+    this.width = width;
+    this.height = height;
+    this.vertexCount = vertexCount;
+    this.indexCount = indexCount;
+    this.triangleCount = indexCount / 3;
+    this.label = label;
+  }
+  get destroyed() {
+    return this._destroyed;
+  }
+  get submitted() {
+    return this._submitted;
+  }
+  get refitCount() {
+    return this._refitCount;
+  }
+  get rebuildCount() {
+    return this._rebuildCount;
   }
 }
 
@@ -1498,51 +1579,111 @@ class GPUCommandEncoder {
   insertDebugMarker() {}
 }
 
-function replayCommandBuffer(buffer) {
-  const enc = buffer._h;
-  cmd.encBegin(enc);
+// wgpu-native's raw Vulkan callback is an exclusive command-encoder mode: an
+// encoder that has used the WebGPU compute/render API cannot later use the raw
+// API (or vice versa). Keep the public GPUCommandEncoder logical and ordered,
+// but replay each raw operation through its own physical encoder submission.
+// Queue order plus the native bridge's explicit barriers preserve the logical
+// compute -> AS update -> ray-query ordering without CPU synchronization.
+const RAW_NATIVE_ENCODER_COMMANDS = new Set([
+  "dlssEvaluate",
+  "frameGenerationTag",
+  "rayReconstructionEvaluate",
+  "rtxSceneCommit",
+  "rtxInstanceGroupUpdate",
+  "rtxDynamicMeshCreate",
+  "rtxDynamicMeshRefit",
+  "rtxDynamicMeshDestroy",
+  "rtxLightingEvaluate",
+  "rtxReflectionsEvaluate",
+]);
+
+const ENCODER_FREE_COMMANDS = new Set([
+  "rtxSceneBegin",
+  "rtxScenePositions",
+  "rtxSceneIndices",
+  "rtxSceneTriangleRadiance",
+  "rtxSceneTriangleSurface",
+  "rtxSceneLights",
+  "rtxSceneInstanceGroup",
+]);
+
+function replayCommandBuffer(buffer, commandSink = cmd) {
+  let activeEncoder = 0;
+  let activeMode = null;
+  let usedFirstHandle = false;
+  const beginSegment = mode => {
+    if (activeEncoder && activeMode !== mode) finishSegment();
+    if (activeEncoder) return activeEncoder;
+    activeEncoder = usedFirstHandle ? commandSink.allocHandle() : buffer._h;
+    usedFirstHandle = true;
+    activeMode = mode;
+    commandSink.encBegin(activeEncoder);
+    return activeEncoder;
+  };
+  const finishSegment = () => {
+    if (!activeEncoder) return;
+    commandSink.submitEncoders([activeEncoder]);
+    activeEncoder = 0;
+    activeMode = null;
+  };
+
   for (const entry of buffer._commands || []) {
     const op = entry[0];
-    switch (op) {
-      case "computeBegin": cmd.computeBegin(enc); break;
-      case "computePipe": cmd.computePipe(enc, entry[1]._h); break;
-      case "computeBg": cmd.computeBg(enc, entry[1], entry[2]._h, entry[3]); break;
-      case "dispatch": cmd.dispatch(enc, entry[1], entry[2], entry[3]); break;
-      case "computeEnd": cmd.computeEnd(enc); break;
-      case "renderBegin": cmd.renderBegin(enc, entry[1]); break;
-      case "renderPipe": cmd.renderPipe(enc, entry[1]._h); break;
-      case "renderBg": cmd.renderBg(enc, entry[1], entry[2]._h, entry[3]); break;
-      case "setVertex": cmd.setVertex(enc, entry[1], entry[2]._h, entry[3], entry[4]); break;
-      case "setIndex": cmd.setIndex(enc, entry[1]._h, entry[2], entry[3], entry[4]); break;
-      case "draw": cmd.draw(enc, entry[1], entry[2], entry[3], entry[4]); break;
-      case "drawIndexed": cmd.drawIndexed(enc, entry[1], entry[2], entry[3], entry[4], entry[5]); break;
-      case "drawIndirect": cmd.drawIndirect(enc, entry[1]._h, entry[2], entry[3]); break;
-      case "setViewport": cmd.setViewport(enc, entry[1], entry[2], entry[3], entry[4], entry[5], entry[6]); break;
-      case "setScissor": cmd.setScissor(enc, entry[1], entry[2], entry[3], entry[4]); break;
-      case "setStencil": cmd.setStencil(enc, entry[1]); break;
-      case "setBlend": cmd.setBlend(enc, entry[1]); break;
-      case "renderEnd": cmd.renderEnd(enc); break;
-      case "dlssEvaluate": cmd.dlssEvaluate(enc, entry[1]); break;
-      case "frameGenerationTag": cmd.frameGenerationTag(enc, entry[1]); break;
-      case "rayReconstructionEvaluate": cmd.rayReconstructionEvaluate(enc, entry[1]); break;
-      case "rtxSceneBegin": cmd.rtxSceneBegin(); break;
-      case "rtxScenePositions": cmd.rtxScenePositions(entry[1]); break;
-      case "rtxSceneIndices": cmd.rtxSceneIndices(entry[1]); break;
-      case "rtxSceneTriangleRadiance": cmd.rtxSceneTriangleRadiance(entry[1]); break;
-      case "rtxSceneTriangleSurface": cmd.rtxSceneTriangleSurface(entry[1]); break;
-      case "rtxSceneLights": cmd.rtxSceneLights(entry[1]); break;
-      case "rtxSceneInstanceGroup": cmd.rtxSceneInstanceGroup(entry[1]); break;
-      case "rtxSceneCommit": cmd.rtxSceneCommit(enc); break;
-      case "rtxInstanceGroupUpdate":
-        cmd.rtxInstanceGroupUpdate(enc, entry[1].id, entry[1].matrices, entry[1].masks);
-        break;
-      case "rtxLightingEvaluate": cmd.rtxLightingEvaluate(enc, entry[1]); break;
-      case "rtxReflectionsEvaluate": cmd.rtxReflectionsEvaluate(enc, entry[1]); break;
-      case "copyBuf": cmd.copyBuf(enc, entry[1]._h, entry[3]._h, entry[2], entry[4], entry[5]); break;
-      case "copyTex": cmd.copyTex(enc, entry[1], entry[2], entry[3], entry[4]); break;
+    const rawNative = RAW_NATIVE_ENCODER_COMMANDS.has(op);
+    if (rawNative) {
+      // Never mix two callbacks either: one raw operation per physical
+      // encoder is the narrowest contract supported across wgpu-native builds.
+      finishSegment();
+      beginSegment("raw-native");
+    } else if (!ENCODER_FREE_COMMANDS.has(op)) {
+      beginSegment("webgpu");
     }
+    const enc = activeEncoder;
+    switch (op) {
+      case "computeBegin": commandSink.computeBegin(enc); break;
+      case "computePipe": commandSink.computePipe(enc, entry[1]._h); break;
+      case "computeBg": commandSink.computeBg(enc, entry[1], entry[2]._h, entry[3]); break;
+      case "dispatch": commandSink.dispatch(enc, entry[1], entry[2], entry[3]); break;
+      case "computeEnd": commandSink.computeEnd(enc); break;
+      case "renderBegin": commandSink.renderBegin(enc, entry[1]); break;
+      case "renderPipe": commandSink.renderPipe(enc, entry[1]._h); break;
+      case "renderBg": commandSink.renderBg(enc, entry[1], entry[2]._h, entry[3]); break;
+      case "setVertex": commandSink.setVertex(enc, entry[1], entry[2]._h, entry[3], entry[4]); break;
+      case "setIndex": commandSink.setIndex(enc, entry[1]._h, entry[2], entry[3], entry[4]); break;
+      case "draw": commandSink.draw(enc, entry[1], entry[2], entry[3], entry[4]); break;
+      case "drawIndexed": commandSink.drawIndexed(enc, entry[1], entry[2], entry[3], entry[4], entry[5]); break;
+      case "drawIndirect": commandSink.drawIndirect(enc, entry[1]._h, entry[2], entry[3]); break;
+      case "setViewport": commandSink.setViewport(enc, entry[1], entry[2], entry[3], entry[4], entry[5], entry[6]); break;
+      case "setScissor": commandSink.setScissor(enc, entry[1], entry[2], entry[3], entry[4]); break;
+      case "setStencil": commandSink.setStencil(enc, entry[1]); break;
+      case "setBlend": commandSink.setBlend(enc, entry[1]); break;
+      case "renderEnd": commandSink.renderEnd(enc); break;
+      case "dlssEvaluate": commandSink.dlssEvaluate(enc, entry[1]); break;
+      case "frameGenerationTag": commandSink.frameGenerationTag(enc, entry[1]); break;
+      case "rayReconstructionEvaluate": commandSink.rayReconstructionEvaluate(enc, entry[1]); break;
+      case "rtxSceneBegin": commandSink.rtxSceneBegin(); break;
+      case "rtxScenePositions": commandSink.rtxScenePositions(entry[1]); break;
+      case "rtxSceneIndices": commandSink.rtxSceneIndices(entry[1]); break;
+      case "rtxSceneTriangleRadiance": commandSink.rtxSceneTriangleRadiance(entry[1]); break;
+      case "rtxSceneTriangleSurface": commandSink.rtxSceneTriangleSurface(entry[1]); break;
+      case "rtxSceneLights": commandSink.rtxSceneLights(entry[1]); break;
+      case "rtxSceneInstanceGroup": commandSink.rtxSceneInstanceGroup(entry[1]); break;
+      case "rtxSceneCommit": commandSink.rtxSceneCommit(enc); break;
+      case "rtxInstanceGroupUpdate":
+        commandSink.rtxInstanceGroupUpdate(enc, entry[1].id, entry[1].matrices, entry[1].masks);
+        break;
+      case "rtxDynamicMeshCreate": commandSink.rtxDynamicMeshCreate(enc, entry[1]); break;
+      case "rtxDynamicMeshRefit": commandSink.rtxDynamicMeshRefit(enc, entry[1]); break;
+      case "rtxDynamicMeshDestroy": commandSink.rtxDynamicMeshDestroy(enc, entry[1]); break;
+      case "rtxLightingEvaluate": commandSink.rtxLightingEvaluate(enc, entry[1]); break;
+      case "rtxReflectionsEvaluate": commandSink.rtxReflectionsEvaluate(enc, entry[1]); break;
+      case "copyBuf": commandSink.copyBuf(enc, entry[1]._h, entry[3]._h, entry[2], entry[4], entry[5]); break;
+      case "copyTex": commandSink.copyTex(enc, entry[1], entry[2], entry[3], entry[4]); break;
+    }
+    if (rawNative) finishSegment();
   }
-  cmd.submitEncoders([enc]);
+  finishSegment();
 }
 
 class GPUQueue {
@@ -1606,7 +1747,8 @@ class GPUQueue {
   }
   copyExternalImageToTexture(source, dest, copySize) {
     const sz = extent(copySize);
-    const pixels = rasterize(source.source, sz.width, sz.height, !!source.flipY);
+    const external = externalFrame(source.source);
+    const pixels = rasterize(external || source.source, sz.width, sz.height, !!source.flipY);
     cmd.texWrite(
       dest.texture._h,
       dest.mipLevel || 0,
@@ -1671,8 +1813,110 @@ function bgEntries(entries) {
 // infers from surrounding code. Naga keeps those operands abstract at runtime
 // and rejects the shader. Make only that unambiguous literal form concrete.
 const literalScalarMix = /\bmix\(\s*([-+]?(?:\d+\.\d*|\.\d+|\d+)(?:e[-+]?\d+)?)\s*,\s*([-+]?(?:\d+\.\d*|\.\d+|\d+)(?:e[-+]?\d+)?)\s*,\s*([-+]?(?:\d+\.\d*|\.\d+|\d+)(?:e[-+]?\d+)?)\s*\)/gi;
+
+function appendWgslCallArgument(source, name, replacement, argument) {
+  let cursor = 0;
+  let output = "";
+  while (cursor < source.length) {
+    const index = source.indexOf(name, cursor);
+    if (index < 0) break;
+    const previous = source[index - 1];
+    const following = source[index + name.length];
+    if ((previous && /[A-Za-z0-9_]/.test(previous)) || (following && /[A-Za-z0-9_]/.test(following))) {
+      output += source.slice(cursor, index + name.length);
+      cursor = index + name.length;
+      continue;
+    }
+    let open = index + name.length;
+    while (/\s/.test(source[open] || "")) open += 1;
+    if (source[open] !== "(") {
+      output += source.slice(cursor, index + name.length);
+      cursor = index + name.length;
+      continue;
+    }
+    let depth = 1;
+    let close = open + 1;
+    let lineComment = false;
+    let blockComment = false;
+    for (; close < source.length && depth > 0; close += 1) {
+      const current = source[close];
+      const next = source[close + 1];
+      if (lineComment) {
+        if (current === "\n") lineComment = false;
+        continue;
+      }
+      if (blockComment) {
+        if (current === "*" && next === "/") {
+          blockComment = false;
+          close += 1;
+        }
+        continue;
+      }
+      if (current === "/" && next === "/") {
+        lineComment = true;
+        close += 1;
+      } else if (current === "/" && next === "*") {
+        blockComment = true;
+        close += 1;
+      } else if (current === "(") depth += 1;
+      else if (current === ")") depth -= 1;
+    }
+    if (depth !== 0) break;
+    const closingIndex = close - 1;
+    output += source.slice(cursor, index) + replacement +
+      source.slice(index + name.length, closingIndex) + `, ${argument})`;
+    cursor = close;
+  }
+  return output + source.slice(cursor);
+}
+
+function lowerExternalTextureWgsl(source) {
+  if (!/\btexture_external\b/.test(source)) return source;
+  // wgpu-native does not currently expose platform external-texture creation.
+  // Camera frames are RGBA-uploaded into a persistent texture instead, so the
+  // matching WGSL handle and its clamp-to-edge sampling builtin are lowered to
+  // the equivalent ordinary sampled-texture form.
+  const texture2d = source.replace(/\btexture_external\b/g, "texture_2d<f32>");
+  return appendWgslCallArgument(
+    texture2d,
+    "textureSampleBaseClampToEdge",
+    "textureSampleLevel",
+    "0.0",
+  );
+}
+
+function validateNativeEncoderPassOrder(commands, operation = "native WebGPU operation") {
+  let openPass = null;
+  for (const command of commands || []) {
+    const opcode = command?.[0];
+    if (opcode === "computeBegin" || opcode === "renderBegin") {
+      const nextPass = opcode === "computeBegin" ? "compute" : "render";
+      if (openPass !== null) {
+        throw new TypeError(
+          `${operation}.commandEncoder contains overlapping ${openPass} and ${nextPass} passes`,
+        );
+      }
+      openPass = nextPass;
+    } else if (opcode === "computeEnd" || opcode === "renderEnd") {
+      const endedPass = opcode === "computeEnd" ? "compute" : "render";
+      if (openPass !== endedPass) {
+        throw new TypeError(
+          `${operation}.commandEncoder contains an unmatched ${endedPass}-pass end`,
+        );
+      }
+      openPass = null;
+    }
+  }
+  if (openPass !== null) {
+    throw new TypeError(
+      `${operation} must be recorded after the active WebGPU ${openPass} pass is ended`,
+    );
+  }
+  return true;
+}
+
 function normalizeWgslForNative(source) {
-  return String(source || "").replace(literalScalarMix,
+  return lowerExternalTextureWgsl(String(source || "")).replace(literalScalarMix,
     (_match, x, y, factor) => `mix(f32(${x}), f32(${y}), f32(${factor}))`);
 }
 
@@ -1689,6 +1933,7 @@ class GPUDevice extends Emitter {
     this._errStack = [];
     this._destroyed = false;
     this._rtxPipelines = new Set();
+    this._externalTextures = new Map();
     activeNativeDevice = this;
     ensureStarted(globalThis.innerWidth || 1, globalThis.innerHeight || 1);
   }
@@ -1804,14 +2049,54 @@ class GPUDevice extends Emitter {
   destroy() {
     if (this._destroyed) return;
     this._destroyed = true;
+    for (const record of this._externalTextures.values()) record.texture?.destroy();
+    this._externalTextures.clear();
     const pipelines = Array.from(this._rtxPipelines);
     for (const pipeline of pipelines) pipeline._destroy(false);
     this._rtxPipelines.clear();
     if (pipelines.length > 0) cmd.submitNow(true);
     if (activeNativeDevice === this) activeNativeDevice = null;
   }
-  importExternalTexture() {
-    return { _kind: "external" };
+  importExternalTexture(desc) {
+    const source = desc?.source;
+    if (!source || (typeof source !== "object" && typeof source !== "function")) {
+      throw new TypeError("importExternalTexture requires a video or VideoFrame source");
+    }
+    const frame = externalFrame(source);
+    if (!frame || !(frame.width > 0 && frame.height > 0) || !frame.data) {
+      throw new Error("The external image source has no current RGBA frame");
+    }
+    const key = frame.cacheKey && (typeof frame.cacheKey === "object" || typeof frame.cacheKey === "function")
+      ? frame.cacheKey
+      : source;
+    let record = this._externalTextures.get(key);
+    if (!record || record.texture._destroyed || record.width !== frame.width || record.height !== frame.height) {
+      record?.texture?.destroy();
+      const texture = this.createTexture({
+        label: "ThreeBrowser RGBA external-frame texture",
+        size: { width: frame.width, height: frame.height, depthOrArrayLayers: 1 },
+        format: "rgba8unorm",
+        usage: 0x02 | 0x04,
+      });
+      record = {
+        texture,
+        view: texture.createView(),
+        width: frame.width,
+        height: frame.height,
+        sequence: undefined,
+      };
+      this._externalTextures.set(key, record);
+    }
+    if (record.sequence !== frame.sequence) {
+      this.queue.writeTexture(
+        { texture: record.texture },
+        frame.data,
+        { bytesPerRow: frame.width * 4, rowsPerImage: frame.height },
+        { width: frame.width, height: frame.height, depthOrArrayLayers: 1 },
+      );
+      record.sequence = frame.sequence;
+    }
+    return new GPUExternalTexture(record);
   }
 }
 
@@ -2012,6 +2297,7 @@ export function install() {
   if (!n) throw new Error("ThreeBrowser native WebGPU host missing");
 
   ensureConstants();
+  if (!globalThis.GPUExternalTexture) globalThis.GPUExternalTexture = GPUExternalTexture;
   const gpu = new GPU();
   const requested = {
     reflexMode: -1,
@@ -2025,6 +2311,8 @@ export function install() {
   let staticRaySceneGeneration = 0;
   let activeStaticRaySceneGeneration = 0;
   const dynamicRayInstanceGroups = new Map();
+  let activeDynamicRayMesh = null;
+  let dynamicRayMeshDestroyPending = false;
   let rayLightingQueued = false;
   let rayReflectionsQueued = false;
 
@@ -2638,6 +2926,23 @@ export function install() {
     return { encoder, autoSubmit: provided == null };
   };
 
+  const inOrderNativeEncoder = (provided, operation) => {
+    const encoder = provided ?? activeNativeDevice?.createCommandEncoder({
+      label: `ThreeBrowser ${operation}`,
+    });
+    if (!(encoder instanceof GPUCommandEncoder) || !encoder._h ||
+        !Array.isArray(encoder._commands)) {
+      throw new TypeError(
+        `${operation}.commandEncoder must be a native GPUCommandEncoder, or an active native GPUDevice must exist`,
+      );
+    }
+    if (encoder._finished) {
+      throw new TypeError(`${operation}.commandEncoder has already been finished`);
+    }
+    validateNativeEncoderPassOrder(encoder._commands, operation);
+    return { encoder, autoSubmit: provided == null };
+  };
+
   const submitNativeEncoderIfNeeded = ({ encoder, autoSubmit }) => {
     if (!autoSubmit) return false;
     if (!activeNativeDevice) throw new Error("The active native GPUDevice was destroyed before submission");
@@ -2664,6 +2969,29 @@ export function install() {
           activeStaticRaySceneGeneration !== generation) {
         throw new Error(
           `The static scene changed before native ${operation} was submitted; record the evaluation again`,
+        );
+      }
+    });
+  };
+
+  const invalidateDynamicRayMesh = () => {
+    if (activeDynamicRayMesh) {
+      activeDynamicRayMesh._destroyed = true;
+      activeDynamicRayMesh._destroyQueued = false;
+      activeDynamicRayMesh._h = 0;
+      activeDynamicRayMesh._createEncoder = null;
+    }
+    activeDynamicRayMesh = null;
+    dynamicRayMeshDestroyPending = false;
+  };
+
+  const bindDynamicPositionsTexture = (encoder, resource, operation) => {
+    const texture = resource.texture;
+    const handle = resource.textureHandle;
+    encoder._submissionValidators.push(() => {
+      if (texture._destroyed || texture._h !== handle) {
+        throw new Error(
+          `positionsTexture was destroyed before ${operation} was submitted`,
         );
       }
     });
@@ -2779,6 +3107,7 @@ export function install() {
       }
     }
     const nativeEncoder = dedicatedNativeEncoder(scene.commandEncoder, "registerStaticScene");
+    invalidateDynamicRayMesh();
     nativeEncoder.encoder._commands.push(["rtxSceneBegin"]);
     nativeEncoder.encoder._commands.push(["rtxScenePositions", positions]);
     nativeEncoder.encoder._commands.push(["rtxSceneIndices", indices]);
@@ -2874,7 +3203,199 @@ export function install() {
     });
   };
 
+  const requireDynamicRayMesh = (mesh, operation) => {
+    if (!(mesh instanceof ThreeBrowserDynamicTriangleMesh) ||
+        mesh._kind !== "threebrowser-dynamic-triangle-mesh") {
+      throw new TypeError(`${operation}.mesh must be returned by createDynamicTriangleMesh`);
+    }
+    if (mesh._destroyed || mesh._destroyQueued || !mesh._h) {
+      throw new Error("The dynamic triangle mesh has been destroyed");
+    }
+    if (mesh._device !== activeNativeDevice || mesh._device?._destroyed) {
+      throw new Error("The dynamic triangle mesh belongs to a different or destroyed GPUDevice");
+    }
+    if (mesh !== activeDynamicRayMesh ||
+        mesh._sceneGeneration !== staticRaySceneGeneration) {
+      throw new Error("The dynamic triangle mesh is no longer attached to the active ray scene");
+    }
+    return mesh;
+  };
+
+  const createDynamicTriangleMesh = (options = {}) => {
+    if (!options || typeof options !== "object") {
+      throw new TypeError("threeBrowserRTX.createDynamicTriangleMesh expects an options object");
+    }
+    if (dynamicRayMeshDestroyPending) {
+      throw new Error("Submit the pending dynamic-mesh destroy before creating its replacement");
+    }
+    if (activeDynamicRayMesh && !activeDynamicRayMesh._destroyed) {
+      throw new Error("The active ray scene already has its single dynamic triangle-mesh slot attached");
+    }
+    const generation = requireActiveStaticRayScene("dynamic triangle-mesh creation");
+    const device = requireActiveRtxDevice();
+    const positions = rtxDynamicPositionsResource(
+      options.positionsTexture ?? options.positions,
+      options.positionsVulkanLayout ?? options.vulkanLayout,
+    );
+    const texelCount = positions.texture.width * positions.texture.height;
+    const vertexCount = Number(options.vertexCount ?? texelCount);
+    if (!Number.isInteger(vertexCount) || vertexCount <= 0 || vertexCount > texelCount) {
+      throw new RangeError("vertexCount must be a positive integer no larger than positionsTexture.width * height");
+    }
+    const indices = rtxUint32Indices(options.indices, vertexCount);
+    const nativeEncoder = inOrderNativeEncoder(
+      options.commandEncoder,
+      "createDynamicTriangleMesh",
+    );
+    bindEvaluationToStaticScene(
+      nativeEncoder.encoder,
+      generation,
+      "dynamic triangle-mesh creation",
+    );
+    bindDynamicPositionsTexture(
+      nativeEncoder.encoder,
+      positions,
+      "dynamic triangle-mesh creation",
+    );
+    const mesh = new ThreeBrowserDynamicTriangleMesh(
+      cmd.allocHandle(),
+      device,
+      generation,
+      positions.texture.width,
+      positions.texture.height,
+      vertexCount,
+      indices.length,
+      options.label === undefined ? "" : String(options.label),
+    );
+    mesh._createEncoder = nativeEncoder.encoder;
+    activeDynamicRayMesh = mesh;
+    nativeEncoder.encoder._commands.push(["rtxDynamicMeshCreate", {
+      handle: mesh._h,
+      positionsTextureHandle: positions.textureHandle,
+      positionsVulkanLayout: positions.vulkanLayout,
+      width: mesh.width,
+      height: mesh.height,
+      vertexCount: mesh.vertexCount,
+      indices,
+    }]);
+    nativeEncoder.encoder._submissionCallbacks.push(() => {
+      if (!mesh._destroyed && mesh === activeDynamicRayMesh &&
+          mesh._sceneGeneration === staticRaySceneGeneration) {
+        mesh._submitted = true;
+        mesh._rebuildCount = 1;
+        mesh._createEncoder = null;
+      }
+    });
+    submitNativeEncoderIfNeeded(nativeEncoder);
+    return mesh;
+  };
+
+  const refitDynamicTriangleMesh = (update = {}) => {
+    if (!update || typeof update !== "object") {
+      throw new TypeError("threeBrowserRTX.refitDynamicTriangleMesh expects an update object");
+    }
+    const mesh = requireDynamicRayMesh(
+      update.mesh,
+      "refitDynamicTriangleMesh",
+    );
+    const positions = rtxDynamicPositionsResource(
+      update.positionsTexture ?? update.positions,
+      update.positionsVulkanLayout ?? update.vulkanLayout,
+    );
+    if (positions.texture.width !== mesh.width ||
+        positions.texture.height !== mesh.height) {
+      throw new RangeError("Dynamic triangle-mesh refits must preserve the positionsTexture extent");
+    }
+    const nativeEncoder = inOrderNativeEncoder(
+      update.commandEncoder,
+      "refitDynamicTriangleMesh",
+    );
+    if (!mesh._submitted && nativeEncoder.encoder !== mesh._createEncoder) {
+      throw new Error("The dynamic triangle-mesh creation must be submitted before refitting it from another encoder");
+    }
+    bindEvaluationToStaticScene(
+      nativeEncoder.encoder,
+      mesh._sceneGeneration,
+      "dynamic triangle-mesh refit",
+    );
+    bindDynamicPositionsTexture(
+      nativeEncoder.encoder,
+      positions,
+      "dynamic triangle-mesh refit",
+    );
+    const rebuild = Boolean(update.rebuild);
+    nativeEncoder.encoder._commands.push(["rtxDynamicMeshRefit", {
+      handle: mesh._h,
+      positionsTextureHandle: positions.textureHandle,
+      positionsVulkanLayout: positions.vulkanLayout,
+      width: mesh.width,
+      height: mesh.height,
+      vertexCount: mesh.vertexCount,
+      rebuild,
+    }]);
+    nativeEncoder.encoder._submissionCallbacks.push(() => {
+      if (!mesh._destroyed) {
+        mesh._refitCount++;
+        if (rebuild) mesh._rebuildCount++;
+      }
+    });
+    const submitted = submitNativeEncoderIfNeeded(nativeEncoder);
+    return immutableSnapshot({
+      queued: true,
+      submitted,
+      rebuild,
+      vertexCount: mesh.vertexCount,
+      triangleCount: mesh.triangleCount,
+      note: rebuild
+        ? "GPU positions will replace the native vertex buffer and the fixed-topology BLAS will be rebuilt; the source image layout is restored."
+        : "GPU positions will replace the native vertex buffer and the update-capable BLAS will be refit in place; its TLAS address stays stable.",
+    });
+  };
+
+  const destroyDynamicTriangleMesh = (value = {}) => {
+    const options = value instanceof ThreeBrowserDynamicTriangleMesh
+      ? { mesh: value }
+      : value;
+    if (!options || typeof options !== "object") {
+      throw new TypeError("threeBrowserRTX.destroyDynamicTriangleMesh expects a mesh or options object");
+    }
+    const mesh = requireDynamicRayMesh(
+      options.mesh,
+      "destroyDynamicTriangleMesh",
+    );
+    if (!mesh._submitted) {
+      throw new Error("Submit dynamic triangle-mesh creation before destroying it");
+    }
+    const nativeEncoder = inOrderNativeEncoder(
+      options.commandEncoder,
+      "destroyDynamicTriangleMesh",
+    );
+    bindEvaluationToStaticScene(
+      nativeEncoder.encoder,
+      mesh._sceneGeneration,
+      "dynamic triangle-mesh destroy",
+    );
+    const handle = mesh._h;
+    nativeEncoder.encoder._commands.push(["rtxDynamicMeshDestroy", handle]);
+    mesh._destroyQueued = true;
+    mesh._destroyed = true;
+    activeDynamicRayMesh = null;
+    dynamicRayMeshDestroyPending = true;
+    nativeEncoder.encoder._submissionCallbacks.push(() => {
+      mesh._h = 0;
+      mesh._destroyQueued = false;
+      dynamicRayMeshDestroyPending = false;
+    });
+    const submitted = submitNativeEncoderIfNeeded(nativeEncoder);
+    return immutableSnapshot({
+      queued: true,
+      submitted,
+      note: "The reserved TLAS slot will be masked. Native BLAS storage is retained until a later safe recycle.",
+    });
+  };
+
   const destroyStaticScene = () => {
+    invalidateDynamicRayMesh();
     cmd.rtxSceneDestroy();
     cmd.submitNow(true);
     staticRaySceneQueued = false;
@@ -2892,7 +3413,9 @@ export function install() {
       throw new TypeError("threeBrowserRTX.evaluateRayLighting expects a frame object");
     }
     const sceneGeneration = requireActiveStaticRayScene("ray-query lighting");
-    const nativeEncoder = dedicatedNativeEncoder(frame.commandEncoder, "evaluateRayLighting");
+    // Lighting may immediately consume a texture-driven BLAS created/refit
+    // after an earlier WebGPU compute pass on this same encoder.
+    const nativeEncoder = inOrderNativeEncoder(frame.commandEncoder, "evaluateRayLighting");
     bindEvaluationToStaticScene(
       nativeEncoder.encoder,
       sceneGeneration,
@@ -3041,6 +3564,11 @@ export function install() {
       throw new TypeError("threeBrowserRTX.evaluateRayReflections expects a frame object");
     }
     const sceneGeneration = requireActiveStaticRayScene("ray reflections");
+    if (activeDynamicRayMesh && !activeDynamicRayMesh._destroyed) {
+      throw new Error(
+        "Ray-query reflections cannot run while a dynamic triangle mesh is attached because it has no reflection material metadata",
+      );
+    }
     const nativeEncoder = dedicatedNativeEncoder(frame.commandEncoder, "evaluateRayReflections");
     bindEvaluationToStaticScene(
       nativeEncoder.encoder,
@@ -3265,6 +3793,9 @@ export function install() {
       shaderCompiler: RTX_SHADER_COMPILER_INFO,
       registerStaticScene,
       updateInstanceGroup,
+      createDynamicTriangleMesh,
+      refitDynamicTriangleMesh,
+      destroyDynamicTriangleMesh,
       destroyStaticScene,
       evaluateRayLighting,
       evaluateRayReflections,
@@ -3306,4 +3837,14 @@ export function install() {
   return true;
 }
 
-export { GPUBuffer, GPUTexture, GPUDevice, GPUAdapter };
+export {
+  GPUBuffer,
+  GPUTexture,
+  GPUExternalTexture,
+  GPUDevice,
+  GPUAdapter,
+  lowerExternalTextureWgsl,
+  replayCommandBuffer,
+  rtxDynamicPositionsResource,
+  validateNativeEncoderPassOrder,
+};

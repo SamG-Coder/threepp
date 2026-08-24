@@ -8,6 +8,7 @@
 #include <windows.h>
 
 #include <chrono>
+#include <array>
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
@@ -69,6 +70,187 @@ fn fs_main() -> @location(0) vec4f {
 }
 )";
 
+bool runDynamicTriangleMeshSmoke() {
+    TWRayQueryCapabilities before{};
+    before.struct_size = sizeof(before);
+    if (!tw_ray_query_capabilities(&before) || !before.supported) return true;
+
+    constexpr uint32_t kPositionsTexture = 100;
+    constexpr uint32_t kStaticEncoder = 101;
+    constexpr uint32_t kCreateEncoder = 102;
+    constexpr uint32_t kRefitEncoder = 103;
+    constexpr uint32_t kRebuildEncoder = 104;
+    constexpr uint32_t kDestroyEncoder = 105;
+    constexpr uint32_t kMesh = 106;
+    constexpr uint32_t kRgba32Float = 41;
+    constexpr uint32_t kTextureUsage = 0x01u | 0x02u | 0x08u;
+    constexpr uint32_t kTextureDimension2D = 2;
+    constexpr uint32_t kTransferDstLayout = 7;
+    constexpr uint32_t kProtocolVersion = 1;
+    const std::array<float, 16> dynamicPositions{{
+        -0.25f, -0.25f, 0.0f, 1.0f,
+         0.25f, -0.25f, 0.0f, 1.0f,
+         0.00f,  0.25f, 0.0f, 1.0f,
+         0.00f,  0.00f, 0.0f, 1.0f,
+    }};
+    const std::array<float, 9> staticPositions{{
+        -1.0f, -1.0f, 1.0f,
+         1.0f, -1.0f, 1.0f,
+         0.0f,  1.0f, 1.0f,
+    }};
+    const std::array<uint32_t, 3> indices{{0u, 1u, 2u}};
+
+    Stream stream;
+    {
+        const auto start = stream.begin(tw::cmd::OP_TEX_CREATE);
+        stream.u32(kPositionsTexture);
+        stream.u32(2u);
+        stream.u32(2u);
+        stream.u32(1u);
+        stream.u32(kRgba32Float);
+        stream.u32(kTextureUsage);
+        stream.u32(kTextureDimension2D);
+        stream.u32(1u);
+        stream.u32(1u);
+        stream.u32(0u);
+        stream.end(start);
+    }
+    {
+        const auto start = stream.begin(tw::cmd::OP_TEX_WRITE);
+        stream.u32(kPositionsTexture);
+        stream.u32(0u); // mip
+        stream.u32(0u);
+        stream.u32(0u);
+        stream.u32(0u);
+        stream.u32(2u);
+        stream.u32(2u);
+        stream.u32(1u);
+        stream.u32(2u * 4u * sizeof(float));
+        stream.u32(2u);
+        stream.u32(static_cast<uint32_t>(dynamicPositions.size() * sizeof(float)));
+        stream.u32(0u);
+        stream.raw(dynamicPositions.data(),
+                   static_cast<uint32_t>(dynamicPositions.size() * sizeof(float)));
+        stream.end(start);
+    }
+    const auto beginEncoder = [&stream](uint32_t handle) {
+        const auto start = stream.begin(tw::cmd::OP_ENC_BEGIN);
+        stream.u32(handle);
+        stream.u32(0u);
+        stream.end(start);
+    };
+    const auto submitEncoder = [&stream] {
+        const auto start = stream.begin(tw::cmd::OP_SUBMIT);
+        stream.end(start);
+    };
+
+    beginEncoder(kStaticEncoder);
+    {
+        const auto start = stream.begin(tw::cmd::OP_RTX_SCENE_BEGIN);
+        stream.u32(kProtocolVersion);
+        stream.end(start);
+    }
+    {
+        const auto start = stream.begin(tw::cmd::OP_RTX_SCENE_POSITIONS);
+        stream.u32(kProtocolVersion);
+        stream.u32(3u);
+        stream.raw(staticPositions.data(),
+                   static_cast<uint32_t>(staticPositions.size() * sizeof(float)));
+        stream.end(start);
+    }
+    {
+        const auto start = stream.begin(tw::cmd::OP_RTX_SCENE_INDICES);
+        stream.u32(kProtocolVersion);
+        stream.u32(static_cast<uint32_t>(indices.size()));
+        stream.raw(indices.data(),
+                   static_cast<uint32_t>(indices.size() * sizeof(uint32_t)));
+        stream.end(start);
+    }
+    {
+        const auto start = stream.begin(tw::cmd::OP_RTX_SCENE_COMMIT);
+        stream.u32(kProtocolVersion);
+        stream.u32(kStaticEncoder);
+        stream.end(start);
+    }
+    submitEncoder();
+
+    beginEncoder(kCreateEncoder);
+    {
+        const auto start = stream.begin(tw::cmd::OP_RTX_DYNAMIC_MESH_CREATE);
+        stream.u32(kProtocolVersion);
+        stream.u32(kCreateEncoder);
+        stream.u32(kMesh);
+        stream.u32(kPositionsTexture);
+        stream.u32(kTransferDstLayout);
+        stream.u32(2u);
+        stream.u32(2u);
+        stream.u32(3u);
+        stream.u32(static_cast<uint32_t>(indices.size()));
+        stream.raw(indices.data(),
+                   static_cast<uint32_t>(indices.size() * sizeof(uint32_t)));
+        stream.end(start);
+    }
+    submitEncoder();
+
+    const auto appendRefit = [&](uint32_t encoder, bool rebuild) {
+        beginEncoder(encoder);
+        const auto start = stream.begin(tw::cmd::OP_RTX_DYNAMIC_MESH_REFIT);
+        stream.u32(kProtocolVersion);
+        stream.u32(encoder);
+        stream.u32(kMesh);
+        stream.u32(kPositionsTexture);
+        stream.u32(kTransferDstLayout);
+        stream.u32(2u);
+        stream.u32(2u);
+        stream.u32(3u);
+        stream.u32(rebuild ? 1u : 0u);
+        stream.end(start);
+        submitEncoder();
+    };
+    appendRefit(kRefitEncoder, false);
+    appendRefit(kRebuildEncoder, true);
+
+    beginEncoder(kDestroyEncoder);
+    {
+        const auto start = stream.begin(tw::cmd::OP_RTX_DYNAMIC_MESH_DESTROY);
+        stream.u32(kProtocolVersion);
+        stream.u32(kDestroyEncoder);
+        stream.u32(kMesh);
+        stream.end(start);
+    }
+    submitEncoder();
+
+    if (!tw_cmd_submit(stream.bytes.data(), static_cast<int>(stream.bytes.size()))) {
+        std::cerr << "dynamic triangle-mesh command submit failed: "
+                  << tw_last_error() << '\n';
+        return false;
+    }
+    TWRayQueryCapabilities after{};
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    do {
+        after = {};
+        after.struct_size = sizeof(after);
+        tw_ray_query_capabilities(&after);
+        if (after.failure_count != before.failure_count ||
+            after.build_count >= before.build_count + 5u) {
+            break;
+        }
+        Sleep(1);
+    } while (std::chrono::steady_clock::now() < deadline);
+    if (!after.active || after.failure_count != before.failure_count ||
+        after.build_count != before.build_count + 5u ||
+        after.triangle_count != 1u) {
+        std::cerr << "dynamic triangle-mesh GPU smoke failed: "
+                  << after.reason << " builds=" << after.build_count
+                  << " failures=" << after.failure_count
+                  << " triangles=" << after.triangle_count << '\n';
+        return false;
+    }
+    std::cout << "dynamic_blas=ok builds="
+              << (after.build_count - before.build_count) << '\n';
+    return true;
+}
+
 }// namespace
 
 int main() {
@@ -112,6 +294,11 @@ int main() {
               << " rayreconstruction=" << gpuCapabilities.dlss_ray_reconstruction
               << " reflex=" << gpuCapabilities.reflex
               << " status=\"" << gpuCapabilities.status << "\"\n";
+
+    if (!runDynamicTriangleMeshSmoke()) {
+        tw_shutdown();
+        return 19;
+    }
 
     TWGpuFeatureStatus featureStatus{};
     featureStatus.struct_size = sizeof(featureStatus);

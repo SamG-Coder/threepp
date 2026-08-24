@@ -67,6 +67,9 @@ export const OP = {
   RTX_SCENE_INSTANCE_GROUP: 89,
   RTX_INSTANCE_GROUP_UPDATE: 90,
   RTX_PIPELINE_CREATE_SOURCE: 91,
+  RTX_DYNAMIC_MESH_CREATE: 92,
+  RTX_DYNAMIC_MESH_REFIT: 93,
+  RTX_DYNAMIC_MESH_DESTROY: 94,
 };
 
 // wgpu-native webgpu.h numeric enums (WGPUTextureFormat, …).
@@ -634,7 +637,10 @@ function shaderCreate(handle, code) {
 function bglKind(entry) {
   if (entry.buffer) return 0;
   if (entry.sampler) return 1;
-  if (entry.texture) return 2;
+  // ThreeBrowser lowers texture_external to a persistent RGBA texture for its
+  // Windows camera compatibility path. It therefore uses an ordinary sampled
+  // texture binding in the native WebGPU layout.
+  if (entry.texture || entry.externalTexture) return 2;
   if (entry.storageTexture) return 3;
   return 0;
 }
@@ -666,7 +672,7 @@ function bglCreate(handle, entries) {
       wu32(0);
       wu32(0);
     } else if (kind === 2) {
-      const t = e.texture || {};
+      const t = e.texture || e.externalTexture || {};
       wu32(enu(SAMPLE_TYPE, t.sampleType || "float", 2));
       wu32(enu(VIEW_DIM, t.viewDimension || "2d", 2));
       wu32(t.multisampled ? 1 : 0);
@@ -1341,6 +1347,47 @@ function rtxInstanceGroupUpdate(encoder, id, matrices, masks) {
   end(s);
 }
 
+function rtxDynamicMeshCreate(encoder, mesh) {
+  const indexBytes = asU8(mesh.indices);
+  if (indexBytes.byteLength === 0 || (indexBytes.byteLength % 12) !== 0) {
+    throw new RangeError("RTX dynamic-mesh indices must contain complete uint32 triangles");
+  }
+  const s = begin(OP.RTX_DYNAMIC_MESH_CREATE, 36 + indexBytes.byteLength);
+  wu32(RTX_PROTOCOL_VERSION);
+  wu32(encoder >>> 0);
+  wu32(mesh.handle >>> 0);
+  wu32(mesh.positionsTextureHandle >>> 0);
+  wu32(mesh.positionsVulkanLayout >>> 0);
+  wu32(mesh.width >>> 0);
+  wu32(mesh.height >>> 0);
+  wu32(mesh.vertexCount >>> 0);
+  wu32(indexBytes.byteLength / 4);
+  wbytes(indexBytes);
+  end(s);
+}
+
+function rtxDynamicMeshRefit(encoder, mesh) {
+  const s = begin(OP.RTX_DYNAMIC_MESH_REFIT, 36);
+  wu32(RTX_PROTOCOL_VERSION);
+  wu32(encoder >>> 0);
+  wu32(mesh.handle >>> 0);
+  wu32(mesh.positionsTextureHandle >>> 0);
+  wu32(mesh.positionsVulkanLayout >>> 0);
+  wu32(mesh.width >>> 0);
+  wu32(mesh.height >>> 0);
+  wu32(mesh.vertexCount >>> 0);
+  wu32(mesh.rebuild ? 1 : 0);
+  end(s);
+}
+
+function rtxDynamicMeshDestroy(encoder, handle) {
+  const s = begin(OP.RTX_DYNAMIC_MESH_DESTROY, 12);
+  wu32(RTX_PROTOCOL_VERSION);
+  wu32(encoder >>> 0);
+  wu32(handle >>> 0);
+  end(s);
+}
+
 function rtxPipelineCreate(handle, profile, entryPoint, spirv) {
   const entryPointBytes = utf8(entryPoint);
   const entryPointPaddedBytes = (entryPointBytes.byteLength + 3) & ~3;
@@ -1593,6 +1640,9 @@ const cmd = {
   rtxSceneDestroy,
   rtxSceneInstanceGroup,
   rtxInstanceGroupUpdate,
+  rtxDynamicMeshCreate,
+  rtxDynamicMeshRefit,
+  rtxDynamicMeshDestroy,
   rtxPipelineCreate,
   rtxPipelineCreateSource,
   rtxPipelineDestroy,

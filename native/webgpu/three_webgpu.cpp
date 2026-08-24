@@ -4771,6 +4771,73 @@ void execOne(uint32_t op, Reader& r) {
             }
             return;
         }
+        case OP_RTX_DYNAMIC_MESH_CREATE: {
+            const uint32_t version = r.u32();
+            TWRayQueryDynamicTriangleMeshFrame frame{};
+            frame.struct_size = sizeof(frame);
+            frame.command_encoder_handle = r.u32();
+            frame.mesh_handle = r.u32();
+            frame.positions_texture_handle = r.u32();
+            frame.positions_vulkan_layout = r.u32();
+            frame.width = r.u32();
+            frame.height = r.u32();
+            frame.vertex_count = r.u32();
+            const uint32_t indexCount = r.u32();
+            const uint64_t indexBytes =
+                static_cast<uint64_t>(indexCount) * sizeof(uint32_t);
+            if (!r.ok || version != 1u || frame.command_encoder_handle == 0u ||
+                frame.mesh_handle == 0u || frame.positions_texture_handle == 0u ||
+                frame.width == 0u || frame.height == 0u ||
+                frame.vertex_count == 0u || indexCount == 0u ||
+                indexCount % 3u != 0u || indexBytes > r.remaining() ||
+                r.remaining() - indexBytes > 4u) {
+                setError("Unsupported or malformed RTX dynamic-mesh creation command");
+                return;
+            }
+            std::vector<uint32_t> indices(indexCount);
+            for (uint32_t& value : indices) value = r.u32();
+            if (!r.ok || !tw_ray_query_dynamic_triangle_mesh_create(
+                    &frame, indices.data(), indexCount)) {
+                if (!r.ok) {
+                    setError("RTX dynamic-mesh topology ended before indexCount");
+                }
+                return;
+            }
+            return;
+        }
+        case OP_RTX_DYNAMIC_MESH_REFIT: {
+            const uint32_t version = r.u32();
+            TWRayQueryDynamicTriangleMeshFrame frame{};
+            frame.struct_size = sizeof(frame);
+            frame.command_encoder_handle = r.u32();
+            frame.mesh_handle = r.u32();
+            frame.positions_texture_handle = r.u32();
+            frame.positions_vulkan_layout = r.u32();
+            frame.width = r.u32();
+            frame.height = r.u32();
+            frame.vertex_count = r.u32();
+            frame.flags = r.u32();
+            if (!r.ok || version != 1u || frame.command_encoder_handle == 0u ||
+                frame.mesh_handle == 0u || frame.positions_texture_handle == 0u ||
+                frame.width == 0u || frame.height == 0u ||
+                frame.vertex_count == 0u || (frame.flags & ~1u) != 0u) {
+                setError("Unsupported or malformed RTX dynamic-mesh refit command");
+                return;
+            }
+            tw_ray_query_dynamic_triangle_mesh_refit(&frame);
+            return;
+        }
+        case OP_RTX_DYNAMIC_MESH_DESTROY: {
+            const uint32_t version = r.u32();
+            const uint32_t encoder = r.u32();
+            const uint32_t handle = r.u32();
+            if (!r.ok || version != 1u || encoder == 0u || handle == 0u) {
+                setError("Unsupported or malformed RTX dynamic-mesh destroy command");
+                return;
+            }
+            tw_ray_query_dynamic_triangle_mesh_destroy(encoder, handle);
+            return;
+        }
         case OP_RTX_LIGHTING_EVALUATE: {
             const uint32_t version = r.u32();
             if (version == 1u) {
@@ -6779,6 +6846,239 @@ int tw_ray_query_instance_group_update(uint32_t commandEncoderHandle,
                 const auto rayQuery = rayQueryBridgeCapabilities();
                 setError(status != WGPUStatus_Success
                     ? "wgpu-native rejected the Vulkan TLAS refit recording callback"
+                    : rayQuery.status);
+                return 0;
+            }
+            return 1;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+#endif
+}
+
+int tw_ray_query_dynamic_triangle_mesh_create(
+    const TWRayQueryDynamicTriangleMeshFrame* frame,
+    const uint32_t* indices, uint32_t indexCount) {
+    static_assert(sizeof(TWRayQueryDynamicTriangleMeshFrame) == 36u);
+    if (!frame || frame->struct_size < sizeof(TWRayQueryDynamicTriangleMeshFrame) ||
+        !indices || indexCount == 0u || indexCount % 3u != 0u ||
+        frame->mesh_handle == 0u || frame->positions_texture_handle == 0u ||
+        frame->width == 0u || frame->height == 0u || frame->vertex_count == 0u ||
+        frame->flags != 0u ||
+        static_cast<uint64_t>(frame->width) * frame->height < frame->vertex_count) {
+        setError("Invalid dynamic triangle-mesh creation descriptor");
+        return 0;
+    }
+#if !defined(THREEBROWSER_RAY_QUERY)
+    return 0;
+#else
+    const auto acceptedLayout = [](uint32_t value) {
+        switch (static_cast<VkImageLayout>(value)) {
+            case VK_IMAGE_LAYOUT_GENERAL:
+            case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+            case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+            case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+                return true;
+            default:
+                return false;
+        }
+    };
+    if (!acceptedLayout(frame->positions_vulkan_layout)) {
+        setError("Dynamic triangle-mesh positions use an unsupported VkImageLayout");
+        return 0;
+    }
+    const TWRayQueryDynamicTriangleMeshFrame copy = *frame;
+    try {
+        return onWorker([copy, indices, indexCount] {
+            endPasses();
+            WGPUCommandEncoder encoder = g.currentEncoder;
+            if (copy.command_encoder_handle) {
+                Slot* slot = getSlot(copy.command_encoder_handle);
+                encoder = slot && slot->kind == Kind::Encoder ? slot->encoder : nullptr;
+            }
+            Slot* positions = getSlot(copy.positions_texture_handle);
+            constexpr WGPUTextureUsage requiredUsage =
+                WGPUTextureUsage_CopySrc | WGPUTextureUsage_StorageBinding;
+            if (!encoder || !positions || positions->kind != Kind::Texture ||
+                !positions->texture ||
+                positions->texFormat != WGPUTextureFormat_RGBA32Float ||
+                (positions->texUsage & requiredUsage) != requiredUsage ||
+                positions->texD != 1u || positions->texMipLevels != 1u ||
+                positions->texSampleCount != 1u ||
+                positions->texW != copy.width || positions->texH != copy.height) {
+                setError("Dynamic triangle meshes require a matching single-layer rgba32float COPY_SRC|STORAGE_BINDING texture");
+                return 0;
+            }
+            for (uint32_t offset = 0u; offset < indexCount; ++offset) {
+                if (indices[offset] >= copy.vertex_count) {
+                    setError("Dynamic triangle-mesh topology contains an out-of-range index");
+                    return 0;
+                }
+            }
+            RayQueryDynamicTriangleMeshFrame native{};
+            native.positionsImage =
+                wgpuTextureGetNativeVulkanImage(positions->texture);
+            native.positionsLayout = copy.positions_vulkan_layout;
+            native.width = copy.width;
+            native.height = copy.height;
+            native.vertexCount = copy.vertex_count;
+            native.handle = copy.mesh_handle;
+            struct Creation {
+                RayQueryDynamicTriangleMeshFrame* frame;
+                const uint32_t* indices;
+                uint32_t indexCount;
+                bool result{};
+            } creation{&native, indices, indexCount, false};
+            const WGPUStatus status = wgpuCommandEncoderWithNativeVulkanCommandBuffer(
+                encoder,
+                [](void* commandBuffer, void* userdata) {
+                    auto* value = static_cast<Creation*>(userdata);
+                    value->frame->commandBuffer = commandBuffer;
+                    value->result = rayQueryBridgeCreateDynamicTriangleMesh(
+                        *value->frame, value->indices, value->indexCount);
+                },
+                &creation);
+            if (status != WGPUStatus_Success || !creation.result) {
+                const auto rayQuery = rayQueryBridgeCapabilities();
+                setError(status != WGPUStatus_Success
+                    ? "wgpu-native rejected the Vulkan dynamic-BLAS creation callback"
+                    : rayQuery.status);
+                return 0;
+            }
+            return 1;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+#endif
+}
+
+int tw_ray_query_dynamic_triangle_mesh_refit(
+    const TWRayQueryDynamicTriangleMeshFrame* frame) {
+    if (!frame || frame->struct_size < sizeof(TWRayQueryDynamicTriangleMeshFrame) ||
+        frame->mesh_handle == 0u || frame->positions_texture_handle == 0u ||
+        frame->width == 0u || frame->height == 0u || frame->vertex_count == 0u ||
+        (frame->flags & ~1u) != 0u ||
+        static_cast<uint64_t>(frame->width) * frame->height < frame->vertex_count) {
+        setError("Invalid dynamic triangle-mesh refit descriptor");
+        return 0;
+    }
+#if !defined(THREEBROWSER_RAY_QUERY)
+    return 0;
+#else
+    const auto acceptedLayout = [](uint32_t value) {
+        switch (static_cast<VkImageLayout>(value)) {
+            case VK_IMAGE_LAYOUT_GENERAL:
+            case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+            case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+            case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+                return true;
+            default:
+                return false;
+        }
+    };
+    if (!acceptedLayout(frame->positions_vulkan_layout)) {
+        setError("Dynamic triangle-mesh positions use an unsupported VkImageLayout");
+        return 0;
+    }
+    const TWRayQueryDynamicTriangleMeshFrame copy = *frame;
+    try {
+        return onWorker([copy] {
+            endPasses();
+            WGPUCommandEncoder encoder = g.currentEncoder;
+            if (copy.command_encoder_handle) {
+                Slot* slot = getSlot(copy.command_encoder_handle);
+                encoder = slot && slot->kind == Kind::Encoder ? slot->encoder : nullptr;
+            }
+            Slot* positions = getSlot(copy.positions_texture_handle);
+            constexpr WGPUTextureUsage requiredUsage =
+                WGPUTextureUsage_CopySrc | WGPUTextureUsage_StorageBinding;
+            if (!encoder || !positions || positions->kind != Kind::Texture ||
+                !positions->texture ||
+                positions->texFormat != WGPUTextureFormat_RGBA32Float ||
+                (positions->texUsage & requiredUsage) != requiredUsage ||
+                positions->texD != 1u || positions->texMipLevels != 1u ||
+                positions->texSampleCount != 1u ||
+                positions->texW != copy.width || positions->texH != copy.height) {
+                setError("Dynamic triangle-mesh refits require the original rgba32float COPY_SRC|STORAGE_BINDING extent");
+                return 0;
+            }
+            RayQueryDynamicTriangleMeshFrame native{};
+            native.positionsImage =
+                wgpuTextureGetNativeVulkanImage(positions->texture);
+            native.positionsLayout = copy.positions_vulkan_layout;
+            native.width = copy.width;
+            native.height = copy.height;
+            native.vertexCount = copy.vertex_count;
+            native.handle = copy.mesh_handle;
+            native.flags = copy.flags;
+            struct Refit {
+                RayQueryDynamicTriangleMeshFrame* frame;
+                bool result{};
+            } refit{&native, false};
+            const WGPUStatus status = wgpuCommandEncoderWithNativeVulkanCommandBuffer(
+                encoder,
+                [](void* commandBuffer, void* userdata) {
+                    auto* value = static_cast<Refit*>(userdata);
+                    value->frame->commandBuffer = commandBuffer;
+                    value->result = rayQueryBridgeRefitDynamicTriangleMesh(
+                        *value->frame);
+                },
+                &refit);
+            if (status != WGPUStatus_Success || !refit.result) {
+                const auto rayQuery = rayQueryBridgeCapabilities();
+                setError(status != WGPUStatus_Success
+                    ? "wgpu-native rejected the Vulkan dynamic-BLAS refit callback"
+                    : rayQuery.status);
+                return 0;
+            }
+            return 1;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+#endif
+}
+
+int tw_ray_query_dynamic_triangle_mesh_destroy(
+    uint32_t commandEncoderHandle, uint32_t meshHandle) {
+    if (commandEncoderHandle == 0u || meshHandle == 0u) {
+        setError("Dynamic triangle-mesh destroy requires encoder and mesh handles");
+        return 0;
+    }
+#if !defined(THREEBROWSER_RAY_QUERY)
+    return 0;
+#else
+    try {
+        return onWorker([commandEncoderHandle, meshHandle] {
+            endPasses();
+            Slot* slot = getSlot(commandEncoderHandle);
+            WGPUCommandEncoder encoder =
+                slot && slot->kind == Kind::Encoder ? slot->encoder : nullptr;
+            if (!encoder) {
+                setError("Dynamic triangle-mesh destroy received an invalid encoder");
+                return 0;
+            }
+            struct Destruction {
+                uint32_t handle;
+                bool result{};
+            } destruction{meshHandle, false};
+            const WGPUStatus status = wgpuCommandEncoderWithNativeVulkanCommandBuffer(
+                encoder,
+                [](void* commandBuffer, void* userdata) {
+                    auto* value = static_cast<Destruction*>(userdata);
+                    value->result = rayQueryBridgeDestroyDynamicTriangleMesh(
+                        commandBuffer, value->handle);
+                },
+                &destruction);
+            if (status != WGPUStatus_Success || !destruction.result) {
+                const auto rayQuery = rayQueryBridgeCapabilities();
+                setError(status != WGPUStatus_Success
+                    ? "wgpu-native rejected the Vulkan dynamic-mesh detach callback"
                     : rayQuery.status);
                 return 0;
             }

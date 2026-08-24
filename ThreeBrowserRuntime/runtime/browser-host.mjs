@@ -868,6 +868,235 @@ class ImageElement extends Element {
   }
 }
 
+let nextMediaStreamId = 1;
+let nextMediaTrackId = 1;
+const activeCameraTracks = new Set();
+
+class MediaDeviceInfo {
+  constructor({ deviceId = "", label = "", kind = "videoinput", groupId = "" } = {}) {
+    this.deviceId = String(deviceId);
+    this.label = String(label);
+    this.kind = String(kind);
+    this.groupId = String(groupId);
+  }
+  toJSON() {
+    return { deviceId: this.deviceId, kind: this.kind, label: this.label, groupId: this.groupId };
+  }
+}
+
+class MediaStreamTrack extends BrowserEventTarget {
+  constructor(opened, constraints = {}) {
+    super();
+    this.kind = "video";
+    this.id = `threebrowser-camera-track-${nextMediaTrackId++}`;
+    this.label = String(opened.label || "Windows camera");
+    this.enabled = true;
+    this.muted = false;
+    this.readyState = "live";
+    this.contentHint = "motion";
+    this._nativeHandle = Number(opened.handle || 0);
+    this._constraints = { ...constraints };
+    this._settings = {
+      deviceId: String(opened.deviceId || ""),
+      groupId: "",
+      width: Number(opened.width || 0),
+      height: Number(opened.height || 0),
+      frameRate: Number(opened.frameRate || 0),
+      resizeMode: "none",
+    };
+    const exact = numericConstraint(constraints.frameRate, "exact");
+    const maximum = numericConstraint(constraints.frameRate, "max");
+    const ideal = numericConstraint(constraints.frameRate, "ideal");
+    const deliveryCap = maximum || ideal || 0;
+    // Frame dropping can satisfy a maximum or approximate an ideal below the
+    // camera cadence. It cannot truthfully manufacture an exact cadence when
+    // Media Foundation selected another rate. Unknown rates remain unknown.
+    this._deliveryFrameRate = this._settings.frameRate > 0
+      ? (!exact && deliveryCap > 0
+          ? Math.min(deliveryCap, this._settings.frameRate)
+          : this._settings.frameRate)
+      : 0;
+    if (this._deliveryFrameRate > 0) this._settings.frameRate = this._deliveryFrameRate;
+    activeCameraTracks.add(this);
+  }
+  clone() {
+    throw new DOMException("ThreeBrowser camera tracks cannot be cloned", "NotSupportedError");
+  }
+  getCapabilities() {
+    return {
+      width: { min: this._settings.width, max: this._settings.width },
+      height: { min: this._settings.height, max: this._settings.height },
+      frameRate: { min: this._deliveryFrameRate || this._settings.frameRate, max: this._settings.frameRate },
+      deviceId: this._settings.deviceId,
+    };
+  }
+  getConstraints() { return { ...this._constraints }; }
+  getSettings() { return { ...this._settings }; }
+  applyConstraints() {
+    return Promise.reject(new DOMException(
+      "Camera constraints are fixed when ThreeBrowser opens the Media Foundation source",
+      "NotSupportedError",
+    ));
+  }
+  stop() { this._end(true, false); }
+  _end(closeNative, emitEvent = true) {
+    if (this.readyState === "ended") return;
+    this.readyState = "ended";
+    const handle = this._nativeHandle;
+    this._nativeHandle = 0;
+    activeCameraTracks.delete(this);
+    if (closeNative && handle) native.cameraClose?.(handle);
+    if (emitEvent) this.dispatchEvent(new Event("ended"));
+  }
+}
+
+class MediaStream extends BrowserEventTarget {
+  constructor(tracks = []) {
+    super();
+    this.id = `threebrowser-camera-stream-${nextMediaStreamId++}`;
+    this._tracks = Array.from(tracks);
+  }
+  get active() { return this._tracks.some(track => track.readyState === "live"); }
+  getTracks() { return [...this._tracks]; }
+  getVideoTracks() { return this._tracks.filter(track => track.kind === "video"); }
+  getAudioTracks() { return []; }
+  addTrack(track) {
+    if (!(track instanceof MediaStreamTrack)) throw new TypeError("addTrack expects a MediaStreamTrack");
+    if (!this._tracks.includes(track)) this._tracks.push(track);
+  }
+  removeTrack(track) { this._tracks = this._tracks.filter(candidate => candidate !== track); }
+  clone() { return new MediaStream(this._tracks.map(track => track.clone())); }
+}
+
+class OverconstrainedError extends DOMException {
+  constructor(constraint, message) {
+    super(message || `Camera constraint ${constraint} cannot be satisfied`, "OverconstrainedError");
+    this.constraint = constraint;
+  }
+}
+
+function constraintValue(value, key) {
+  if (value == null) return undefined;
+  if (typeof value !== "object") return key === "ideal" ? value : undefined;
+  return value[key];
+}
+
+function numericConstraint(value, key) {
+  const candidate = Number(constraintValue(value, key));
+  return Number.isFinite(candidate) && candidate > 0 ? candidate : 0;
+}
+
+function requestedNumber(value) {
+  return numericConstraint(value, "exact") || numericConstraint(value, "ideal") ||
+    numericConstraint(value, "max") || numericConstraint(value, "min") ||
+    (typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0);
+}
+
+function validateExactCameraConstraints(constraints, settings) {
+  for (const name of ["width", "height"]) {
+    const exact = numericConstraint(constraints[name], "exact");
+    const minimum = numericConstraint(constraints[name], "min");
+    const maximum = numericConstraint(constraints[name], "max");
+    if ((exact && settings[name] !== exact) || (minimum && settings[name] < minimum) ||
+        (maximum && settings[name] > maximum)) {
+      throw new OverconstrainedError(name);
+    }
+  }
+  const exactRate = numericConstraint(constraints.frameRate, "exact");
+  const minimumRate = numericConstraint(constraints.frameRate, "min");
+  const maximumRate = numericConstraint(constraints.frameRate, "max");
+  if ((exactRate && settings.frameRate !== exactRate) ||
+      (minimumRate && settings.frameRate < minimumRate) ||
+      (maximumRate && settings.frameRate > maximumRate)) {
+    throw new OverconstrainedError("frameRate");
+  }
+  const exactFacing = constraintValue(constraints.facingMode, "exact");
+  if (exactFacing != null) {
+    throw new OverconstrainedError("facingMode", "ThreeBrowser cannot verify Windows camera facing mode");
+  }
+}
+
+class MediaDevices extends BrowserEventTarget {
+  getSupportedConstraints() {
+    return Object.freeze({
+      deviceId: true,
+      width: true,
+      height: true,
+      frameRate: true,
+      facingMode: false,
+      resizeMode: false,
+    });
+  }
+  async enumerateDevices() {
+    if (typeof native.cameraDevices !== "function") return [];
+    return native.cameraDevices().map(device => new MediaDeviceInfo(device));
+  }
+  async getUserMedia(constraints = {}) {
+    if (constraints?.audio) {
+      throw new DOMException("ThreeBrowser getUserMedia currently supports video capture only", "NotSupportedError");
+    }
+    if (!constraints?.video) {
+      throw new TypeError("getUserMedia requires a video constraint");
+    }
+    if (typeof native.cameraOpen !== "function") {
+      throw new DOMException("This ThreeBrowser build has no Windows camera capture module", "NotSupportedError");
+    }
+    const video = constraints.video === true ? {} : constraints.video;
+    if (!video || typeof video !== "object") throw new TypeError("video constraints must be true or an object");
+    const exactDeviceId = constraintValue(video.deviceId, "exact");
+    if (constraintValue(video.facingMode, "exact") != null) {
+      throw new OverconstrainedError("facingMode", "ThreeBrowser cannot verify Windows camera facing mode");
+    }
+    if (constraintValue(video.resizeMode, "exact") != null) {
+      throw new OverconstrainedError("resizeMode", "ThreeBrowser does not expose camera resize modes");
+    }
+    const idealDeviceId = constraintValue(video.deviceId, "ideal") ??
+      (typeof video.deviceId === "string" ? video.deviceId : "");
+    let requestedDeviceId = exactDeviceId ?? "";
+    if (exactDeviceId != null || idealDeviceId) {
+      const devices = await this.enumerateDevices();
+      if (exactDeviceId != null && !devices.some(device => device.deviceId === String(exactDeviceId))) {
+        throw new OverconstrainedError("deviceId");
+      }
+      if (!requestedDeviceId && idealDeviceId &&
+          devices.some(device => device.deviceId === String(idealDeviceId))) {
+        requestedDeviceId = String(idealDeviceId);
+      }
+    }
+    let opened;
+    try {
+      opened = native.cameraOpen({
+        deviceId: requestedDeviceId ? String(requestedDeviceId) : "",
+        width: requestedNumber(video.width),
+        height: requestedNumber(video.height),
+        frameRate: requestedNumber(video.frameRate),
+      });
+    } catch (error) {
+      throw new DOMException(error?.message || "Windows camera capture failed", "NotReadableError");
+    }
+    if (!opened?.handle) {
+      const message = opened?.error || "No Windows video capture device is available";
+      const name = /access.*denied|permission|privacy/i.test(message)
+        ? "NotAllowedError"
+        : /no .*device|unavailable|requested video/i.test(message)
+          ? "NotFoundError"
+          : "NotReadableError";
+      throw new DOMException(message, name);
+    }
+    const track = new MediaStreamTrack(opened, video);
+    try {
+      validateExactCameraConstraints(video, track.getSettings());
+      if (exactDeviceId != null && track.getSettings().deviceId !== String(exactDeviceId)) {
+        throw new OverconstrainedError("deviceId");
+      }
+      return new MediaStream([track]);
+    } catch (error) {
+      track.stop();
+      throw error;
+    }
+  }
+}
+
 class AudioElement extends Element {
   constructor(source = "") {
     super("audio");
@@ -928,9 +1157,235 @@ class VideoElement extends AudioElement {
     this.videoWidth = 0;
     this.videoHeight = 0;
     this.playsInline = true;
+    this._srcObject = null;
+    this._cameraTrack = null;
+    this._cameraPixels = null;
+    this._cameraSequence = 0;
+    this._nativeCameraSequence = 0;
+    this._presentedFrames = 0;
+    this._lastDeliveredAt = -Infinity;
+    this._videoFrameCallbacks = new Map();
+    this._nextVideoFrameCallback = 1;
+    this.HAVE_NOTHING = 0;
+    this.HAVE_METADATA = 1;
+    this.HAVE_CURRENT_DATA = 2;
+    this.HAVE_FUTURE_DATA = 3;
+    this.HAVE_ENOUGH_DATA = 4;
+  }
+  get srcObject() { return this._srcObject; }
+  set srcObject(value) {
+    if (value != null && !(value instanceof MediaStream)) {
+      throw new TypeError("HTMLVideoElement.srcObject supports ThreeBrowser MediaStream values only");
+    }
+    for (const record of this._videoFrameCallbacks.values()) cancelAnimationFrame(record.animationFrame);
+    this._videoFrameCallbacks.clear();
+    this._srcObject = value;
+    this._cameraTrack = value?.getVideoTracks()[0] ?? null;
+    this.videoWidth = 0;
+    this.videoHeight = 0;
+    this.readyState = this.HAVE_NOTHING;
+    this._cameraPixels = null;
+    this.data = null;
+    this.pixels = null;
+    this._cameraSequence = 0;
+    this._nativeCameraSequence = 0;
+    this._presentedFrames = 0;
+    this._lastDeliveredAt = -Infinity;
+  }
+  play() {
+    if (!this._cameraTrack) return super.play();
+    if (this._cameraTrack.readyState !== "live") {
+      return Promise.reject(new DOMException("The camera track has ended", "InvalidStateError"));
+    }
+    this.paused = false;
+    this.ended = false;
+    this.dispatchEvent(new Event("play"));
+    queueMicrotask(() => this.dispatchEvent(new Event("playing")));
+    return Promise.resolve();
+  }
+  pause() {
+    super.pause();
+  }
+  _acquireCameraFrame() {
+    const track = this._cameraTrack;
+    if (this.paused || !track || track.readyState !== "live" || !track._nativeHandle) return false;
+    let metadata;
+    try {
+      metadata = native.cameraRead(track._nativeHandle, this._nativeCameraSequence, null);
+    } catch (error) {
+      track._end(true);
+      this.ended = true;
+      this.dispatchEvent(new Event("ended"));
+      return false;
+    }
+    if (metadata?.ended && !metadata.hasNewFrame) {
+      track._end(true);
+      this.ended = true;
+      this.dispatchEvent(new Event("ended"));
+      return false;
+    }
+    if (!metadata?.hasNewFrame) return false;
+    const now = performance.now();
+    const minimumInterval = track._deliveryFrameRate > 0 ? 1000 / track._deliveryFrameRate : 0;
+    const previousNativeSequence = this._nativeCameraSequence;
+    this._nativeCameraSequence = Number(metadata.sequence || previousNativeSequence);
+    if (minimumInterval > 0 && now - this._lastDeliveredAt + 0.25 < minimumInterval) return false;
+    const required = Number(metadata.byteLength || 0);
+    if (!(required > 0)) return false;
+    if (!this._cameraPixels || this._cameraPixels.byteLength !== required) {
+      this._cameraPixels = new Uint8ClampedArray(required);
+    }
+    const frame = native.cameraRead(track._nativeHandle, previousNativeSequence, this._cameraPixels);
+    if (!frame?.copied) return false;
+    this._nativeCameraSequence = Number(frame.sequence || this._nativeCameraSequence);
+    const firstFrame = this.readyState === this.HAVE_NOTHING;
+    this.videoWidth = Number(frame.width || 0);
+    this.videoHeight = Number(frame.height || 0);
+    this.currentTime = Number(frame.timestampUs || 0) / 1_000_000;
+    this.data = this._cameraPixels;
+    this.pixels = this._cameraPixels;
+    this._cameraSequence = Number(frame.sequence || this._cameraSequence + 1);
+    this._presentedFrames += 1;
+    this._lastDeliveredAt = now;
+    this.readyState = this.HAVE_ENOUGH_DATA;
+    if (firstFrame) {
+      this.dispatchEvent(new Event("loadedmetadata"));
+      this.dispatchEvent(new Event("loadeddata"));
+      this.dispatchEvent(new Event("canplay"));
+      this.dispatchEvent(new Event("canplaythrough"));
+    }
+    this.dispatchEvent(new Event("timeupdate"));
+    return true;
+  }
+  requestVideoFrameCallback(callback) {
+    if (typeof callback !== "function") throw new TypeError("requestVideoFrameCallback expects a function");
+    const id = this._nextVideoFrameCallback++;
+    const poll = now => {
+      const record = this._videoFrameCallbacks.get(id);
+      if (!record) return;
+      if (!this._cameraTrack || this._cameraTrack.readyState !== "live") {
+        this._videoFrameCallbacks.delete(id);
+        if (this._cameraTrack?.readyState === "ended") this.ended = true;
+        return;
+      }
+      if (this.paused) {
+        record.animationFrame = requestAnimationFrame(poll);
+        return;
+      }
+      // Every callback registered before a presented frame observes that same
+      // frame. Only the first poll needs to copy it from native; later polls in
+      // this RAF batch see the incremented counter instead of consuming the
+      // following camera sequence.
+      if (this._presentedFrames <= record.afterPresentedFrames &&
+          !this._acquireCameraFrame()) {
+        record.animationFrame = requestAnimationFrame(poll);
+        return;
+      }
+      if (this._presentedFrames <= record.afterPresentedFrames) {
+        record.animationFrame = requestAnimationFrame(poll);
+        return;
+      }
+      this._videoFrameCallbacks.delete(id);
+      callback(now, {
+        presentationTime: now,
+        expectedDisplayTime: now,
+        width: this.videoWidth,
+        height: this.videoHeight,
+        mediaTime: this.currentTime,
+        presentedFrames: this._presentedFrames,
+        processingDuration: 0,
+      });
+    };
+    const record = {
+      afterPresentedFrames: this._presentedFrames,
+      animationFrame: requestAnimationFrame(poll),
+    };
+    this._videoFrameCallbacks.set(id, record);
+    return id;
+  }
+  cancelVideoFrameCallback(id) {
+    const record = this._videoFrameCallbacks.get(Number(id));
+    if (!record) return;
+    cancelAnimationFrame(record.animationFrame);
+    this._videoFrameCallbacks.delete(Number(id));
+  }
+  __threeBrowserExternalFrame() {
+    this._acquireCameraFrame();
+    if (!this._cameraPixels || !this.videoWidth || !this.videoHeight) return null;
+    return {
+      width: this.videoWidth,
+      height: this.videoHeight,
+      data: this._cameraPixels,
+      sequence: this._cameraSequence,
+      timestampUs: Math.round(this.currentTime * 1_000_000),
+    };
   }
   canPlayType(type) {
     return /^(?:video\/(?:mp4|ogg|webm)|application\/ogg)/i.test(String(type)) ? "probably" : "";
+  }
+}
+
+const mediaReadyStateConstants = Object.freeze({
+  HAVE_NOTHING: 0,
+  HAVE_METADATA: 1,
+  HAVE_CURRENT_DATA: 2,
+  HAVE_FUTURE_DATA: 3,
+  HAVE_ENOUGH_DATA: 4,
+});
+Object.assign(AudioElement, mediaReadyStateConstants);
+Object.assign(AudioElement.prototype, mediaReadyStateConstants);
+Object.assign(VideoElement, mediaReadyStateConstants);
+
+class VideoFrame {
+  constructor(source, init = {}) {
+    const frame = typeof source?.__threeBrowserExternalFrame === "function"
+      ? source.__threeBrowserExternalFrame()
+      : source;
+    const width = Number(frame?.displayWidth ?? frame?.codedWidth ?? frame?.videoWidth ?? frame?.width ?? 0);
+    const height = Number(frame?.displayHeight ?? frame?.codedHeight ?? frame?.videoHeight ?? frame?.height ?? 0);
+    const pixels = frame?.data ?? frame?.pixels;
+    const byteLength = width * height * 4;
+    if (!Number.isInteger(width) || !Number.isInteger(height) ||
+        !(width > 0 && height > 0) || !Number.isSafeInteger(byteLength) ||
+        !ArrayBuffer.isView(pixels) || pixels.BYTES_PER_ELEMENT !== 1 ||
+        pixels.byteLength < byteLength) {
+      throw new TypeError("ThreeBrowser VideoFrame requires an RGBA ImageBitmap or live video frame");
+    }
+    this.codedWidth = this.displayWidth = width;
+    this.codedHeight = this.displayHeight = height;
+    this.visibleRect = Object.freeze({ x: 0, y: 0, width, height });
+    this.timestamp = Number(init.timestamp ?? frame?.timestampUs ?? 0);
+    this.duration = init.duration == null ? null : Number(init.duration);
+    this.format = "RGBA";
+    // VideoElement reuses its camera destination array. A VideoFrame is a
+    // stable snapshot and must not mutate when the next camera sample arrives.
+    this.data = new Uint8ClampedArray(byteLength);
+    this.data.set(new Uint8Array(pixels.buffer, pixels.byteOffset, byteLength));
+    this.pixels = this.data;
+    this._sourceKey = source?._sourceKey ?? source;
+    this._sequence = Number(frame?.sequence ?? 1);
+    this._closed = false;
+  }
+  allocationSize() { return this.codedWidth * this.codedHeight * 4; }
+  clone() {
+    if (this._closed) throw new DOMException("VideoFrame is closed", "InvalidStateError");
+    return new VideoFrame(this, { timestamp: this.timestamp, duration: this.duration });
+  }
+  close() {
+    this._closed = true;
+    this.data = null;
+    this.pixels = null;
+  }
+  __threeBrowserExternalFrame() {
+    if (this._closed) throw new DOMException("VideoFrame is closed", "InvalidStateError");
+    return {
+      width: this.displayWidth,
+      height: this.displayHeight,
+      data: this.data,
+      sequence: this._sequence,
+      timestampUs: this.timestamp,
+      cacheKey: this._sourceKey,
+    };
   }
 }
 
@@ -1130,6 +1585,7 @@ globalThis.history = {
   },
   back() {}, forward() {}, go() {},
 };
+const mediaDevices = new MediaDevices();
 Object.defineProperty(globalThis, "navigator", {
   value: {
     // Sites commonly use Chromium User-Agent Client Hints as their desktop
@@ -1169,6 +1625,7 @@ Object.defineProperty(globalThis, "navigator", {
     onLine: false,
     cookieEnabled: false,
     getGamepads: () => [],
+    mediaDevices,
   },
   configurable: true,
 });
@@ -1212,6 +1669,12 @@ globalThis.HTMLMediaElement = AudioElement;
 globalThis.HTMLAudioElement = AudioElement;
 globalThis.Audio = AudioElement;
 globalThis.HTMLVideoElement = VideoElement;
+globalThis.MediaDeviceInfo = MediaDeviceInfo;
+globalThis.MediaDevices = MediaDevices;
+globalThis.MediaStream = MediaStream;
+globalThis.MediaStreamTrack = MediaStreamTrack;
+globalThis.OverconstrainedError = OverconstrainedError;
+globalThis.VideoFrame = VideoFrame;
 document.defaultView = globalThis;
 globalThis.createImageBitmap = async source => {
   const bytes = source instanceof Blob ? Buffer.from(await source.arrayBuffer()) : Buffer.from(source);
@@ -2270,6 +2733,7 @@ export function start() {
 }
 
 export function stop() {
+  for (const track of [...activeCameraTracks]) track.stop();
   if (!running && !native.isOpen()) return;
   running = false;
   frameCallbacks.clear();
@@ -2370,4 +2834,7 @@ export async function loadEntry(entryPath) {
 }
 
 process.once("SIGINT", () => { stop(); process.exit(0); });
-process.once("exit", () => { if (native.isOpen()) native.shutdown(); });
+process.once("exit", () => {
+  for (const track of [...activeCameraTracks]) track.stop();
+  if (native.isOpen()) native.shutdown();
+});

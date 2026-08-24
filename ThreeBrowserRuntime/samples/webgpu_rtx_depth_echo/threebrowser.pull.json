@@ -1,0 +1,30 @@
+{
+  "format": 2,
+  "projectId": "d37e9c21a64b508f",
+  "virtualURL": "https://d37e9c21a64b508f.runtime.threebrowser.local/",
+  "source": "https://webgpu-rtx-depth-echo.runtime.threebrowser.local/",
+  "pulledAt": "2026-08-25T00:00:00.000Z",
+  "entry": "site-entry.mjs",
+  "requiresWebGPU": true,
+  "html": "index.html",
+  "files": [
+    { "url": "https://webgpu-rtx-depth-echo.runtime.threebrowser.local/", "path": "index.html", "type": "html", "bytes": 0 },
+    { "url": "https://webgpu-rtx-depth-echo.runtime.threebrowser.local/site-entry.mjs", "path": "site-entry.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-depth-echo.runtime.threebrowser.local/src/relief-estimator.mjs", "path": "src/relief-estimator.mjs", "type": "module", "bytes": 0 }
+  ],
+  "compatibility": {
+    "threeImportable": true,
+    "bundledThree": false,
+    "rendererCandidates": ["webgpu"],
+    "canvasOnly": true,
+    "htmlOverlay": false,
+    "domRequired": false,
+    "notes": [
+      "Native WebGPU/TSL sample with an RTX ray-lighting enhancement and a truthful raster fallback.",
+      "Relief is a project-owned luminance, edge and center-prior heuristic; it is not neural inference or metric depth.",
+      "Camera permission is requested only after C is pressed or ?live=1 is supplied; staged procedural RGBA is the default.",
+      "Current relief and four frozen temporal echo sheets share one fixed-topology dynamic BLAS.",
+      "No model weights, third-party inference library, downloaded asset, font, style sheet or HTML UI is used."
+    ]
+  }
+}

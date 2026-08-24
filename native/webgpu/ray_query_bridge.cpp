@@ -30,6 +30,7 @@ namespace {
 
 struct VulkanFunctions {
     PFN_vkGetPhysicalDeviceFeatures2 getPhysicalDeviceFeatures2{};
+    PFN_vkGetPhysicalDeviceProperties2 getPhysicalDeviceProperties2{};
     PFN_vkGetPhysicalDeviceMemoryProperties getPhysicalDeviceMemoryProperties{};
     PFN_vkCreateBuffer createBuffer{};
     PFN_vkDestroyBuffer destroyBuffer{};
@@ -65,6 +66,7 @@ struct VulkanFunctions {
     PFN_vkCreateImageView createImageView{};
     PFN_vkDestroyImageView destroyImageView{};
     PFN_vkCmdCopyBuffer cmdCopyBuffer{};
+    PFN_vkCmdCopyImageToBuffer cmdCopyImageToBuffer{};
     PFN_vkCmdUpdateBuffer cmdUpdateBuffer{};
     PFN_vkCmdPipelineBarrier cmdPipelineBarrier{};
     PFN_vkCmdBindPipeline cmdBindPipeline{};
@@ -181,6 +183,7 @@ struct State {
     VkDevice device{VK_NULL_HANDLE};
     VkQueue queue{VK_NULL_HANDLE};
     uint32_t queueFamily{};
+    VkDeviceSize accelerationStructureScratchAlignment{1u};
     VulkanFunctions vk{};
     bool attached{};
     bool webgpuFeatureEnabled{};
@@ -224,6 +227,28 @@ struct State {
     std::vector<InstanceGroup> instanceGroups;
     std::vector<VkAccelerationStructureInstanceKHR> instanceRecords;
     uint32_t tlasInstanceCount{};
+    // Static scene commits reserve one masked TLAS slot for a single
+    // texture-driven deformable mesh. Its BLAS address remains stable across
+    // refits, so TLAS updates are only needed on attach/detach.
+    Buffer dynamicVertices{};
+    Buffer dynamicIndices{};
+    Buffer dynamicBlasScratch{};
+    AccelerationStructure dynamicBlas{};
+    uint32_t dynamicInstanceIndex{};
+    uint32_t dynamicMeshHandle{};
+    uint32_t dynamicVertexCount{};
+    uint32_t dynamicIndexCount{};
+    uint32_t dynamicTextureWidth{};
+    uint32_t dynamicTextureHeight{};
+    uint32_t baseTriangleCount{};
+    bool dynamicSlotReserved{};
+    bool dynamicMeshActive{};
+    uint64_t dynamicRefitCount{};
+    uint64_t dynamicRebuildCount{};
+    // wgpu owns these images, but raw Vulkan position copies may still be in
+    // flight when JS destroys their GPUTexture. Remember every image borrowed
+    // since the last device-idle point so releaseSlot can retire it safely.
+    std::vector<VkImage> dynamicSourceImages;
     bool sceneReady{};
     uint32_t triangleCount{};
     uint64_t buildCount{};
@@ -260,6 +285,8 @@ bool loadFunctions() {
     auto& f = g.vk;
     f.getPhysicalDeviceFeatures2 = loadInstanceProc<PFN_vkGetPhysicalDeviceFeatures2>(
         getInstanceProc, g.instance, "vkGetPhysicalDeviceFeatures2");
+    f.getPhysicalDeviceProperties2 = loadInstanceProc<PFN_vkGetPhysicalDeviceProperties2>(
+        getInstanceProc, g.instance, "vkGetPhysicalDeviceProperties2");
     f.getPhysicalDeviceMemoryProperties =
         loadInstanceProc<PFN_vkGetPhysicalDeviceMemoryProperties>(
             getInstanceProc, g.instance, "vkGetPhysicalDeviceMemoryProperties");
@@ -299,6 +326,7 @@ bool loadFunctions() {
     LOAD_DEVICE(createImageView, vkCreateImageView);
     LOAD_DEVICE(destroyImageView, vkDestroyImageView);
     LOAD_DEVICE(cmdCopyBuffer, vkCmdCopyBuffer);
+    LOAD_DEVICE(cmdCopyImageToBuffer, vkCmdCopyImageToBuffer);
     LOAD_DEVICE(cmdUpdateBuffer, vkCmdUpdateBuffer);
     LOAD_DEVICE(cmdPipelineBarrier, vkCmdPipelineBarrier);
     LOAD_DEVICE(cmdBindPipeline, vkCmdBindPipeline);
@@ -308,7 +336,8 @@ bool loadFunctions() {
     LOAD_DEVICE(deviceWaitIdle, vkDeviceWaitIdle);
 #undef LOAD_DEVICE
 
-    return f.getPhysicalDeviceFeatures2 && f.getPhysicalDeviceMemoryProperties &&
+    return f.getPhysicalDeviceFeatures2 && f.getPhysicalDeviceProperties2 &&
+           f.getPhysicalDeviceMemoryProperties &&
            f.createBuffer && f.destroyBuffer && f.getBufferMemoryRequirements &&
            f.allocateMemory && f.freeMemory && f.bindBufferMemory && f.mapMemory &&
            f.unmapMemory && f.flushMappedMemoryRanges && f.getBufferDeviceAddress &&
@@ -322,6 +351,7 @@ bool loadFunctions() {
            f.destroyPipelineLayout && f.destroyShaderModule && f.destroyPipeline &&
            f.createSampler && f.destroySampler && f.createImageView &&
            f.destroyImageView && f.cmdCopyBuffer && f.cmdUpdateBuffer &&
+           f.cmdCopyImageToBuffer &&
            f.cmdPipelineBarrier &&
            f.cmdBindPipeline && f.cmdBindDescriptorSets && f.cmdPushConstants &&
            f.cmdDispatch && f.deviceWaitIdle;
@@ -490,6 +520,20 @@ bool createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
     return true;
 }
 
+VkDeviceSize scratchAllocationSize(VkDeviceSize requiredSize) {
+    const VkDeviceSize alignment =
+        std::max<VkDeviceSize>(1u, g.accelerationStructureScratchAlignment);
+    return requiredSize + alignment - 1u;
+}
+
+VkDeviceAddress alignedScratchAddress(const Buffer& buffer) {
+    const VkDeviceAddress alignment = static_cast<VkDeviceAddress>(
+        std::max<VkDeviceSize>(1u, g.accelerationStructureScratchAlignment));
+    const VkDeviceAddress remainder = buffer.address % alignment;
+    return remainder == 0u ? buffer.address
+                           : buffer.address + (alignment - remainder);
+}
+
 bool uploadBuffer(Buffer& buffer, const void* data, VkDeviceSize bytes) {
     if (!buffer.memory || !data ||
         (buffer.memoryProperties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) == 0u ||
@@ -639,14 +683,32 @@ bool createAccelerationStructure(VkAccelerationStructureTypeKHR type,
     return true;
 }
 
+void destroyDynamicTriangleMeshResources() {
+    destroyAccelerationStructure(g.dynamicBlas);
+    destroyBuffer(g.dynamicBlasScratch);
+    destroyBuffer(g.dynamicIndices);
+    destroyBuffer(g.dynamicVertices);
+    g.dynamicMeshHandle = 0u;
+    g.dynamicVertexCount = 0u;
+    g.dynamicIndexCount = 0u;
+    g.dynamicTextureWidth = 0u;
+    g.dynamicTextureHeight = 0u;
+    g.dynamicMeshActive = false;
+}
+
 void destroySceneResources(bool wait) {
     if (!g.device) return;
     if (wait && g.vk.deviceWaitIdle) g.vk.deviceWaitIdle(g.device);
+    // Every raw copy that borrowed one of these images is complete after the
+    // idle path. The wait=false callers are construction-failure/shutdown
+    // cleanup paths with no outstanding dynamic copy recording.
+    g.dynamicSourceImages.clear();
     // Every cached set contains the TLAS handle. It must not survive a scene
     // rebuild, even when the borrowed color/depth images are unchanged.
     resetDescriptorCache();
     resetReflectionDescriptorCache();
     destroyAccelerationStructure(g.tlas);
+    destroyDynamicTriangleMeshResources();
     for (auto& group : g.instanceGroups) {
         destroyAccelerationStructure(group.blas);
         destroyBuffer(group.blasScratch);
@@ -654,6 +716,11 @@ void destroySceneResources(bool wait) {
     g.instanceGroups.clear();
     g.instanceRecords.clear();
     g.tlasInstanceCount = 0u;
+    g.dynamicInstanceIndex = 0u;
+    g.dynamicSlotReserved = false;
+    g.baseTriangleCount = 0u;
+    g.dynamicRefitCount = 0u;
+    g.dynamicRebuildCount = 0u;
     destroyAccelerationStructure(g.blas);
     destroyBuffer(g.tlasScratch);
     destroyBuffer(g.instances);
@@ -1286,6 +1353,14 @@ bool rayQueryBridgeAttachVulkan(const RayQueryVulkanContext& context) {
     VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
     features.pNext = &accelerationStructure;
     g.vk.getPhysicalDeviceFeatures2(g.physicalDevice, &features);
+    VkPhysicalDeviceAccelerationStructurePropertiesKHR accelerationProperties{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR};
+    VkPhysicalDeviceProperties2 properties{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+    properties.pNext = &accelerationProperties;
+    g.vk.getPhysicalDeviceProperties2(g.physicalDevice, &properties);
+    g.accelerationStructureScratchAlignment = std::max<VkDeviceSize>(
+        1u, accelerationProperties.minAccelerationStructureScratchOffsetAlignment);
     g.accelerationStructureSupported = accelerationStructure.accelerationStructure == VK_TRUE;
     g.rayQuerySupported = rayQuery.rayQuery == VK_TRUE;
     if (!g.webgpuFeatureEnabled || !g.accelerationStructureSupported ||
@@ -1693,7 +1768,7 @@ bool rayQueryBridgeCommit(void* commandBufferValue) {
         if (!createAccelerationStructure(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
                                          sizes.accelerationStructureSize,
                                          accelerationStructure) ||
-            !createBuffer(sizes.buildScratchSize,
+            !createBuffer(scratchAllocationSize(sizes.buildScratchSize),
                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                               VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -1701,7 +1776,7 @@ bool rayQueryBridgeCommit(void* commandBufferValue) {
             return false;
         }
         build.dstAccelerationStructure = accelerationStructure.handle;
-        build.scratchData.deviceAddress = scratch.address;
+        build.scratchData.deviceAddress = alignedScratchAddress(scratch);
         VkAccelerationStructureDeviceAddressInfoKHR addressInfo{
             VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
         addressInfo.accelerationStructure = accelerationStructure.handle;
@@ -1730,7 +1805,10 @@ bool rayQueryBridgeCommit(void* commandBufferValue) {
         }
     }
 
-    uint32_t totalInstanceCount = 1u;
+    // Keep one fixed masked slot at the end of every scene TLAS. A later
+    // dynamic-mesh create can attach its BLAS with an in-place TLAS update;
+    // existing descriptor sets keep the same TLAS handle.
+    uint32_t totalInstanceCount = 2u;
     for (const PendingInstanceGroup& group : g.pendingInstanceGroups) {
         if (group.capacity > std::numeric_limits<uint32_t>::max() - totalInstanceCount) {
             fail("Dynamic instance-group capacity overflowed the TLAS");
@@ -1762,6 +1840,19 @@ bool rayQueryBridgeCommit(void* commandBufferValue) {
         }
         nextInstance += group.descriptor.capacity;
     }
+    g.dynamicInstanceIndex = nextInstance;
+    g.dynamicSlotReserved = true;
+    auto& dynamicInstance = g.instanceRecords[g.dynamicInstanceIndex];
+    dynamicInstance.transform.matrix[0][0] = 1.0f;
+    dynamicInstance.transform.matrix[1][1] = 1.0f;
+    dynamicInstance.transform.matrix[2][2] = 1.0f;
+    dynamicInstance.instanceCustomIndex = primitiveCount & 0x00ffffffu;
+    dynamicInstance.mask = 0u;
+    dynamicInstance.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+    // Masked instances still carry a valid AS address for validation and
+    // vendor portability. The reference is replaced when a dynamic mesh is
+    // attached.
+    dynamicInstance.accelerationStructureReference = g.blas.address;
     if (!createImmutableSceneBuffer(
             static_cast<VkDeviceSize>(g.instanceRecords.size()) *
                 sizeof(VkAccelerationStructureInstanceKHR),
@@ -1793,8 +1884,9 @@ bool rayQueryBridgeCommit(void* commandBufferValue) {
         &tlasBuild, &instanceCount, &tlasSizes);
     if (!createAccelerationStructure(VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
                                      tlasSizes.accelerationStructureSize, g.tlas) ||
-        !createBuffer(std::max(tlasSizes.buildScratchSize,
-                               tlasSizes.updateScratchSize),
+        !createBuffer(scratchAllocationSize(std::max(
+                          tlasSizes.buildScratchSize,
+                          tlasSizes.updateScratchSize)),
                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                       VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -1804,7 +1896,7 @@ bool rayQueryBridgeCommit(void* commandBufferValue) {
         return false;
     }
     tlasBuild.dstAccelerationStructure = g.tlas.handle;
-    tlasBuild.scratchData.deviceAddress = g.tlasScratch.address;
+    tlasBuild.scratchData.deviceAddress = alignedScratchAddress(g.tlasScratch);
     VkAccelerationStructureDeviceAddressInfoKHR tlasAddressInfo{
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
     tlasAddressInfo.accelerationStructure = g.tlas.handle;
@@ -1856,6 +1948,7 @@ bool rayQueryBridgeCommit(void* commandBufferValue) {
                             0, 1, &buildBarrier, 0, nullptr, 0, nullptr);
     g.sceneReady = true;
     g.triangleCount = primitiveCount;
+    g.baseTriangleCount = primitiveCount;
     g.tlasInstanceCount = instanceCount;
     ++g.buildCount;
     g.status = g.sceneReady
@@ -1870,6 +1963,411 @@ bool rayQueryBridgeCommit(void* commandBufferValue) {
     g.pendingStaticLights.clear();
     g.pendingInstanceGroups.clear();
     return g.sceneReady;
+}
+
+namespace {
+
+constexpr VkBuildAccelerationStructureFlagsKHR kDynamicBlasFlags =
+    VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+    VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+
+void configureDynamicBlasBuild(
+    VkAccelerationStructureGeometryKHR& geometry,
+    VkAccelerationStructureBuildGeometryInfoKHR& build,
+    VkBuildAccelerationStructureModeKHR mode) {
+    VkAccelerationStructureGeometryTrianglesDataKHR triangles{
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR};
+    triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+    triangles.vertexData.deviceAddress = g.dynamicVertices.address;
+    // rgba32float texture copies are tightly packed at 16 bytes per texel. The
+    // BLAS consumes xyz and intentionally skips w.
+    triangles.vertexStride = 4u * sizeof(float);
+    triangles.maxVertex = g.dynamicVertexCount - 1u;
+    triangles.indexType = VK_INDEX_TYPE_UINT32;
+    triangles.indexData.deviceAddress = g.dynamicIndices.address;
+    geometry = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+    geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+    geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+    geometry.geometry.triangles = triangles;
+    build = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+    build.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+    build.flags = kDynamicBlasFlags;
+    build.mode = mode;
+    build.srcAccelerationStructure = mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR
+        ? g.dynamicBlas.handle
+        : VK_NULL_HANDLE;
+    build.dstAccelerationStructure = g.dynamicBlas.handle;
+    build.geometryCount = 1u;
+    build.pGeometries = &geometry;
+    build.scratchData.deviceAddress = alignedScratchAddress(g.dynamicBlasScratch);
+}
+
+void recordDynamicPositionCopy(
+    VkCommandBuffer commandBuffer,
+    const RayQueryDynamicTriangleMeshFrame& frame) {
+    const auto image = static_cast<VkImage>(frame.positionsImage);
+    if (std::find(g.dynamicSourceImages.begin(), g.dynamicSourceImages.end(), image) ==
+        g.dynamicSourceImages.end()) {
+        g.dynamicSourceImages.push_back(image);
+    }
+    const auto originalLayout = static_cast<VkImageLayout>(frame.positionsLayout);
+    imageBarrier(commandBuffer, image, VK_IMAGE_ASPECT_COLOR_BIT,
+                 originalLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                 VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+                 VK_ACCESS_TRANSFER_READ_BIT,
+                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                 VK_PIPELINE_STAGE_TRANSFER_BIT);
+    VkBufferImageCopy copy{};
+    copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    copy.imageSubresource.layerCount = 1u;
+    copy.imageExtent = {frame.width, frame.height, 1u};
+    g.vk.cmdCopyImageToBuffer(commandBuffer, image,
+                              VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                              g.dynamicVertices.buffer, 1u, &copy);
+    // The bridge borrows this image. Restore exactly the caller-supplied
+    // layout before subsequent WebGPU commands see it again.
+    imageBarrier(commandBuffer, image, VK_IMAGE_ASPECT_COLOR_BIT,
+                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, originalLayout,
+                 VK_ACCESS_TRANSFER_READ_BIT,
+                 VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+}
+
+void recordBufferForAccelerationStructure(
+    VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize size) {
+    VkBufferMemoryBarrier barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+    // Immutable index uploads may map device-local host-visible memory on UMA,
+    // while texture-driven vertices always arrive through transfer. Cover both
+    // legal producer paths with one explicit dependency.
+    barrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT |
+                            VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.buffer = buffer;
+    barrier.offset = 0u;
+    barrier.size = size;
+    g.vk.cmdPipelineBarrier(commandBuffer,
+                            VK_PIPELINE_STAGE_HOST_BIT |
+                                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                            0u, 0u, nullptr, 1u, &barrier, 0u, nullptr);
+}
+
+void recordAccelerationStructureBarrier(
+    VkCommandBuffer commandBuffer, VkPipelineStageFlags destinationStage) {
+    VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    barrier.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+    // Traversal consumes acceleration-structure memory through the dedicated
+    // AS-read access type. Keeping this mask AS-specific also makes the helper
+    // valid when the destination is another AS build (BLAS -> TLAS).
+    barrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+    g.vk.cmdPipelineBarrier(
+        commandBuffer, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+        destinationStage, 0u, 1u, &barrier, 0u, nullptr, 0u, nullptr);
+}
+
+void recordAccelerationStructureForUpdate(VkCommandBuffer commandBuffer) {
+    VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    // The same BLAS/TLAS may have been traversed by a ray-query dispatch in an
+    // earlier command buffer on this queue. Make that read complete before an
+    // in-place UPDATE (or a BUILD into the same AS storage) begins. Including
+    // AS-build writes also covers multiple native AS operations recorded in
+    // one WebGPU encoder.
+    barrier.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                            VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+    barrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                            VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+    g.vk.cmdPipelineBarrier(
+        commandBuffer,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+        VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+        0u, 1u, &barrier, 0u, nullptr, 0u, nullptr);
+}
+
+void recordTlasUpdate(VkCommandBuffer commandBuffer) {
+    VkAccelerationStructureGeometryInstancesDataKHR instancesData{
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR};
+    instancesData.data.deviceAddress = g.instances.address;
+    VkAccelerationStructureGeometryKHR geometry{
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+    geometry.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+    geometry.geometry.instances = instancesData;
+    VkAccelerationStructureBuildGeometryInfoKHR build{
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+    build.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+    build.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                  VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+    build.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
+    build.srcAccelerationStructure = g.tlas.handle;
+    build.dstAccelerationStructure = g.tlas.handle;
+    build.geometryCount = 1u;
+    build.pGeometries = &geometry;
+    build.scratchData.deviceAddress = alignedScratchAddress(g.tlasScratch);
+    VkAccelerationStructureBuildRangeInfoKHR range{};
+    range.primitiveCount = g.tlasInstanceCount;
+    const VkAccelerationStructureBuildRangeInfoKHR* rangePointer = &range;
+    g.vk.cmdBuildAccelerationStructures(commandBuffer, 1u, &build, &rangePointer);
+}
+
+bool validDynamicFrame(const RayQueryDynamicTriangleMeshFrame& frame) {
+    return frame.commandBuffer && frame.positionsImage &&
+           frame.positionsLayout != VK_IMAGE_LAYOUT_UNDEFINED &&
+           frame.handle != 0u && frame.width != 0u && frame.height != 0u &&
+           frame.vertexCount != 0u &&
+           static_cast<uint64_t>(frame.width) * frame.height >= frame.vertexCount;
+}
+
+} // namespace
+
+bool rayQueryBridgeCreateDynamicTriangleMesh(
+    const RayQueryDynamicTriangleMeshFrame& frame,
+    const uint32_t* indices, std::size_t indexCount) {
+    std::scoped_lock lock(g.mutex);
+    if (!g.attached || !g.sceneReady || !g.dynamicSlotReserved ||
+        !validDynamicFrame(frame) || !indices || indexCount == 0u ||
+        indexCount > std::numeric_limits<uint32_t>::max() ||
+        indexCount % 3u != 0u || g.dynamicMeshActive) {
+        fail("Dynamic triangle-mesh creation requires a ready scene, rgba32f position image and complete fixed topology");
+        return false;
+    }
+    for (std::size_t offset = 0u; offset < indexCount; ++offset) {
+        if (indices[offset] >= frame.vertexCount) {
+            fail("Dynamic triangle-mesh topology contains an out-of-range vertex index");
+            return false;
+        }
+    }
+    const uint64_t dynamicTriangleCount = indexCount / 3u;
+    if (dynamicTriangleCount > std::numeric_limits<uint32_t>::max() -
+                                   static_cast<uint64_t>(g.baseTriangleCount)) {
+        fail("Dynamic triangle-mesh primitive count overflows scene diagnostics");
+        return false;
+    }
+
+    // A previously detached mesh is no longer referenced after its destroy
+    // submission. Wait for that submission before recycling native storage.
+    if (g.dynamicBlas.handle || g.dynamicVertices.buffer ||
+        g.dynamicIndices.buffer || g.dynamicBlasScratch.buffer) {
+        if (g.vk.deviceWaitIdle) g.vk.deviceWaitIdle(g.device);
+        destroyDynamicTriangleMeshResources();
+        // All static/dynamic upload copies are complete after the idle wait;
+        // avoid retaining staging buffers across repeated detach/recreate
+        // cycles.
+        for (auto& staging : g.sceneUploadStaging) destroyBuffer(staging);
+        g.sceneUploadStaging.clear();
+    }
+    g.dynamicMeshHandle = frame.handle;
+    g.dynamicVertexCount = frame.vertexCount;
+    g.dynamicIndexCount = static_cast<uint32_t>(indexCount);
+    g.dynamicTextureWidth = frame.width;
+    g.dynamicTextureHeight = frame.height;
+
+    const VkBufferUsageFlags geometryUsage =
+        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    const VkDeviceSize positionBytes =
+        static_cast<VkDeviceSize>(frame.width) * frame.height * 4u * sizeof(float);
+    std::vector<PendingBufferCopy> pendingCopies;
+    const std::size_t stagingStart = g.sceneUploadStaging.size();
+    if (!createBuffer(positionBytes,
+                      geometryUsage | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                      g.dynamicVertices) ||
+        !createImmutableSceneBuffer(
+            static_cast<VkDeviceSize>(indexCount) * sizeof(uint32_t),
+            geometryUsage, indices, g.dynamicIndices, pendingCopies)) {
+        destroyDynamicTriangleMeshResources();
+        while (g.sceneUploadStaging.size() > stagingStart) {
+            destroyBuffer(g.sceneUploadStaging.back());
+            g.sceneUploadStaging.pop_back();
+        }
+        return false;
+    }
+
+    VkAccelerationStructureGeometryKHR geometry{};
+    VkAccelerationStructureBuildGeometryInfoKHR build{};
+    configureDynamicBlasBuild(geometry, build,
+                              VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR);
+    const uint32_t primitiveCount = static_cast<uint32_t>(indexCount / 3u);
+    VkAccelerationStructureBuildSizesInfoKHR sizes{
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+    g.vk.getAccelerationStructureBuildSizes(
+        g.device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+        &build, &primitiveCount, &sizes);
+    if (!createAccelerationStructure(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
+                                     sizes.accelerationStructureSize,
+                                     g.dynamicBlas) ||
+        !createBuffer(scratchAllocationSize(
+                          std::max(sizes.buildScratchSize, sizes.updateScratchSize)),
+                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                          VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                      g.dynamicBlasScratch)) {
+        destroyDynamicTriangleMeshResources();
+        while (g.sceneUploadStaging.size() > stagingStart) {
+            destroyBuffer(g.sceneUploadStaging.back());
+            g.sceneUploadStaging.pop_back();
+        }
+        return false;
+    }
+    VkAccelerationStructureDeviceAddressInfoKHR addressInfo{
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
+    addressInfo.accelerationStructure = g.dynamicBlas.handle;
+    g.dynamicBlas.address =
+        g.vk.getAccelerationStructureDeviceAddress(g.device, &addressInfo);
+    if (!g.dynamicBlas.address) {
+        fail("Vulkan returned no device address for the dynamic triangle-mesh BLAS");
+        destroyDynamicTriangleMeshResources();
+        while (g.sceneUploadStaging.size() > stagingStart) {
+            destroyBuffer(g.sceneUploadStaging.back());
+            g.sceneUploadStaging.pop_back();
+        }
+        return false;
+    }
+
+    // Rebind handles filled after the size query and AS allocation.
+    configureDynamicBlasBuild(geometry, build,
+                              VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR);
+    VkAccelerationStructureBuildRangeInfoKHR range{};
+    range.primitiveCount = primitiveCount;
+    const VkAccelerationStructureBuildRangeInfoKHR* rangePointer = &range;
+    const auto commandBuffer = static_cast<VkCommandBuffer>(frame.commandBuffer);
+    for (const PendingBufferCopy& copy : pendingCopies) {
+        VkBufferCopy region{};
+        region.size = copy.size;
+        g.vk.cmdCopyBuffer(commandBuffer, copy.source, copy.destination, 1u, &region);
+    }
+    recordDynamicPositionCopy(commandBuffer, frame);
+    recordBufferForAccelerationStructure(commandBuffer,
+                                         g.dynamicVertices.buffer,
+                                         g.dynamicVertices.size);
+    recordBufferForAccelerationStructure(commandBuffer,
+                                         g.dynamicIndices.buffer,
+                                         g.dynamicIndices.size);
+    recordAccelerationStructureForUpdate(commandBuffer);
+    g.vk.cmdBuildAccelerationStructures(commandBuffer, 1u, &build, &rangePointer);
+    recordAccelerationStructureBarrier(
+        commandBuffer, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR);
+
+    auto instance = g.instanceRecords[g.dynamicInstanceIndex];
+    instance.instanceCustomIndex = g.baseTriangleCount & 0x00ffffffu;
+    instance.mask = 0xffu;
+    instance.accelerationStructureReference = g.dynamicBlas.address;
+    const VkDeviceSize instanceOffset =
+        static_cast<VkDeviceSize>(g.dynamicInstanceIndex) *
+        sizeof(VkAccelerationStructureInstanceKHR);
+    g.vk.cmdUpdateBuffer(commandBuffer, g.instances.buffer, instanceOffset,
+                         sizeof(instance), &instance);
+    VkBufferMemoryBarrier instanceBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+    instanceBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    instanceBarrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+    instanceBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    instanceBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    instanceBarrier.buffer = g.instances.buffer;
+    instanceBarrier.offset = instanceOffset;
+    instanceBarrier.size = sizeof(instance);
+    g.vk.cmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                            0u, 0u, nullptr, 1u, &instanceBarrier, 0u, nullptr);
+    recordTlasUpdate(commandBuffer);
+    recordAccelerationStructureBarrier(commandBuffer,
+                                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+
+    g.instanceRecords[g.dynamicInstanceIndex] = instance;
+    g.dynamicMeshActive = true;
+    g.triangleCount = g.baseTriangleCount + primitiveCount;
+    ++g.buildCount;
+    ++g.dynamicRebuildCount;
+    g.status = "GPU texture copied and update-capable dynamic BLAS attached to the active TLAS";
+    return true;
+}
+
+bool rayQueryBridgeRefitDynamicTriangleMesh(
+    const RayQueryDynamicTriangleMeshFrame& frame) {
+    std::scoped_lock lock(g.mutex);
+    if (!g.attached || !g.sceneReady || !g.dynamicMeshActive ||
+        !validDynamicFrame(frame) || frame.handle != g.dynamicMeshHandle ||
+        frame.vertexCount != g.dynamicVertexCount ||
+        frame.width != g.dynamicTextureWidth ||
+        frame.height != g.dynamicTextureHeight ||
+        !g.dynamicBlas.handle || !g.dynamicBlasScratch.address) {
+        fail("Dynamic triangle-mesh refit must match the active mesh handle, texture extent and fixed vertex count");
+        return false;
+    }
+    const bool rebuild = (frame.flags & 1u) != 0u;
+    VkAccelerationStructureGeometryKHR geometry{};
+    VkAccelerationStructureBuildGeometryInfoKHR build{};
+    configureDynamicBlasBuild(
+        geometry, build, rebuild
+            ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR
+            : VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR);
+    VkAccelerationStructureBuildRangeInfoKHR range{};
+    range.primitiveCount = g.dynamicIndexCount / 3u;
+    const VkAccelerationStructureBuildRangeInfoKHR* rangePointer = &range;
+    const auto commandBuffer = static_cast<VkCommandBuffer>(frame.commandBuffer);
+    recordDynamicPositionCopy(commandBuffer, frame);
+    recordBufferForAccelerationStructure(commandBuffer,
+                                         g.dynamicVertices.buffer,
+                                         g.dynamicVertices.size);
+    recordAccelerationStructureForUpdate(commandBuffer);
+    g.vk.cmdBuildAccelerationStructures(commandBuffer, 1u, &build, &rangePointer);
+    recordAccelerationStructureBarrier(commandBuffer,
+                                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    ++g.buildCount;
+    ++g.dynamicRefitCount;
+    if (rebuild) ++g.dynamicRebuildCount;
+    g.status = rebuild
+        ? "Dynamic triangle-mesh BLAS rebuild recorded after GPU texture copy"
+        : "Dynamic triangle-mesh BLAS in-place refit recorded after GPU texture copy";
+    return true;
+}
+
+bool rayQueryBridgeDestroyDynamicTriangleMesh(void* commandBufferValue,
+                                              uint32_t handle) {
+    std::scoped_lock lock(g.mutex);
+    if (!g.attached || !g.sceneReady || !g.dynamicMeshActive ||
+        !commandBufferValue || handle == 0u || handle != g.dynamicMeshHandle ||
+        !g.dynamicSlotReserved) {
+        fail("Dynamic triangle-mesh destroy requires its active handle and command encoder");
+        return false;
+    }
+    const auto commandBuffer = static_cast<VkCommandBuffer>(commandBufferValue);
+    auto instance = g.instanceRecords[g.dynamicInstanceIndex];
+    instance.instanceCustomIndex = g.baseTriangleCount & 0x00ffffffu;
+    instance.mask = 0u;
+    instance.accelerationStructureReference = g.blas.address;
+    const VkDeviceSize instanceOffset =
+        static_cast<VkDeviceSize>(g.dynamicInstanceIndex) *
+        sizeof(VkAccelerationStructureInstanceKHR);
+    g.vk.cmdUpdateBuffer(commandBuffer, g.instances.buffer, instanceOffset,
+                         sizeof(instance), &instance);
+    VkBufferMemoryBarrier instanceBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+    instanceBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    instanceBarrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+    instanceBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    instanceBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    instanceBarrier.buffer = g.instances.buffer;
+    instanceBarrier.offset = instanceOffset;
+    instanceBarrier.size = sizeof(instance);
+    g.vk.cmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                            0u, 0u, nullptr, 1u, &instanceBarrier, 0u, nullptr);
+    recordAccelerationStructureForUpdate(commandBuffer);
+    recordTlasUpdate(commandBuffer);
+    recordAccelerationStructureBarrier(commandBuffer,
+                                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    g.instanceRecords[g.dynamicInstanceIndex] = instance;
+    g.dynamicMeshActive = false;
+    g.dynamicMeshHandle = 0u;
+    g.triangleCount = g.baseTriangleCount;
+    ++g.buildCount;
+    g.status = "Dynamic triangle-mesh TLAS slot masked; native storage retained until safe recycle";
+    return true;
 }
 
 bool rayQueryBridgeUpdateInstanceGroup(void* commandBufferValue, uint32_t id,
@@ -1953,7 +2451,7 @@ bool rayQueryBridgeUpdateInstanceGroup(void* commandBufferValue, uint32_t id,
     build.dstAccelerationStructure = g.tlas.handle;
     build.geometryCount = 1u;
     build.pGeometries = &geometry;
-    build.scratchData.deviceAddress = g.tlasScratch.address;
+    build.scratchData.deviceAddress = alignedScratchAddress(g.tlasScratch);
     VkAccelerationStructureBuildRangeInfoKHR range{};
     range.primitiveCount = g.tlasInstanceCount;
     const VkAccelerationStructureBuildRangeInfoKHR* rangePointer = &range;
@@ -2118,6 +2616,15 @@ bool rayQueryBridgeEvaluate(const RayQueryLightingFrame& frame) {
 bool rayQueryBridgeEvaluateReflections(const RayQueryReflectionFrame& frame) {
     std::scoped_lock lock(g.mutex);
     const bool hasSpecularHitDistance = frame.specularHitDistanceImage != nullptr;
+    // Reflection profiles dereference the static scene's per-primitive
+    // radiance/surface arrays. Texture-driven geometry intentionally has no
+    // such metadata, so allowing a reflection hit would make those reads
+    // undefined. Lighting/custom lighting profiles only consume the TLAS and
+    // remain fully compatible.
+    if (g.dynamicMeshActive) {
+        fail("Ray-query reflections are unavailable while a dynamic triangle mesh is attached; the dynamic mesh has no reflection material metadata");
+        return false;
+    }
     if (!g.attached || !g.sceneReady || !g.reflectionPipeline ||
         !frame.commandBuffer || !frame.sourceColorImage || !frame.outputColorImage ||
         !frame.depthImage || !frame.normalRoughnessImage ||
@@ -2335,7 +2842,9 @@ void rayQueryBridgeForgetImage(void* imageValue) {
     std::scoped_lock lock(g.mutex);
     if (!g.device || !imageValue) return;
     const auto image = static_cast<VkImage>(imageValue);
-    bool found = false;
+    bool found = std::find(g.dynamicSourceImages.begin(),
+                           g.dynamicSourceImages.end(), image) !=
+                 g.dynamicSourceImages.end();
     for (const auto& [key, record] : g.descriptors) {
         (void)record;
         if (key.color == image || key.depth == image) {
@@ -2356,6 +2865,9 @@ void rayQueryBridgeForgetImage(void* imageValue) {
     }
     if (!found) return;
     g.vk.deviceWaitIdle(g.device);
+    // One device-idle covers all raw position-image borrows recorded so far,
+    // not just the image whose WGPUTexture is currently being released.
+    g.dynamicSourceImages.clear();
     for (auto iterator = g.descriptors.begin(); iterator != g.descriptors.end();) {
         if (iterator->first.color == image || iterator->first.depth == image) {
             if (iterator->second.set && g.descriptorPool) {
@@ -2400,6 +2912,7 @@ void rayQueryBridgeShutdown() {
     g.physicalDevice = VK_NULL_HANDLE;
     g.device = VK_NULL_HANDLE;
     g.queue = VK_NULL_HANDLE;
+    g.accelerationStructureScratchAlignment = 1u;
     g.vk = {};
     g.attached = false;
     g.webgpuFeatureEnabled = false;
@@ -2435,6 +2948,15 @@ bool rayQueryBridgeUpdateInstanceGroup(void*, uint32_t, const float*,
                                        const uint32_t*, std::size_t) {
     return false;
 }
+bool rayQueryBridgeCreateDynamicTriangleMesh(
+    const RayQueryDynamicTriangleMeshFrame&, const uint32_t*, std::size_t) {
+    return false;
+}
+bool rayQueryBridgeRefitDynamicTriangleMesh(
+    const RayQueryDynamicTriangleMeshFrame&) {
+    return false;
+}
+bool rayQueryBridgeDestroyDynamicTriangleMesh(void*, uint32_t) { return false; }
 void rayQueryBridgeDestroyScene() {}
 bool rayQueryBridgeEvaluate(const RayQueryLightingFrame&) { return false; }
 bool rayQueryBridgeEvaluateReflections(const RayQueryReflectionFrame&) { return false; }
