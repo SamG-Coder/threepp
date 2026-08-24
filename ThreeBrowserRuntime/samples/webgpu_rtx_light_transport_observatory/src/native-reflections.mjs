@@ -122,6 +122,13 @@ export class NativeReflectionRenderer {
     this.adaptiveEnabled = false;
     this.adaptiveFrameReady = false;
     this.adaptiveRequestInitialized = false;
+    // Keep the page's requested feature set separate from the effective native
+    // state. Runtime controls may temporarily mask a feature without changing
+    // the page intent; a later resize must still update that feature's stored
+    // Streamline output extent so re-enabling it cannot resurrect stale sizes.
+    this.pageRayReconstructionRequested = false;
+    this.pageSuperResolutionRequested = false;
+    this.pageFrameGenerationRequested = false;
     this.rayReconstructionRequested = false;
     this.rayReconstructionFailed = false;
     this.superResolutionRequested = false;
@@ -315,26 +322,44 @@ export class NativeReflectionRenderer {
     return { options, settings, width, height, enabled: true };
   }
 
-  _requestAdaptiveFeatures(options) {
-    const rr = Boolean(
+  _requestAdaptiveFeatures(options, {
+    preserveIntent = false,
+    includeReflex = true,
+  } = {}) {
+    const rrAvailable = Boolean(
       this.rtx?.capabilities?.dlssRayReconstruction &&
       typeof this.rtx.evaluateRayReconstruction === "function",
     );
-    const sr = Boolean(
+    const srAvailable = Boolean(
       this.rtx?.capabilities?.dlssSuperResolution &&
       typeof this.rtx.evaluateSuperResolution === "function",
     );
-    const fg = Boolean(
+    const fgAvailable = Boolean(
       this.rtx?.capabilities?.dlssFrameGeneration &&
       typeof this.rtx.tagFrameGeneration === "function",
     );
-    this.rtx.releaseViewport?.(STREAMLINE_VIEWPORT);
-    const status = this.rtx.requestFeatures?.({
-      reflex: this.rtx?.capabilities?.reflex ? "boost" : false,
+    const rr = rrAvailable &&
+      (!preserveIntent || this.pageRayReconstructionRequested);
+    // RR is built on the DLSS viewport configuration. Keep SR requested when
+    // RR is desired even if an older caller only recorded the RR intent.
+    const sr = srAvailable &&
+      (!preserveIntent || this.pageSuperResolutionRequested || rr);
+    const fg = fgAvailable &&
+      (!preserveIntent || this.pageFrameGenerationRequested);
+    this.pageRayReconstructionRequested = rr;
+    this.pageSuperResolutionRequested = sr;
+    this.pageFrameGenerationRequested = fg;
+
+    const request = {
       dlssSuperResolution: sr ? options : false,
       dlssRayReconstruction: rr ? options : false,
       dlssFrameGeneration: fg,
-    });
+    };
+    // Omitting Reflex during resize preserves the page's existing mode instead
+    // of silently forcing Boost whenever only the DLSS extent changed.
+    if (includeReflex) request.reflex = this.rtx?.capabilities?.reflex ? "boost" : false;
+    this.rtx.releaseViewport?.(STREAMLINE_VIEWPORT);
+    const status = this.rtx.requestFeatures?.(request);
     this.adaptiveRequestInitialized = true;
     this.rayReconstructionRequested = rr;
     this.rayReconstructionFailed = false;
@@ -357,6 +382,33 @@ export class NativeReflectionRenderer {
       status?.features?.dlssFrameGeneration?.failureCount ?? 0,
     );
     this._syncAdaptiveFeatureRequests(status);
+    return status;
+  }
+
+  _validateAdaptiveConfiguration(status, adaptive, outputWidth, outputHeight) {
+    const feature = status?.features?.dlssSuperResolution;
+    if (feature?.configured) {
+      const renderWidth = positiveInteger(feature.renderWidth, 0);
+      const renderHeight = positiveInteger(feature.renderHeight, 0);
+      const configuredOutputWidth = positiveInteger(feature.outputWidth, 0);
+      const configuredOutputHeight = positiveInteger(feature.outputHeight, 0);
+      if (renderWidth !== adaptive.width || renderHeight !== adaptive.height ||
+          configuredOutputWidth !== outputWidth || configuredOutputHeight !== outputHeight) {
+        throw new Error(
+          `Streamline configured ${renderWidth}x${renderHeight} -> ` +
+          `${configuredOutputWidth}x${configuredOutputHeight}; expected ` +
+          `${adaptive.width}x${adaptive.height} -> ${outputWidth}x${outputHeight}.`,
+        );
+      }
+      return;
+    }
+
+    const reason = String(feature?.reason ?? "");
+    const runtimeMasked = reason === "Disabled from runtime controls" ||
+      reason.startsWith("Blocked by runtime controls:");
+    if (!runtimeMasked) {
+      throw new Error(reason || "Streamline did not configure the resized DLSS viewport.");
+    }
   }
 
   _syncAdaptiveFeatureRequests(status = this.rtx?.getStatus?.()) {
@@ -543,10 +595,19 @@ export class NativeReflectionRenderer {
       };
       try {
         adaptive = this._adaptiveSettings(outputWidth, outputHeight);
-        if (adaptive.enabled) this._requestAdaptiveFeatures(adaptive.options);
+        if (adaptive.enabled) {
+          const status = this._requestAdaptiveFeatures(adaptive.options);
+          this._validateAdaptiveConfiguration(status, adaptive, outputWidth, outputHeight);
+        }
       } catch (error) {
         console.warn(`[RTX adaptive] Native presentation setup unavailable: ${error?.message || error}`);
         this.adaptiveEnabled = false;
+        adaptive = {
+          options: null,
+          width: outputWidth,
+          height: outputHeight,
+          enabled: false,
+        };
       }
       this._createTargets(
         adaptive.width,
@@ -591,8 +652,11 @@ export class NativeReflectionRenderer {
     if (!this.enabled ||
         (nextWidth === this.outputWidth && nextHeight === this.outputHeight)) return this.enabled;
     try {
-      const requested = this._syncAdaptiveFeatureRequests();
-      const adaptive = requested.adaptiveRequested
+      this.adaptiveFrameReady = false;
+      this._syncAdaptiveFeatureRequests();
+      const pageAdaptiveRequested = this.pageRayReconstructionRequested ||
+        this.pageSuperResolutionRequested;
+      const adaptive = pageAdaptiveRequested
         ? this._adaptiveSettings(nextWidth, nextHeight)
         : {
             options: null,
@@ -600,6 +664,16 @@ export class NativeReflectionRenderer {
             height: nextHeight,
             enabled: false,
           };
+      // Reconfigure Streamline before destroying the old targets or exposing
+      // any new-size texture view. This keeps its configured render/output
+      // extents in the same resize transaction as the WebGPU resources.
+      if (adaptive.enabled) {
+        const status = this._requestAdaptiveFeatures(adaptive.options, {
+          preserveIntent: true,
+          includeReflex: false,
+        });
+        this._validateAdaptiveConfiguration(status, adaptive, nextWidth, nextHeight);
+      }
       this._createTargets(
         adaptive.width,
         adaptive.height,
@@ -615,6 +689,7 @@ export class NativeReflectionRenderer {
       this.enabled = false;
       this.failure = `Native reflection resize failed: ${error?.message || error}`;
       console.error(`[RTX reflections] ${this.failure}`);
+      this._disposeTargets();
       return false;
     }
   }
