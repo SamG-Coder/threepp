@@ -1,0 +1,36 @@
+{
+  "format": 2,
+  "projectId": "8f70c2e9ad3146bb",
+  "virtualURL": "https://8f70c2e9ad3146bb.runtime.threebrowser.local/",
+  "pulledAt": "2026-08-24T00:00:00.000Z",
+  "entry": "site-entry.mjs",
+  "html": "index.html",
+  "requiresWebGPU": true,
+  "source": "https://webgpu-rtx-megacity-overlook.runtime.threebrowser.local/",
+  "files": [
+    { "url": "https://webgpu-rtx-megacity-overlook.runtime.threebrowser.local/", "path": "index.html", "type": "html", "bytes": 800 },
+    { "url": "https://webgpu-rtx-megacity-overlook.runtime.threebrowser.local/site-entry.mjs", "path": "site-entry.mjs", "type": "module", "bytes": 139 },
+    { "url": "https://webgpu-rtx-megacity-overlook.runtime.threebrowser.local/src/main.mjs", "path": "src/main.mjs", "type": "module", "bytes": 19829 },
+    { "url": "https://webgpu-rtx-megacity-overlook.runtime.threebrowser.local/src/materials.mjs", "path": "src/materials.mjs", "type": "module", "bytes": 29152 },
+    { "url": "https://webgpu-rtx-megacity-overlook.runtime.threebrowser.local/src/city.mjs", "path": "src/city.mjs", "type": "module", "bytes": 36498 },
+    { "url": "https://webgpu-rtx-megacity-overlook.runtime.threebrowser.local/src/traffic.mjs", "path": "src/traffic.mjs", "type": "module", "bytes": 30008 },
+    { "url": "https://webgpu-rtx-megacity-overlook.runtime.threebrowser.local/src/atmosphere.mjs", "path": "src/atmosphere.mjs", "type": "module", "bytes": 15324 },
+    { "url": "https://webgpu-rtx-megacity-overlook.runtime.threebrowser.local/src/microdetail.mjs", "path": "src/microdetail.mjs", "type": "module", "bytes": 29159 },
+    { "url": "https://webgpu-rtx-megacity-overlook.runtime.threebrowser.local/src/scene.mjs", "path": "src/scene.mjs", "type": "module", "bytes": 2917 },
+    { "url": "https://webgpu-rtx-megacity-overlook.runtime.threebrowser.local/assets/megacity-display-atlas.png", "path": "assets/megacity-display-atlas.png", "type": "image", "bytes": 2607500 }
+  ],
+  "compatibility": {
+    "threeImportable": true,
+    "bundledThree": false,
+    "rendererCandidates": ["webgpu"],
+    "canvasOnly": true,
+    "htmlOverlay": false,
+    "domRequired": false,
+    "notes": [
+      "Native WebGPU/TSL-only sample; no WebGL fallback.",
+      "All megacity-specific geometry, traffic, fog, material and camera systems are JavaScript-authored.",
+      "The sample reuses the Observatory generic JavaScript MRT/RTX bridge without changing C++ or its project shader.",
+      "One original generated display atlas and deterministic DataTextures provide surface detail."
+    ]
+  }
+}

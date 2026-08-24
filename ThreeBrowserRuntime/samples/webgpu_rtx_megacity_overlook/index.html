@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>RTX Megacity Overlook — ThreeBrowser Runtime</title>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "../../node_modules/three/build/three.module.js",
+      "three/webgpu": "../../node_modules/three/build/three.webgpu.js",
+      "three/tsl": "../../node_modules/three/build/three.tsl.js",
+      "three/addons/": "../../node_modules/three/examples/jsm/"
+    }
+  }
+  </script>
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #020506; }
+    canvas { display: block; width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+  <script type="module" src="./site-entry.mjs"></script>
+</body>
+</html>
