@@ -93,6 +93,7 @@ internal sealed partial class RuntimeLauncherForm : Form
                     root.GetProperty("name").GetString() ?? ""); break;
                 case "libraryDelete": await DeleteLibraryItemAsync(root.GetProperty("id").GetString() ?? ""); break;
                 case "bootstrapOpen": await OpenBootstrapAsync(root.GetProperty("id").GetString() ?? ""); break;
+                case "bootstrapOpenDemo": await OpenBootstrapAsync(root.GetProperty("id").GetString() ?? "", true); break;
                 case "bootstrapOpenCurrent": await OpenCurrentBootstrapAsync(); break;
                 case "bootstrapPick": await PickBootstrapAssetAsync(root.GetProperty("kind").GetString() ?? ""); break;
                 case "bootstrapBuild": await BuildBootstrapAsync(root); break;
@@ -307,7 +308,8 @@ internal sealed partial class RuntimeLauncherForm : Form
                     id = $"sample/{leaf}",
                     name = HumanizeName(leaf),
                     description = "Showcase project",
-                    kind = "Sample"
+                    kind = "Sample",
+                    exportable = true
                 });
             }
         }
@@ -322,7 +324,8 @@ internal sealed partial class RuntimeLauncherForm : Form
                     id = $"demo/{leaf}",
                     name = HumanizeName(leaf),
                     description = "Built-in runtime demo",
-                    kind = "Demo"
+                    kind = "Demo",
+                    exportable = false
                 });
             }
         }
@@ -618,7 +621,7 @@ function makeLibraryItem(item,demo){
  const copy=document.createElement('div');copy.className='item-copy';const name=document.createElement('div');name.className='item-name';name.textContent=item.name;name.title=item.name;const source=document.createElement('div');source.className='item-source';source.textContent=demo?item.description:item.source;source.title=source.textContent;copy.append(name,source);top.append(mark,copy);
  const badges=document.createElement('div');badges.className='item-badges';const kind=document.createElement('span');kind.className='badge';kind.textContent=demo?item.kind:formatDate(item.pulledAt);badges.append(kind);if(!demo&&item.fileCount){const files=document.createElement('span');files.className='badge';files.textContent=item.fileCount.toLocaleString()+' files';badges.append(files)}if(!demo&&item.requiresWebGpu){const gpu=document.createElement('span');gpu.className='badge gpu';gpu.textContent='WebGPU';badges.append(gpu)}
  const actions=document.createElement('div');actions.className='item-actions';actions.append(makeAction('▶  Launch','launch',()=>send(demo?'demoLaunch':'libraryLaunch',{id:item.id})));
- if(demo){actions.append(makeAction('Open folder','',()=>send('demoOpen',{id:item.id})));card.append(top,badges,actions)}
+ if(demo){if(item.exportable)actions.append(makeAction('Export .exe','package',()=>send('bootstrapOpenDemo',{id:item.id})));actions.append(makeAction('Open folder','',()=>send('demoOpen',{id:item.id})));card.append(top,badges,actions)}
  else{actions.append(makeAction('Export .exe','package',()=>send('bootstrapOpen',{id:item.id})));const secondary=document.createElement('div');secondary.className='item-secondary-actions';secondary.append(makeAction('Open folder','',()=>send('libraryOpen',{id:item.id})),makeAction('Rename','',()=>showRename(item)),makeAction('Delete','danger',()=>showDelete(item)));card.append(top,badges,actions,secondary)}
  return card
 }

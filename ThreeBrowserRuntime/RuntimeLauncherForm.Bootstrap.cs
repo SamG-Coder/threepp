@@ -10,25 +10,30 @@ internal sealed partial class RuntimeLauncherForm
     private BootstrapDraft? _bootstrapDraft;
     private BootstrapExportResult? _lastBootstrapExport;
 
-    private async Task OpenBootstrapAsync(string id)
+    private async Task OpenBootstrapAsync(string id, bool demo = false)
     {
         if (_running)
         {
             await InvokeUiAsync("notify", "Stop the current operation before exporting.", "error");
             return;
         }
-        var entry = ResolveExportEntry(id);
+        var entry = demo ? ResolveDemoEntry(id) : ResolveExportEntry(id);
         if (entry is null || !File.Exists(entry))
         {
-            await InvokeUiAsync("notify", "That project is no longer available.", "error");
+            await InvokeUiAsync("notify", demo ? "That example is no longer available." : "That project is no longer available.", "error");
             await RefreshLibraryAsync();
+            return;
+        }
+        if (demo && !Path.GetFileName(entry).Equals("site-entry.mjs", StringComparison.OrdinalIgnoreCase))
+        {
+            await InvokeUiAsync("notify", "Only complete example projects can be exported.", "error");
             return;
         }
 
         var directory = Path.GetDirectoryName(entry)!;
-        var name = BootstrapExporter.SanitizeFileName(ReadBootstrapDisplayName(directory, id));
+        var name = BootstrapExporter.SanitizeFileName(ReadBootstrapDisplayName(directory, Path.GetFileName(directory)));
         var destination = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "ThreeBrowser Exports");
-        _bootstrapDraft = new BootstrapDraft(id, entry, name, destination);
+        _bootstrapDraft = new BootstrapDraft(id, entry, name, destination, demo);
         await InvokeUiAsync("bootstrapDialog", new { id, name, destination });
     }
 
@@ -125,7 +130,7 @@ internal sealed partial class RuntimeLauncherForm
             await InvokeUiAsync("notify", "The selected project changed. Reopen the export dialog.", "error");
             return;
         }
-        var entry = ResolveExportEntry(draft.Id);
+        var entry = draft.Demo ? ResolveDemoEntry(draft.Id) : ResolveExportEntry(draft.Id);
         if (entry is null || !entry.Equals(draft.Entry, StringComparison.OrdinalIgnoreCase))
         {
             await InvokeUiAsync("notify", "That project is no longer available.", "error");
@@ -273,12 +278,13 @@ internal sealed partial class RuntimeLauncherForm
             ? value.GetString() ?? ""
             : "";
 
-    private sealed class BootstrapDraft(string id, string entry, string suggestedName, string destinationDirectory)
+    private sealed class BootstrapDraft(string id, string entry, string suggestedName, string destinationDirectory, bool demo)
     {
         internal string Id { get; } = id;
         internal string Entry { get; } = entry;
         internal string SuggestedName { get; } = suggestedName;
         internal string DestinationDirectory { get; set; } = destinationDirectory;
+        internal bool Demo { get; } = demo;
         internal string? IconPath { get; set; }
         internal string? LoadingImagePath { get; set; }
         internal string? CertificatePath { get; set; }
