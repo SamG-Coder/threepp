@@ -1,0 +1,1888 @@
+THREE.WARNING: Multiple instances of Three.js being imported.
+ThreeBrowser WebGPU requestAdapter
+ThreeBrowser canvas created { width: 1280, height: 720 }
+ThreeBrowser canvas mounted {
+  width: 1280,
+  height: 720,
+  parent: 'BODY',
+  parentId: '',
+  zIndex: 0,
+  selected: true
+}
+ThreeBrowser WebGPU requestAdapter
+ThreeBrowser WebGPU requestDevice {
+  requiredFeatures: [
+    'core-features-and-limits',
+    'depth-clip-control',
+    'depth32float-stencil8',
+    'texture-compression-bc',
+    'indirect-first-instance',
+    'rg11b10ufloat-renderable',
+    'bgra8unorm-storage',
+    'float32-filterable',
+    'float32-blendable',
+    'clip-distances',
+    'dual-source-blending'
+  ],
+  requiredLimits: {}
+}
+ThreeBrowser render stats {
+  fps: 0,
+  frameUs: 0,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 0,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+THREE.AttributeNode: Vertex attribute "uv" not found on geometry.
+THREE.AttributeNode: Vertex attribute "uv" not found on geometry.
+THREE.AttributeNode: Vertex attribute "uv" not found on geometry.
+THREE.AttributeNode: Vertex attribute "uv" not found on geometry.
+ThreeBrowser WebGPU canvas context created
+ThreeBrowser WebGPU canvas configure bgra8unorm
+ThreeBrowser WebGPU surface submit {
+  passes: 1,
+  draws: [ [ 'draw', 3, 1, 0, 0 ] ],
+  loadOp: 'load',
+  clear: undefined
+}
+ThreeBrowser WebGPU surface submit {
+  passes: 1,
+  draws: [ [ 'draw', 3, 1, 0, 0 ] ],
+  loadOp: 'load',
+  clear: undefined
+}
+ThreeBrowser render stats {
+  fps: 0,
+  frameUs: 0,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 0,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser WebGPU surface submit {
+  passes: 1,
+  draws: [ [ 'draw', 3, 1, 0, 0 ] ],
+  loadOp: 'load',
+  clear: undefined
+}
+ThreeBrowser WebGPU surface submit {
+  passes: 1,
+  draws: [ [ 'draw', 3, 1, 0, 0 ] ],
+  loadOp: 'load',
+  clear: undefined
+}
+ThreeBrowser render stats {
+  fps: 0,
+  frameUs: 0,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 0,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 0,
+  frameUs: 0,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 0,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 0,
+  frameUs: 0,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 0,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 0,
+  frameUs: 0,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 0,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 0,
+  frameUs: 0,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 0,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser WebGPU surface submit {
+  passes: 1,
+  draws: [ [ 'draw', 3, 1, 0, 0 ] ],
+  loadOp: 'load',
+  clear: undefined
+}
+ThreeBrowser WebGPU surface submit {
+  passes: 1,
+  draws: [ [ 'draw', 3, 1, 0, 0 ] ],
+  loadOp: 'load',
+  clear: undefined
+}
+ThreeBrowser WebGPU surface submit {
+  passes: 1,
+  draws: [ [ 'draw', 3, 1, 0, 0 ] ],
+  loadOp: 'load',
+  clear: undefined
+}
+ThreeBrowser WebGPU surface submit {
+  passes: 1,
+  draws: [ [ 'draw', 3, 1, 0, 0 ] ],
+  loadOp: 'load',
+  clear: undefined
+}
+ThreeBrowser render stats {
+  fps: 234,
+  frameUs: 144,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 132,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 195,
+  frameUs: 124,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 315,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 294,
+  frameUs: 89,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 522,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 270,
+  frameUs: 104,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 771,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 150,
+  frameUs: 117,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 930,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 21,
+  frameUs: 173,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 1006,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 161,
+  frameUs: 140,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 1116,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 167,
+  frameUs: 107,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 1224,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 110,
+  frameUs: 225,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 1329,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 100,
+  frameUs: 147,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 1434,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 67,
+  frameUs: 252,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 1542,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 73,
+  frameUs: 75,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 1641,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 77,
+  frameUs: 81,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 1749,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 165,
+  frameUs: 105,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 1851,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 115,
+  frameUs: 94,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 1962,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 99,
+  frameUs: 120,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 2067,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 108,
+  frameUs: 85,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 2178,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 104,
+  frameUs: 167,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 2286,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 60,
+  frameUs: 78,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 2393,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 100,
+  frameUs: 134,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 2502,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 177,
+  frameUs: 112,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 2613,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 61,
+  frameUs: 113,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 2724,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 99,
+  frameUs: 122,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 2829,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 161,
+  frameUs: 108,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 2939,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 88,
+  frameUs: 87,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 3051,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 110,
+  frameUs: 136,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 3159,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 60,
+  frameUs: 94,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 3264,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 121,
+  frameUs: 110,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 3369,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 168,
+  frameUs: 138,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 3480,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 65,
+  frameUs: 82,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 3591,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 97,
+  frameUs: 107,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 3699,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 61,
+  frameUs: 113,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 3810,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 76,
+  frameUs: 79,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 3924,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 61,
+  frameUs: 87,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 4029,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 110,
+  frameUs: 70,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 4140,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 196,
+  frameUs: 226,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 4248,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 103,
+  frameUs: 282,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 4359,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 65,
+  frameUs: 79,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 4470,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 60,
+  frameUs: 86,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 4580,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 95,
+  frameUs: 107,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 4685,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 77,
+  frameUs: 77,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 4794,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 100,
+  frameUs: 108,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 4899,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 61,
+  frameUs: 81,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 5010,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 78,
+  frameUs: 121,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 5118,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 140,
+  frameUs: 125,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 5223,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 170,
+  frameUs: 137,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 5334,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 103,
+  frameUs: 104,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 5439,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 109,
+  frameUs: 93,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 5549,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 113,
+  frameUs: 133,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 5652,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 99,
+  frameUs: 92,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 5763,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 136,
+  frameUs: 261,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 5865,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 94,
+  frameUs: 149,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 5973,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 80,
+  frameUs: 98,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 6081,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 94,
+  frameUs: 98,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 6186,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 89,
+  frameUs: 115,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 6300,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 75,
+  frameUs: 179,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 6411,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 78,
+  frameUs: 98,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 6522,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 105,
+  frameUs: 147,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 6611,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 106,
+  frameUs: 78,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 6722,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 79,
+  frameUs: 78,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 6830,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 76,
+  frameUs: 90,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 6939,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 69,
+  frameUs: 75,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 7050,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 165,
+  frameUs: 129,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 7158,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 138,
+  frameUs: 141,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 7269,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 259,
+  frameUs: 86,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 7473,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 290,
+  frameUs: 99,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 7725,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 188,
+  frameUs: 88,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 7968,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 302,
+  frameUs: 117,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 8202,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 223,
+  frameUs: 91,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 8430,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 201,
+  frameUs: 97,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 8652,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 259,
+  frameUs: 102,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 8871,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 262,
+  frameUs: 83,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 9090,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 257,
+  frameUs: 86,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 9309,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 255,
+  frameUs: 89,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 9525,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 221,
+  frameUs: 85,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 9747,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 207,
+  frameUs: 85,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 9969,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 208,
+  frameUs: 104,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 10188,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 271,
+  frameUs: 82,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 10407,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 262,
+  frameUs: 87,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 10623,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 252,
+  frameUs: 99,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 10843,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 55,
+  frameUs: 89,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 11015,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 42,
+  frameUs: 80,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 11075,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 50,
+  frameUs: 81,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 11136,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 40,
+  frameUs: 64,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 11196,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 60,
+  frameUs: 67,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 11256,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 60,
+  frameUs: 88,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 11316,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 60,
+  frameUs: 89,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 11376,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 40,
+  frameUs: 66,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 11436,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 80,
+  frameUs: 79,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 11496,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 40,
+  frameUs: 57,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 11556,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 80,
+  frameUs: 60,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 11616,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 40,
+  frameUs: 83,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 11679,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 100,
+  frameUs: 78,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 11739,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 80,
+  frameUs: 89,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 11799,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 40,
+  frameUs: 67,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 11859,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 80,
+  frameUs: 84,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 11919,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 40,
+  frameUs: 82,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 11979,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 40,
+  frameUs: 74,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 12042,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 59,
+  frameUs: 81,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 12102,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 60,
+  frameUs: 83,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 12162,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 60,
+  frameUs: 64,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 12222,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 60,
+  frameUs: 81,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 12282,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 59,
+  frameUs: 63,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 12342,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 40,
+  frameUs: 63,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 12402,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 40,
+  frameUs: 63,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 12462,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 60,
+  frameUs: 60,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 12525,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 40,
+  frameUs: 64,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 12585,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 100,
+  frameUs: 83,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 12645,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 60,
+  frameUs: 84,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 12705,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 80,
+  frameUs: 93,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 12765,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 60,
+  frameUs: 96,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 12825,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 80,
+  frameUs: 66,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 12885,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 40,
+  frameUs: 80,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 12945,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 60,
+  frameUs: 61,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 13005,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 60,
+  frameUs: 59,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 13068,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 80,
+  frameUs: 64,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 13128,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 60,
+  frameUs: 63,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 13188,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 237,
+  frameUs: 69,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 13284,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 108,
+  frameUs: 86,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 13443,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 80,
+  frameUs: 65,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 13503,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 50,
+  frameUs: 164,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 13563,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)
+ThreeBrowser render stats {
+  fps: 60,
+  frameUs: 60,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 13623,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: Ray Reconstruction evaluation failed (39)

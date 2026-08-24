@@ -1,0 +1,16 @@
+[RTX reflections] Static scene ready: 52,385 vertices · 56,604 triangles · 8 shadow-tested lights · linear HDR material data attached.
+[Medieval RPG] development control pipe listening at \\.\pipe\ThreeBrowserMedievalRpgCodex20260824e
+[Medieval RPG] READY · 32 landmarks · 32 interactions · 9 scheduled NPCs · WEBGPU FULL-RES FALLBACK
+[Medieval RPG] t=10.0s actors=19 enemies=9 calls=8226 triangles=220399 path=RTX RAY-QUERY REFLECTIONS · DLSS RR · DLSS FG · REFLEX
+[Medieval RPG] t=20.0s actors=19 enemies=9 calls=17832 triangles=162115 path=RTX RAY-QUERY REFLECTIONS · DLSS RR · DLSS FG · REFLEX
+[Medieval RPG] t=30.0s actors=19 enemies=9 calls=27402 triangles=219203 path=RTX RAY-QUERY REFLECTIONS · DLSS RR · REFLEX
+[Medieval RPG] t=40.0s actors=19 enemies=9 calls=37698 triangles=209181 path=RTX RAY-QUERY REFLECTIONS · DLSS RR · REFLEX
+[Medieval RPG] t=50.0s actors=19 enemies=9 calls=48654 triangles=193151 path=RTX RAY-QUERY REFLECTIONS · DLSS RR · REFLEX
+[Medieval RPG] t=60.0s actors=19 enemies=9 calls=61380 triangles=183713 path=RTX RAY-QUERY REFLECTIONS · DLSS RR · REFLEX
+File 'C:\ThreeBrowser\ThreeBrowserRuntime\build\bin/sl.common.dll' is signed by NVIDIA and the signature was verified.
+File 'C:\ThreeBrowser\ThreeBrowserRuntime\build\bin/sl.dlss.dll' is signed by NVIDIA and the signature was verified.
+File 'C:\ThreeBrowser\ThreeBrowserRuntime\build\bin/sl.dlss_d.dll' is signed by NVIDIA and the signature was verified.
+File 'C:\ThreeBrowser\ThreeBrowserRuntime\build\bin/sl.dlss_g.dll' is signed by NVIDIA and the signature was verified.
+File 'C:\ThreeBrowser\ThreeBrowserRuntime\build\bin/sl.pcl.dll' is signed by NVIDIA and the signature was verified.
+File 'C:\ThreeBrowser\ThreeBrowserRuntime\build\bin/sl.reflex.dll' is signed by NVIDIA and the signature was verified.
+File 'C:\ThreeBrowser\ThreeBrowserRuntime\build\bin/NvLowLatencyVk.dll' is signed by NVIDIA and the signature was verified.

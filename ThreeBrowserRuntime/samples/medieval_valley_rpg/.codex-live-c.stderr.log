@@ -1,0 +1,482 @@
+THREE.WARNING: Multiple instances of Three.js being imported.
+ThreeBrowser WebGPU requestAdapter
+ThreeBrowser canvas created { width: 1280, height: 720 }
+ThreeBrowser canvas mounted {
+  width: 1280,
+  height: 720,
+  parent: 'BODY',
+  parentId: '',
+  zIndex: 0,
+  selected: true
+}
+ThreeBrowser WebGPU requestAdapter
+ThreeBrowser WebGPU requestDevice {
+  requiredFeatures: [
+    'core-features-and-limits',
+    'depth-clip-control',
+    'depth32float-stencil8',
+    'texture-compression-bc',
+    'indirect-first-instance',
+    'rg11b10ufloat-renderable',
+    'bgra8unorm-storage',
+    'float32-filterable',
+    'float32-blendable',
+    'clip-distances',
+    'dual-source-blending'
+  ],
+  requiredLimits: {}
+}
+ThreeBrowser render stats {
+  fps: 0,
+  frameUs: 0,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 0,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+THREE.AttributeNode: Vertex attribute "uv" not found on geometry.
+THREE.AttributeNode: Vertex attribute "uv" not found on geometry.
+THREE.AttributeNode: Vertex attribute "uv" not found on geometry.
+THREE.AttributeNode: Vertex attribute "uv" not found on geometry.
+ThreeBrowser WebGPU canvas context created
+ThreeBrowser WebGPU canvas configure bgra8unorm
+ThreeBrowser render stats {
+  fps: 0,
+  frameUs: 0,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 0,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 133,
+  frameUs: 60,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 53,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 164,
+  frameUs: 225,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 198,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 154,
+  frameUs: 52,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 349,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 129,
+  frameUs: 60,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 497,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 145,
+  frameUs: 57,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 655,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 164,
+  frameUs: 161,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 819,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 252,
+  frameUs: 123,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 1025,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 248,
+  frameUs: 313,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 1181,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 217,
+  frameUs: 122,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 1416,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 169,
+  frameUs: 55,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 1575,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 160,
+  frameUs: 53,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 1731,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 156,
+  frameUs: 56,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 1889,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 178,
+  frameUs: 63,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 2053,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 168,
+  frameUs: 53,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 2217,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 150,
+  frameUs: 65,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 2378,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 143,
+  frameUs: 118,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 2537,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 146,
+  frameUs: 70,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 2687,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 144,
+  frameUs: 57,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 2837,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 166,
+  frameUs: 84,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 2980,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 148,
+  frameUs: 67,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 3135,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 167,
+  frameUs: 60,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 3271,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 165,
+  frameUs: 85,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 3425,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 150,
+  frameUs: 53,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 3590,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 169,
+  frameUs: 55,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 3758,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 167,
+  frameUs: 56,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 3924,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 173,
+  frameUs: 65,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 4091,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 173,
+  frameUs: 111,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 4258,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 154,
+  frameUs: 185,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 4411,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 157,
+  frameUs: 50,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 4524,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 
+ThreeBrowser render stats {
+  fps: 164,
+  frameUs: 84,
+  width: 1280,
+  height: 720,
+  vsync: false,
+  presents: 4638,
+  animationCallbacks: 1,
+  workers: [],
+  rendererCalls: 0,
+  renderTargets: null,
+  nativeScene: '',
+  sceneCandidates: []
+} lastError: 

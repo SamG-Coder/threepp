@@ -1,0 +1,42 @@
+{
+  "format": 2,
+  "projectId": "e028969fcd310641",
+  "virtualURL": "https://e028969fcd310641.runtime.threebrowser.local/",
+  "source": "https://medieval-valley-rpg.runtime.threebrowser.local/",
+  "pulledAt": "2026-08-24T00:00:00.000Z",
+  "entry": "site-entry.mjs",
+  "requiresWebGPU": true,
+  "html": "index.html",
+  "files": [
+    {
+      "url": "https://medieval-valley-rpg.runtime.threebrowser.local/",
+      "path": "index.html",
+      "type": "html",
+      "bytes": 622
+    },
+    {
+      "url": "https://medieval-valley-rpg.runtime.threebrowser.local/site-entry.mjs",
+      "path": "site-entry.mjs",
+      "type": "module",
+      "bytes": 287
+    }
+  ],
+  "compatibility": {
+    "threeImportable": true,
+    "bundledThree": false,
+    "threeMode": "importable",
+    "rendererCandidates": [
+      "webgpu"
+    ],
+    "canvasOnly": true,
+    "uiMode": "canvas-only",
+    "htmlOverlay": false,
+    "domRequired": false,
+    "notes": [
+      "Self-contained Three.js/TSL WebGPU RPG sample with no WebGL or C++ gameplay path.",
+      "All visible UI is rendered through the WebGPU canvas; HTML only bootstraps the module graph.",
+      "The optional native reflection bridge registers immutable world geometry only and falls back cleanly to standard WebGPU.",
+      "Dynamic actors, vegetation, weather particles, fire effects and transparent water remain on the authored raster/TSL path."
+    ]
+  }
+}

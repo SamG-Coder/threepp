@@ -1,0 +1,15 @@
+[RTX reflections] Static scene ready: 52,385 vertices · 56,604 triangles · 8 shadow-tested lights · linear HDR material data attached.
+[Medieval RPG] development control pipe listening at \\.\pipe\ThreeBrowserMedievalRpgCodex20260824b
+[Medieval RPG] READY · 32 landmarks · 32 interactions · 9 scheduled NPCs · WEBGPU FULL-RES FALLBACK
+[Medieval RPG] t=10.0s actors=18 enemies=8 calls=3717 triangles=220503 path=RTX RAY-QUERY REFLECTIONS · REFLEX
+[Medieval RPG] t=20.0s actors=18 enemies=8 calls=6181 triangles=220279 path=RTX RAY-QUERY REFLECTIONS · REFLEX
+[Medieval RPG] t=30.0s actors=18 enemies=8 calls=8694 triangles=220279 path=RTX RAY-QUERY REFLECTIONS · REFLEX
+[Medieval RPG] t=40.0s actors=18 enemies=8 calls=11235 triangles=220279 path=RTX RAY-QUERY REFLECTIONS · REFLEX
+[Medieval RPG] t=50.0s actors=18 enemies=8 calls=13734 triangles=220279 path=RTX RAY-QUERY REFLECTIONS · REFLEX
+[Medieval RPG] t=60.0s actors=18 enemies=8 calls=16240 triangles=220279 path=RTX RAY-QUERY REFLECTIONS · REFLEX
+[Medieval RPG] t=70.0s actors=18 enemies=8 calls=20419 triangles=220279 path=RTX RAY-QUERY REFLECTIONS · REFLEX
+[Medieval RPG] t=80.0s actors=18 enemies=8 calls=25529 triangles=220279 path=RTX RAY-QUERY REFLECTIONS · REFLEX
+[Medieval RPG] t=90.0s actors=18 enemies=8 calls=27279 triangles=220279 path=RTX RAY-QUERY REFLECTIONS · REFLEX
+[Medieval RPG] t=100.0s actors=18 enemies=8 calls=28679 triangles=220279 path=RTX RAY-QUERY REFLECTIONS · REFLEX
+[Medieval RPG] t=110.0s actors=18 enemies=8 calls=30079 triangles=220279 path=RTX RAY-QUERY REFLECTIONS · REFLEX
+[Medieval RPG] t=120.0s actors=18 enemies=8 calls=31794 triangles=220279 path=RTX RAY-QUERY REFLECTIONS · REFLEX

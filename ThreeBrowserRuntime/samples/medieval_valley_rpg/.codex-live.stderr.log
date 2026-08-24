@@ -1,0 +1,13 @@
+THREE.WARNING: Multiple instances of Three.js being imported.
+[Medieval RPG] Fatal startup error Error: Light Against the Dark requires the ThreeBrowser WebGPU runtime.
+    at main (file:///C:/ThreeBrowser/ThreeBrowserRuntime/samples/medieval_valley_rpg/src/main.mjs:62:36)
+    at file:///C:/ThreeBrowser/ThreeBrowserRuntime/samples/medieval_valley_rpg/src/main.mjs:335:1
+node:internal/process/promises:394
+    triggerUncaughtException(err, true /* fromPromise */);
+    ^
+
+Error: Light Against the Dark requires the ThreeBrowser WebGPU runtime.
+    at main (file:///C:/ThreeBrowser/ThreeBrowserRuntime/samples/medieval_valley_rpg/src/main.mjs:62:36)
+    at file:///C:/ThreeBrowser/ThreeBrowserRuntime/samples/medieval_valley_rpg/src/main.mjs:335:1
+
+Node.js v24.19.0
