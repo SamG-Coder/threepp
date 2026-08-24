@@ -1,0 +1,37 @@
+{
+  "format": 2,
+  "projectId": "2a9f14c6e87bd503",
+  "virtualURL": "https://2a9f14c6e87bd503.runtime.threebrowser.local/",
+  "pulledAt": "2026-08-24T00:00:00.000Z",
+  "entry": "site-entry.mjs",
+  "html": "index.html",
+  "requiresWebGPU": true,
+  "source": "https://webgpu-rtx-neon-rain-district.runtime.threebrowser.local/",
+  "files": [
+    { "url": "https://webgpu-rtx-neon-rain-district.runtime.threebrowser.local/", "path": "index.html", "type": "html", "bytes": 0 },
+    { "url": "https://webgpu-rtx-neon-rain-district.runtime.threebrowser.local/site-entry.mjs", "path": "site-entry.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-neon-rain-district.runtime.threebrowser.local/src/main.mjs", "path": "src/main.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-neon-rain-district.runtime.threebrowser.local/src/materials.mjs", "path": "src/materials.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-neon-rain-district.runtime.threebrowser.local/src/procedural-textures.mjs", "path": "src/procedural-textures.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-neon-rain-district.runtime.threebrowser.local/src/city.mjs", "path": "src/city.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-neon-rain-district.runtime.threebrowser.local/src/traffic.mjs", "path": "src/traffic.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-neon-rain-district.runtime.threebrowser.local/src/atmosphere.mjs", "path": "src/atmosphere.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-neon-rain-district.runtime.threebrowser.local/src/scene.mjs", "path": "src/scene.mjs", "type": "module", "bytes": 0 }
+  ],
+  "compatibility": {
+    "threeImportable": true,
+    "bundledThree": false,
+    "rendererCandidates": ["webgpu"],
+    "canvasOnly": true,
+    "htmlOverlay": false,
+    "domRequired": false,
+    "notes": [
+      "Native WebGPU/TSL-only sample; no WebGL fallback.",
+      "All district-specific content, materials, traffic, weather and camera work are authored in JavaScript.",
+      "The sample reuses the Light Transport Observatory's generic JavaScript MRT and RTX bridge without its project shader.",
+      "A fixed-capacity JavaScript traffic instance group keeps moving cars in off-screen ray reflections.",
+      "One public WebGPU ReflectorNode supplies the wet-road fallback when native ray traversal is unavailable.",
+      "No C++, native shader, downloaded model, image, texture, font, style sheet or HTML UI is used; all material maps are deterministic JavaScript DataTextures."
+    ]
+  }
+}
