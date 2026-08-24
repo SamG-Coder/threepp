@@ -37,6 +37,12 @@ if (!File.Exists(launcher))
     return 1;
 }
 
+if (args.Length > 0 && (args[0].Equals("export", StringComparison.OrdinalIgnoreCase) ||
+                        args[0].Equals("bootstrap", StringComparison.OrdinalIgnoreCase)))
+{
+    return await BootstrapCommand.RunAsync(args.Skip(1).ToArray(), runtimeDirectory, nodeExecutable);
+}
+
 if (args.Length == 0)
 {
     var uiThread = new Thread(() =>

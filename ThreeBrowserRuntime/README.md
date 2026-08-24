@@ -65,6 +65,62 @@ whether Three.js remains importable or has been embedded into a production
 bundle, which renderer families were detected, and whether the page appears to
 be canvas-only, an HTML overlay, or DOM-required.
 
+## Export a Windows application
+
+The launcher includes an **Export .exe** action on each project card and in the
+current-project toolbar. Its HTML wizard uses the same layout and controls as
+the pull/unpack UI. It lets you select:
+
+- the application name and export directory;
+- a custom application/window icon;
+- the image shown while resources load and startup shaders compile;
+- one embedded `.exe`, or a portable `.exe` plus a dependency folder;
+- unsigned, an existing `.pfx`/`.p12` code-signing certificate, or a newly
+  generated self-signed certificate; and
+- an optional timestamp-server URL and generated bootstrap source project.
+
+The export contains the complete project tree, Node.js, JavaScript modules,
+native renderers, the shader compiler, GPU/runtime DLLs, and app-local Visual
+C++ runtime libraries. The generated launcher is a self-contained Windows x64
+application, so the receiving PC does not need a separate Node, .NET, or VC++
+runtime installation. Embedded packages extract into a content-addressed cache
+under `%LOCALAPPDATA%\ThreeBrowser\BootstrapCache`; the current package and
+the two most recently used older versions are retained. The archive and its
+per-file SHA-256 manifest are verified before export.
+
+The computer performing the export needs the x64 .NET 10 SDK because the wizard
+generates and publishes a small native Windows bootstrap project. The wizard
+checks this prerequisite before packaging; recipients of the exported app do
+not need the SDK or runtime.
+
+The same workflow is available from the command line:
+
+```powershell
+dotnet run --project .\ThreeBrowserRuntime.csproj -- export .\samples\the-suture `
+  --name "The Suture" `
+  --output "$env:USERPROFILE\Documents\ThreeBrowser Exports" `
+  --mode single `
+  --icon .\branding\app.png `
+  --loading-image .\branding\loading.jpg `
+  --self-signed "CN=Example Publisher" `
+  --keep-project
+```
+
+For an existing certificate, use `--certificate publisher.pfx` and put its
+password in an environment variable named by `--certificate-password-env`.
+Use `--mode portable` for the dependency-folder form. Run `export --help` for
+the complete option list.
+
+A self-signed executable is signed but is not publicly trusted. Windows will
+still warn on other PCs unless its accompanying `.self-signed.cer` is installed
+into a trusted store. Public distribution should use a trusted code-signing
+certificate and timestamp service.
+
+The loading image closes only after the first real frame has presented. That
+means shaders and pipelines required by the initial scene are ready. A generic
+export cannot discover material permutations or pipelines created later by
+user interaction, so those later variants still compile on first use.
+
 Relative ESM imports, `.js` modules, and HTML import maps are supported. The
 bare `three` import resolves to the native ThreeBrowser compatibility API rather
 than stock WebGL; addon paths continue through the page's import map so their

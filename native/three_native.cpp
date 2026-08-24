@@ -771,11 +771,12 @@ int impl_runtime_start(int width, int height, const char* title) {
     }
 #endif
     Canvas::Parameters params;
+    const bool delayStandaloneReveal = std::getenv("THREEBROWSER_READY_FILE") != nullptr;
     params.title(title ? title : "ThreeBrowser")
             .size(width > 0 ? width : 800, height > 0 ? height : 600)
             .antialiasing(2)
             .vsync(g.vsync.load(std::memory_order_relaxed))
-            .headless(!g.standalone.load(std::memory_order_relaxed))
+            .headless(!g.standalone.load(std::memory_order_relaxed) || delayStandaloneReveal)
             .exitOnKeyEscape(false);
     g.canvas = std::make_unique<Canvas>(params);
 #ifdef THREEPP_WITH_VULKAN

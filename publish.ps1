@@ -64,6 +64,7 @@ New-Item -ItemType Directory -Force -Path $packagedRuntimeBin | Out-Null
 Copy-Item -LiteralPath (Join-Path $runtimeBin 'runtime') -Destination $packagedRuntimeBin -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $runtimeBin 'demo') -Destination $packagedRuntimeBin -Recurse -Force
 $runtimePayloadFiles = @(
+    'glslangValidator.exe',
     'libgcc_s_seh-1.dll',
     'libstdc++-6.dll',
     'libwinpthread-1.dll',
@@ -87,6 +88,14 @@ foreach ($fileName in $runtimePayloadFiles) {
     $source = Join-Path $runtimeBin $fileName
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
         throw "Native runtime payload missing: $source"
+    }
+    Copy-Item -LiteralPath $source -Destination $packagedRuntimeBin -Force
+}
+$vcRuntimeFiles = @('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
+foreach ($fileName in $vcRuntimeFiles) {
+    $source = Join-Path ([Environment]::GetFolderPath('System')) $fileName
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+        throw "Microsoft VC++ runtime dependency missing: $source"
     }
     Copy-Item -LiteralPath $source -Destination $packagedRuntimeBin -Force
 }
@@ -124,6 +133,10 @@ $requiredFiles = @(
     (Join-Path $packagedRuntimeBin 'three_native.dll'),
     (Join-Path $packagedRuntimeBin 'three_webgpu.dll'),
     (Join-Path $packagedRuntimeBin 'wgpu_native.dll'),
+    (Join-Path $packagedRuntimeBin 'glslangValidator.exe'),
+    (Join-Path $packagedRuntimeBin 'msvcp140.dll'),
+    (Join-Path $packagedRuntimeBin 'vcruntime140.dll'),
+    (Join-Path $packagedRuntimeBin 'vcruntime140_1.dll'),
     (Join-Path $packagedRuntimeBin 'runtime\launch.mjs')
 )
 foreach ($required in $requiredFiles) {

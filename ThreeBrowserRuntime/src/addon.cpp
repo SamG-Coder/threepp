@@ -34,11 +34,43 @@ std::atomic_bool pointerLocked{false};
 std::atomic_int requestedReflexMode{-1};
 POINT pointerRestorePosition{};
 bool pointerRestorePositionValid{false};
+HICON packagedIconBig{};
+HICON packagedIconSmall{};
 
 void releasePointerLock();
 
 void resetGpuFeatureRequests() {
     requestedReflexMode.store(-1, std::memory_order_release);
+}
+
+bool hasBootstrapReadySignal() {
+    return GetEnvironmentVariableW(L"THREEBROWSER_READY_FILE", nullptr, 0) > 1;
+}
+
+void applyPackagedIcon(HWND hwnd) {
+    if (!hwnd || packagedIconBig || packagedIconSmall) return;
+    const DWORD length = GetEnvironmentVariableW(L"THREEBROWSER_APP_ICON", nullptr, 0);
+    if (length <= 1) return;
+    std::wstring path(length, L'\0');
+    const DWORD copied = GetEnvironmentVariableW(L"THREEBROWSER_APP_ICON", path.data(), length);
+    if (copied == 0 || copied >= length) return;
+    path.resize(copied);
+    packagedIconBig = static_cast<HICON>(LoadImageW(nullptr, path.c_str(), IMAGE_ICON,
+                                                    GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON),
+                                                    LR_LOADFROMFILE));
+    packagedIconSmall = static_cast<HICON>(LoadImageW(nullptr, path.c_str(), IMAGE_ICON,
+                                                      GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON),
+                                                      LR_LOADFROMFILE));
+    if (packagedIconBig) SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(packagedIconBig));
+    if (packagedIconSmall) SendMessageW(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(packagedIconSmall));
+}
+
+void revealRuntimeWindow(HWND hwnd) {
+    if (!hwnd || !IsWindow(hwnd)) return;
+    applyPackagedIcon(hwnd);
+    ShowWindowAsync(hwnd, SW_SHOW);
+    SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS);
 }
 
 void stopActiveRuntime() {
@@ -48,6 +80,10 @@ void stopActiveRuntime() {
     if (mode == 2) tw_shutdown();
     else if (mode == 1) tn_runtime_shutdown();
     tw_set_overlay_window(nullptr);
+    if (packagedIconBig) DestroyIcon(packagedIconBig);
+    if (packagedIconSmall) DestroyIcon(packagedIconSmall);
+    packagedIconBig = nullptr;
+    packagedIconSmall = nullptr;
     resetGpuFeatureRequests();
 }
 
@@ -170,9 +206,8 @@ napi_value start(napi_env env, napi_callback_info info) {
         tn_runtime_set_loading(1, "Loading project assets");
         if (auto hwnd = static_cast<HWND>(tn_runtime_hwnd())) {
             tw_set_overlay_window(hwnd);
-            ShowWindowAsync(hwnd, SW_SHOW);
-            SetWindowPos(hwnd, HWND_TOP, 0, 0, width, height,
-                         SWP_NOMOVE | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS);
+            applyPackagedIcon(hwnd);
+            if (!hasBootstrapReadySignal()) revealRuntimeWindow(hwnd);
         }
     }
     return boolean(env, ok);
@@ -199,12 +234,17 @@ napi_value webGpuStart(napi_env env, napi_callback_info info) {
         tw_set_loading(1, "Loading project assets");
         if (auto hwnd = static_cast<HWND>(tw_hwnd())) {
             tw_set_overlay_window(hwnd);
-            ShowWindowAsync(hwnd, SW_SHOW);
-            SetWindowPos(hwnd, HWND_TOP, 0, 0, width, height,
-                         SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS);
+            applyPackagedIcon(hwnd);
+            if (!hasBootstrapReadySignal()) revealRuntimeWindow(hwnd);
         }
     }
     return boolean(env, ok);
+}
+
+napi_value reveal(napi_env env, napi_callback_info) {
+    const HWND hwnd = runtimeHwnd();
+    revealRuntimeWindow(hwnd);
+    return boolean(env, hwnd && IsWindow(hwnd));
 }
 
 napi_value submit(napi_env env, napi_callback_info info) {
@@ -1230,6 +1270,7 @@ napi_value init(napi_env env, napi_value exports) {
         {"resize", nullptr, resize, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"shutdown", nullptr, shutdown, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"isOpen", nullptr, isOpen, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"reveal", nullptr, reveal, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"waitFrame", nullptr, waitFrame, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"pressure", nullptr, pressure, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"backendName", nullptr, backendName, nullptr, nullptr, nullptr, napi_default, nullptr},

@@ -11,6 +11,35 @@ const require = createRequire(import.meta.url);
 const addonPath = process.env.THREEBROWSER_RUNTIME_ADDON || path.join(here, "..", "three_browser_runtime.node");
 export const native = require(addonPath);
 let lastUnhandledEventError = null;
+let bootstrapReadySignalled = false;
+
+function signalBootstrapReady() {
+  const readyFile = process.env.THREEBROWSER_READY_FILE;
+  if (bootstrapReadySignalled || !readyFile || Number(native.stats()?.presents || 0) < 1) return true;
+  const pendingFile = `${readyFile}.${process.pid}.pending`;
+  try {
+    fs.writeFileSync(pendingFile, JSON.stringify({
+      pid: process.pid,
+      backend: native.backendName?.() || "unknown",
+      presentedAt: new Date().toISOString(),
+      presents: Number(native.stats()?.presents || 0),
+    }), { encoding: "utf8", flag: "wx" });
+    if (native.reveal?.() === false) throw new Error("the native runtime window could not be revealed");
+    fs.renameSync(pendingFile, readyFile);
+    bootstrapReadySignalled = true;
+    return true;
+  } catch (error) {
+    try { fs.unlinkSync(pendingFile); } catch {}
+    if (error?.code === "EEXIST" && fs.existsSync(readyFile)) {
+      native.reveal?.();
+      bootstrapReadySignalled = true;
+      return true;
+    }
+    bootstrapReadySignalled = true;
+    console.error(`ThreeBrowser bootstrap readiness signal failed: ${error?.message || error}`);
+    return false;
+  }
+}
 
 class BrowserEventTarget {
   constructor() { this._eventListeners = new Map(); }
@@ -1407,7 +1436,8 @@ globalThis.fetch = async (input, init) => {
         if (fallback.ok) response = fallback;
       }
     }
-    if (isVirtual && response.ok && method === "GET" && pulledDirectory) {
+    if (isVirtual && response.ok && method === "GET" && pulledDirectory &&
+        process.env.THREEBROWSER_PACKAGED_READ_ONLY !== "1") {
       const relative = decodeURIComponent(requestURL.pathname).replace(/^\/+/, "").replaceAll("/", path.sep);
       const cachePath = path.resolve(pulledDirectory, relative);
       const boundary = `${path.resolve(pulledDirectory)}${path.sep}`;
@@ -1443,8 +1473,10 @@ globalThis.fetch = async (input, init) => {
         const response = await platformFetch(remoteURL, init);
         if (response.ok && method === "GET") {
           const bytes = Buffer.from(await response.arrayBuffer());
-          await fs.promises.mkdir(path.dirname(missingPath), { recursive: true });
-          await fs.promises.writeFile(missingPath, bytes);
+          if (process.env.THREEBROWSER_PACKAGED_READ_ONLY !== "1") {
+            await fs.promises.mkdir(path.dirname(missingPath), { recursive: true });
+            await fs.promises.writeFile(missingPath, bytes);
+          }
           return new Response(bytes, { status: response.status, statusText: response.statusText, headers: response.headers });
         }
         return response;
@@ -1891,6 +1923,11 @@ function pump() {
     return;
   }
   nativeWindowSeen = true;
+  if (!signalBootstrapReady()) {
+    stop();
+    setImmediate(() => process.exit(3));
+    return;
+  }
   if (process.env.THREEBROWSER_TRACE_RENDER && performance.now() >= nextTraceFrame) {
     nextTraceFrame = performance.now() + 1000;
     console.error("ThreeBrowser render stats", {
