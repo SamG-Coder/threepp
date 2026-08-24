@@ -882,7 +882,43 @@ function origin3(o) {
   return { x: o.x || 0, y: o.y || 0, z: o.z || 0 };
 }
 
+function externalRgbaView(value) {
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  }
+  return null;
+}
+
+function directRasterPixels(image, w, h, flipY) {
+  let source = image;
+  if (typeof image?._threeBrowserReadPixels === "function") {
+    try {
+      source = image._threeBrowserReadPixels();
+    } catch {
+      return null;
+    }
+  }
+  const pixels = source?.data ?? source?.pixels;
+  const sourceWidth = Math.max(0, Math.trunc(Number(source?.width ?? source?.naturalWidth) || 0));
+  const sourceHeight = Math.max(0, Math.trunc(Number(source?.height ?? source?.naturalHeight) || 0));
+  const bytes = externalRgbaView(pixels);
+  const requiredLength = sourceWidth * sourceHeight * 4;
+  if (!bytes || sourceWidth !== w || sourceHeight !== h || bytes.byteLength < requiredLength) return null;
+  const rgba = new Uint8Array(bytes.buffer, bytes.byteOffset, requiredLength);
+  if (!flipY) return rgba;
+  const result = new Uint8Array(requiredLength);
+  const stride = sourceWidth * 4;
+  for (let row = 0; row < sourceHeight; ++row) {
+    const sourceOffset = (sourceHeight - row - 1) * stride;
+    result.set(rgba.subarray(sourceOffset, sourceOffset + stride), row * stride);
+  }
+  return result;
+}
+
 function rasterize(image, w, h, flipY) {
+  const direct = directRasterPixels(image, w, h, flipY);
+  if (direct) return direct;
   const doc = globalThis.document;
   if (!doc?.createElement) return new Uint8Array(w * h * 4);
   const c = doc.createElement("canvas");
@@ -1631,6 +1667,15 @@ function bgEntries(entries) {
   return out;
 }
 
+// Three.js can emit all-literal scalar mix() expressions whose type Dawn
+// infers from surrounding code. Naga keeps those operands abstract at runtime
+// and rejects the shader. Make only that unambiguous literal form concrete.
+const literalScalarMix = /\bmix\(\s*([-+]?(?:\d+\.\d*|\.\d+|\d+)(?:e[-+]?\d+)?)\s*,\s*([-+]?(?:\d+\.\d*|\.\d+|\d+)(?:e[-+]?\d+)?)\s*,\s*([-+]?(?:\d+\.\d*|\.\d+|\d+)(?:e[-+]?\d+)?)\s*\)/gi;
+function normalizeWgslForNative(source) {
+  return String(source || "").replace(literalScalarMix,
+    (_match, x, y, factor) => `mix(f32(${x}), f32(${y}), f32(${factor}))`);
+}
+
 class GPUDevice extends Emitter {
   constructor(adapter, desc) {
     super();
@@ -1649,8 +1694,9 @@ class GPUDevice extends Emitter {
   }
   createShaderModule(desc) {
     const h = cmd.allocHandle();
-    cmd.shaderCreate(h, desc.code || "");
-    const m = new GPUShaderModule(h, desc.code);
+    const code = normalizeWgslForNative(desc.code);
+    cmd.shaderCreate(h, code);
+    const m = new GPUShaderModule(h, code);
     m.label = desc.label || "";
     return m;
   }

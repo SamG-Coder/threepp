@@ -3900,12 +3900,17 @@ void execOne(uint32_t op, Reader& r) {
             }
             Slot s;
             s.kind = Kind::RenderPipeline;
+            const uint64_t errorsBefore = g.validationErrors.load(std::memory_order_relaxed);
             s.rpipe = wgpuDeviceCreateRenderPipeline(g.device, &pd);
             if (g.device) {
+                // wgpu-native can return a non-null invalid pipeline and report
+                // the validation error only while the device is polled. Never
+                // retain that handle: submitting it aborts inside wgpuQueueSubmit.
                 wgpuDevicePoll(g.device, 0, nullptr);
             }
-            if (!s.rpipe) {
-                setError("render pipeline failed");
+            if (!s.rpipe || g.validationErrors.load(std::memory_order_relaxed) != errorsBefore) {
+                if (s.rpipe) wgpuRenderPipelineRelease(s.rpipe);
+                setError("render pipeline failed validation");
                 return;
             }
             putSlot(handle, std::move(s));
@@ -4108,10 +4113,15 @@ void execOne(uint32_t op, Reader& r) {
                 setError("render begin: no color attachments");
                 return;
             }
-            if (g.resizeHoldFrames > 0) {
+            const bool usesSwapchain = std::any_of(colorInputs.begin(), colorInputs.end(), [](const ColorInput& color) {
+                return color.view == 0 || (color.view != 0 && color.resolve == 0);
+            });
+            if (g.resizeHoldFrames > 0 && usesSwapchain) {
                 // A page may record several passes before its next present.
-                // Hold all of them until complete animation frames have
-                // elapsed with a stable canvas size.
+                // Hold only swapchain work until complete animation frames
+                // have elapsed with a stable canvas size. Offscreen work can
+                // be one-shot startup content (PMREM, LUTs, shadow caches), so
+                // dropping it here leaves those textures permanently empty.
                 g.skipRenderPass = true;
                 return;
             }
@@ -4145,9 +4155,6 @@ void execOne(uint32_t op, Reader& r) {
                 frameW = g.pendingResizeW > 0 ? static_cast<uint32_t>(g.pendingResizeW) : g.config.width;
                 frameH = g.pendingResizeH > 0 ? static_cast<uint32_t>(g.pendingResizeH) : g.config.height;
             }
-            const bool usesSwapchain = std::any_of(colorInputs.begin(), colorInputs.end(), [](const ColorInput& color) {
-                return color.view == 0 || (color.view != 0 && color.resolve == 0);
-            });
             if (usesSwapchain && frameW != 0 && frameH != 0 &&
                 (g.config.width != frameW || g.config.height != frameH)) {
                 configureSurface(static_cast<int>(frameW), static_cast<int>(frameH));
@@ -4265,6 +4272,7 @@ void execOne(uint32_t op, Reader& r) {
                               pipe, g.renderPass ? 1u : 0u,
                               s ? static_cast<unsigned>(s->kind) : 0u);
                 setError(buf);
+                g.skipRenderPass = true;
                 return;
             }
             wgpuRenderPassEncoderSetPipeline(g.renderPass, s->rpipe);
@@ -5539,11 +5547,22 @@ int tw_overlay_open(void) {
     return g.overlayOpen.load(std::memory_order_relaxed);
 }
 
+static POINT overlayPointFromClient(int x, int y, int renderWidth, int renderHeight) {
+    renderWidth = std::max(1, renderWidth);
+    renderHeight = std::max(1, renderHeight);
+    return POINT{
+        std::clamp(x, 0, renderWidth - 1),
+        std::clamp(y, 0, renderHeight - 1),
+    };
+}
+
 void tw_overlay_click(int x, int y) {
     if (!g.overlayOpen.load(std::memory_order_relaxed)) return;
     const int width = g.statsW.load(std::memory_order_relaxed);
     const int height = g.statsH.load(std::memory_order_relaxed);
-    POINT point{x, y};
+    POINT point = overlayPointFromClient(x, y, width, height);
+    x = point.x;
+    y = point.y;
     const OverlayLayout layout = overlayLayout(width, height);
     const bool insideBody = PtInRect(&layout.bodyClip, point) != FALSE;
     if (layout.maxScroll > 0 && PtInRect(&layout.scrollTrack, point)) {
@@ -5682,9 +5701,10 @@ void tw_overlay_click(int x, int y) {
 
 void tw_overlay_pointer_move(int x, int y) {
     if (!g.overlayOpen.load(std::memory_order_relaxed)) return;
-    const OverlayLayout layout = overlayLayout(g.statsW.load(std::memory_order_relaxed),
-                                               g.statsH.load(std::memory_order_relaxed));
-    const POINT point{x, y};
+    const int width = g.statsW.load(std::memory_order_relaxed);
+    const int height = g.statsH.load(std::memory_order_relaxed);
+    const OverlayLayout layout = overlayLayout(width, height);
+    const POINT point = overlayPointFromClient(x, y, width, height);
     {
         std::lock_guard<std::mutex> lock(g.displayMu);
         OverlayDropdown& dropdown = g.resolutionDropdown;
@@ -5805,8 +5825,6 @@ const uint8_t* tw_overlay_raster(int width, int height, int fps, int frameUs,
     static auto lastDiagnosticsRefresh = std::chrono::steady_clock::time_point{};
     width = std::max(1, width);
     height = std::max(1, height);
-    g.statsW.store(width, std::memory_order_relaxed);
-    g.statsH.store(height, std::memory_order_relaxed);
     g.statsFps.store(fps, std::memory_order_relaxed);
     g.statsFrameUs.store(frameUs, std::memory_order_relaxed);
     g.pendingCommandSubmits.store(backlog, std::memory_order_relaxed);

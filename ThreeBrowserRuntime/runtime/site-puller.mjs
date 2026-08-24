@@ -234,11 +234,11 @@ function inspectJavaScript(record, source) {
 
   const modulePatterns = [
     /\b(?:import|export)\s+(?:[^"']*?\s+from\s*)?["']([^"']+)["']/g,
-    /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
+    /\bimport\s*\(\s*(["'`])([^"'`\r\n]+)\1\s*\)/g,
   ];
   for (const pattern of modulePatterns) {
     for (const match of source.matchAll(pattern)) {
-      const value = match[1];
+      const value = match[2] ?? match[1];
       if (value === "three" || value.startsWith("three/")) {
         hasInterceptableThreeImport = true;
         findings.add(`Three.js import: ${value}`);
@@ -246,8 +246,12 @@ function inspectJavaScript(record, source) {
       collectReference(record, value, "module");
     }
   }
-  for (const match of source.matchAll(/\bnew\s+URL\s*\(\s*["']([^"']+)["']\s*,\s*import\.meta\.url\s*\)/g)) {
-    collectReference(record, match[1], "asset");
+  // Vite/Rolldown may emit worker URLs with backtick literals and may wrap
+  // import.meta.url in a harmless concatenation (for example `` +
+  // import.meta.url). Accept those optimized forms as well as the canonical
+  // new URL("asset", import.meta.url) spelling so worker chunks are pulled.
+  for (const match of source.matchAll(/\bnew\s+URL\s*\(\s*(["'`])([^"'`\r\n]+)\1\s*,\s*[^)]*\bimport\.meta\.url\s*\)/g)) {
+    collectReference(record, match[2], "asset");
   }
   for (const match of source.matchAll(/\.setPath\(\s*["']([^"']*)["']\s*\)\s*\.load\(\s*["']([^"']+)["']/g)) {
     collectReference(record, `${match[1]}${match[2]}`, "asset", true, record.virtualSource !== undefined);
@@ -424,7 +428,7 @@ function rewriteText(record, source) {
   for (const reference of replacements) {
     const replacement = relativeSpecifier(record, reference.targetRecord, reference.documentRelative);
     const escaped = reference.value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    result = result.replace(new RegExp(`(["'])${escaped}\\1`, "g"), (_match, quote) => `${quote}${replacement}${quote}`);
+    result = result.replace(new RegExp(`(["'\x60])${escaped}\\1`, "g"), (_match, quote) => `${quote}${replacement}${quote}`);
     result = result.replace(new RegExp(`(sourceMappingURL\\s*=\\s*)${escaped}(?=\\s|$)`, "g"), `$1${replacement}`);
   }
   return result;

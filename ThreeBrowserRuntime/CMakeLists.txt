@@ -53,7 +53,9 @@ if (NOT EXISTS "${_node_lib}")
     endif ()
 endif ()
 
-add_library(three_browser_runtime MODULE src/addon.cpp)
+add_library(three_browser_runtime MODULE
+        src/addon.cpp
+        src/canvas2d.cpp)
 target_compile_definitions(three_browser_runtime PRIVATE
         NAPI_VERSION=10 NODE_GYP_MODULE_NAME=three_browser_runtime WIN32_LEAN_AND_MEAN NOMINMAX)
 target_include_directories(three_browser_runtime PRIVATE

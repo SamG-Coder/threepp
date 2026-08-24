@@ -46,32 +46,33 @@ class BrowserEventTarget {
   addEventListener(type, listener, options = {}) {
     if (!listener) return;
     const key = String(type);
+    const capture = typeof options === "boolean" ? options : Boolean(options?.capture);
     const listeners = this._eventListeners.get(key) || [];
-    if (!listeners.some(entry => entry.listener === listener)) {
-      listeners.push({ listener, once: Boolean(typeof options === "object" && options.once) });
+    if (!listeners.some(entry => entry.listener === listener && entry.capture === capture)) {
+      listeners.push({ listener, capture, once: Boolean(typeof options === "object" && options.once) });
       this._eventListeners.set(key, listeners);
     }
   }
-  removeEventListener(type, listener) {
+  removeEventListener(type, listener, options = {}) {
     const key = String(type);
+    const capture = typeof options === "boolean" ? options : Boolean(options?.capture);
     const listeners = this._eventListeners.get(key);
     if (!listeners) return;
-    this._eventListeners.set(key, listeners.filter(entry => entry.listener !== listener));
+    this._eventListeners.set(key, listeners.filter(entry => entry.listener !== listener || entry.capture !== capture));
   }
   dispatchEvent(event) {
     if (!event?.type) throw new TypeError("Event object requires a type");
     const path = [this];
-    if (event.bubbles) {
-      const visited = new Set(path);
-      for (let parent = this.parentNode; parent && !visited.has(parent); parent = parent.parentNode) {
-        path.push(parent);
-        visited.add(parent);
-      }
+    const visited = new Set(path);
+    for (let parent = this.parentNode; parent && !visited.has(parent); parent = parent.parentNode) {
+      path.push(parent);
+      visited.add(parent);
     }
     try { Object.defineProperty(event, "target", { configurable: true, value: this }); } catch {}
-    for (const currentTarget of path) {
+    const invoke = (currentTarget, capture) => {
       try { Object.defineProperty(event, "currentTarget", { configurable: true, value: currentTarget }); } catch {}
       for (const entry of [...(currentTarget._eventListeners?.get(String(event.type)) || [])]) {
+        if (entry.capture !== capture) continue;
         try {
           if (typeof entry.listener === "function") entry.listener.call(currentTarget, event);
           else entry.listener.handleEvent?.(event);
@@ -79,9 +80,16 @@ class BrowserEventTarget {
           lastUnhandledEventError = error;
           console.error(`Unhandled ${event.type} event listener error:`, error);
         }
-        if (entry.once) currentTarget.removeEventListener(event.type, entry.listener);
+        if (entry.once) currentTarget.removeEventListener(event.type, entry.listener, { capture });
       }
-      if (event.cancelBubble) break;
+    };
+    for (let index = path.length - 1; index > 0 && !event.cancelBubble; --index) invoke(path[index], true);
+    if (!event.cancelBubble) {
+      invoke(this, true);
+      invoke(this, false);
+    }
+    if (event.bubbles) {
+      for (let index = 1; index < path.length && !event.cancelBubble; ++index) invoke(path[index], false);
     }
     return !event.defaultPrevented;
   }
@@ -205,6 +213,7 @@ class Element extends BrowserEventTarget {
       node.parentNode = this;
       node.ownerDocument ??= this.ownerDocument || globalThis.document || null;
       this.children.unshift(node);
+      promotePresentedCanvasTree(node);
       completeVirtualResourceTree(node);
     }
   }
@@ -442,107 +451,268 @@ function completeVirtualResourceTree(node) {
   for (const child of node.children || []) completeVirtualResourceTree(child);
 }
 
+function canvasBitmapDimension(value, fallback = 0) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(0, Math.min(0xffffffff, Math.trunc(number)));
+}
+
+function rgbaByteView(value) {
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  }
+  return null;
+}
+
+function clampedPixelCopy(value, expectedLength = -1) {
+  const bytes = rgbaByteView(value);
+  const length = expectedLength < 0 ? (bytes?.byteLength || 0) : expectedLength;
+  const result = new Uint8ClampedArray(length);
+  if (bytes) result.set(bytes.subarray(0, length));
+  return result;
+}
+
+class BrowserImageData {
+  constructor(dataOrWidth, widthOrHeight, heightOrSettings) {
+    if (typeof dataOrWidth === "number") {
+      const width = Math.trunc(Number(dataOrWidth));
+      const height = Math.trunc(Number(widthOrHeight));
+      if (!(width > 0 && height > 0)) throw new RangeError("ImageData dimensions must be greater than zero");
+      this.data = new Uint8ClampedArray(width * height * 4);
+      this.width = width;
+      this.height = height;
+    } else {
+      if (!(dataOrWidth instanceof Uint8ClampedArray)) {
+        throw new TypeError("ImageData pixels must be a Uint8ClampedArray");
+      }
+      const width = Math.trunc(Number(widthOrHeight));
+      let height = typeof heightOrSettings === "number"
+        ? Math.trunc(Number(heightOrSettings))
+        : dataOrWidth.length / (Math.max(1, width) * 4);
+      height = Math.trunc(height);
+      if (!(width > 0 && height > 0) || dataOrWidth.length !== width * height * 4) {
+        throw new RangeError("ImageData dimensions do not match the pixel array");
+      }
+      this.data = dataOrWidth;
+      this.width = width;
+      this.height = height;
+    }
+    this.colorSpace = "srgb";
+  }
+}
+
+class BrowserCanvasGradient {
+  constructor(surface, x0, y0, x1, y1) {
+    this._nativeGradient = native.canvas2dGradientCreate(surface, x0, y0, x1, y1);
+  }
+  addColorStop(offset, color) {
+    const normalizedOffset = Number(offset);
+    if (!Number.isFinite(normalizedOffset) || normalizedOffset < 0 || normalizedOffset > 1) {
+      throw new RangeError("Canvas gradient offsets must be between zero and one");
+    }
+    if (native.canvas2dGradientAddColorStop(this._nativeGradient, normalizedOffset, String(color)) === false) {
+      throw new TypeError("Invalid canvas gradient color: " + color);
+    }
+  }
+}
+
+const canvas2dImageSurfaceCache = new WeakMap();
+const canvas2dNativeProperties = new Set([
+  "fillStyle", "strokeStyle", "font", "textAlign", "textBaseline",
+  "lineCap", "lineJoin", "filter", "globalAlpha", "lineWidth", "miterLimit",
+]);
+const canvas2dDefaultState = Object.freeze({
+  fillStyle: "#000000",
+  strokeStyle: "#000000",
+  font: "10px sans-serif",
+  textAlign: "start",
+  textBaseline: "alphabetic",
+  lineCap: "butt",
+  lineJoin: "miter",
+  filter: "none",
+  globalAlpha: 1,
+  lineWidth: 1,
+  miterLimit: 10,
+  globalCompositeOperation: "source-over",
+  imageSmoothingEnabled: true,
+  imageSmoothingQuality: "low",
+  lineDashOffset: 0,
+  shadowBlur: 0,
+  shadowColor: "rgba(0, 0, 0, 0)",
+  shadowOffsetX: 0,
+  shadowOffsetY: 0,
+  direction: "inherit",
+});
+
 class Canvas2DContext {
   constructor(canvas) {
     this.canvas = canvas;
-    this.fillStyle = "#000";
-    this.strokeStyle = "#000";
-    this.font = "10px sans-serif";
-    this.textAlign = "start";
-    this.textBaseline = "alphabetic";
-    this.globalAlpha = 1;
-    this.lineWidth = 1;
+    this._nativeSurface = null;
+    this._stateStack = [];
+    this._resetState();
   }
-  measureText(text) { return { width: String(text).length * 7 }; }
-  createLinearGradient() { return { addColorStop() {} }; }
-  createRadialGradient() { return { addColorStop() {} }; }
-  createPattern() { return null; }
-  createImageData(width, height) { return { width, height, data: new Uint8ClampedArray(width * height * 4) }; }
-  getImageData(x, y, width, height) {
-    const result = this.createImageData(width, height);
-    if (!this.pixels) return result;
-    const sourceWidth = this.canvas.width;
-    const sourceHeight = this.canvas.height;
-    if (x === 0 && y === 0 && width === sourceWidth && height === sourceHeight) {
-      result.data.set(this.pixels);
-      return result;
-    }
-    for (let row = 0; row < height; ++row) {
-      if (y + row < 0 || y + row >= sourceHeight) continue;
-      const sourceOffset = ((y + row) * sourceWidth + Math.max(0, x)) * 4;
-      const destinationOffset = (row * width + Math.max(0, -x)) * 4;
-      const copyWidth = Math.max(0, Math.min(width - Math.max(0, -x), sourceWidth - Math.max(0, x)));
-      result.data.set(this.pixels.subarray(sourceOffset, sourceOffset + copyWidth * 4), destinationOffset);
-    }
-    return result;
+  _resetState() {
+    this._state = { ...canvas2dDefaultState };
+    this._lineDash = [];
+    this._stateStack.length = 0;
   }
-  putImageData() {}
-  save() {}
-  restore() {}
-  scale() {}
-  rotate() {}
-  translate() {}
-  transform() {}
-  setTransform() {}
-  resetTransform() {}
-  clearRect() {}
-  fillRect() {}
-  strokeRect() {}
-  beginPath() {}
-  closePath() {}
-  moveTo() {}
-  lineTo() {}
-  bezierCurveTo() {}
-  quadraticCurveTo() {}
-  arc() {}
-  arcTo() {}
-  rect() {}
-  fill() {}
-  stroke() {}
-  clip() {}
-  fillText() {}
-  strokeText() {}
-  drawImage(image, ...args) {
-    const source = image?.data || image?.pixels;
-    const sourceWidth = image?.width || image?.naturalWidth || 0;
-    const sourceHeight = image?.height || image?.naturalHeight || 0;
-    if (!source || !sourceWidth || !sourceHeight) return;
-    let sourceX = 0, sourceY = 0, sourceDrawWidth = sourceWidth, sourceDrawHeight = sourceHeight;
-    let destinationX = 0, destinationY = 0, destinationWidth = sourceWidth, destinationHeight = sourceHeight;
-    if (args.length >= 2) [destinationX, destinationY] = args;
-    if (args.length >= 4) [destinationX, destinationY, destinationWidth, destinationHeight] = args;
-    if (args.length >= 8) {
-      [sourceX, sourceY, sourceDrawWidth, sourceDrawHeight, destinationX, destinationY, destinationWidth, destinationHeight] = args;
+  _surface() {
+    if (this._nativeSurface === null) {
+      this._nativeSurface = native.canvas2dCreate(this.canvas.width, this.canvas.height);
     }
-    const canvasWidth = this.canvas.width;
-    const canvasHeight = this.canvas.height;
-    if (!this.pixels || this.pixels.length !== canvasWidth * canvasHeight * 4) {
-      this.pixels = new Uint8ClampedArray(canvasWidth * canvasHeight * 4);
-    }
-    if (sourceX === 0 && sourceY === 0 && destinationX === 0 && destinationY === 0 &&
-        sourceDrawWidth === sourceWidth && sourceDrawHeight === sourceHeight &&
-        destinationWidth === sourceWidth && destinationHeight === sourceHeight &&
-        canvasWidth === sourceWidth && canvasHeight === sourceHeight) {
-      this.pixels.set(source);
-      return;
-    }
-    for (let y = 0; y < destinationHeight; ++y) {
-      const targetY = destinationY + y;
-      if (targetY < 0 || targetY >= canvasHeight) continue;
-      const sampleY = Math.min(sourceHeight - 1, Math.max(0, sourceY + Math.floor(y * sourceDrawHeight / destinationHeight)));
-      for (let x = 0; x < destinationWidth; ++x) {
-        const targetX = destinationX + x;
-        if (targetX < 0 || targetX >= canvasWidth) continue;
-        const sampleX = Math.min(sourceWidth - 1, Math.max(0, sourceX + Math.floor(x * sourceDrawWidth / destinationWidth)));
-        const sourceOffset = (sampleY * sourceWidth + sampleX) * 4;
-        const targetOffset = (targetY * canvasWidth + targetX) * 4;
-        this.pixels.set(source.subarray(sourceOffset, sourceOffset + 4), targetOffset);
+    return this._nativeSurface;
+  }
+  _resize(width, height) {
+    if (this._nativeSurface !== null) native.canvas2dResize(this._nativeSurface, width, height);
+    this._resetState();
+  }
+  _setProperty(property, value) {
+    let normalized = value;
+    if (property === "fillStyle" || property === "strokeStyle") {
+      if (value instanceof BrowserCanvasGradient) {
+        if (native.canvas2dSetGradient(this._surface(), property, value._nativeGradient) === false) return;
+        this._state[property] = value;
+        return;
       }
+      normalized = String(value);
+    } else if (["font", "textAlign", "textBaseline", "lineCap", "lineJoin", "filter"].includes(property)) {
+      normalized = String(value);
+    } else if (["globalAlpha", "lineWidth", "miterLimit", "lineDashOffset", "shadowBlur", "shadowOffsetX", "shadowOffsetY"].includes(property)) {
+      normalized = Number(value);
+      if (!Number.isFinite(normalized)) return;
+    } else if (property === "imageSmoothingEnabled") {
+      normalized = Boolean(value);
+    } else {
+      normalized = String(value);
+    }
+    if (canvas2dNativeProperties.has(property) &&
+        native.canvas2dSet(this._surface(), property, normalized) === false) return;
+    this._state[property] = normalized;
+  }
+  _call(operation, ...args) {
+    while (args.length && args.at(-1) === undefined) args.pop();
+    native.canvas2dCall(this._surface(), operation,
+      ...args.map(value => typeof value === "boolean" ? (value ? 1 : 0) : value));
+  }
+  _imageSurface(image) {
+    if (image instanceof CanvasElement) return image._surface();
+    if (image instanceof Canvas2DContext) return image._surface();
+    if (typeof image?._surface === "function") return image._surface();
+    const pixels = image?.data ?? image?.pixels;
+    const width = canvasBitmapDimension(image?.width ?? image?.naturalWidth);
+    const height = canvasBitmapDimension(image?.height ?? image?.naturalHeight);
+    if (!pixels || !width || !height) throw new TypeError("drawImage source has no decoded RGBA pixels");
+    const expectedLength = width * height * 4;
+    let bytes = rgbaByteView(pixels);
+    if (!bytes) throw new TypeError("drawImage source pixels must be an ArrayBuffer view");
+    if (bytes.byteLength < expectedLength) bytes = clampedPixelCopy(bytes, expectedLength);
+    if (image instanceof ImageElement) {
+      const cached = canvas2dImageSurfaceCache.get(image);
+      if (cached?.pixels === pixels && cached.width === width && cached.height === height) return cached.surface;
+      const surface = native.canvas2dCreate(width, height, bytes);
+      canvas2dImageSurfaceCache.set(image, { pixels, width, height, surface });
+      return surface;
+    }
+    // ImageData and plain RGBA objects are mutable; snapshot them for each draw.
+    return native.canvas2dCreate(width, height, bytes);
+  }
+  _readPixels(x = 0, y = 0, width = this.canvas.width, height = this.canvas.height) {
+    width = Math.max(0, Math.trunc(Number(width) || 0));
+    height = Math.max(0, Math.trunc(Number(height) || 0));
+    if (!width || !height) return new Uint8ClampedArray();
+    return clampedPixelCopy(native.canvas2dReadPixels(
+      this._surface(), Math.trunc(Number(x) || 0), Math.trunc(Number(y) || 0), width, height,
+    ), width * height * 4);
+  }
+  get pixels() {
+    return this._readPixels();
+  }
+  save() {
+    this._call("save");
+    this._stateStack.push({ state: { ...this._state }, lineDash: [...this._lineDash] });
+  }
+  restore() {
+    this._call("restore");
+    const saved = this._stateStack.pop();
+    if (saved) {
+      this._state = saved.state;
+      this._lineDash = saved.lineDash;
     }
   }
-  setLineDash() {}
+  createLinearGradient(x0, y0, x1, y1) {
+    return new BrowserCanvasGradient(this._surface(), Number(x0), Number(y0), Number(x1), Number(y1));
+  }
+  createRadialGradient(x0, y0, _r0, x1, y1) {
+    return this.createLinearGradient(x0, y0, x1, y1);
+  }
+  createPattern() { return null; }
+  createImageData(widthOrImageData, height) {
+    if (typeof widthOrImageData === "object") {
+      return new BrowserImageData(widthOrImageData.width, widthOrImageData.height);
+    }
+    return new BrowserImageData(Math.abs(Math.trunc(Number(widthOrImageData))), Math.abs(Math.trunc(Number(height))));
+  }
+  getImageData(x, y, width, height) {
+    x = Math.trunc(Number(x) || 0);
+    y = Math.trunc(Number(y) || 0);
+    width = Math.trunc(Number(width) || 0);
+    height = Math.trunc(Number(height) || 0);
+    if (!width || !height) throw new RangeError("getImageData dimensions must be non-zero");
+    if (width < 0) { x += width; width = -width; }
+    if (height < 0) { y += height; height = -height; }
+    return new BrowserImageData(this._readPixels(x, y, width, height), width, height);
+  }
+  putImageData(imageData, dx, dy, ...dirty) {
+    if (!imageData?.data || !Number.isFinite(Number(imageData.width)) || !Number.isFinite(Number(imageData.height))) {
+      throw new TypeError("putImageData expects an ImageData-like object");
+    }
+    const pixels = rgbaByteView(imageData.data);
+    if (!pixels) throw new TypeError("putImageData pixels must be an ArrayBuffer view");
+    native.canvas2dWritePixels(
+      this._surface(), pixels, Math.trunc(imageData.width), Math.trunc(imageData.height),
+      Math.trunc(Number(dx) || 0), Math.trunc(Number(dy) || 0), ...dirty.map(value => Math.trunc(Number(value) || 0)),
+    );
+  }
+  drawImage(image, ...args) {
+    native.canvas2dDrawImage(this._surface(), this._imageSurface(image), ...args.map(Number));
+  }
+  measureText(text) {
+    const metrics = native.canvas2dMeasureText(this._surface(), String(text));
+    return typeof metrics === "number" ? { width: metrics } : metrics;
+  }
+  setLineDash(segments) {
+    const normalized = Array.from(segments || [], Number);
+    if (normalized.some(value => !Number.isFinite(value) || value < 0)) throw new RangeError("Invalid line dash segment");
+    this._call("setLineDash", ...normalized);
+    this._lineDash = normalized.length % 2 ? [...normalized, ...normalized] : normalized;
+  }
+  getLineDash() { return [...this._lineDash]; }
+  fill(fillRule = "nonzero") { this._call(fillRule === "evenodd" ? "fillEvenOdd" : "fill"); }
+  clip(fillRule = "nonzero") { this._call(fillRule === "evenodd" ? "clipEvenOdd" : "clip"); }
+  reset() { this._resize(this.canvas.width, this.canvas.height); }
 }
 
+for (const property of Object.keys(canvas2dDefaultState)) {
+  Object.defineProperty(Canvas2DContext.prototype, property, {
+    configurable: true,
+    enumerable: true,
+    get() { return this._state[property]; },
+    set(value) { this._setProperty(property, value); },
+  });
+}
+
+for (const operation of [
+  "scale", "rotate", "translate", "transform", "setTransform", "resetTransform",
+  "clearRect", "fillRect", "strokeRect", "beginPath", "closePath", "moveTo", "lineTo",
+  "bezierCurveTo", "quadraticCurveTo", "arc", "arcTo", "ellipse", "rect", "roundRect",
+  "stroke", "fillText", "strokeText",
+]) {
+  Object.defineProperty(Canvas2DContext.prototype, operation, {
+    configurable: true,
+    value(...args) { this._call(operation, ...args); },
+  });
+}
 class WebGLRenderingContextProbe {
   constructor(canvas) { this.canvas = canvas; }
   getExtension(name) {
@@ -560,16 +730,26 @@ class WebGLRenderingContextProbe {
 class WebGL2RenderingContextProbe extends WebGLRenderingContextProbe {}
 
 class CanvasElement extends Element {
-  constructor() {
+  constructor(width = 1280, height = 720) {
     super("canvas");
-    this.width = 1280;
-    this.height = 720;
-    this.clientWidth = 1280;
-    this.clientHeight = 720;
+    this._canvasWidth = canvasBitmapDimension(width, 1280);
+    this._canvasHeight = canvasBitmapDimension(height, 720);
+    this.clientWidth = this._canvasWidth;
+    this.clientHeight = this._canvasHeight;
     this.tabIndex = 0;
     this.context2d = null;
     this.contextWebgl = null;
     this.contextWebgl2 = null;
+  }
+  get width() { return this._canvasWidth; }
+  set width(value) {
+    this._canvasWidth = canvasBitmapDimension(value);
+    this.context2d?._resize(this._canvasWidth, this._canvasHeight);
+  }
+  get height() { return this._canvasHeight; }
+  set height(value) {
+    this._canvasHeight = canvasBitmapDimension(value);
+    this.context2d?._resize(this._canvasWidth, this._canvasHeight);
   }
   focus() { document.activeElement = this; }
   getBoundingClientRect() {
@@ -583,8 +763,26 @@ class CanvasElement extends Element {
     if (name === "webgl2" || name === "experimental-webgl2") return this.contextWebgl2 ??= new WebGL2RenderingContextProbe(this);
     return null;
   }
+  _surface() {
+    return (this.context2d ??= new Canvas2DContext(this))._surface();
+  }
+  _threeBrowserReadPixels() {
+    const length = this.width * this.height * 4;
+    const data = this.context2d?._readPixels(0, 0, this.width, this.height) || new Uint8ClampedArray(length);
+    return { data, width: this.width, height: this.height };
+  }
+  toDataURL() {
+    if (!this.width || !this.height) return "data:,";
+    const png = Buffer.from(native.canvas2dEncodePng(this._surface()));
+    return "data:image/png;base64," + png.toString("base64");
+  }
+  toBuffer() {
+    return Buffer.from(native.canvas2dEncodePng(this._surface()));
+  }
+  async convertToBlob() {
+    return new Blob([this.toBuffer()], { type: "image/png" });
+  }
 }
-
 function encodedImageSize(bytes) {
   if (bytes.length >= 10 && bytes.subarray(0, 3).toString() === "GIF") {
     return { width: bytes.readUInt16LE(6), height: bytes.readUInt16LE(8) };
@@ -934,8 +1132,36 @@ globalThis.history = {
 };
 Object.defineProperty(globalThis, "navigator", {
   value: {
-    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ThreeBrowserRuntime/0.1 V8",
-    platform: process.platform,
+    // Sites commonly use Chromium User-Agent Client Hints as their desktop
+    // WebGPU gate. Without this, they can stop before creating a renderer.
+    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 ThreeBrowserRuntime/0.1",
+    userAgentData: {
+      brands: [
+        { brand: "Chromium", version: "128" },
+        { brand: "ThreeBrowser", version: "1" },
+      ],
+      mobile: false,
+      platform: process.platform === "win32" ? "Windows" : process.platform === "darwin" ? "macOS" : "Linux",
+      async getHighEntropyValues(hints = []) {
+        const values = {
+          architecture: process.arch === "x64" ? "x86" : process.arch,
+          bitness: process.arch === "x64" || process.arch === "arm64" ? "64" : "32",
+          model: "",
+          platformVersion: "10.0.0",
+          uaFullVersion: "128.0.0.0",
+          fullVersionList: [
+            { brand: "Chromium", version: "128.0.0.0" },
+            { brand: "ThreeBrowser", version: "1.0.0.0" },
+          ],
+          wow64: false,
+        };
+        return Object.fromEntries(hints.filter(hint => hint in values).map(hint => [hint, values[hint]]));
+      },
+      toJSON() {
+        return { brands: this.brands, mobile: this.mobile, platform: this.platform };
+      },
+    },
+    platform: process.platform === "win32" ? "Win32" : process.platform,
     language: "en-AU",
     languages: ["en-AU", "en"],
     maxTouchPoints: 0,
@@ -976,6 +1202,8 @@ globalThis.HTMLTextAreaElement = Element;
 globalThis.SVGElement = Element;
 globalThis.HTMLCanvasElement = CanvasElement;
 globalThis.CanvasRenderingContext2D = Canvas2DContext;
+globalThis.CanvasGradient = BrowserCanvasGradient;
+globalThis.ImageData = BrowserImageData;
 globalThis.WebGLRenderingContext = WebGLRenderingContextProbe;
 globalThis.WebGL2RenderingContext = WebGL2RenderingContextProbe;
 globalThis.HTMLImageElement = ImageElement;
@@ -1034,6 +1262,8 @@ const audioParam = (value = 0) => ({
 const audioNode = extra => Object.assign({
   connect() { return this; },
   disconnect() {},
+  addEventListener() {},
+  removeEventListener() {},
 }, extra);
 class SilentAudioContext {
   constructor() {
@@ -1052,6 +1282,17 @@ class SilentAudioContext {
   suspend() { this.state = "suspended"; return Promise.resolve(); }
   close() { this.state = "closed"; return Promise.resolve(); }
   createGain() { return audioNode({ gain: audioParam(1) }); }
+  createOscillator() {
+    return audioNode({
+      type: "sine",
+      frequency: audioParam(440),
+      detune: audioParam(),
+      start() {},
+      stop() {},
+      onended: null,
+    });
+  }
+  createStereoPanner() { return audioNode({ pan: audioParam() }); }
   createPanner() {
     return audioNode({
       positionX: audioParam(), positionY: audioParam(), positionZ: audioParam(),
@@ -1059,6 +1300,29 @@ class SilentAudioContext {
       refDistance: 1, rolloffFactor: 1, distanceModel: "inverse", panningModel: "HRTF",
       setPosition() {}, setOrientation() {},
     });
+  }
+  createBuffer(numberOfChannels, length, sampleRate = this.sampleRate) {
+    const channels = Math.max(1, Number(numberOfChannels) | 0);
+    const frames = Math.max(0, Number(length) | 0);
+    const rate = Math.max(1, Number(sampleRate) || this.sampleRate);
+    const data = Array.from({ length: channels }, () => new Float32Array(frames));
+    return {
+      duration: frames / rate,
+      length: frames,
+      numberOfChannels: channels,
+      sampleRate: rate,
+      getChannelData(index) {
+        const channel = data[Number(index) | 0];
+        if (!channel) throw new RangeError("AudioBuffer channel index is out of range");
+        return channel;
+      },
+      copyFromChannel(destination, channelNumber, startInChannel = 0) {
+        destination.set(this.getChannelData(channelNumber).subarray(startInChannel, startInChannel + destination.length));
+      },
+      copyToChannel(source, channelNumber, startInChannel = 0) {
+        this.getChannelData(channelNumber).set(source, startInChannel);
+      },
+    };
   }
   createBufferSource() {
     return audioNode({
@@ -1079,24 +1343,53 @@ globalThis.AudioContext = SilentAudioContext;
 globalThis.webkitAudioContext = SilentAudioContext;
 globalThis.getComputedStyle = element => element?.style ?? { getPropertyValue: () => "" };
 globalThis.matchMedia = query => ({ matches: false, media: String(query), onchange: null, addEventListener() {}, removeEventListener() {} });
+const activeResizeObservers = new Set();
+function queueResizeObserverDelivery(observer) {
+  if (observer.deliveryQueued) return;
+  observer.deliveryQueued = true;
+  queueMicrotask(() => {
+    observer.deliveryQueued = false;
+    const entries = [];
+    for (const target of observer.targets) {
+      const contentRect = target.getBoundingClientRect();
+      const previous = observer.lastSizes.get(target);
+      if (previous?.width === contentRect.width && previous?.height === contentRect.height) continue;
+      observer.lastSizes.set(target, { width: contentRect.width, height: contentRect.height });
+      entries.push({
+        target,
+        contentRect,
+        contentBoxSize: [{ inlineSize: contentRect.width, blockSize: contentRect.height }],
+      });
+    }
+    if (entries.length) observer.callback(entries, observer);
+  });
+}
+function notifyResizeObservers() {
+  for (const observer of activeResizeObservers) queueResizeObserverDelivery(observer);
+}
 globalThis.ResizeObserver = class {
-  constructor(callback) { this.callback = callback; this.targets = new Set(); }
+  constructor(callback) {
+    if (typeof callback !== "function") throw new TypeError("ResizeObserver callback must be a function");
+    this.callback = callback;
+    this.targets = new Set();
+    this.lastSizes = new Map();
+    this.deliveryQueued = false;
+  }
   observe(target) {
     this.targets.add(target);
-    queueMicrotask(() => {
-      if (!this.targets.has(target)) return;
-      const contentRect = target.getBoundingClientRect();
-      if (process.env.THREEBROWSER_TRACE_RENDER) {
-        console.error("ThreeBrowser ResizeObserver", {
-          tag: target.tagName, id: target.id, className: target.className,
-          width: contentRect.width, height: contentRect.height,
-        });
-      }
-      this.callback([{ target, contentRect, contentBoxSize: [{ inlineSize: contentRect.width, blockSize: contentRect.height }] }], this);
-    });
+    activeResizeObservers.add(this);
+    queueResizeObserverDelivery(this);
   }
-  unobserve(target) { this.targets.delete(target); }
-  disconnect() { this.targets.clear(); }
+  unobserve(target) {
+    this.targets.delete(target);
+    this.lastSizes.delete(target);
+    if (!this.targets.size) activeResizeObservers.delete(this);
+  }
+  disconnect() {
+    this.targets.clear();
+    this.lastSizes.clear();
+    activeResizeObservers.delete(this);
+  }
 };
 globalThis.MutationObserver = class { constructor(callback) { this.callback = callback; } observe() {} disconnect() {} takeRecords() { return []; } };
 
@@ -1900,8 +2193,8 @@ function syncWindowSize() {
   if (currentCanvas) {
     currentCanvas.clientWidth = currentCanvas.width = state.width;
     currentCanvas.clientHeight = currentCanvas.height = state.height;
-    currentCanvas.dispatchEvent(new Event("resize"));
   }
+  notifyResizeObservers();
   globalThis.dispatchEvent(new Event("resize"));
 }
 

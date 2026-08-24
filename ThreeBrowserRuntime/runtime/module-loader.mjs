@@ -124,8 +124,10 @@ registerHooks({
   load(url, context, nextLoad) {
     // A browser always treats files reached by an ESM import as modules. Node
     // otherwise interprets .js according to a nearby package.json.
-    if (url.startsWith("file:") && /\.(?:js|jsx)$/i.test(new URL(url).pathname)) {
-      return { format: "module", source: fs.readFileSync(fileURLToPath(url), "utf8"), shortCircuit: true };
+    const filePath = url.startsWith("file:") ? fileURLToPath(url) : "";
+    const dependencyPath = filePath.includes(`${path.sep}node_modules${path.sep}`);
+    if (filePath && !dependencyPath && /\.(?:js|jsx)$/i.test(filePath)) {
+      return { format: "module", source: fs.readFileSync(filePath, "utf8"), shortCircuit: true };
     }
     return nextLoad(url, context);
   },

@@ -11,6 +11,7 @@
 
 #include "three_native.h"
 #include "three_webgpu.h"
+#include "canvas2d.h"
 
 #define STB_IMAGE_STATIC
 #define STB_IMAGE_IMPLEMENTATION
@@ -21,8 +22,11 @@
 #include <array>
 #include <atomic>
 #include <climits>
+#include <cmath>
 #include <cstring>
 #include <cstdint>
+#include <limits>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -185,6 +189,457 @@ void set(napi_env env, napi_value object, const char* name, napi_value value) {
     napi_set_named_property(env, object, name, value);
 }
 
+using threebrowser::canvas2d::CanvasSurface;
+using threebrowser::canvas2d::LinearGradient;
+
+constexpr napi_type_tag canvasSurfaceTypeTag{
+    0xf024c2e415f844a1ULL, 0x836dc652b278eb4dULL};
+constexpr napi_type_tag canvasGradientTypeTag{
+    0xa2fb0b221a4a4d88ULL, 0xa85658882e08f52bULL};
+
+void finalizeCanvasSurface(napi_env, void* data, void*) {
+    delete static_cast<CanvasSurface*>(data);
+}
+
+void finalizeCanvasGradient(napi_env, void* data, void*) {
+    delete static_cast<LinearGradient*>(data);
+}
+
+template<typename T>
+T* canvasExternal(napi_env env, napi_value value, const napi_type_tag& tag, const char* expected) {
+    bool matches = false;
+    if (napi_check_object_type_tag(env, value, &tag, &matches) != napi_ok || !matches) {
+        napi_throw_type_error(env, nullptr, expected);
+        return nullptr;
+    }
+    void* data = nullptr;
+    if (napi_get_value_external(env, value, &data) != napi_ok || !data) {
+        napi_throw_type_error(env, nullptr, expected);
+        return nullptr;
+    }
+    return static_cast<T*>(data);
+}
+
+CanvasSurface* canvasSurface(napi_env env, napi_value value) {
+    return canvasExternal<CanvasSurface>(env, value, canvasSurfaceTypeTag,
+                                         "Expected a Canvas2D surface");
+}
+
+LinearGradient* canvasGradient(napi_env env, napi_value value) {
+    return canvasExternal<LinearGradient>(env, value, canvasGradientTypeTag,
+                                          "Expected a Canvas2D linear gradient");
+}
+
+bool canvasInteger(napi_env env, napi_value value, int& result) {
+    napi_valuetype type{};
+    double numberValue = 0;
+    if (napi_typeof(env, value, &type) != napi_ok || type != napi_number ||
+        napi_get_value_double(env, value, &numberValue) != napi_ok ||
+        !std::isfinite(numberValue) ||
+        numberValue < static_cast<double>(std::numeric_limits<int>::min()) ||
+        numberValue > static_cast<double>(std::numeric_limits<int>::max())) {
+        napi_throw_range_error(env, nullptr, "Expected a finite 32-bit integer");
+        return false;
+    }
+    result = static_cast<int>(numberValue);
+    return true;
+}
+
+bool canvasBytes(napi_env env, napi_value value, const std::uint8_t*& data,
+                 std::size_t& byteLength) {
+    bool isBuffer = false;
+    if (napi_is_buffer(env, value, &isBuffer) == napi_ok && isBuffer) {
+        void* raw = nullptr;
+        if (napi_get_buffer_info(env, value, &raw, &byteLength) == napi_ok) {
+            data = static_cast<const std::uint8_t*>(raw);
+            return true;
+        }
+    }
+
+    bool isTypedArray = false;
+    if (napi_is_typedarray(env, value, &isTypedArray) != napi_ok || !isTypedArray) {
+        napi_throw_type_error(env, nullptr, "Expected Uint8Array or Uint8ClampedArray pixels");
+        return false;
+    }
+    napi_typedarray_type type{};
+    std::size_t length = 0;
+    void* raw = nullptr;
+    napi_value arrayBuffer{};
+    std::size_t offset = 0;
+    if (napi_get_typedarray_info(env, value, &type, &length, &raw, &arrayBuffer, &offset) != napi_ok ||
+        (type != napi_uint8_array && type != napi_uint8_clamped_array)) {
+        napi_throw_type_error(env, nullptr, "Expected Uint8Array or Uint8ClampedArray pixels");
+        return false;
+    }
+    data = static_cast<const std::uint8_t*>(raw);
+    byteLength = length;
+    return true;
+}
+
+napi_value canvasByteArray(napi_env env, const std::vector<std::uint8_t>& bytes,
+                           napi_typedarray_type type) {
+    void* output = nullptr;
+    napi_value arrayBuffer{};
+    if (napi_create_arraybuffer(env, bytes.size(), &output, &arrayBuffer) != napi_ok) return nullptr;
+    if (!bytes.empty()) std::memcpy(output, bytes.data(), bytes.size());
+    napi_value result{};
+    if (napi_create_typedarray(env, type, bytes.size(), arrayBuffer, 0, &result) != napi_ok) return nullptr;
+    return result;
+}
+napi_value canvas2dCreate(napi_env env, napi_callback_info info) {
+    std::array<napi_value, 3> argv{};
+    std::size_t argc = argv.size();
+    napi_get_cb_info(env, info, &argc, argv.data(), nullptr, nullptr);
+    if (argc < 2) {
+        napi_throw_type_error(env, nullptr, "canvas2dCreate requires width and height");
+        return nullptr;
+    }
+    int width = 0;
+    int height = 0;
+    if (!canvasInteger(env, argv[0], width) || !canvasInteger(env, argv[1], height)) return nullptr;
+    if (width < 0 || height < 0) {
+        napi_throw_range_error(env, nullptr, "Canvas dimensions cannot be negative");
+        return nullptr;
+    }
+
+    CanvasSurface* surface = nullptr;
+    try {
+        surface = new CanvasSurface(width, height);
+        if (argc >= 3) {
+            const std::uint8_t* pixels = nullptr;
+            std::size_t byteLength = 0;
+            if (!canvasBytes(env, argv[2], pixels, byteLength)) {
+                delete surface;
+                return nullptr;
+            }
+            if (!surface->writePixels(0, 0, width, height,
+                                      std::span<const std::uint8_t>(pixels, byteLength))) {
+                delete surface;
+                napi_throw_range_error(env, nullptr, "Initial Canvas2D pixel buffer is too small");
+                return nullptr;
+            }
+        }
+    } catch (const std::exception& error) {
+        delete surface;
+        napi_throw_error(env, nullptr, error.what());
+        return nullptr;
+    } catch (...) {
+        delete surface;
+        napi_throw_error(env, nullptr, "Could not create Canvas2D surface");
+        return nullptr;
+    }
+
+    napi_value result{};
+    if (napi_create_external(env, surface, finalizeCanvasSurface, nullptr, &result) != napi_ok) {
+        delete surface;
+        return nullptr;
+    }
+    if (napi_type_tag_object(env, result, &canvasSurfaceTypeTag) != napi_ok) return nullptr;
+    return result;
+}
+
+napi_value canvas2dResize(napi_env env, napi_callback_info info) {
+    std::array<napi_value, 3> argv{};
+    std::size_t argc = argv.size();
+    napi_get_cb_info(env, info, &argc, argv.data(), nullptr, nullptr);
+    if (argc < 3) {
+        napi_throw_type_error(env, nullptr, "canvas2dResize requires a surface, width and height");
+        return nullptr;
+    }
+    auto* surface = canvasSurface(env, argv[0]);
+    int width = 0;
+    int height = 0;
+    if (!surface || !canvasInteger(env, argv[1], width) || !canvasInteger(env, argv[2], height)) return nullptr;
+    return boolean(env, surface->resize(width, height));
+}
+
+napi_value canvas2dSet(napi_env env, napi_callback_info info) {
+    std::array<napi_value, 3> argv{};
+    std::size_t argc = argv.size();
+    napi_get_cb_info(env, info, &argc, argv.data(), nullptr, nullptr);
+    if (argc < 3) {
+        napi_throw_type_error(env, nullptr, "canvas2dSet requires a surface, property and value");
+        return nullptr;
+    }
+    auto* surface = canvasSurface(env, argv[0]);
+    if (!surface) return nullptr;
+    napi_valuetype propertyType{};
+    if (napi_typeof(env, argv[1], &propertyType) != napi_ok || propertyType != napi_string) {
+        napi_throw_type_error(env, nullptr, "Canvas2D property name must be a string");
+        return nullptr;
+    }
+    const std::string property = argString(env, argv[1], "");
+    napi_valuetype valueType{};
+    napi_typeof(env, argv[2], &valueType);
+    if (valueType == napi_number) {
+        double value = 0;
+        napi_get_value_double(env, argv[2], &value);
+        return boolean(env, surface->setNumber(property, value));
+    }
+    if (valueType == napi_string) {
+        return boolean(env, surface->setString(property, argString(env, argv[2], "")));
+    }
+    if (valueType == napi_boolean) {
+        bool value = false;
+        napi_get_value_bool(env, argv[2], &value);
+        return boolean(env, surface->setNumber(property, value ? 1.0 : 0.0));
+    }
+    napi_throw_type_error(env, nullptr, "Canvas2D property value must be a number or string");
+    return nullptr;
+}
+
+napi_value canvas2dGradientCreate(napi_env env, napi_callback_info info) {
+    std::array<napi_value, 5> argv{};
+    std::size_t argc = argv.size();
+    napi_get_cb_info(env, info, &argc, argv.data(), nullptr, nullptr);
+    const bool hasSurface = argc >= 5;
+    const std::size_t offset = hasSurface ? 1 : 0;
+    if (argc < offset + 4) {
+        napi_throw_type_error(env, nullptr, "canvas2dGradientCreate requires four coordinates");
+        return nullptr;
+    }
+    CanvasSurface* surface = nullptr;
+    if (hasSurface && !(surface = canvasSurface(env, argv[0]))) return nullptr;
+    std::array<double, 4> coordinates{};
+    for (std::size_t i = 0; i < coordinates.size(); ++i) {
+        napi_valuetype type{};
+        if (napi_typeof(env, argv[offset + i], &type) != napi_ok || type != napi_number ||
+            napi_get_value_double(env, argv[offset + i], &coordinates[i]) != napi_ok) {
+            napi_throw_type_error(env, nullptr, "Canvas2D gradient coordinates must be numbers");
+            return nullptr;
+        }
+    }
+
+    LinearGradient* gradient = nullptr;
+    try {
+        gradient = new LinearGradient(surface
+            ? surface->createLinearGradient(coordinates[0], coordinates[1], coordinates[2], coordinates[3])
+            : LinearGradient(coordinates[0], coordinates[1], coordinates[2], coordinates[3]));
+    } catch (const std::exception& error) {
+        napi_throw_error(env, nullptr, error.what());
+        return nullptr;
+    } catch (...) {
+        napi_throw_error(env, nullptr, "Could not create Canvas2D gradient");
+        return nullptr;
+    }
+    napi_value result{};
+    if (napi_create_external(env, gradient, finalizeCanvasGradient, nullptr, &result) != napi_ok) {
+        delete gradient;
+        return nullptr;
+    }
+    if (napi_type_tag_object(env, result, &canvasGradientTypeTag) != napi_ok) return nullptr;
+    return result;
+}
+
+napi_value canvas2dGradientAddColorStop(napi_env env, napi_callback_info info) {
+    std::array<napi_value, 3> argv{};
+    std::size_t argc = argv.size();
+    napi_get_cb_info(env, info, &argc, argv.data(), nullptr, nullptr);
+    if (argc < 3) {
+        napi_throw_type_error(env, nullptr,
+                              "canvas2dGradientAddColorStop requires a gradient, offset and color");
+        return nullptr;
+    }
+    auto* gradient = canvasGradient(env, argv[0]);
+    if (!gradient) return nullptr;
+    double offset = 0;
+    napi_valuetype offsetType{};
+    napi_valuetype colorType{};
+    if (napi_typeof(env, argv[1], &offsetType) != napi_ok || offsetType != napi_number ||
+        napi_get_value_double(env, argv[1], &offset) != napi_ok ||
+        napi_typeof(env, argv[2], &colorType) != napi_ok || colorType != napi_string) {
+        napi_throw_type_error(env, nullptr, "Color stop offset must be a number and color must be a string");
+        return nullptr;
+    }
+    return boolean(env, gradient->addColorStop(offset, argString(env, argv[2], "")));
+}
+
+napi_value canvas2dSetGradient(napi_env env, napi_callback_info info) {
+    std::array<napi_value, 3> argv{};
+    std::size_t argc = argv.size();
+    napi_get_cb_info(env, info, &argc, argv.data(), nullptr, nullptr);
+    if (argc < 3) {
+        napi_throw_type_error(env, nullptr,
+                              "canvas2dSetGradient requires a surface, property and gradient");
+        return nullptr;
+    }
+    auto* surface = canvasSurface(env, argv[0]);
+    auto* gradient = canvasGradient(env, argv[2]);
+    if (!surface || !gradient) return nullptr;
+    napi_valuetype type{};
+    if (napi_typeof(env, argv[1], &type) != napi_ok || type != napi_string) {
+        napi_throw_type_error(env, nullptr, "Canvas2D property name must be a string");
+        return nullptr;
+    }
+    return boolean(env, surface->setGradient(argString(env, argv[1], ""), *gradient));
+}
+napi_value canvas2dCall(napi_env env, napi_callback_info info) {
+    std::array<napi_value, 16> argv{};
+    std::size_t argc = argv.size();
+    napi_get_cb_info(env, info, &argc, argv.data(), nullptr, nullptr);
+    if (argc < 2) {
+        napi_throw_type_error(env, nullptr, "canvas2dCall requires a surface and operation");
+        return nullptr;
+    }
+    auto* surface = canvasSurface(env, argv[0]);
+    if (!surface) return nullptr;
+    napi_valuetype operationType{};
+    if (napi_typeof(env, argv[1], &operationType) != napi_ok || operationType != napi_string) {
+        napi_throw_type_error(env, nullptr, "Canvas2D operation must be a string");
+        return nullptr;
+    }
+    const std::string operation = argString(env, argv[1], "");
+    std::vector<double> numbers;
+    numbers.reserve(argc > 2 ? argc - 2 : 0);
+    std::string textValue;
+    bool hasText = false;
+    for (std::size_t i = 2; i < argc; ++i) {
+        napi_valuetype type{};
+        napi_typeof(env, argv[i], &type);
+        if (type == napi_number) {
+            double value = 0;
+            napi_get_value_double(env, argv[i], &value);
+            numbers.push_back(value);
+        } else if (type == napi_string && !hasText) {
+            textValue = argString(env, argv[i], "");
+            hasText = true;
+        } else {
+            napi_throw_type_error(env, nullptr, "Canvas2D operation arguments must be numbers or one string");
+            return nullptr;
+        }
+    }
+    return boolean(env, surface->call(operation, numbers, textValue));
+}
+
+napi_value canvas2dReadPixels(napi_env env, napi_callback_info info) {
+    std::array<napi_value, 5> argv{};
+    std::size_t argc = argv.size();
+    napi_get_cb_info(env, info, &argc, argv.data(), nullptr, nullptr);
+    if (argc < 1) {
+        napi_throw_type_error(env, nullptr, "canvas2dReadPixels requires a surface");
+        return nullptr;
+    }
+    auto* surface = canvasSurface(env, argv[0]);
+    if (!surface) return nullptr;
+    int x = 0;
+    int y = 0;
+    int width = -1;
+    int height = -1;
+    int* values[] = {&x, &y, &width, &height};
+    for (std::size_t i = 1; i < argc; ++i) {
+        if (!canvasInteger(env, argv[i], *values[i - 1])) return nullptr;
+    }
+    try {
+        return canvasByteArray(env, surface->readPixels(x, y, width, height), napi_uint8_clamped_array);
+    } catch (const std::exception& error) {
+        napi_throw_error(env, nullptr, error.what());
+        return nullptr;
+    }
+}
+
+napi_value canvas2dWritePixels(napi_env env, napi_callback_info info) {
+    std::array<napi_value, 10> argv{};
+    std::size_t argc = argv.size();
+    napi_get_cb_info(env, info, &argc, argv.data(), nullptr, nullptr);
+    if (argc < 6) {
+        napi_throw_type_error(env, nullptr,
+                              "canvas2dWritePixels requires surface, pixels, width, height, dx and dy");
+        return nullptr;
+    }
+    auto* surface = canvasSurface(env, argv[0]);
+    if (!surface) return nullptr;
+    const std::uint8_t* pixels = nullptr;
+    std::size_t byteLength = 0;
+    if (!canvasBytes(env, argv[1], pixels, byteLength)) return nullptr;
+    int width = 0;
+    int height = 0;
+    int destinationX = 0;
+    int destinationY = 0;
+    int sourceX = 0;
+    int sourceY = 0;
+    int copyWidth = -1;
+    int copyHeight = -1;
+    int* values[] = {&width, &height, &destinationX, &destinationY,
+                     &sourceX, &sourceY, &copyWidth, &copyHeight};
+    for (std::size_t i = 2; i < argc; ++i) {
+        if (!canvasInteger(env, argv[i], *values[i - 2])) return nullptr;
+    }
+    return boolean(env, surface->writePixels(destinationX, destinationY, width, height,
+                                              std::span<const std::uint8_t>(pixels, byteLength),
+                                              sourceX, sourceY, copyWidth, copyHeight));
+}
+
+napi_value canvas2dDrawImage(napi_env env, napi_callback_info info) {
+    std::array<napi_value, 10> argv{};
+    std::size_t argc = argv.size();
+    napi_get_cb_info(env, info, &argc, argv.data(), nullptr, nullptr);
+    if (argc < 4) {
+        napi_throw_type_error(env, nullptr,
+                              "canvas2dDrawImage requires destination, source and at least dx and dy");
+        return nullptr;
+    }
+    auto* destination = canvasSurface(env, argv[0]);
+    auto* source = canvasSurface(env, argv[1]);
+    if (!destination || !source) return nullptr;
+    std::vector<double> numbers;
+    numbers.reserve(argc - 2);
+    for (std::size_t i = 2; i < argc; ++i) {
+        napi_valuetype type{};
+        double value = 0;
+        if (napi_typeof(env, argv[i], &type) != napi_ok || type != napi_number ||
+            napi_get_value_double(env, argv[i], &value) != napi_ok) {
+            napi_throw_type_error(env, nullptr, "Canvas2D drawImage arguments must be numbers");
+            return nullptr;
+        }
+        numbers.push_back(value);
+    }
+    return boolean(env, destination->drawImage(*source, numbers));
+}
+napi_value canvas2dMeasureText(napi_env env, napi_callback_info info) {
+    std::array<napi_value, 2> argv{};
+    std::size_t argc = argv.size();
+    napi_get_cb_info(env, info, &argc, argv.data(), nullptr, nullptr);
+    if (argc < 2) {
+        napi_throw_type_error(env, nullptr, "canvas2dMeasureText requires a surface and text");
+        return nullptr;
+    }
+    auto* surface = canvasSurface(env, argv[0]);
+    if (!surface) return nullptr;
+    napi_valuetype type{};
+    if (napi_typeof(env, argv[1], &type) != napi_ok || type != napi_string) {
+        napi_throw_type_error(env, nullptr, "Canvas2D text must be a string");
+        return nullptr;
+    }
+    const auto metrics = surface->measureText(argString(env, argv[1], ""));
+    napi_value result{};
+    napi_create_object(env, &result);
+    set(env, result, "width", number(env, metrics.width));
+    set(env, result, "actualBoundingBoxLeft", number(env, metrics.actualBoundingBoxLeft));
+    set(env, result, "actualBoundingBoxRight", number(env, metrics.actualBoundingBoxRight));
+    set(env, result, "actualBoundingBoxAscent", number(env, metrics.actualBoundingBoxAscent));
+    set(env, result, "actualBoundingBoxDescent", number(env, metrics.actualBoundingBoxDescent));
+    set(env, result, "fontBoundingBoxAscent", number(env, metrics.fontBoundingBoxAscent));
+    set(env, result, "fontBoundingBoxDescent", number(env, metrics.fontBoundingBoxDescent));
+    return result;
+}
+
+napi_value canvas2dEncodePng(napi_env env, napi_callback_info info) {
+    napi_value argv[1]{};
+    std::size_t argc = 1;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (argc < 1) {
+        napi_throw_type_error(env, nullptr, "canvas2dEncodePng requires a surface");
+        return nullptr;
+    }
+    auto* surface = canvasSurface(env, argv[0]);
+    if (!surface) return nullptr;
+    try {
+        return canvasByteArray(env, surface->encodePng(), napi_uint8_array);
+    } catch (const std::exception& error) {
+        napi_throw_error(env, nullptr, error.what());
+        return nullptr;
+    }
+}
 napi_value start(napi_env env, napi_callback_info info) {
     std::array<napi_value, 3> argv{};
     std::size_t argc = argv.size();
@@ -1155,6 +1610,15 @@ napi_value stats(napi_env env, napi_callback_info) {
     std::uint64_t presents = 0;
     if (runtimeMode.load(std::memory_order_acquire) == 2) tw_stats(&fps, &frameUs, &width, &height, &vsync, &presents);
     else tn_runtime_stats(&fps, &frameUs, &width, &height, &vsync, &presents);
+    RECT client{};
+    if (const HWND hwnd = runtimeHwnd(); hwnd && GetClientRect(hwnd, &client)) {
+        const int clientWidth = static_cast<int>(client.right - client.left);
+        const int clientHeight = static_cast<int>(client.bottom - client.top);
+        if (clientWidth > 0 && clientHeight > 0) {
+            width = clientWidth;
+            height = clientHeight;
+        }
+    }
     napi_value result;
     napi_create_object(env, &result);
     set(env, result, "fps", number(env, fps));
@@ -1267,6 +1731,18 @@ napi_value init(napi_env env, napi_value exports) {
         {"submit", nullptr, submit, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"render", nullptr, render, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"decodeImage", nullptr, decodeImage, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"canvas2dCreate", nullptr, canvas2dCreate, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"canvas2dResize", nullptr, canvas2dResize, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"canvas2dSet", nullptr, canvas2dSet, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"canvas2dGradientCreate", nullptr, canvas2dGradientCreate, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"canvas2dGradientAddColorStop", nullptr, canvas2dGradientAddColorStop, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"canvas2dSetGradient", nullptr, canvas2dSetGradient, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"canvas2dCall", nullptr, canvas2dCall, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"canvas2dReadPixels", nullptr, canvas2dReadPixels, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"canvas2dWritePixels", nullptr, canvas2dWritePixels, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"canvas2dDrawImage", nullptr, canvas2dDrawImage, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"canvas2dMeasureText", nullptr, canvas2dMeasureText, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"canvas2dEncodePng", nullptr, canvas2dEncodePng, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"resize", nullptr, resize, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"shutdown", nullptr, shutdown, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"isOpen", nullptr, isOpen, nullptr, nullptr, nullptr, napi_default, nullptr},
