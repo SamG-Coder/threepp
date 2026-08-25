@@ -1,0 +1,36 @@
+{
+  "format": 2,
+  "projectId": "b057f1ae91c0de21",
+  "virtualURL": "https://b057f1ae91c0de21.runtime.threebrowser.local/",
+  "source": "https://webgpu-rtx-bushfire-mountainside.runtime.threebrowser.local/",
+  "pulledAt": "2026-08-25T00:00:00.000Z",
+  "entry": "site-entry.mjs",
+  "requiresWebGPU": true,
+  "html": "index.html",
+  "files": [
+    { "url": "https://webgpu-rtx-bushfire-mountainside.runtime.threebrowser.local/", "path": "index.html", "type": "html", "bytes": 0 },
+    { "url": "https://webgpu-rtx-bushfire-mountainside.runtime.threebrowser.local/site-entry.mjs", "path": "site-entry.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-bushfire-mountainside.runtime.threebrowser.local/src/main.mjs", "path": "src/main.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-bushfire-mountainside.runtime.threebrowser.local/src/terrain.mjs", "path": "src/terrain.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-bushfire-mountainside.runtime.threebrowser.local/src/forest.mjs", "path": "src/forest.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-bushfire-mountainside.runtime.threebrowser.local/src/fire-model.mjs", "path": "src/fire-model.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-bushfire-mountainside.runtime.threebrowser.local/src/fire-effects.mjs", "path": "src/fire-effects.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-bushfire-mountainside.runtime.threebrowser.local/src/atmosphere.mjs", "path": "src/atmosphere.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-bushfire-mountainside.runtime.threebrowser.local/src/native-rtx-lighting.mjs", "path": "src/native-rtx-lighting.mjs", "type": "module", "bytes": 0 }
+  ],
+  "compatibility": {
+    "threeImportable": true,
+    "bundledThree": false,
+    "rendererCandidates": ["webgpu"],
+    "canvasOnly": true,
+    "htmlOverlay": false,
+    "domRequired": false,
+    "notes": [
+      "Native WebGPU/TSL sample; all scene, wildfire, smoke and RTX integration code is project-owned MJS.",
+      "Valley-scale scene: 600 x 800 metre terrain, 1,400 layered trees, and a 192 x 264 metre simulated fuel field.",
+      "Native RTX ray queries provide moon visibility, ambient occlusion, and up to three shadow-tested warm fire emitters against a static terrain/forest snapshot.",
+      "Slow deterministic spread, tree-attached flames, smoke, embers, broken snags, fallen charred logs, ash and residual ember lighting remain JavaScript-authored.",
+      "No native/C++ runtime files, downloaded models, image textures or external assets are used."
+    ]
+  }
+}
