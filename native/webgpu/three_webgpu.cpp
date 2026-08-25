@@ -4715,7 +4715,8 @@ void execOne(uint32_t op, Reader& r) {
             const uint32_t indexCount = r.u32();
             const uint32_t primitiveBase = r.u32();
             if (!r.ok || version != 1u || id == 0u || capacity == 0u ||
-                capacity > 1024u || vertexCount == 0u || indexCount == 0u ||
+                capacity > kRayQueryMaximumInstanceGroupCapacity ||
+                vertexCount == 0u || indexCount == 0u ||
                 indexCount % 3u != 0u || r.remaining() != 0u) {
                 setError("Unsupported or malformed RTX instance-group descriptor");
                 return;
@@ -4753,7 +4754,8 @@ void execOne(uint32_t op, Reader& r) {
                 static_cast<uint64_t>(instanceCount) *
                 (12ull * sizeof(float) + sizeof(uint32_t));
             if (!r.ok || version != 1u || id == 0u || instanceCount == 0u ||
-                instanceCount > 1024u || expectedBytes != r.remaining()) {
+                instanceCount > kRayQueryMaximumInstanceGroupCapacity ||
+                expectedBytes != r.remaining()) {
                 setError("Unsupported or malformed RTX instance-group update");
                 return;
             }
@@ -4783,9 +4785,30 @@ void execOne(uint32_t op, Reader& r) {
             frame.height = r.u32();
             frame.vertex_count = r.u32();
             const uint32_t indexCount = r.u32();
+            if (version == 2u) {
+                frame.flags = r.u32();
+                for (float& value : frame.reflection_radiance) value = r.f32();
+                for (float& value : frame.reflection_surface) value = r.f32();
+            }
             const uint64_t indexBytes =
                 static_cast<uint64_t>(indexCount) * sizeof(uint32_t);
-            if (!r.ok || version != 1u || frame.command_encoder_handle == 0u ||
+            bool validMaterial = true;
+            if (version == 2u && (frame.flags & 2u) != 0u) {
+                for (float value : frame.reflection_radiance) {
+                    validMaterial = validMaterial && std::isfinite(value) && value >= 0.0f;
+                }
+                for (uint32_t index = 0u; index < 3u; ++index) {
+                    const float value = frame.reflection_surface[index];
+                    validMaterial = validMaterial && std::isfinite(value) && value >= 0.0f;
+                }
+                const float roughness = frame.reflection_surface[3];
+                validMaterial = validMaterial && std::isfinite(roughness) &&
+                                roughness >= 0.0f && roughness <= 1.0f;
+            }
+            if (!r.ok || (version != 1u && version != 2u) ||
+                (version == 1u && frame.flags != 0u) ||
+                (version == 2u && (frame.flags & ~2u) != 0u) || !validMaterial ||
+                frame.command_encoder_handle == 0u ||
                 frame.mesh_handle == 0u || frame.positions_texture_handle == 0u ||
                 frame.width == 0u || frame.height == 0u ||
                 frame.vertex_count == 0u || indexCount == 0u ||
@@ -6734,7 +6757,8 @@ int tw_ray_query_scene_instance_group(uint32_t id, uint32_t capacity,
                                       uint32_t indexOffset,
                                       uint32_t indexCount,
                                       uint32_t primitiveBase) {
-    if (id == 0u || capacity == 0u || capacity > 1024u ||
+    if (id == 0u || capacity == 0u ||
+        capacity > kRayQueryMaximumInstanceGroupCapacity ||
         vertexCount == 0u || indexCount == 0u || indexCount % 3u != 0u) {
         return 0;
     }
@@ -6809,7 +6833,7 @@ int tw_ray_query_instance_group_update(uint32_t commandEncoderHandle,
     return 0;
 #else
     if (id == 0u || !matrices3x4 || !masks || instanceCount == 0u ||
-        instanceCount > 1024u) {
+        instanceCount > kRayQueryMaximumInstanceGroupCapacity) {
         return 0;
     }
     try {
@@ -6861,12 +6885,17 @@ int tw_ray_query_instance_group_update(uint32_t commandEncoderHandle,
 int tw_ray_query_dynamic_triangle_mesh_create(
     const TWRayQueryDynamicTriangleMeshFrame* frame,
     const uint32_t* indices, uint32_t indexCount) {
-    static_assert(sizeof(TWRayQueryDynamicTriangleMeshFrame) == 36u);
-    if (!frame || frame->struct_size < sizeof(TWRayQueryDynamicTriangleMeshFrame) ||
+    constexpr std::size_t legacyFrameSize =
+        offsetof(TWRayQueryDynamicTriangleMeshFrame, reflection_radiance);
+    static_assert(legacyFrameSize == 36u);
+    static_assert(sizeof(TWRayQueryDynamicTriangleMeshFrame) == 68u);
+    if (!frame || frame->struct_size < legacyFrameSize ||
         !indices || indexCount == 0u || indexCount % 3u != 0u ||
         frame->mesh_handle == 0u || frame->positions_texture_handle == 0u ||
         frame->width == 0u || frame->height == 0u || frame->vertex_count == 0u ||
-        frame->flags != 0u ||
+        (frame->flags & ~2u) != 0u ||
+        ((frame->flags & 2u) != 0u &&
+         frame->struct_size < sizeof(TWRayQueryDynamicTriangleMeshFrame)) ||
         static_cast<uint64_t>(frame->width) * frame->height < frame->vertex_count) {
         setError("Invalid dynamic triangle-mesh creation descriptor");
         return 0;
@@ -6874,6 +6903,26 @@ int tw_ray_query_dynamic_triangle_mesh_create(
 #if !defined(THREEBROWSER_RAY_QUERY)
     return 0;
 #else
+    if ((frame->flags & 2u) != 0u) {
+        for (float value : frame->reflection_radiance) {
+            if (!std::isfinite(value) || value < 0.0f) {
+                setError("Dynamic triangle-mesh reflection radiance is invalid");
+                return 0;
+            }
+        }
+        for (uint32_t index = 0u; index < 3u; ++index) {
+            const float value = frame->reflection_surface[index];
+            if (!std::isfinite(value) || value < 0.0f) {
+                setError("Dynamic triangle-mesh reflection F0 is invalid");
+                return 0;
+            }
+        }
+        const float roughness = frame->reflection_surface[3];
+        if (!std::isfinite(roughness) || roughness < 0.0f || roughness > 1.0f) {
+            setError("Dynamic triangle-mesh reflection roughness is invalid");
+            return 0;
+        }
+    }
     const auto acceptedLayout = [](uint32_t value) {
         switch (static_cast<VkImageLayout>(value)) {
             case VK_IMAGE_LAYOUT_GENERAL:
@@ -6889,7 +6938,9 @@ int tw_ray_query_dynamic_triangle_mesh_create(
         setError("Dynamic triangle-mesh positions use an unsupported VkImageLayout");
         return 0;
     }
-    const TWRayQueryDynamicTriangleMeshFrame copy = *frame;
+    TWRayQueryDynamicTriangleMeshFrame copy{};
+    std::memcpy(&copy, frame, std::min<std::size_t>(
+        frame->struct_size, sizeof(TWRayQueryDynamicTriangleMeshFrame)));
     try {
         return onWorker([copy, indices, indexCount] {
             endPasses();
@@ -6925,6 +6976,11 @@ int tw_ray_query_dynamic_triangle_mesh_create(
             native.height = copy.height;
             native.vertexCount = copy.vertex_count;
             native.handle = copy.mesh_handle;
+            native.flags = copy.flags;
+            std::copy_n(copy.reflection_radiance, 4u,
+                        native.reflectionRadiance);
+            std::copy_n(copy.reflection_surface, 4u,
+                        native.reflectionSurface);
             struct Creation {
                 RayQueryDynamicTriangleMeshFrame* frame;
                 const uint32_t* indices;
@@ -6958,7 +7014,10 @@ int tw_ray_query_dynamic_triangle_mesh_create(
 
 int tw_ray_query_dynamic_triangle_mesh_refit(
     const TWRayQueryDynamicTriangleMeshFrame* frame) {
-    if (!frame || frame->struct_size < sizeof(TWRayQueryDynamicTriangleMeshFrame) ||
+    constexpr std::size_t legacyFrameSize =
+        offsetof(TWRayQueryDynamicTriangleMeshFrame, reflection_radiance);
+    static_assert(legacyFrameSize == 36u);
+    if (!frame || frame->struct_size < legacyFrameSize ||
         frame->mesh_handle == 0u || frame->positions_texture_handle == 0u ||
         frame->width == 0u || frame->height == 0u || frame->vertex_count == 0u ||
         (frame->flags & ~1u) != 0u ||
@@ -6984,7 +7043,9 @@ int tw_ray_query_dynamic_triangle_mesh_refit(
         setError("Dynamic triangle-mesh positions use an unsupported VkImageLayout");
         return 0;
     }
-    const TWRayQueryDynamicTriangleMeshFrame copy = *frame;
+    TWRayQueryDynamicTriangleMeshFrame copy{};
+    std::memcpy(&copy, frame, std::min<std::size_t>(
+        frame->struct_size, sizeof(TWRayQueryDynamicTriangleMeshFrame)));
     try {
         return onWorker([copy] {
             endPasses();

@@ -11,6 +11,7 @@
 
 #include "three_native.h"
 #include "three_webgpu.h"
+#include "audio_playback.h"
 #include "camera_capture.h"
 #include "canvas2d.h"
 
@@ -81,6 +82,7 @@ void revealRuntimeWindow(HWND hwnd) {
 void stopActiveRuntime() {
     releasePointerLock();
     threebrowser::camera::closeAll();
+    threebrowser::audio::closeAll();
     if (!runtimeActive.exchange(false, std::memory_order_acq_rel)) return;
     const int mode = runtimeMode.exchange(0, std::memory_order_acq_rel);
     if (mode == 2) tw_shutdown();
@@ -949,6 +951,177 @@ napi_value cameraClose(napi_env env, napi_callback_info info) {
         const auto handle = static_cast<std::uint32_t>(std::max(0.0, argNumber(env, argv[0], 0)));
         threebrowser::camera::close(handle);
     }
+    return undefined(env);
+}
+
+napi_value audioPlaybackStateObject(
+    napi_env env,
+    const threebrowser::audio::PlaybackState& state) {
+    napi_value result{};
+    napi_create_object(env, &result);
+    set(env, result, "cursorFrame", number(env, static_cast<double>(state.cursorFrame)));
+    set(env, result, "lengthFrames", number(env, static_cast<double>(state.lengthFrames)));
+    set(env, result, "loopIndex", number(env, static_cast<double>(state.loopIndex)));
+    set(env, result, "sampleRate", number(env, state.sampleRate));
+    set(env, result, "channels", number(env, state.channels));
+    set(env, result, "playing", boolean(env, state.playing));
+    set(env, result, "ended", boolean(env, state.ended));
+    set(env, result, "looping", boolean(env, state.looping));
+    set(env, result, "volume", number(env, state.volume));
+    set(env, result, "playbackRate", number(env, state.playbackRate));
+    set(env, result, "error", string(env, state.error.c_str()));
+    return result;
+}
+
+std::uint32_t audioHandleArgument(napi_env env, napi_value value) {
+    return static_cast<std::uint32_t>(std::clamp(
+        argNumber(env, value, 0),
+        0.0,
+        static_cast<double>(std::numeric_limits<std::uint32_t>::max())));
+}
+
+napi_value audioOpen(napi_env env, napi_callback_info info) {
+    napi_value argv[1]{};
+    std::size_t argc = 1;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (argc < 1) {
+        napi_throw_type_error(env, nullptr, "audioOpen requires a local WAV path");
+        return nullptr;
+    }
+    napi_valuetype type{};
+    if (napi_typeof(env, argv[0], &type) != napi_ok || type != napi_string) {
+        napi_throw_type_error(env, nullptr, "audioOpen path must be a string");
+        return nullptr;
+    }
+
+    const auto opened = threebrowser::audio::open(argString(env, argv[0], ""));
+    napi_value result{};
+    napi_create_object(env, &result);
+    set(env, result, "handle", number(env, opened.handle));
+    set(env, result, "state", audioPlaybackStateObject(env, opened.state));
+    set(env, result, "error", string(env, opened.error.c_str()));
+
+    napi_value cuePoints{};
+    napi_create_array_with_length(env, opened.cuePoints.size(), &cuePoints);
+    for (std::size_t index = 0; index < opened.cuePoints.size(); ++index) {
+        const auto& cue = opened.cuePoints[index];
+        napi_value item{};
+        napi_create_object(env, &item);
+        set(env, item, "cueId", number(env, cue.id));
+        set(env, item, "sampleFrame", number(env, static_cast<double>(cue.sampleFrame)));
+        napi_set_element(env, cuePoints, static_cast<std::uint32_t>(index), item);
+    }
+    set(env, result, "cuePoints", cuePoints);
+    set(env, result, "cueCount", number(env, opened.cuePoints.size()));
+    return result;
+}
+
+napi_value audioPlay(napi_env env, napi_callback_info info) {
+    napi_value argv[1]{};
+    std::size_t argc = 1;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    return boolean(env, argc > 0 && threebrowser::audio::play(audioHandleArgument(env, argv[0])));
+}
+
+napi_value audioPause(napi_env env, napi_callback_info info) {
+    napi_value argv[1]{};
+    std::size_t argc = 1;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    return boolean(env, argc > 0 && threebrowser::audio::pause(audioHandleArgument(env, argv[0])));
+}
+
+napi_value audioSetLooping(napi_env env, napi_callback_info info) {
+    napi_value argv[2]{};
+    std::size_t argc = 2;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    bool looping = false;
+    if (argc > 1) napi_get_value_bool(env, argv[1], &looping);
+    return boolean(env, argc > 1 && threebrowser::audio::setLooping(
+        audioHandleArgument(env, argv[0]), looping));
+}
+
+napi_value audioSetVolume(napi_env env, napi_callback_info info) {
+    napi_value argv[2]{};
+    std::size_t argc = 2;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    return boolean(env, argc > 1 && threebrowser::audio::setVolume(
+        audioHandleArgument(env, argv[0]),
+        static_cast<float>(argNumber(env, argv[1], 1))));
+}
+
+napi_value audioSetPlaybackRate(napi_env env, napi_callback_info info) {
+    napi_value argv[2]{};
+    std::size_t argc = 2;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    return boolean(env, argc > 1 && threebrowser::audio::setPlaybackRate(
+        audioHandleArgument(env, argv[0]),
+        static_cast<float>(argNumber(env, argv[1], 1))));
+}
+
+napi_value audioSeek(napi_env env, napi_callback_info info) {
+    napi_value argv[2]{};
+    std::size_t argc = 2;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    const double requestedFrame = argc > 1 ? argNumber(env, argv[1], 0) : 0;
+    const auto sampleFrame = static_cast<std::uint64_t>(std::clamp(
+        requestedFrame,
+        0.0,
+        static_cast<double>(std::numeric_limits<std::uint64_t>::max())));
+    return boolean(env, argc > 1 && threebrowser::audio::seek(
+        audioHandleArgument(env, argv[0]), sampleFrame));
+}
+
+napi_value audioState(napi_env env, napi_callback_info info) {
+    napi_value argv[1]{};
+    std::size_t argc = 1;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    return audioPlaybackStateObject(
+        env,
+        threebrowser::audio::state(argc > 0 ? audioHandleArgument(env, argv[0]) : 0));
+}
+
+napi_value audioPollCues(napi_env env, napi_callback_info info) {
+    napi_value argv[1]{};
+    std::size_t argc = 1;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    const auto packet = threebrowser::audio::pollCues(
+        argc > 0 ? audioHandleArgument(env, argv[0]) : 0);
+    napi_value result{};
+    napi_create_object(env, &result);
+    set(env, result, "state", audioPlaybackStateObject(env, packet.state));
+    set(env, result, "error", string(env, packet.error.c_str()));
+
+    napi_value cues{};
+    napi_create_array_with_length(env, packet.cues.size(), &cues);
+    for (std::size_t index = 0; index < packet.cues.size(); ++index) {
+        const auto& cue = packet.cues[index];
+        const std::uint64_t absoluteSample = packet.state.lengthFrames > 0 &&
+                                                    cue.loopIndex <=
+                                                        std::numeric_limits<std::uint64_t>::max() /
+                                                            packet.state.lengthFrames
+                                                ? cue.loopIndex * packet.state.lengthFrames + cue.sampleFrame
+                                                : cue.sampleFrame;
+        napi_value item{};
+        napi_create_object(env, &item);
+        set(env, item, "sequence", number(env, static_cast<double>(cue.sequence)));
+        set(env, item, "cueId", number(env, cue.id));
+        set(env, item, "sampleFrame", number(env, static_cast<double>(cue.sampleFrame)));
+        set(env, item, "absoluteSample", number(env, static_cast<double>(absoluteSample)));
+        set(env, item, "playheadSample", number(env, static_cast<double>(cue.playheadSample)));
+        set(env, item, "sampleRate", number(env, packet.state.sampleRate));
+        set(env, item, "loop", number(env, static_cast<double>(cue.loopIndex)));
+        set(env, item, "loopIndex", number(env, static_cast<double>(cue.loopIndex)));
+        napi_set_element(env, cues, static_cast<std::uint32_t>(index), item);
+    }
+    set(env, result, "cues", cues);
+    return result;
+}
+
+napi_value audioClose(napi_env env, napi_callback_info info) {
+    napi_value argv[1]{};
+    std::size_t argc = 1;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (argc > 0) threebrowser::audio::close(audioHandleArgument(env, argv[0]));
     return undefined(env);
 }
 
@@ -1885,6 +2058,16 @@ napi_value init(napi_env env, napi_value exports) {
         {"cameraOpen", nullptr, cameraOpen, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"cameraRead", nullptr, cameraRead, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"cameraClose", nullptr, cameraClose, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"audioOpen", nullptr, audioOpen, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"audioPlay", nullptr, audioPlay, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"audioPause", nullptr, audioPause, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"audioSetLooping", nullptr, audioSetLooping, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"audioSetVolume", nullptr, audioSetVolume, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"audioSetPlaybackRate", nullptr, audioSetPlaybackRate, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"audioSeek", nullptr, audioSeek, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"audioState", nullptr, audioState, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"audioPollCues", nullptr, audioPollCues, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"audioClose", nullptr, audioClose, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"canvas2dCreate", nullptr, canvas2dCreate, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"canvas2dResize", nullptr, canvas2dResize, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"canvas2dSet", nullptr, canvas2dSet, nullptr, nullptr, nullptr, napi_default, nullptr},

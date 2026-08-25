@@ -33,6 +33,11 @@ struct RayQueryBridgeCapabilities {
     const char* status{};
 };
 
+// Fixed per-group budget shared by the bridge and the native command parser.
+// VkAccelerationStructureInstanceKHR is 64 bytes, so a full group occupies
+// 512 KiB and is uploaded as multiple Vulkan update commands.
+inline constexpr uint32_t kRayQueryMaximumInstanceGroupCapacity = 8192u;
+
 enum class RayQueryPipelineProfile : uint32_t {
     LightingV1 = 1,
     ReflectionsV1 = 2,
@@ -108,7 +113,11 @@ struct RayQueryDynamicTriangleMeshFrame {
     uint32_t vertexCount{};
     uint32_t handle{};
     // bit 0: rebuild the BLAS instead of updating it in place.
+    // bit 1: create includes a uniform reflection material.
     uint32_t flags{};
+    float reflectionRadiance[4]{};
+    // Linear metallic F0 RGB and perceptual roughness.
+    float reflectionSurface[4]{};
 };
 
 bool rayQueryBridgeAttachVulkan(const RayQueryVulkanContext& context);

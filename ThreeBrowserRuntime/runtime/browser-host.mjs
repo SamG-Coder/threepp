@@ -1101,52 +1101,215 @@ class AudioElement extends Element {
   constructor(source = "") {
     super("audio");
     this._src = "";
+    this._nativeAudioHandle = 0;
+    this._audioLoadGeneration = 0;
+    this._audioLoadPromise = null;
+    this._currentTime = 0;
+    this._duration = Number.NaN;
+    this._loop = false;
+    this._muted = false;
+    this._volume = 1;
+    this._playbackRate = 1;
+    this._endedEventSent = false;
     this.autoplay = false;
     this.controls = false;
     this.crossOrigin = null;
-    this.currentTime = 0;
     this.defaultMuted = false;
-    this.duration = Number.NaN;
     this.ended = false;
-    this.loop = false;
-    this.muted = false;
     this.paused = true;
-    this.playbackRate = 1;
     this.preload = "auto";
     this.readyState = 0;
-    this.volume = 1;
     if (source) this.src = source;
   }
   get src() { return this._src; }
   set src(value) {
     this._src = String(value ?? "");
-    this.readyState = 0;
-    if (this._src) this.load();
+    this.load();
   }
   get currentSrc() { return this._src; }
-  load() {
-    queueMicrotask(() => {
-      this.readyState = 4;
-      for (const type of ["loadedmetadata", "loadeddata", "canplay", "canplaythrough"]) {
-        this.dispatchEvent(new Event(type));
-      }
-      if (this.autoplay) void this.play();
-    });
+  get duration() { return this._duration; }
+  get currentTime() {
+    this._syncNativeAudioState();
+    return this._currentTime;
   }
-  play() {
+  set currentTime(value) {
+    const requested = Math.max(0, Number(value) || 0);
+    this._currentTime = Number.isFinite(this._duration)
+      ? Math.min(this._duration, requested)
+      : requested;
+    if (!this._nativeAudioHandle) return;
+    const state = native.audioState?.(this._nativeAudioHandle);
+    const sampleRate = Number(state?.sampleRate || 0);
+    if (sampleRate > 0) {
+      native.audioSeek?.(this._nativeAudioHandle, Math.round(this._currentTime * sampleRate));
+      this.ended = false;
+      this._endedEventSent = false;
+    }
+  }
+  get loop() { return this._loop; }
+  set loop(value) {
+    this._loop = Boolean(value);
+    if (this._nativeAudioHandle) native.audioSetLooping?.(this._nativeAudioHandle, this._loop);
+  }
+  get muted() { return this._muted; }
+  set muted(value) {
+    this._muted = Boolean(value);
+    this._applyNativeAudioVolume();
+  }
+  get volume() { return this._volume; }
+  set volume(value) {
+    const requested = Number(value);
+    if (!Number.isFinite(requested) || requested < 0 || requested > 1) {
+      throw new DOMException("Audio volume must be between 0 and 1", "IndexSizeError");
+    }
+    this._volume = requested;
+    this._applyNativeAudioVolume();
+  }
+  get playbackRate() { return this._playbackRate; }
+  set playbackRate(value) {
+    const requested = Number(value);
+    if (!Number.isFinite(requested) || requested <= 0) {
+      throw new DOMException("Audio playbackRate must be greater than zero", "NotSupportedError");
+    }
+    this._playbackRate = requested;
+    if (this._nativeAudioHandle) native.audioSetPlaybackRate?.(this._nativeAudioHandle, requested);
+  }
+  _applyNativeAudioVolume() {
+    if (this._nativeAudioHandle) {
+      native.audioSetVolume?.(this._nativeAudioHandle, this._muted ? 0 : this._volume);
+    }
+  }
+  _closeNativeAudio() {
+    if (this._nativeAudioHandle) native.audioClose?.(this._nativeAudioHandle);
+    this._nativeAudioHandle = 0;
+  }
+  _syncNativeAudioState(state = null) {
+    if (!this._nativeAudioHandle) return null;
+    const snapshot = state ?? native.audioState?.(this._nativeAudioHandle);
+    const sampleRate = Number(snapshot?.sampleRate || 0);
+    const cursorFrame = Number(snapshot?.cursorFrame || 0);
+    const lengthFrames = Number(snapshot?.lengthFrames || 0);
+    if (sampleRate > 0) {
+      this._currentTime = cursorFrame / sampleRate;
+      this._duration = lengthFrames > 0 ? lengthFrames / sampleRate : Number.NaN;
+    }
+    this.ended = Boolean(snapshot?.ended) && !this._loop;
+    if (this.ended && !this._endedEventSent) {
+      this._endedEventSent = true;
+      this.paused = true;
+      queueMicrotask(() => this.dispatchEvent(new Event("ended")));
+    }
+    return snapshot;
+  }
+  load() {
+    const generation = ++this._audioLoadGeneration;
+    this._closeNativeAudio();
+    this._currentTime = 0;
+    this._duration = Number.NaN;
+    this.readyState = 0;
+    this.ended = false;
+    this.paused = true;
+    this._endedEventSent = false;
+    if (!this._src) {
+      this._audioLoadPromise = null;
+      return;
+    }
+    this._audioLoadPromise = new Promise((resolve, reject) => {
+      queueMicrotask(() => {
+        // Camera-backed/video playback keeps its existing media shim. Native
+        // audio is deliberately attached only to HTMLAudioElement instances.
+        if (this.tagName === "VIDEO") {
+          this.readyState = 4;
+          for (const type of ["loadedmetadata", "loadeddata", "canplay", "canplaythrough"]) {
+            this.dispatchEvent(new Event(type));
+          }
+          if (this.autoplay) void this.play();
+          resolve();
+          return;
+        }
+        try {
+          const localPath = resolveNativeAudioPath(this._src);
+          if (!localPath) {
+            throw new DOMException(
+              "ThreeBrowser native audio currently requires a local or pulled media file",
+              "NotSupportedError",
+            );
+          }
+          const opened = native.audioOpen?.(localPath);
+          if (generation !== this._audioLoadGeneration) {
+            if (opened?.handle) native.audioClose?.(opened.handle);
+            resolve();
+            return;
+          }
+          if (!opened?.handle) throw new Error(opened?.error || "Native audio could not open the media file");
+          this._nativeAudioHandle = Number(opened.handle);
+          this._syncNativeAudioState(opened.state);
+          this._applyNativeAudioVolume();
+          native.audioSetLooping?.(this._nativeAudioHandle, this._loop);
+          native.audioSetPlaybackRate?.(this._nativeAudioHandle, this._playbackRate);
+          if (this._currentTime > 0) this.currentTime = this._currentTime;
+          this.readyState = 4;
+          for (const type of ["loadedmetadata", "loadeddata", "canplay", "canplaythrough"]) {
+            this.dispatchEvent(new Event(type));
+          }
+          if (this.autoplay) void this.play();
+          resolve();
+        } catch (error) {
+          if (generation !== this._audioLoadGeneration) {
+            resolve();
+            return;
+          }
+          this.readyState = 0;
+          queueMicrotask(() => this.dispatchEvent(new Event("error")));
+          reject(error);
+        }
+      });
+    });
+    // load() itself is synchronous in the browser. Keep rejected background
+    // preloads from becoming process-level unhandled rejections; play() still
+    // awaits and reports the original failure to its caller.
+    this._audioLoadPromise.catch(() => {});
+  }
+  async play() {
+    if (!this._src) {
+      throw new DOMException("The media element has no source", "NotSupportedError");
+    }
+    if (!this._audioLoadPromise && !this._nativeAudioHandle) this.load();
+    await this._audioLoadPromise;
+    if (this.tagName !== "VIDEO" &&
+        (!this._nativeAudioHandle || native.audioPlay?.(this._nativeAudioHandle) === false)) {
+      throw new DOMException("Native audio playback could not start", "NotSupportedError");
+    }
+    if (!this.paused) return;
     this.paused = false;
     this.ended = false;
+    this._endedEventSent = false;
     this.dispatchEvent(new Event("play"));
     queueMicrotask(() => this.dispatchEvent(new Event("playing")));
-    return Promise.resolve();
   }
   pause() {
     if (this.paused) return;
+    if (this._nativeAudioHandle) native.audioPause?.(this._nativeAudioHandle);
+    this._syncNativeAudioState();
     this.paused = true;
     this.dispatchEvent(new Event("pause"));
   }
+  pollCues() {
+    if (!this._nativeAudioHandle) return [];
+    const packet = native.audioPollCues?.(this._nativeAudioHandle);
+    this._syncNativeAudioState(packet?.state);
+    return Array.isArray(packet?.cues) ? packet.cues : [];
+  }
+  close() {
+    this._audioLoadGeneration++;
+    this._closeNativeAudio();
+    this._audioLoadPromise = null;
+    this.paused = true;
+    this.readyState = 0;
+  }
   canPlayType(type) {
-    return /^(?:audio\/(?:mpeg|mp4|ogg|wav|webm)|application\/ogg)/i.test(String(type)) ? "probably" : "";
+    return /^(?:audio\/(?:wav|x-wav|wave))/i.test(String(type)) ? "probably" :
+      /^(?:audio\/(?:mpeg|mp4|ogg|webm)|application\/ogg)/i.test(String(type)) ? "maybe" : "";
   }
 }
 
@@ -2140,12 +2303,37 @@ let pulledVirtualURL = null;
 let pulledDirectory = null;
 let pulledFiles = new Map();
 let pulledVirtualFiles = new Map();
+function resolveNativeAudioPath(source) {
+  const raw = String(source ?? "");
+  if (!raw) return null;
+  if (path.isAbsolute(raw)) return path.resolve(raw);
+  let requestURL;
+  try {
+    const base = globalThis.location?.href || pulledVirtualURL?.href;
+    requestURL = base ? new URL(raw, base) : new URL(raw);
+    requestURL.hash = "";
+  } catch {
+    return null;
+  }
+  if (requestURL.protocol === "file:") {
+    requestURL.search = "";
+    return fileURLToPath(requestURL);
+  }
+  const isVirtual = pulledVirtualURL && requestURL.origin === pulledVirtualURL.origin;
+  const sourceCandidate = isVirtual && pulledSourceURL
+    ? new URL(`${requestURL.pathname}${requestURL.search}`, pulledSourceURL.origin)
+    : pulledSourceURL ? new URL(raw, pulledSourceURL) : requestURL;
+  sourceCandidate.hash = "";
+  const pulledPath = pulledVirtualFiles.get(requestURL.href) || pulledFiles.get(sourceCandidate.href);
+  return pulledPath && pulledDirectory ? path.resolve(pulledDirectory, pulledPath) : null;
+}
 const contentTypes = new Map([
   [".json", "application/json"], [".gltf", "model/gltf+json"], [".glb", "model/gltf-binary"],
   [".bin", "application/octet-stream"], [".dat", "application/octet-stream"], [".wasm", "application/wasm"], [".txt", "text/plain"],
   [".glsl", "text/plain"], [".vert", "text/plain"], [".frag", "text/plain"], [".comp", "text/plain"],
   [".wgsl", "text/plain"], [".spv", "application/vnd.khronos.spirv"],
   [".png", "image/png"], [".jpg", "image/jpeg"], [".jpeg", "image/jpeg"], [".webp", "image/webp"],
+  [".wav", "audio/wav"],
 ]);
 globalThis.fetch = async (input, init) => {
   const raw = input instanceof Request ? input.url : input instanceof URL ? input.href : String(input);

@@ -5,6 +5,11 @@
 
 const CAP = 8 * 1024 * 1024;
 
+// Keep this protocol budget aligned with every native RTX scene decoder. A
+// maximum-size update carries 8,192 affine 3x4 matrices plus visibility masks
+// (about 416 KiB), comfortably below the 8 MiB command ring above.
+export const RTX_MAX_INSTANCE_GROUP_CAPACITY = 8192;
+
 export const OP = {
   NOP: 0,
   START: 1,
@@ -1209,6 +1214,7 @@ function rayReconstructionEvaluate(encoder, frame) {
 // triangle scene. Scene upload is recorded in the same command buffer as the
 // Vulkan BLAS/TLAS build so no mesh bytes cross the bridge on later frames.
 const RTX_PROTOCOL_VERSION = 1;
+const RTX_DYNAMIC_MESH_CREATE_PROTOCOL_VERSION = 2;
 const RTX_EVALUATION_PROTOCOL_VERSION = 2;
 const RTX_PIPELINE_PROTOCOL_VERSION = 1;
 
@@ -1318,10 +1324,17 @@ function rtxSceneDestroy() {
 }
 
 function rtxSceneInstanceGroup(group) {
+  const capacity = Number(group?.capacity);
+  if (!Number.isInteger(capacity) || capacity <= 0 ||
+      capacity > RTX_MAX_INSTANCE_GROUP_CAPACITY) {
+    throw new RangeError(
+      `RTX instance-group capacity must be an integer in [1, ${RTX_MAX_INSTANCE_GROUP_CAPACITY}]`,
+    );
+  }
   const s = begin(OP.RTX_SCENE_INSTANCE_GROUP, 32);
   wu32(RTX_PROTOCOL_VERSION);
   wu32(group.id >>> 0);
-  wu32(group.capacity >>> 0);
+  wu32(capacity >>> 0);
   wu32(group.vertexOffset >>> 0);
   wu32(group.vertexCount >>> 0);
   wu32(group.indexOffset >>> 0);
@@ -1334,6 +1347,11 @@ function rtxInstanceGroupUpdate(encoder, id, matrices, masks) {
   const matrixBytes = asU8(matrices);
   const maskBytes = asU8(masks);
   const count = masks.length >>> 0;
+  if (count === 0 || count > RTX_MAX_INSTANCE_GROUP_CAPACITY) {
+    throw new RangeError(
+      `RTX instance-group updates require a slot count in [1, ${RTX_MAX_INSTANCE_GROUP_CAPACITY}]`,
+    );
+  }
   if (matrixBytes.byteLength !== count * 12 * 4 || maskBytes.byteLength !== count * 4) {
     throw new RangeError("RTX instance-group updates require one 3x4 matrix and one uint32 mask per slot");
   }
@@ -1352,8 +1370,26 @@ function rtxDynamicMeshCreate(encoder, mesh) {
   if (indexBytes.byteLength === 0 || (indexBytes.byteLength % 12) !== 0) {
     throw new RangeError("RTX dynamic-mesh indices must contain complete uint32 triangles");
   }
-  const s = begin(OP.RTX_DYNAMIC_MESH_CREATE, 36 + indexBytes.byteLength);
-  wu32(RTX_PROTOCOL_VERSION);
+  const reflectionMaterial = mesh.reflectionMaterial ?? null;
+  if (!reflectionMaterial) {
+    const s = begin(OP.RTX_DYNAMIC_MESH_CREATE, 36 + indexBytes.byteLength);
+    wu32(RTX_PROTOCOL_VERSION);
+    wu32(encoder >>> 0);
+    wu32(mesh.handle >>> 0);
+    wu32(mesh.positionsTextureHandle >>> 0);
+    wu32(mesh.positionsVulkanLayout >>> 0);
+    wu32(mesh.width >>> 0);
+    wu32(mesh.height >>> 0);
+    wu32(mesh.vertexCount >>> 0);
+    wu32(indexBytes.byteLength / 4);
+    wbytes(indexBytes);
+    end(s);
+    return;
+  }
+  const radiance = reflectionMaterial.radiance;
+  const surface = reflectionMaterial.surface;
+  const s = begin(OP.RTX_DYNAMIC_MESH_CREATE, 72 + indexBytes.byteLength);
+  wu32(RTX_DYNAMIC_MESH_CREATE_PROTOCOL_VERSION);
   wu32(encoder >>> 0);
   wu32(mesh.handle >>> 0);
   wu32(mesh.positionsTextureHandle >>> 0);
@@ -1362,6 +1398,9 @@ function rtxDynamicMeshCreate(encoder, mesh) {
   wu32(mesh.height >>> 0);
   wu32(mesh.vertexCount >>> 0);
   wu32(indexBytes.byteLength / 4);
+  wu32(2);
+  for (let index = 0; index < 4; ++index) wf32(radiance[index]);
+  for (let index = 0; index < 4; ++index) wf32(surface[index]);
   wbytes(indexBytes);
   end(s);
 }

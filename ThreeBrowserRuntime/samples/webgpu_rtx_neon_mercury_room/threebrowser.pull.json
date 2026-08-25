@@ -1,0 +1,39 @@
+{
+  "format": 2,
+  "projectId": "7f31a9c4e2b6085d",
+  "virtualURL": "https://7f31a9c4e2b6085d.runtime.threebrowser.local/",
+  "source": "https://webgpu-rtx-neon-mercury-room.runtime.threebrowser.local/",
+  "pulledAt": "2026-08-25T00:00:00.000Z",
+  "entry": "site-entry.mjs",
+  "requiresWebGPU": true,
+  "html": "index.html",
+  "files": [
+    { "url": "https://webgpu-rtx-neon-mercury-room.runtime.threebrowser.local/", "path": "index.html", "type": "html", "bytes": 0 },
+    { "url": "https://webgpu-rtx-neon-mercury-room.runtime.threebrowser.local/site-entry.mjs", "path": "site-entry.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-neon-mercury-room.runtime.threebrowser.local/src/main.mjs", "path": "src/main.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-neon-mercury-room.runtime.threebrowser.local/src/bass-shocks.mjs", "path": "src/bass-shocks.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-neon-mercury-room.runtime.threebrowser.local/src/mercury-model.mjs", "path": "src/mercury-model.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-neon-mercury-room.runtime.threebrowser.local/src/mercury.mjs", "path": "src/mercury.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-neon-mercury-room.runtime.threebrowser.local/src/room.mjs", "path": "src/room.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-neon-mercury-room.runtime.threebrowser.local/src/rtx-scene.mjs", "path": "src/rtx-scene.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-neon-mercury-room.runtime.threebrowser.local/src/native-rtx-renderer.mjs", "path": "src/native-rtx-renderer.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-neon-mercury-room.runtime.threebrowser.local/assets/mercury-sub-bass.wav", "path": "assets/mercury-sub-bass.wav", "type": "audio", "bytes": 18434984 }
+  ],
+  "compatibility": {
+    "threeImportable": true,
+    "bundledThree": false,
+    "rendererCandidates": ["webgpu"],
+    "canvasOnly": true,
+    "htmlOverlay": false,
+    "domRequired": false,
+    "notes": [
+      "Native WebGPU/TSL mirror-room sample with all simulation, materials and RTX integration in project-owned MJS.",
+      "A deterministic fixed-step heightfield conserves the volume of a mouse-gravity-driven heavy gold-mercury pool.",
+      "The exact connected 88x104 solver surface uploads through one persistent rgba32float texture into a reflection-material-aware dynamic BLAS.",
+      "A native 96-second tempo-mapped PCM16 song exposes embedded RIFF cue markers that create tiered fixed-tick mercury lifts from the same authored transients.",
+      "Static mirror architecture and stable emissive neon feed native ray reflections through live normal, roughness and metallic guides.",
+      "The camera remains inside hard room bounds and no HUD or overlay is created.",
+      "Native RTX and raster fallback paths render offscreen and share exactly one final swapchain presentation."
+    ]
+  }
+}

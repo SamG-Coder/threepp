@@ -121,6 +121,9 @@ struct ReflectionDescriptorKey {
     VkImage specularAlbedo{VK_NULL_HANDLE};
     VkImage specularHitDistance{VK_NULL_HANDLE};
     VkFormat specularHitDistanceFormat{VK_FORMAT_UNDEFINED};
+    VkBuffer dynamicVertices{VK_NULL_HANDLE};
+    VkBuffer dynamicIndices{VK_NULL_HANDLE};
+    VkBuffer dynamicMaterial{VK_NULL_HANDLE};
 
     bool operator==(const ReflectionDescriptorKey&) const = default;
 };
@@ -140,6 +143,13 @@ struct ReflectionDescriptorKeyHash {
         combine(key.specularHitDistance);
         value ^= static_cast<std::size_t>(key.specularHitDistanceFormat) +
                  0x9e3779b97f4a7c15ull + (value << 6u) + (value >> 2u);
+        const auto combineBuffer = [&value](VkBuffer buffer) {
+            const auto part = reinterpret_cast<std::uintptr_t>(buffer);
+            value ^= part + 0x9e3779b97f4a7c15ull + (value << 6u) + (value >> 2u);
+        };
+        combineBuffer(key.dynamicVertices);
+        combineBuffer(key.dynamicIndices);
+        combineBuffer(key.dynamicMaterial);
         return value;
     }
 };
@@ -232,6 +242,7 @@ struct State {
     // refits, so TLAS updates are only needed on attach/detach.
     Buffer dynamicVertices{};
     Buffer dynamicIndices{};
+    Buffer dynamicReflectionMaterial{};
     Buffer dynamicBlasScratch{};
     AccelerationStructure dynamicBlas{};
     uint32_t dynamicInstanceIndex{};
@@ -243,6 +254,7 @@ struct State {
     uint32_t baseTriangleCount{};
     bool dynamicSlotReserved{};
     bool dynamicMeshActive{};
+    bool dynamicReflectionMaterialPresent{};
     uint64_t dynamicRefitCount{};
     uint64_t dynamicRebuildCount{};
     // wgpu owns these images, but raw Vulkan position copies may still be in
@@ -366,6 +378,7 @@ constexpr uint32_t kSpirvMagic = 0x07230203u;
 constexpr std::size_t kMaximumCustomSpirvWords = (1024u * 1024u) / 4u;
 constexpr std::size_t kMaximumCustomPipelines = 256u;
 constexpr std::size_t kMaximumEntryPointBytes = 255u;
+constexpr VkDeviceSize kMaximumCommandBufferUpdateBytes = 65536u;
 constexpr uint16_t kSpirvOpEntryPoint = 15u;
 constexpr uint16_t kSpirvOpExecutionMode = 16u;
 constexpr uint32_t kSpirvExecutionModelGlCompute = 5u;
@@ -686,6 +699,7 @@ bool createAccelerationStructure(VkAccelerationStructureTypeKHR type,
 void destroyDynamicTriangleMeshResources() {
     destroyAccelerationStructure(g.dynamicBlas);
     destroyBuffer(g.dynamicBlasScratch);
+    destroyBuffer(g.dynamicReflectionMaterial);
     destroyBuffer(g.dynamicIndices);
     destroyBuffer(g.dynamicVertices);
     g.dynamicMeshHandle = 0u;
@@ -694,6 +708,7 @@ void destroyDynamicTriangleMeshResources() {
     g.dynamicTextureWidth = 0u;
     g.dynamicTextureHeight = 0u;
     g.dynamicMeshActive = false;
+    g.dynamicReflectionMaterialPresent = false;
 }
 
 void destroySceneResources(bool wait) {
@@ -820,7 +835,7 @@ bool createPipeline() {
 }
 
 bool createReflectionPipeline() {
-    const std::array<VkDescriptorSetLayoutBinding, 12> bindings{{
+    const std::array<VkDescriptorSetLayoutBinding, 15> bindings{{
         {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1,
          VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
         {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1,
@@ -845,6 +860,12 @@ bool createReflectionPipeline() {
          VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
         {11, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1,
          VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+         VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {13, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+         VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+         VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
     }};
     VkDescriptorSetLayoutCreateInfo descriptorLayout{
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
@@ -859,7 +880,7 @@ bool createReflectionPipeline() {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 256},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 512},
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1024},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1280},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2048},
     }};
     VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pool.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
@@ -1157,6 +1178,7 @@ VkDescriptorSet reflectionDescriptorFor(const ReflectionDescriptorKey& key) {
     }
     if (!g.triangleRadiance.buffer || !g.vertices.buffer || !g.indices.buffer ||
         !g.triangleSurface.buffer || !g.staticLights.buffer ||
+        !key.dynamicVertices || !key.dynamicIndices || !key.dynamicMaterial ||
         g.triangleRadiance.size < sizeof(float) * 4u ||
         g.triangleSurface.size < sizeof(float) * 4u ||
         g.staticLights.size < sizeof(float) * 16u) {
@@ -1249,6 +1271,18 @@ VkDescriptorSet reflectionDescriptorFor(const ReflectionDescriptorKey& key) {
     lightsInfo.buffer = g.staticLights.buffer;
     lightsInfo.offset = 0;
     lightsInfo.range = g.staticLights.size;
+    VkDescriptorBufferInfo dynamicVertexInfo{};
+    dynamicVertexInfo.buffer = key.dynamicVertices;
+    dynamicVertexInfo.offset = 0;
+    dynamicVertexInfo.range = VK_WHOLE_SIZE;
+    VkDescriptorBufferInfo dynamicIndexInfo{};
+    dynamicIndexInfo.buffer = key.dynamicIndices;
+    dynamicIndexInfo.offset = 0;
+    dynamicIndexInfo.range = VK_WHOLE_SIZE;
+    VkDescriptorBufferInfo dynamicMaterialInfo{};
+    dynamicMaterialInfo.buffer = key.dynamicMaterial;
+    dynamicMaterialInfo.offset = 0;
+    dynamicMaterialInfo.range = VK_WHOLE_SIZE;
 
     std::array<VkWriteDescriptorSet, 12> writes{};
     writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
@@ -1303,6 +1337,21 @@ VkDescriptorSet reflectionDescriptorFor(const ReflectionDescriptorKey& key) {
     }
     g.vk.updateDescriptorSets(g.device, writeCount,
                               writes.data(), 0, nullptr);
+    const std::array<const VkDescriptorBufferInfo*, 3> dynamicInfos{{
+        &dynamicVertexInfo, &dynamicIndexInfo, &dynamicMaterialInfo,
+    }};
+    std::array<VkWriteDescriptorSet, 3> dynamicWrites{};
+    for (uint32_t index = 0u; index < dynamicWrites.size(); ++index) {
+        dynamicWrites[index] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        dynamicWrites[index].dstSet = record.set;
+        dynamicWrites[index].dstBinding = 12u + index;
+        dynamicWrites[index].descriptorCount = 1u;
+        dynamicWrites[index].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        dynamicWrites[index].pBufferInfo = dynamicInfos[index];
+    }
+    g.vk.updateDescriptorSets(g.device,
+                              static_cast<uint32_t>(dynamicWrites.size()),
+                              dynamicWrites.data(), 0, nullptr);
     g.reflectionDescriptors.emplace(key, record);
     return record.set;
 }
@@ -1574,7 +1623,8 @@ bool rayQueryBridgeAddInstanceGroup(uint32_t id, uint32_t capacity,
                                     uint32_t indexOffset, uint32_t indexCount,
                                     uint32_t primitiveBase) {
     std::scoped_lock lock(g.mutex);
-    if (!g.attached || id == 0u || capacity == 0u || capacity > 1024u ||
+    if (!g.attached || id == 0u || capacity == 0u ||
+        capacity > kRayQueryMaximumInstanceGroupCapacity ||
         vertexCount == 0u || indexCount == 0u || indexCount % 3u != 0u ||
         primitiveBase > 0x00ffffffu) {
         fail("Invalid dynamic ray-query instance-group descriptor");
@@ -2011,6 +2061,23 @@ void recordDynamicPositionCopy(
         g.dynamicSourceImages.push_back(image);
     }
     const auto originalLayout = static_cast<VkImageLayout>(frame.positionsLayout);
+    VkBufferMemoryBarrier destinationBarrier{
+        VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+    destinationBarrier.srcAccessMask =
+        VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+        VK_ACCESS_SHADER_READ_BIT;
+    destinationBarrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    destinationBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    destinationBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    destinationBarrier.buffer = g.dynamicVertices.buffer;
+    destinationBarrier.offset = 0u;
+    destinationBarrier.size = g.dynamicVertices.size;
+    g.vk.cmdPipelineBarrier(
+        commandBuffer,
+        VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, 0u, 0u, nullptr, 1u,
+        &destinationBarrier, 0u, nullptr);
     imageBarrier(commandBuffer, image, VK_IMAGE_ASPECT_COLOR_BIT,
                  originalLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                  VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
@@ -2042,7 +2109,9 @@ void recordBufferForAccelerationStructure(
     // legal producer paths with one explicit dependency.
     barrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT |
                             VK_ACCESS_TRANSFER_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+    // Reflection shaders also read dynamic geometry/material through SSBOs.
+    barrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                            VK_ACCESS_SHADER_READ_BIT;
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.buffer = buffer;
@@ -2051,7 +2120,8 @@ void recordBufferForAccelerationStructure(
     g.vk.cmdPipelineBarrier(commandBuffer,
                             VK_PIPELINE_STAGE_HOST_BIT |
                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
-                            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                             0u, 0u, nullptr, 1u, &barrier, 0u, nullptr);
 }
 
@@ -2126,12 +2196,34 @@ bool rayQueryBridgeCreateDynamicTriangleMesh(
     const RayQueryDynamicTriangleMeshFrame& frame,
     const uint32_t* indices, std::size_t indexCount) {
     std::scoped_lock lock(g.mutex);
+    const bool hasReflectionMaterial = (frame.flags & 2u) != 0u;
     if (!g.attached || !g.sceneReady || !g.dynamicSlotReserved ||
         !validDynamicFrame(frame) || !indices || indexCount == 0u ||
         indexCount > std::numeric_limits<uint32_t>::max() ||
-        indexCount % 3u != 0u || g.dynamicMeshActive) {
+        indexCount % 3u != 0u || (frame.flags & ~2u) != 0u ||
+        g.dynamicMeshActive || g.baseTriangleCount > 0x00ffffffu) {
         fail("Dynamic triangle-mesh creation requires a ready scene, rgba32f position image and complete fixed topology");
         return false;
+    }
+    if (hasReflectionMaterial) {
+        for (float value : frame.reflectionRadiance) {
+            if (!std::isfinite(value) || value < 0.0f) {
+                fail("Dynamic triangle-mesh reflection radiance is invalid");
+                return false;
+            }
+        }
+        for (uint32_t index = 0u; index < 3u; ++index) {
+            const float value = frame.reflectionSurface[index];
+            if (!std::isfinite(value) || value < 0.0f) {
+                fail("Dynamic triangle-mesh reflection F0 is invalid");
+                return false;
+            }
+        }
+        const float roughness = frame.reflectionSurface[3];
+        if (!std::isfinite(roughness) || roughness < 0.0f || roughness > 1.0f) {
+            fail("Dynamic triangle-mesh reflection roughness is invalid");
+            return false;
+        }
     }
     for (std::size_t offset = 0u; offset < indexCount; ++offset) {
         if (indices[offset] >= frame.vertexCount) {
@@ -2149,8 +2241,12 @@ bool rayQueryBridgeCreateDynamicTriangleMesh(
     // A previously detached mesh is no longer referenced after its destroy
     // submission. Wait for that submission before recycling native storage.
     if (g.dynamicBlas.handle || g.dynamicVertices.buffer ||
-        g.dynamicIndices.buffer || g.dynamicBlasScratch.buffer) {
+        g.dynamicIndices.buffer || g.dynamicReflectionMaterial.buffer ||
+        g.dynamicBlasScratch.buffer) {
         if (g.vk.deviceWaitIdle) g.vk.deviceWaitIdle(g.device);
+        // Cached reflection sets key the exact dynamic buffers. The device is
+        // idle here, so retire every set before those buffers are destroyed.
+        resetReflectionDescriptorCache();
         destroyDynamicTriangleMeshResources();
         // All static/dynamic upload copies are complete after the idle wait;
         // avoid retaining staging buffers across repeated detach/recreate
@@ -2163,6 +2259,7 @@ bool rayQueryBridgeCreateDynamicTriangleMesh(
     g.dynamicIndexCount = static_cast<uint32_t>(indexCount);
     g.dynamicTextureWidth = frame.width;
     g.dynamicTextureHeight = frame.height;
+    g.dynamicReflectionMaterialPresent = hasReflectionMaterial;
 
     const VkBufferUsageFlags geometryUsage =
         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
@@ -2172,6 +2269,11 @@ bool rayQueryBridgeCreateDynamicTriangleMesh(
         static_cast<VkDeviceSize>(frame.width) * frame.height * 4u * sizeof(float);
     std::vector<PendingBufferCopy> pendingCopies;
     const std::size_t stagingStart = g.sceneUploadStaging.size();
+    std::array<float, 8> reflectionMaterial{};
+    if (hasReflectionMaterial) {
+        std::copy_n(frame.reflectionRadiance, 4u, reflectionMaterial.data());
+        std::copy_n(frame.reflectionSurface, 4u, reflectionMaterial.data() + 4u);
+    }
     if (!createBuffer(positionBytes,
                       geometryUsage | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -2179,7 +2281,11 @@ bool rayQueryBridgeCreateDynamicTriangleMesh(
                       g.dynamicVertices) ||
         !createImmutableSceneBuffer(
             static_cast<VkDeviceSize>(indexCount) * sizeof(uint32_t),
-            geometryUsage, indices, g.dynamicIndices, pendingCopies)) {
+            geometryUsage, indices, g.dynamicIndices, pendingCopies) ||
+        (hasReflectionMaterial && !createImmutableSceneBuffer(
+            sizeof(reflectionMaterial), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            reflectionMaterial.data(), g.dynamicReflectionMaterial,
+            pendingCopies))) {
         destroyDynamicTriangleMeshResources();
         while (g.sceneUploadStaging.size() > stagingStart) {
             destroyBuffer(g.sceneUploadStaging.back());
@@ -2249,6 +2355,11 @@ bool rayQueryBridgeCreateDynamicTriangleMesh(
     recordBufferForAccelerationStructure(commandBuffer,
                                          g.dynamicIndices.buffer,
                                          g.dynamicIndices.size);
+    if (g.dynamicReflectionMaterial.buffer) {
+        recordBufferForAccelerationStructure(commandBuffer,
+                                             g.dynamicReflectionMaterial.buffer,
+                                             g.dynamicReflectionMaterial.size);
+    }
     recordAccelerationStructureForUpdate(commandBuffer);
     g.vk.cmdBuildAccelerationStructures(commandBuffer, 1u, &build, &rangePointer);
     recordAccelerationStructureBarrier(
@@ -2256,7 +2367,10 @@ bool rayQueryBridgeCreateDynamicTriangleMesh(
 
     auto instance = g.instanceRecords[g.dynamicInstanceIndex];
     instance.instanceCustomIndex = g.baseTriangleCount & 0x00ffffffu;
-    instance.mask = 0xffu;
+    // Bit 7 identifies the dynamic mesh. Primary and shadow queries use 0xff;
+    // its single material bounce clears bit 7 so it can only hit static room
+    // geometry and cannot recurse back into the deforming surface.
+    instance.mask = 0x80u;
     instance.accelerationStructureReference = g.dynamicBlas.address;
     const VkDeviceSize instanceOffset =
         static_cast<VkDeviceSize>(g.dynamicInstanceIndex) *
@@ -2394,8 +2508,8 @@ bool rayQueryBridgeUpdateInstanceGroup(void* commandBufferValue, uint32_t id,
     const VkDeviceSize byteSize =
         static_cast<VkDeviceSize>(instanceCount) *
         sizeof(VkAccelerationStructureInstanceKHR);
-    if (byteSize == 0u || byteSize > 65536u ||
-        byteOffset + byteSize > g.instances.size) {
+    if (byteSize == 0u || byteOffset > g.instances.size ||
+        byteSize > g.instances.size - byteOffset) {
         fail("Dynamic instance-group update exceeds the Vulkan instance buffer");
         return false;
     }
@@ -2420,8 +2534,21 @@ bool rayQueryBridgeUpdateInstanceGroup(void* commandBufferValue, uint32_t id,
     }
 
     const VkCommandBuffer commandBuffer = static_cast<VkCommandBuffer>(commandBufferValue);
-    g.vk.cmdUpdateBuffer(commandBuffer, g.instances.buffer, byteOffset, byteSize,
-                         records.data());
+    // vkCmdUpdateBuffer is limited to 65,536 bytes per command. Instance
+    // records are 64-byte aligned, so split large groups into legal commands.
+    // Vulkan copies pData into command-buffer storage while recording; unlike
+    // a host-visible staging ring, this has no cross-frame reuse lifetime or
+    // host/GPU race to manage.
+    static_assert(sizeof(VkAccelerationStructureInstanceKHR) % 4u == 0u);
+    const auto* updateBytes = reinterpret_cast<const std::byte*>(records.data());
+    for (VkDeviceSize uploaded = 0u; uploaded < byteSize;) {
+        const VkDeviceSize chunkSize = std::min(
+            kMaximumCommandBufferUpdateBytes, byteSize - uploaded);
+        g.vk.cmdUpdateBuffer(commandBuffer, g.instances.buffer,
+                             byteOffset + uploaded, chunkSize,
+                             updateBytes + static_cast<std::size_t>(uploaded));
+        uploaded += chunkSize;
+    }
     VkBufferMemoryBarrier instanceBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
     instanceBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     instanceBarrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
@@ -2466,7 +2593,7 @@ bool rayQueryBridgeUpdateInstanceGroup(void* commandBufferValue, uint32_t id,
                             1u, &buildBarrier, 0u, nullptr, 0u, nullptr);
     std::copy(records.begin(), records.end(),
               g.instanceRecords.begin() + iterator->firstInstance);
-    g.status = "Dynamic ray-query instance group updated and TLAS refit recorded";
+    g.status = "Dynamic ray-query instance group uploaded in legal Vulkan chunks and TLAS refit recorded";
     return true;
 }
 
@@ -2616,13 +2743,17 @@ bool rayQueryBridgeEvaluate(const RayQueryLightingFrame& frame) {
 bool rayQueryBridgeEvaluateReflections(const RayQueryReflectionFrame& frame) {
     std::scoped_lock lock(g.mutex);
     const bool hasSpecularHitDistance = frame.specularHitDistanceImage != nullptr;
-    // Reflection profiles dereference the static scene's per-primitive
-    // radiance/surface arrays. Texture-driven geometry intentionally has no
-    // such metadata, so allowing a reflection hit would make those reads
-    // undefined. Lighting/custom lighting profiles only consume the TLAS and
-    // remain fully compatible.
-    if (g.dynamicMeshActive) {
+    if (g.dynamicMeshActive &&
+        (!g.dynamicReflectionMaterialPresent ||
+         !g.dynamicVertices.buffer || !g.dynamicIndices.buffer ||
+         !g.dynamicReflectionMaterial.buffer)) {
         fail("Ray-query reflections are unavailable while a dynamic triangle mesh is attached; the dynamic mesh has no reflection material metadata");
+        return false;
+    }
+    // Existing custom reflection profiles predate the additive dynamic
+    // geometry bindings and cannot attest to their local-indexing contract.
+    if (g.dynamicMeshActive && frame.pipelineHandle != 0u) {
+        fail("Custom ray-query reflection pipelines are unavailable while a dynamic triangle mesh is attached");
         return false;
     }
     if (!g.attached || !g.sceneReady || !g.reflectionPipeline ||
@@ -2692,6 +2823,12 @@ bool rayQueryBridgeEvaluateReflections(const RayQueryReflectionFrame& frame) {
         : defaultPipeline;
     if (!pipeline) return false;
 
+    const VkBuffer dynamicVertexBinding = g.dynamicVertices.buffer
+        ? g.dynamicVertices.buffer : g.vertices.buffer;
+    const VkBuffer dynamicIndexBinding = g.dynamicIndices.buffer
+        ? g.dynamicIndices.buffer : g.indices.buffer;
+    const VkBuffer dynamicMaterialBinding = g.dynamicReflectionMaterial.buffer
+        ? g.dynamicReflectionMaterial.buffer : g.staticLights.buffer;
     const ReflectionDescriptorKey key{
         static_cast<VkImage>(frame.sourceColorImage),
         static_cast<VkImage>(frame.outputColorImage),
@@ -2700,6 +2837,9 @@ bool rayQueryBridgeEvaluateReflections(const RayQueryReflectionFrame& frame) {
         static_cast<VkImage>(frame.specularAlbedoImage),
         static_cast<VkImage>(frame.specularHitDistanceImage),
         hasSpecularHitDistance ? hitDistanceFormat : VK_FORMAT_UNDEFINED,
+        dynamicVertexBinding,
+        dynamicIndexBinding,
+        dynamicMaterialBinding,
     };
     const std::array<VkImage, 6> images{{
         key.sourceColor, key.outputColor, key.depth,

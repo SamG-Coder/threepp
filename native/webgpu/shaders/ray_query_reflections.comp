@@ -36,6 +36,18 @@ layout(r32f, set = 0, binding = 11) uniform writeonly image2D specularHitDistanc
 layout(r16f, set = 0, binding = 11) uniform writeonly image2D specularHitDistanceOutput;
     #endif
 #endif
+layout(std430, set = 0, binding = 12) readonly buffer DynamicPositions {
+    // rgba32float texture copies retain their 16-byte texel stride.
+    vec4 dynamicWorldPositions[];
+};
+layout(std430, set = 0, binding = 13) readonly buffer DynamicIndices {
+    uint dynamicWorldIndices[];
+};
+layout(std430, set = 0, binding = 14) readonly buffer DynamicReflectionMaterial {
+    vec4 dynamicTerminalRadiance;
+    // Uniform metallic F0 RGB and perceptual roughness.
+    vec4 dynamicSurfaceResponse;
+};
 
 layout(push_constant) uniform ReflectionConstants {
     mat4 inverseViewProjection;
@@ -51,6 +63,9 @@ layout(push_constant) uniform ReflectionConstants {
 const uint kDepthInverted = 1u;
 const uint kTemporalJitter = 2u;
 const uint kHighQuality = 4u;
+// The native bridge reserves bit 7 for the dynamic triangle-mesh instance.
+// Clearing it makes the material bounce see only the immutable room scene.
+const uint kStaticRoomCullMask = 0x7fu;
 const float kTwoPi = 6.28318530717958647692;
 
 void storeSpecularHitDistance(ivec2 pixel, float distanceToHit) {
@@ -139,21 +154,51 @@ vec3 missRadiance(vec3 direction) {
            max(frame.environment.a, 0.0) * horizon;
 }
 
-vec3 positionAt(uint vertex) {
+uint staticPrimitiveCount() {
+    return uint(worldIndices.length()) / 3u;
+}
+
+bool isDynamicHit(uint primitiveBase) {
+    // Native assigns the dynamic TLAS slot immediately after every primitive
+    // represented by the immutable static/index-group buffers.
+    return primitiveBase == staticPrimitiveCount();
+}
+
+vec3 staticPositionAt(uint vertex) {
     uint scalar = vertex * 3u;
     return vec3(worldPositions[scalar + 0u],
                 worldPositions[scalar + 1u],
                 worldPositions[scalar + 2u]);
 }
 
-vec3 primitiveNormal(uint primitive, mat4x3 objectToWorld,
+vec3 dynamicPositionAt(uint vertex) {
+    return dynamicWorldPositions[vertex].xyz;
+}
+
+vec3 primitiveNormal(uint primitiveBase, uint localPrimitive,
+                     mat4x3 objectToWorld,
                      vec3 incomingDirection) {
+    bool dynamicHit = isDynamicHit(primitiveBase);
+    uint primitive = dynamicHit
+        ? localPrimitive
+        : primitiveBase + localPrimitive;
     uint first = primitive * 3u;
-    uint indexCount = uint(worldIndices.length());
+    uint indexCount = dynamicHit
+        ? uint(dynamicWorldIndices.length())
+        : uint(worldIndices.length());
     if (first + 2u >= indexCount) return normalize(-incomingDirection);
-    vec3 p0 = objectToWorld * vec4(positionAt(worldIndices[first + 0u]), 1.0);
-    vec3 p1 = objectToWorld * vec4(positionAt(worldIndices[first + 1u]), 1.0);
-    vec3 p2 = objectToWorld * vec4(positionAt(worldIndices[first + 2u]), 1.0);
+    uint i0 = dynamicHit ? dynamicWorldIndices[first + 0u]
+                         : worldIndices[first + 0u];
+    uint i1 = dynamicHit ? dynamicWorldIndices[first + 1u]
+                         : worldIndices[first + 1u];
+    uint i2 = dynamicHit ? dynamicWorldIndices[first + 2u]
+                         : worldIndices[first + 2u];
+    vec3 p0 = objectToWorld * vec4(
+        dynamicHit ? dynamicPositionAt(i0) : staticPositionAt(i0), 1.0);
+    vec3 p1 = objectToWorld * vec4(
+        dynamicHit ? dynamicPositionAt(i1) : staticPositionAt(i1), 1.0);
+    vec3 p2 = objectToWorld * vec4(
+        dynamicHit ? dynamicPositionAt(i2) : staticPositionAt(i2), 1.0);
     vec3 normal = cross(p1 - p0, p2 - p0);
     float magnitude = length(normal);
     if (magnitude < 1e-8) return normalize(-incomingDirection);
@@ -173,14 +218,33 @@ bool shadowed(vec3 origin, vec3 direction, float minimumDistance,
            gl_RayQueryCommittedIntersectionNoneEXT;
 }
 
-vec3 directLightAtHit(uint primitive, mat4x3 objectToWorld,
-                      vec3 hitPoint, vec3 incomingDirection) {
+vec4 surfaceAtHit(uint primitiveBase, uint localPrimitive) {
+    if (isDynamicHit(primitiveBase)) return dynamicSurfaceResponse;
+    uint primitive = primitiveBase + localPrimitive;
     uint surfaceCount = uint(surfaceResponse.length());
-    vec4 surface = surfaceCount == 0u
+    return surfaceCount == 0u
         ? vec4(0.0)
         : surfaceResponse[min(primitive, surfaceCount - 1u)];
+}
+
+vec3 terminalAtHit(uint primitiveBase, uint localPrimitive) {
+    if (isDynamicHit(primitiveBase)) {
+        return max(dynamicTerminalRadiance.rgb, vec3(0.0));
+    }
+    uint primitive = primitiveBase + localPrimitive;
+    uint count = uint(terminalRadiance.length());
+    return count == 0u
+        ? vec3(0.0)
+        : max(terminalRadiance[min(primitive, count - 1u)].rgb, vec3(0.0));
+}
+
+vec3 directLightAtHit(uint primitiveBase, uint localPrimitive,
+                      mat4x3 objectToWorld,
+                      vec3 hitPoint, vec3 incomingDirection) {
+    vec4 surface = surfaceAtHit(primitiveBase, localPrimitive);
     vec3 albedo = max(surface.rgb, vec3(0.0));
-    vec3 normal = primitiveNormal(primitive, objectToWorld, incomingDirection);
+    vec3 normal = primitiveNormal(
+        primitiveBase, localPrimitive, objectToWorld, incomingDirection);
     float positionScale = max(1.0, max(abs(hitPoint.x),
                                       max(abs(hitPoint.y), abs(hitPoint.z))));
     float rayBias = max(frame.parameters.z, positionScale * 2e-6);
@@ -250,6 +314,71 @@ vec3 directLightAtHit(uint primitive, mat4x3 objectToWorld,
     return albedo * irradiance * inversePi;
 }
 
+vec3 traceStaticRoomRadiance(vec3 origin, vec3 direction,
+                             float maximumDistance) {
+    rayQueryEXT query;
+    rayQueryInitializeEXT(query, topLevelScene, gl_RayFlagsOpaqueEXT,
+                          kStaticRoomCullMask, origin, 0.0, direction,
+                          maximumDistance);
+    while (rayQueryProceedEXT(query)) {}
+    if (rayQueryGetIntersectionTypeEXT(query, true) ==
+        gl_RayQueryCommittedIntersectionNoneEXT) {
+        return missRadiance(direction);
+    }
+
+    uint primitiveBase =
+        rayQueryGetIntersectionInstanceCustomIndexEXT(query, true);
+    uint localPrimitive =
+        rayQueryGetIntersectionPrimitiveIndexEXT(query, true);
+    mat4x3 objectToWorld =
+        rayQueryGetIntersectionObjectToWorldEXT(query, true);
+    float distanceToHit = rayQueryGetIntersectionTEXT(query, true);
+    vec3 hitPoint = origin + direction * distanceToHit;
+    return terminalAtHit(primitiveBase, localPrimitive) + directLightAtHit(
+        primitiveBase, localPrimitive, objectToWorld, hitPoint, direction);
+}
+
+vec3 dynamicMaterialBounce(uint primitiveBase, uint localPrimitive,
+                           mat4x3 objectToWorld, vec3 hitPoint,
+                           vec3 incomingDirection, float remainingDistance,
+                           vec3 baseRadiance) {
+    vec3 normal = primitiveNormal(
+        primitiveBase, localPrimitive, objectToWorld, incomingDirection);
+    vec3 viewDirection = normalize(-incomingDirection);
+    vec4 surface = surfaceAtHit(primitiveBase, localPrimitive);
+    vec3 f0 = clamp(surface.rgb, vec3(0.0), vec3(1.0));
+    float roughness = clamp(surface.a, 0.0, 1.0);
+    float positionScale = max(1.0, max(abs(hitPoint.x),
+                                      max(abs(hitPoint.y), abs(hitPoint.z))));
+    float rayBias = max(frame.parameters.z, positionScale * 2e-6);
+    if (remainingDistance <= rayBias) return baseRadiance;
+
+    // One stable GGX sample gives the dynamic material its configured
+    // roughness without introducing recursive ray queries. The secondary
+    // query excludes the dynamic instance, so this is strictly
+    // mirror -> dynamic mesh -> static room.
+    uint seed = hash(localPrimitive ^ floatBitsToUint(hitPoint.x) ^
+                     hash(floatBitsToUint(hitPoint.z)));
+    // Keep polished metals on the same exact, stable mirror direction used by
+    // the primary reflection path; rougher materials select one stable GGX
+    // lobe sample.
+    int sampleCount = roughness < 0.08 ? 1 : 4;
+    int sampleIndex = int(seed % uint(sampleCount));
+    float rotation = float(hash(seed) & 0x00ffffffu) /
+                     float(0x01000000u);
+    vec3 reflectedDirection = ggxReflection(
+        viewDirection, normal, roughness, sampleIndex, sampleCount, rotation);
+    vec3 reflectedOrigin = hitPoint + normal * rayBias;
+    vec3 reflectedRadiance = traceStaticRoomRadiance(
+        reflectedOrigin, reflectedDirection, remainingDistance - rayBias);
+
+    float normalDotView = clamp(dot(normal, viewDirection), 0.0, 1.0);
+    vec3 fresnel = f0 + (vec3(1.0) - f0) *
+                   pow(1.0 - normalDotView, 5.0);
+    return baseRadiance * (vec3(1.0) - fresnel) +
+           reflectedRadiance * fresnel;
+}
+
 vec3 traceTerminalRadiance(vec3 origin, vec3 direction, float maximumDistance,
                            out float hitDistance) {
     hitDistance = 0.0;
@@ -261,23 +390,26 @@ vec3 traceTerminalRadiance(vec3 origin, vec3 direction, float maximumDistance,
         gl_RayQueryCommittedIntersectionNoneEXT) {
         return missRadiance(direction);
     }
-    uint primitive = rayQueryGetIntersectionInstanceCustomIndexEXT(query, true) +
-                     rayQueryGetIntersectionPrimitiveIndexEXT(query, true);
+    uint primitiveBase =
+        rayQueryGetIntersectionInstanceCustomIndexEXT(query, true);
+    uint localPrimitive =
+        rayQueryGetIntersectionPrimitiveIndexEXT(query, true);
     mat4x3 objectToWorld =
         rayQueryGetIntersectionObjectToWorldEXT(query, true);
     float distanceToHit = rayQueryGetIntersectionTEXT(query, true);
     hitDistance = distanceToHit;
     vec3 hitPoint = origin + direction * distanceToHit;
-    uint count = uint(terminalRadiance.length());
-    vec3 terminal = count == 0u
-        ? vec3(0.0)
-        : max(terminalRadiance[min(primitive, count - 1u)].rgb, vec3(0.0));
+    vec3 terminal = terminalAtHit(primitiveBase, localPrimitive);
     // A second ray-query pass supplies direct light visibility at the reflected
     // hit. Transparent panes are deliberately absent from the static TLAS, so
     // light can enter through glazing while opaque walls and frames still cast
     // correct shadows. The shaded hit then becomes a true one-bounce source.
-    return terminal + directLightAtHit(
-        primitive, objectToWorld, hitPoint, direction);
+    vec3 baseRadiance = terminal + directLightAtHit(
+        primitiveBase, localPrimitive, objectToWorld, hitPoint, direction);
+    if (!isDynamicHit(primitiveBase)) return baseRadiance;
+    return dynamicMaterialBounce(
+        primitiveBase, localPrimitive, objectToWorld, hitPoint, direction,
+        maximumDistance - distanceToHit, baseRadiance);
 }
 
 void main() {

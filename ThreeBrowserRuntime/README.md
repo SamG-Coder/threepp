@@ -261,6 +261,34 @@ if (registration.queued) {
 }
 ```
 
+Static registration can also declare reusable geometry for fixed-capacity,
+refittable instance groups. Each group supports up to 8,192 slots. Updates must
+provide exactly one tightly packed row-major 3x4 transform and one uint32
+visibility mask per registered slot; set a mask to zero when that slot is
+inactive. The geometry and BLAS remain shared while native code refits the TLAS:
+
+```js
+const capacity = 8192;
+rtx.registerStaticScene({
+  positions,
+  indices,
+  instanceGroups: [{
+    id: "liquid-proxy",
+    capacity,
+    positions: reusablePositions,
+    indices: reusableIndices,
+    triangleRadiance: reusableRadiance,
+    triangleSurface: reusableSurface,
+  }],
+});
+
+rtx.updateInstanceGroup({
+  id: "liquid-proxy",
+  matrices: new Float32Array(capacity * 12),
+  masks: new Uint32Array(capacity),
+});
+```
+
 `evaluateRayLighting()` is deliberately scene-independent: it provides
 directional-light visibility/shadows and ray-traced ambient occlusion only.
 Water waves, caustics and other authored material behavior remain in the

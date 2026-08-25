@@ -1,4 +1,7 @@
-import { cmd } from "./three-webgpu-cmd.js?tb-native=3";
+import {
+  cmd,
+  RTX_MAX_INSTANCE_GROUP_CAPACITY,
+} from "./three-webgpu-cmd.js?tb-native=3";
 
 const FEATURES = [
   "core-features-and-limits",
@@ -336,6 +339,19 @@ function rtxTriangleSurface(value, triangleCount) {
   return surface;
 }
 
+function rtxDynamicReflectionMaterial(value) {
+  if (value == null) return null;
+  if (!value || typeof value !== "object") {
+    throw new TypeError("reflectionMaterial must be an object with radiance and surface vec4 values");
+  }
+  const radiance = rtxTriangleRadiance(value.radiance, 1);
+  const surface = rtxTriangleSurface(value.surface, 1);
+  if (!radiance || !surface) {
+    throw new TypeError("reflectionMaterial requires both radiance and surface vec4 values");
+  }
+  return Object.freeze({ radiance, surface });
+}
+
 function rtxInstanceGroupIdentity(value) {
   if (typeof value === "number") {
     if (!Number.isInteger(value) || value <= 0 || value > 0xffffffff) {
@@ -354,6 +370,17 @@ function rtxInstanceGroupIdentity(value) {
   // Zero is reserved for the fixed world-space scene instance.
   if (hash === 0) hash = 1;
   return { key: `s:${value}`, nativeId: hash, publicId: value };
+}
+
+function rtxInstanceGroupCapacity(value, label = "instance-group capacity") {
+  const capacity = Number(value);
+  if (!Number.isInteger(capacity) || capacity <= 0 ||
+      capacity > RTX_MAX_INSTANCE_GROUP_CAPACITY) {
+    throw new RangeError(
+      `${label} must be an integer in [1, ${RTX_MAX_INSTANCE_GROUP_CAPACITY}]`,
+    );
+  }
+  return capacity;
 }
 
 function rtxInstanceMatrices(value, capacity) {
@@ -1211,7 +1238,8 @@ class ThreeBrowserRayQueryPipeline {
 }
 
 class ThreeBrowserDynamicTriangleMesh {
-  constructor(handle, device, generation, width, height, vertexCount, indexCount, label) {
+  constructor(handle, device, generation, width, height, vertexCount, indexCount,
+              hasReflectionMaterial, label) {
     this._h = handle;
     this._kind = "threebrowser-dynamic-triangle-mesh";
     this._device = device;
@@ -1227,6 +1255,7 @@ class ThreeBrowserDynamicTriangleMesh {
     this.vertexCount = vertexCount;
     this.indexCount = indexCount;
     this.triangleCount = indexCount / 3;
+    this.hasReflectionMaterial = hasReflectionMaterial;
     this.label = label;
   }
   get destroyed() {
@@ -3028,10 +3057,10 @@ export function install() {
           `instanceGroups[${groupIndex}].id collides with ${groupIds.get(identity.nativeId)} after native id normalization`,
         );
       }
-      const capacity = Number(source.capacity);
-      if (!Number.isInteger(capacity) || capacity <= 0 || capacity > 1024) {
-        throw new RangeError(`instanceGroups[${groupIndex}].capacity must be an integer in [1, 1024]`);
-      }
+      const capacity = rtxInstanceGroupCapacity(
+        source.capacity,
+        `instanceGroups[${groupIndex}].capacity`,
+      );
       const localPositions = rtxFloat32Positions(source.positions);
       const localVertexCount = localPositions.length / 3;
       const localIndices = rtxUint32Indices(source.indices, localVertexCount);
@@ -3243,6 +3272,7 @@ export function install() {
       throw new RangeError("vertexCount must be a positive integer no larger than positionsTexture.width * height");
     }
     const indices = rtxUint32Indices(options.indices, vertexCount);
+    const reflectionMaterial = rtxDynamicReflectionMaterial(options.reflectionMaterial);
     const nativeEncoder = inOrderNativeEncoder(
       options.commandEncoder,
       "createDynamicTriangleMesh",
@@ -3265,6 +3295,7 @@ export function install() {
       positions.texture.height,
       vertexCount,
       indices.length,
+      Boolean(reflectionMaterial),
       options.label === undefined ? "" : String(options.label),
     );
     mesh._createEncoder = nativeEncoder.encoder;
@@ -3277,6 +3308,7 @@ export function install() {
       height: mesh.height,
       vertexCount: mesh.vertexCount,
       indices,
+      reflectionMaterial,
     }]);
     nativeEncoder.encoder._submissionCallbacks.push(() => {
       if (!mesh._destroyed && mesh === activeDynamicRayMesh &&
@@ -3564,9 +3596,15 @@ export function install() {
       throw new TypeError("threeBrowserRTX.evaluateRayReflections expects a frame object");
     }
     const sceneGeneration = requireActiveStaticRayScene("ray reflections");
-    if (activeDynamicRayMesh && !activeDynamicRayMesh._destroyed) {
+    const dynamicMeshAttached = activeDynamicRayMesh && !activeDynamicRayMesh._destroyed;
+    if (dynamicMeshAttached && !activeDynamicRayMesh.hasReflectionMaterial) {
       throw new Error(
         "Ray-query reflections cannot run while a dynamic triangle mesh is attached because it has no reflection material metadata",
+      );
+    }
+    if (dynamicMeshAttached && frame.pipeline != null) {
+      throw new Error(
+        "Custom ray-reflection pipelines cannot run while a dynamic triangle mesh is attached",
       );
     }
     const nativeEncoder = dedicatedNativeEncoder(frame.commandEncoder, "evaluateRayReflections");
@@ -3845,6 +3883,11 @@ export {
   GPUAdapter,
   lowerExternalTextureWgsl,
   replayCommandBuffer,
+  RTX_MAX_INSTANCE_GROUP_CAPACITY,
+  rtxInstanceGroupCapacity,
+  rtxInstanceMatrices,
+  rtxInstanceMasks,
+  rtxDynamicReflectionMaterial,
   rtxDynamicPositionsResource,
   validateNativeEncoderPassOrder,
 };

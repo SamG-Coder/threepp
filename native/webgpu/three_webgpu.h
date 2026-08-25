@@ -266,8 +266,15 @@ typedef struct TWRayQueryDynamicTriangleMeshFrame {
     uint32_t width;
     uint32_t height;
     uint32_t vertex_count;
-    // Refit only: bit 0 requests a full BLAS rebuild for large deformation.
+    // Refit: bit 0 requests a full BLAS rebuild for large deformation.
+    // Create: bit 1 declares the appended uniform reflection material.
     uint32_t flags;
+    // Optional additive create ABI. Legacy callers may pass struct_size == 36;
+    // these values are read only when struct_size covers the complete fields
+    // and flags bit 1 is set.
+    float reflection_radiance[4];
+    // Linear metallic F0 RGB and perceptual roughness.
+    float reflection_surface[4];
 } TWRayQueryDynamicTriangleMeshFrame;
 
 enum {
