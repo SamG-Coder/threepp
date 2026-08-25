@@ -150,6 +150,8 @@ async function main() {
   const camera = new THREE.PerspectiveCamera(58, innerWidth / Math.max(1, innerHeight), 0.08, 680);
   camera.position.set(-8, 5, 15);
   scene.add(camera);
+  const audioListenerForward = new THREE.Vector3(0, 0, -1);
+  const audioListenerUp = new THREE.Vector3(0, 1, 0);
   const firstPersonWeapon = createFirstPersonWeapon(camera);
   const gameplayFill = new THREE.PointLight(0xb9ddff, 24, 18, 2);
   gameplayFill.name = "Player and vehicle readability fill";
@@ -323,9 +325,20 @@ async function main() {
   const initialLightingEnvironment = environment.snapshot();
   syncBusinessLighting(initialLightingEnvironment.timeHours, initialLightingEnvironment.weather);
   const saveService = createSaveService();
-  let gameAudio = { start() {}, play() {}, update() {}, dispose() {} };
+  let gameAudio = {
+    start() {},
+    play() { return false; },
+    playAt() { return null; },
+    updateListener() {},
+    update() {},
+    snapshot() { return null; },
+    dispose() {},
+  };
   try {
     gameAudio = await createGameAudio();
+    camera.getWorldDirection(audioListenerForward);
+    audioListenerUp.copy(camera.up).applyQuaternion(camera.quaternion).normalize();
+    gameAudio.updateListener(camera.position, audioListenerForward, audioListenerUp);
     gameAudio.start();
   } catch (error) {
     console.warn(`[GTA Neon City] native audio unavailable; continuing silently: ${error?.message || error}`);
@@ -691,7 +704,9 @@ async function main() {
     onShoot: request => fireWeapon(request),
     onMelee: request => performMelee(request),
     onCrime: commitCrime,
-    onSound: (name, volume) => gameAudio.play(name, volume),
+    onSound: (name, volume) => name === "footstep" || name === "melee"
+      ? gameAudio.playAt(name, volume, player.root.position)
+      : gameAudio.play(name, volume),
   });
   const chaseCamera = createChaseCamera(camera, input, world);
   const cinematicDirector = createCinematicDirector(camera);
@@ -719,7 +734,8 @@ async function main() {
     onImpact(detail) {
       const speed = Math.abs(Number(detail.speed) || 0);
       if (speed < 4) return;
-      gameAudio.play("impact", Math.min(0.8, 0.25 + speed * 0.018));
+      gameAudio.playAt("impact", Math.min(0.8, 0.25 + speed * 0.018),
+        detail.position ?? detail.vehicle?.root?.position ?? detail.other?.root?.position);
       chaseCamera.shake(Math.min(0.34, 0.035 + speed * 0.009), Math.min(0.62, 0.18 + speed * 0.012));
       if (selectedActivity === "taxi" && (detail.vehicle === vehicles.playerVehicle || detail.other === vehicles.playerVehicle)) {
         taxiActivity.notify({ type: "collision", severity: speed });
@@ -764,7 +780,8 @@ async function main() {
         const origin = source.clone().setY(source.y + 1.42);
         const target = controlledPosition().clone().setY(controlledPosition().y + (player.vehicle ? 0.85 : 1.1));
         effects?.shot(origin, target, { hit: true });
-        gameAudio.play("gunshot", 0.28);
+        gameAudio.playAt("gunshot", 0.28, origin);
+        gameAudio.playAt("impact", 0.2, target);
       }
       return player.damage(event.amount);
     },
@@ -889,6 +906,8 @@ async function main() {
   const fpsMuzzleOrigin = new THREE.Vector3();
   const diagnosticDirection = new THREE.Vector3();
   const diagnosticUp = new THREE.Vector3();
+  const audioControlPosition = new THREE.Vector3();
+  const thunderSourcePosition = new THREE.Vector3();
   const observerOrigin = new THREE.Vector3();
   const observerDirection = new THREE.Vector3();
   const observerForward = new THREE.Vector3();
@@ -916,9 +935,9 @@ async function main() {
 
   function fireWeapon(request = {}) {
     if (!request.aiming) return { hit: false, blocked: true, reason: "aim-required", crimeHandled: true };
-    gameAudio.play("gunshot", 0.72);
     chaseCamera.shake(0.032, 0.14);
     const origin = firstPersonWeapon.getMuzzleWorld(fpsMuzzleOrigin).clone();
+    gameAudio.playAt("gunshot", 0.72, origin);
     let direction = request.direction?.isVector3 ? request.direction.clone() : null;
     if (!direction || direction.lengthSq() < 0.5) direction = chaseCamera.aimRay(aimOrigin, aimDirection).direction.clone();
     direction.normalize();
@@ -962,6 +981,7 @@ async function main() {
     }
     const end = origin.clone().addScaledVector(direction, hitDistance);
     effects?.shot(origin, end, result);
+    if (result.hit) gameAudio.playAt("impact", result.hitVehicle ? 0.5 : 0.36, end);
     population?.alert(origin, "gunfire");
     return result;
   }
@@ -1016,7 +1036,7 @@ async function main() {
 
     if (result.hit) {
       effects?.impact(point, { ...result, heavy: true });
-      gameAudio.play("impact", result.hitVehicle ? 0.55 : 0.42);
+      gameAudio.playAt("impact", result.hitVehicle ? 0.55 : 0.42, point);
       chaseCamera.shake(result.hitVehicle ? 0.085 : 0.065, 0.18);
     }
     return result;
@@ -1762,7 +1782,7 @@ async function main() {
         gameAudio.play("pickup", 0.48);
         showToast(`BUCKET — ${after.made}/${after.stopCount} MADE`, 1.7);
       } else if (after.lastEvent === "basket_missed") {
-        gameAudio.play("impact", 0.24);
+        gameAudio.playAt("impact", 0.24, world.missionPoints.harbourCourt);
         showToast(`OFF THE RIM — ${after.stopCount - after.stopIndex} SHOTS LEFT`, 1.6);
       }
     }
@@ -2013,7 +2033,8 @@ async function main() {
     const advanceDialogue = input.actionPressed("interact") ||
       (storyBeforeInput.active && input.consumeCode("Space"));
     if (storyBeforeInput.active && advanceDialogue) {
-      narrativeSystem.update(0, narrativeSystem === nightRoute ? { skip: true } : { advance: true });
+      if (narrativeSystem === nightRoute) narrativeSystem.update(0, { skip: true });
+      else narrativeSystem.advanceLine();
       if (narrativeSystem === nightRoute) processNightRouteEvents();
       else if (narrativeSystem === chapterTwo) processChapterTwoEvents();
       else processStoryEvents();
@@ -2144,8 +2165,9 @@ async function main() {
       else startCurrentGarageChapter(false);
     }
     if (input.actionPressed("horn") && player.vehicle) {
-      gameAudio.play("horn", 0.58);
-      population?.alert(vehicles.playerVehicle?.root?.position ?? player.root.position, "horn");
+      const hornPosition = vehicles.playerVehicle?.root?.position ?? player.root.position;
+      gameAudio.playAt("horn", 0.58, hornPosition);
+      population?.alert(hornPosition, "horn");
     }
     if (input.actionPressed("restart") && !player.alive) respawnPlayer();
     if (input.actionPressed("quickSave")) {
@@ -2521,6 +2543,7 @@ async function main() {
           worldDirection: camera.getWorldDirection(diagnosticDirection).toArray(),
           worldUp: diagnosticUp.set(0, 1, 0).applyQuaternion(camera.quaternion).toArray(),
         },
+        audio: gameAudio.snapshot?.() ?? null,
         firstPersonWeapon: firstPersonWeapon.snapshot(),
         cinematic: cinematicDirector.snapshot(),
         playerRootRoll: player.root.rotation.z,
@@ -2671,17 +2694,6 @@ async function main() {
           effects.tireSpray(driven.root.position, driven.state.yaw, driven.radius, sprayIntensity);
         }
       }
-      gameAudio.update({
-        driving: Boolean(vehicles.playerVehicle),
-        speed: vehicles.playerVehicle?.state?.speed ?? 0,
-        wantedStars: wantedState.stars,
-        rain: rainAmount,
-        timeHours: lightingBeforeUpdate.timeHours,
-        tireSlip: vehicles.playerVehicle
-          ? Math.min(1, Math.abs(vehicles.playerVehicle.state?.lateralSpeed ?? 0) / 7 +
-            (input.actionDown("handbrake") && Math.abs(vehicles.playerVehicle.state?.speed ?? 0) > 5 ? 0.62 : 0))
-          : 0,
-      });
       if (player.vehicle && !vehicles.playerVehicle) {
         player.exitVehicle(player.root.position);
         player.damage(28, { ignoreArmor: true });
@@ -2743,8 +2755,10 @@ async function main() {
             heavy: Boolean(impact.ragdoll),
             severity: clamp((impact.impactSpeed ?? Math.abs(vehicle.state.speed)) / 7, 0.7, 2.2),
           });
+          gameAudio.playAt("impact",
+            (vehicle === vehicles.playerVehicle ? 0.42 : 0.28) + Math.min(0.28, Math.abs(vehicle.state.speed) * 0.018),
+            point);
           if (vehicle === vehicles.playerVehicle) {
-            gameAudio.play("impact", 0.42 + Math.min(0.28, Math.abs(vehicle.state.speed) * 0.018));
             chaseCamera.shake(Math.min(0.18, 0.045 + Math.abs(vehicle.state.speed) * 0.006), 0.22);
           }
         }
@@ -2767,7 +2781,14 @@ async function main() {
         thunderAt = elapsed + 0.32 + (Math.sin(elapsed * 1.713) + 1) * 0.19;
       }
       if (thunderAt !== null && elapsed >= thunderAt) {
-        gameAudio.play("thunder", 0.42 + environmentState.rain * 0.32);
+        const thunderDistance = 130 + environmentState.rain * 90;
+        const thunderAngle = elapsed * 1.713 + environmentState.rain * 2.1;
+        thunderSourcePosition.set(
+          focus.x + Math.cos(thunderAngle) * thunderDistance,
+          focus.y + 58 + environmentState.rain * 44,
+          focus.z + Math.sin(thunderAngle) * thunderDistance,
+        );
+        gameAudio.playAt("thunder", 0.42 + environmentState.rain * 0.32, thunderSourcePosition);
         chaseCamera.shake(0.018 + environmentState.rain * 0.012, 0.42);
         thunderAt = null;
       }
@@ -2836,6 +2857,36 @@ async function main() {
         chaseCamera.snapBehind(vehicles.playerVehicle?.state?.yaw ?? player.root.rotation.y);
       }
       cinematicWasActive = cinematicResult.active;
+      camera.getWorldDirection(audioListenerForward);
+      audioListenerUp.copy(camera.up).applyQuaternion(camera.quaternion).normalize();
+      gameAudio.updateListener(camera.position, audioListenerForward, audioListenerUp);
+      let nearestSirenVehicle = null;
+      let nearestSirenDistanceSq = Infinity;
+      if (wantedState.stars > 0) {
+        for (const vehicle of vehicles.vehicles) {
+          if (!vehicle.police || vehicle.health <= 0 || vehicle.driver !== "police") continue;
+          const dx = vehicle.root.position.x - camera.position.x;
+          const dy = vehicle.root.position.y - camera.position.y;
+          const dz = vehicle.root.position.z - camera.position.z;
+          const distanceSq = dx * dx + dy * dy + dz * dz;
+          if (distanceSq >= nearestSirenDistanceSq) continue;
+          nearestSirenDistanceSq = distanceSq;
+          nearestSirenVehicle = vehicle;
+        }
+      }
+      gameAudio.update({
+        driving: Boolean(vehicles.playerVehicle),
+        speed: vehicles.playerVehicle?.state?.speed ?? 0,
+        wantedStars: wantedState.stars,
+        rain: rainAmount,
+        timeHours: lightingBeforeUpdate.timeHours,
+        tireSlip: vehicles.playerVehicle
+          ? Math.min(1, Math.abs(vehicles.playerVehicle.state?.lateralSpeed ?? 0) / 7 +
+            (input.actionDown("handbrake") && Math.abs(vehicles.playerVehicle.state?.speed ?? 0) > 5 ? 0.62 : 0))
+          : 0,
+        sirenPosition: nearestSirenVehicle?.root?.position ?? null,
+        sirenSourceId: nearestSirenVehicle?.id ?? null,
+      });
       firstPersonWeapon.update(dt, {
         aiming: firstPersonAim,
         muzzleFlash: player.muzzleFlash,
@@ -2887,16 +2938,18 @@ async function main() {
     lastFrame = now;
     accumulator = Math.min(MAX_FRAME_DELTA * 2, accumulator + frameDelta);
     const simulationStartedAt = Number(globalThis.performance?.now?.() ?? Date.now());
+    let fixedSteps = 0;
     while (accumulator >= FIXED_STEP) {
       if (!paused && (input.pointer.locked || developmentCaptured || controlStepping)) elapsed += FIXED_STEP;
       fixedUpdate(FIXED_STEP, { captureSnapshot: false });
       accumulator -= FIXED_STEP;
+      fixedSteps += 1;
     }
     framePhaseLatestMs.simulation = Math.max(0, Number(globalThis.performance?.now?.() ?? Date.now()) - simulationStartedAt);
     renderFrame();
     framePhaseLatestMs.animation = Math.max(0, Number(globalThis.performance?.now?.() ?? Date.now()) - animationStartedAt);
     if (!syntheticControlFrame) recordFramePhases();
-    input.endFrame();
+    input.endFrame({ simulationAdvanced: fixedSteps > 0 });
     if (elapsed >= telemetryAt) {
       telemetryAt = (Math.floor(elapsed / TELEMETRY_INTERVAL) + 1) * TELEMETRY_INTERVAL;
       const state = lastSnapshot ?? serializableSnapshot();
@@ -3026,6 +3079,23 @@ async function main() {
         else if (action === "reset") roadsideResponse?.reset();
         else if (action !== "snapshot") throw new RangeError(`Unknown roadside action: ${action}`);
         return roadsideResponse?.snapshot() ?? null;
+      }
+      case "audio": {
+        const action = String(request.action ?? "snapshot");
+        camera.getWorldDirection(audioListenerForward);
+        audioListenerUp.copy(camera.up).applyQuaternion(camera.quaternion).normalize();
+        gameAudio.updateListener(camera.position, audioListenerForward, audioListenerUp);
+        if (action === "playAt") {
+          audioControlPosition.set(
+            Number.isFinite(Number(request.x)) ? Number(request.x) : camera.position.x,
+            Number.isFinite(Number(request.y)) ? Number(request.y) : camera.position.y,
+            Number.isFinite(Number(request.z)) ? Number(request.z) : camera.position.z,
+          );
+          const event = gameAudio.playAt(request.name ?? "gunshot", request.volume ?? 0.65, audioControlPosition);
+          return { event: event ? { ...event } : null, audio: gameAudio.snapshot?.() ?? null };
+        }
+        if (action !== "snapshot") throw new RangeError(`Unknown audio action: ${action}`);
+        return gameAudio.snapshot?.() ?? null;
       }
       case "story": {
         const action = String(request.action ?? "snapshot");

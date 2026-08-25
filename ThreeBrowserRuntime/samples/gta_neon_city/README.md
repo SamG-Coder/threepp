@@ -394,6 +394,10 @@ and mission/player markers update at 20 Hz while the world and camera remain
 uncapped. Its pixel storage is reused; no map mesh or bitmap is created during
 play. HUD text presentation refreshes at 30 Hz and entity/minimap data at
 20 Hz; input, simulation, camera motion and 3D rendering remain full-rate.
+One-shot keyboard and mouse edges are retained for up to 240 ms or twelve
+simulation ticks and are consumed exactly once. Render-only frames no longer
+erase `E`, `F`, story choices or mouse-look deltas before the 60 Hz simulation
+can see them; blur and pointer-lock loss still cancel stale physical input.
 
 Every HUD text mesh also owns fixed-capacity position, UV and index buffers
 created at startup. Updating a prompt, subtitle, objective, shop line or moral
@@ -413,10 +417,10 @@ This avoids invalidating Three.js render-object caches when the player first
 aims. Two hidden pedestrian reserves are likewise included in
 the reveal-all pass. In the current fresh native verification, all 37 discovered
 world/HUD textures were source-ready and explicitly uploaded before READY. The
-latest repeated performance pass reached READY after a 9.37-second pipeline
-phase; its first ADS control round trip was 17.4 ms, dry baseline peaked at
-11.8 ms, the aim window at 11.6 ms and the combined
-night/rain/police/blood/ragdoll window at 18.7 ms, with zero
+latest repeated performance pass reached READY after a 9.23-second pipeline
+phase; its first ADS control round trip was 23.7 ms, dry baseline peaked at
+13.3 ms, the aim window at 12.6 ms and the combined
+night/rain/police/blood/ragdoll window at 25.9 ms, with zero
 frames over 50 ms. These are named-pipe evidence rather than a promised
 hardware-independent frame rate.
 Quick-saves are ordinary player-requested save data. Save schema v7 preserves
@@ -432,6 +436,17 @@ storage is unrelated to graphics pipelines.
 The procedural audio mix includes separate daytime traffic/bird and nighttime
 urban/insect beds. They crossfade from the game clock, duck inside a moving
 vehicle and yield to heavy rain.
+
+World audio uses startup-generated, channel-isolated stereo WAV pairs because
+the native runtime intentionally does not expose a Web Audio panner. Seventy
+native elements are opened and awaited before `READY`: fixed voice pools cover
+gunshots, impacts, horns, footsteps, melee and thunder, while one police-siren
+pair starts silently and follows the nearest occupied police car. Equal-power
+gains follow the resolved gameplay, ADS or cinematic camera, and inverse
+distance falloff makes remote events quieter and eventually inaudible. UI,
+mission, pickup, radio and taxi-cabin cues remain non-positional. Native
+diagnostics verify that element and load counts remain 70/70 during play with
+zero runtime audio allocation or source loads.
 
 ## Fast deterministic tests
 
@@ -458,7 +473,7 @@ and RAM-only route warmup. Asset-readiness coverage proves that all seven
 authored bitmaps are valid, decoded before world creation, and that gameplay
 modules own no late bitmap loader; renderer tests prove generated PBR maps,
 virtual rooms, the font, black backing and minimap are explicitly uploaded.
-The current deterministic suite passes **185/185**
+The current deterministic suite passes **197/197**
 tests. The command above is
 the source of truth after future integration changes.
 
@@ -499,6 +514,12 @@ node C:\ThreeBrowser\ThreeBrowserRuntime\samples\gta_neon_city\tests\native-real
   '\\.\pipe\ThreeBrowserGtaNeonCityTest' C:\ThreeBrowser\artifacts\gta-neon-realism
 
 node C:\ThreeBrowser\ThreeBrowserRuntime\samples\gta_neon_city\tests\native-performance-qa.mjs `
+  '\\.\pipe\ThreeBrowserGtaNeonCityTest'
+
+node C:\ThreeBrowser\ThreeBrowserRuntime\samples\gta_neon_city\tests\native-spatial-audio-qa.mjs `
+  '\\.\pipe\ThreeBrowserGtaNeonCityTest'
+
+node C:\ThreeBrowser\ThreeBrowserRuntime\samples\gta_neon_city\tests\native-input-qa.mjs `
   '\\.\pipe\ThreeBrowserGtaNeonCityTest'
 
 node C:\ThreeBrowser\ThreeBrowserRuntime\samples\gta_neon_city\tests\native-basketball-qa.mjs `

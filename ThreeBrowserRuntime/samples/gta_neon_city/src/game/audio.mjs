@@ -31,6 +31,196 @@ export function synthesizeWav(duration, sampleAt, sampleRate = SAMPLE_RATE) {
   return bytes;
 }
 
+function ascii(bytes, offset, length) {
+  let value = "";
+  for (let index = 0; index < length; ++index) value += String.fromCharCode(bytes[offset + index] ?? 0);
+  return value;
+}
+
+/**
+ * Expands one of the game's deterministic 16-bit mono WAVs into a stereo WAV
+ * whose samples exist in exactly one channel. Two native Audio elements can
+ * therefore provide true arbitrary stereo pan without relying on the runtime's
+ * intentionally silent Web Audio compatibility shim.
+ */
+export function createChannelIsolatedStereoWav(monoBytes, channel = "left") {
+  if (!(monoBytes instanceof Uint8Array) || monoBytes.byteLength < 44 ||
+      ascii(monoBytes, 0, 4) !== "RIFF" || ascii(monoBytes, 8, 4) !== "WAVE") {
+    throw new TypeError("createChannelIsolatedStereoWav requires a PCM WAV byte array");
+  }
+  const input = new DataView(monoBytes.buffer, monoBytes.byteOffset, monoBytes.byteLength);
+  let formatOffset = -1;
+  let formatSize = 0;
+  let dataOffset = -1;
+  let dataSize = 0;
+  for (let offset = 12; offset + 8 <= monoBytes.byteLength;) {
+    const id = ascii(monoBytes, offset, 4);
+    const size = input.getUint32(offset + 4, true);
+    const payload = offset + 8;
+    if (payload + size > monoBytes.byteLength) break;
+    if (id === "fmt ") {
+      formatOffset = payload;
+      formatSize = size;
+    } else if (id === "data") {
+      dataOffset = payload;
+      dataSize = size;
+      break;
+    }
+    offset = payload + size + (size & 1);
+  }
+  if (formatOffset < 0 || formatSize < 16 || dataOffset < 0 ||
+      input.getUint16(formatOffset, true) !== 1 ||
+      input.getUint16(formatOffset + 2, true) !== 1 ||
+      input.getUint16(formatOffset + 14, true) !== 16) {
+    throw new TypeError("Spatial audio requires 16-bit mono PCM WAV input");
+  }
+  const leftOnly = String(channel).toLowerCase() !== "right";
+  const sampleRate = input.getUint32(formatOffset + 4, true);
+  const frames = Math.floor(dataSize / 2);
+  const output = new Uint8Array(44 + frames * 4);
+  const view = new DataView(output.buffer);
+  const writeText = (offset, value) => {
+    for (let index = 0; index < value.length; ++index) output[offset + index] = value.charCodeAt(index);
+  };
+  writeText(0, "RIFF");
+  view.setUint32(4, 36 + frames * 4, true);
+  writeText(8, "WAVE");
+  writeText(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 2, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 4, true);
+  view.setUint16(32, 4, true);
+  view.setUint16(34, 16, true);
+  writeText(36, "data");
+  view.setUint32(40, frames * 4, true);
+  for (let frame = 0; frame < frames; ++frame) {
+    const sample = input.getInt16(dataOffset + frame * 2, true);
+    view.setInt16(44 + frame * 4, leftOnly ? sample : 0, true);
+    view.setInt16(46 + frame * 4, leftOnly ? 0 : sample, true);
+  }
+  return output;
+}
+
+export const SPATIAL_AUDIO_PROFILES = Object.freeze({
+  gunshot: Object.freeze({ referenceDistance: 5, maxDistance: 180, rolloff: 1.0 }),
+  impact: Object.freeze({ referenceDistance: 3, maxDistance: 85, rolloff: 1.25 }),
+  horn: Object.freeze({ referenceDistance: 8, maxDistance: 160, rolloff: 0.82 }),
+  footstep: Object.freeze({ referenceDistance: 1.4, maxDistance: 30, rolloff: 1.2 }),
+  melee: Object.freeze({ referenceDistance: 1.5, maxDistance: 28, rolloff: 1.25 }),
+  thunder: Object.freeze({ referenceDistance: 28, maxDistance: 520, rolloff: 0.32 }),
+  siren: Object.freeze({ referenceDistance: 12, maxDistance: 240, rolloff: 0.72 }),
+});
+
+export const SPATIAL_VOICE_COUNTS = Object.freeze({
+  gunshot: 6,
+  impact: 6,
+  horn: 3,
+  footstep: 4,
+  melee: 3,
+  thunder: 1,
+});
+
+function finiteComponent(value, key, index, fallback = 0) {
+  const component = Array.isArray(value) || ArrayBuffer.isView(value) ? value[index] : value?.[key];
+  const number = Number(component);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+export function createSpatialListenerState() {
+  return {
+    position: { x: 0, y: 0, z: 0 },
+    forward: { x: 0, y: 0, z: -1 },
+    up: { x: 0, y: 1, z: 0 },
+    right: { x: 1, y: 0, z: 0 },
+    revision: 0,
+  };
+}
+
+export function updateSpatialListener(listener, position, forward, up) {
+  if (!listener?.position || !listener?.forward || !listener?.up || !listener?.right) {
+    throw new TypeError("updateSpatialListener requires a reusable listener state");
+  }
+  listener.position.x = finiteComponent(position, "x", 0);
+  listener.position.y = finiteComponent(position, "y", 1);
+  listener.position.z = finiteComponent(position, "z", 2);
+
+  let fx = finiteComponent(forward, "x", 0, 0);
+  let fy = finiteComponent(forward, "y", 1, 0);
+  let fz = finiteComponent(forward, "z", 2, -1);
+  let length = Math.hypot(fx, fy, fz);
+  if (length < 1e-6) { fx = 0; fy = 0; fz = -1; length = 1; }
+  fx /= length; fy /= length; fz /= length;
+
+  let ux = finiteComponent(up, "x", 0, 0);
+  let uy = finiteComponent(up, "y", 1, 1);
+  let uz = finiteComponent(up, "z", 2, 0);
+  length = Math.hypot(ux, uy, uz);
+  if (length < 1e-6) { ux = 0; uy = 1; uz = 0; length = 1; }
+  ux /= length; uy /= length; uz /= length;
+
+  let rx = fy * uz - fz * uy;
+  let ry = fz * ux - fx * uz;
+  let rz = fx * uy - fy * ux;
+  length = Math.hypot(rx, ry, rz);
+  if (length < 1e-6) {
+    rx = Math.abs(fy) > 0.95 ? 1 : -fz;
+    ry = 0;
+    rz = Math.abs(fy) > 0.95 ? 0 : fx;
+    length = Math.hypot(rx, ry, rz) || 1;
+  }
+  rx /= length; ry /= length; rz /= length;
+  // Re-orthogonalise up so camera roll is represented without introducing a
+  // gain bias when a caller supplies an imperfect forward/up pair.
+  ux = ry * fz - rz * fy;
+  uy = rz * fx - rx * fz;
+  uz = rx * fy - ry * fx;
+  listener.forward.x = fx; listener.forward.y = fy; listener.forward.z = fz;
+  listener.right.x = rx; listener.right.y = ry; listener.right.z = rz;
+  listener.up.x = ux; listener.up.y = uy; listener.up.z = uz;
+  listener.revision += 1;
+  return listener;
+}
+
+/** Writes a native-stereo mix into `out`; callers can reuse one object forever. */
+export function calculateSpatialMix(listener, worldPosition, profile = SPATIAL_AUDIO_PROFILES.impact, volume = 1, out = {}) {
+  const sourceX = finiteComponent(worldPosition, "x", 0);
+  const sourceY = finiteComponent(worldPosition, "y", 1);
+  const sourceZ = finiteComponent(worldPosition, "z", 2);
+  const dx = sourceX - listener.position.x;
+  const dy = sourceY - listener.position.y;
+  const dz = sourceZ - listener.position.z;
+  const distance = Math.hypot(dx, dy, dz);
+  const referenceDistance = Math.max(0.01, Number(profile?.referenceDistance) || 1);
+  const maxDistance = Math.max(referenceDistance, Number(profile?.maxDistance) || referenceDistance);
+  const rolloff = Math.max(0, Number(profile?.rolloff) || 0);
+  const level = Math.max(0, Math.min(1, Number(volume) || 0));
+  let attenuation = 0;
+  if (distance < maxDistance && level > 0) {
+    attenuation = distance <= referenceDistance
+      ? 1
+      : referenceDistance / (referenceDistance + rolloff * (distance - referenceDistance));
+  }
+  let pan = 0;
+  if (distance > 1e-6) {
+    pan = Math.max(-1, Math.min(1,
+      (dx * listener.right.x + dy * listener.right.y + dz * listener.right.z) / distance));
+  }
+  const equalPowerAngle = (pan + 1) * Math.PI * 0.25;
+  const gain = level * attenuation;
+  out.sourceX = sourceX;
+  out.sourceY = sourceY;
+  out.sourceZ = sourceZ;
+  out.distance = distance;
+  out.pan = pan;
+  out.attenuation = attenuation;
+  out.leftGain = Math.cos(equalPowerAngle) * gain;
+  out.rightGain = Math.sin(equalPowerAngle) * gain;
+  out.accepted = gain > 0;
+  return out;
+}
+
 function deterministicNoise(seed = 0x4e454f4e) {
   let state = seed >>> 0;
   return () => {
@@ -207,73 +397,319 @@ export function createAudioDefinitions() {
   };
 }
 
+export function createSpatialVoicePool({ name, count, leftFile, rightFile, createElement, playElement }) {
+  const size = Math.max(1, Math.trunc(Number(count) || 1));
+  if (typeof createElement !== "function" || typeof playElement !== "function") {
+    throw new TypeError("createSpatialVoicePool requires fixed element creation and playback adapters");
+  }
+  const voices = new Array(size);
+  for (let index = 0; index < size; ++index) {
+    voices[index] = {
+      left: createElement(leftFile, false, 0, `${name}:left:${index}`),
+      right: createElement(rightFile, false, 0, `${name}:right:${index}`),
+      sequence: 0,
+    };
+  }
+  const api = {
+    name,
+    size,
+    voices,
+    cursor: 0,
+    plays: 0,
+    steals: 0,
+    lastVoiceIndex: -1,
+    lastStolen: false,
+    trigger(mix) {
+      if (!mix?.accepted) {
+        api.lastVoiceIndex = -1;
+        api.lastStolen = false;
+        return -1;
+      }
+      const index = api.cursor;
+      const voice = voices[index];
+      api.cursor = (index + 1) % size;
+      const stolen = voice.left.paused === false || voice.right.paused === false;
+      voice.left.pause?.();
+      voice.right.pause?.();
+      voice.left.volume = Math.max(0, Math.min(1, Number(mix.leftGain) || 0));
+      voice.right.volume = Math.max(0, Math.min(1, Number(mix.rightGain) || 0));
+      voice.left.currentTime = 0;
+      voice.right.currentTime = 0;
+      playElement(voice.left, `${name}:left`);
+      playElement(voice.right, `${name}:right`);
+      voice.sequence += 1;
+      api.plays += 1;
+      api.steals += Number(stolen);
+      api.lastVoiceIndex = index;
+      api.lastStolen = stolen;
+      return index;
+    },
+  };
+  return api;
+}
+
 async function ensureAudioFiles() {
   const [{ access, mkdir, writeFile }, path] = await Promise.all([import("node:fs/promises"), import("node:path")]);
   const local = globalThis.process?.env?.LOCALAPPDATA || globalThis.process?.env?.TEMP || globalThis.process?.cwd?.() || ".";
   const directory = path.join(local, "ThreeBrowser", "GtaNeonCity", "audio-v2");
   await mkdir(directory, { recursive: true });
+  const definitions = createAudioDefinitions();
   const files = {};
-  for (const [name, bytes] of Object.entries(createAudioDefinitions())) {
-    const file = path.join(directory, `${name}.wav`);
+  const writeOnce = async (file, bytes) => {
     try { await access(file); } catch { await writeFile(file, bytes); }
+  };
+  for (const [name, bytes] of Object.entries(definitions)) {
+    const file = path.join(directory, `${name}.wav`);
+    await writeOnce(file, bytes);
     files[name] = file;
   }
-  return files;
+  const spatialFiles = {};
+  for (const name of Object.keys(SPATIAL_AUDIO_PROFILES)) {
+    const mono = definitions[name];
+    if (!mono) throw new Error(`Missing procedural source for spatial sound: ${name}`);
+    const left = path.join(directory, `${name}.spatial-v1-left.wav`);
+    const right = path.join(directory, `${name}.spatial-v1-right.wav`);
+    await Promise.all([
+      writeOnce(left, createChannelIsolatedStereoWav(mono, "left")),
+      writeOnce(right, createChannelIsolatedStereoWav(mono, "right")),
+    ]);
+    spatialFiles[name] = Object.freeze({ left, right });
+  }
+  return { files, spatialFiles };
 }
 
-export async function createGameAudio() {
-  if (typeof globalThis.Audio !== "function") throw new Error("Native Audio is unavailable");
-  const files = await ensureAudioFiles();
+function waitForAudioReady(element) {
+  if (Number(element?.readyState) >= 3 || typeof element?.addEventListener !== "function") return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      element.removeEventListener?.("canplaythrough", ready);
+      element.removeEventListener?.("error", failed);
+    };
+    const ready = () => { cleanup(); resolve(); };
+    const failed = () => { cleanup(); reject(new Error(`Native audio preload failed: ${element.currentSrc || element.src || "unknown"}`)); };
+    element.addEventListener("canplaythrough", ready);
+    element.addEventListener("error", failed);
+  });
+}
+
+export async function createGameAudio(options = {}) {
+  const audioFactory = typeof options.audioFactory === "function"
+    ? options.audioFactory
+    : typeof globalThis.Audio === "function"
+      ? source => new globalThis.Audio(source)
+      : null;
+  if (!audioFactory) throw new Error("Native Audio is unavailable");
+  const prepared = options.preparedFiles ?? await ensureAudioFiles();
+  const files = prepared.files ?? prepared;
+  const spatialFiles = prepared.spatialFiles ?? {};
   const elements = {};
   const oneShots = new Set([
     "gunshot", "impact", "melee", "pickup", "mission", "horn", "footstep", "reload", "empty", "hurt",
     "radio", "thunder", "taxiDoor", "seatbelt", "taxiMeter",
   ]);
-  for (const [name, file] of Object.entries(files)) {
-    const element = new globalThis.Audio(file);
-    element.preload = "auto";
-    element.loop = ["ambience", "cityDay", "cityNight", "engine", "siren", "rain", "tire"].includes(name);
-    element.volume = name === "ambience" ? 0.13 : 0;
-    elements[name] = element;
-  }
+  const loopNames = new Set(["ambience", "cityDay", "cityNight", "engine", "siren", "rain", "tire"]);
+  const allElements = [];
+  const readyPromises = [];
+  const warned = new Set();
+  let elementAllocations = 0;
+  let sourceLoads = 0;
   let started = false;
   let disposed = false;
-  const warned = new Set();
+  let filesReady = false;
 
-  function safePlay(name) {
-    const element = elements[name];
+  function safePlayElement(element, label) {
     if (!element || disposed) return;
-    void element.play().catch(error => {
-      if (warned.has(name)) return;
-      warned.add(name);
-      console.warn(`[GTA Neon City] ${name} audio unavailable: ${error?.message || error}`);
+    try {
+      const result = element.play?.();
+      result?.catch?.(error => {
+        if (warned.has(label)) return;
+        warned.add(label);
+        console.warn(`[GTA Neon City] ${label} audio unavailable: ${error?.message || error}`);
+      });
+    } catch (error) {
+      if (!warned.has(label)) {
+        warned.add(label);
+        console.warn(`[GTA Neon City] ${label} audio unavailable: ${error?.message || error}`);
+      }
+    }
+  }
+
+  function createElement(file, loop = false, volume = 0, label = "audio") {
+    const element = audioFactory(file, label);
+    if (!element) throw new Error(`Audio factory did not create ${label}`);
+    elementAllocations += 1;
+    sourceLoads += 1;
+    element.preload = "auto";
+    element.loop = Boolean(loop);
+    element.volume = Math.max(0, Math.min(1, Number(volume) || 0));
+    allElements.push(element);
+    readyPromises.push(waitForAudioReady(element));
+    return element;
+  }
+
+  for (const [name, file] of Object.entries(files)) {
+    elements[name] = createElement(file, loopNames.has(name), name === "ambience" ? 0.13 : 0, `flat:${name}`);
+  }
+
+  const spatialPools = {};
+  for (const [name, count] of Object.entries(SPATIAL_VOICE_COUNTS)) {
+    const pair = spatialFiles[name];
+    if (!pair?.left || !pair?.right) throw new Error(`Missing prebuilt stereo pair for ${name}`);
+    spatialPools[name] = createSpatialVoicePool({
+      name,
+      count,
+      leftFile: pair.left,
+      rightFile: pair.right,
+      createElement,
+      playElement: safePlayElement,
     });
   }
+  const sirenFiles = spatialFiles.siren;
+  if (!sirenFiles?.left || !sirenFiles?.right) throw new Error("Missing prebuilt stereo pair for siren");
+  const sirenPair = {
+    left: createElement(sirenFiles.left, true, 0, "siren:left"),
+    right: createElement(sirenFiles.right, true, 0, "siren:right"),
+  };
+
+  // Native Audio opens and decodes local WAVs in the constructor's load
+  // microtask. Await every handle before returning so main cannot publish READY
+  // while a gameplay voice still has a first-use file open pending.
+  await Promise.all(readyPromises);
+  filesReady = true;
+  const startupElementCount = elementAllocations;
+  const startupSourceLoads = sourceLoads;
+  const listener = createSpatialListenerState();
+  const spatialMix = { sourceX: 0, sourceY: 0, sourceZ: 0, distance: 0, pan: 0, attenuation: 0, leftGain: 0, rightGain: 0, accepted: false };
+  const sirenMix = { sourceX: 0, sourceY: 0, sourceZ: 0, distance: 0, pan: 0, attenuation: 0, leftGain: 0, rightGain: 0, accepted: false };
+  const lastSpatialEvent = {
+    serial: 0,
+    name: null,
+    sourceX: 0,
+    sourceY: 0,
+    sourceZ: 0,
+    distance: 0,
+    pan: 0,
+    attenuation: 0,
+    leftGain: 0,
+    rightGain: 0,
+    accepted: false,
+    voiceIndex: -1,
+    stolen: false,
+  };
+  const sirenState = {
+    sourceId: null,
+    active: false,
+    audible: false,
+    distance: 0,
+    pan: 0,
+    attenuation: 0,
+    leftGain: 0,
+    rightGain: 0,
+  };
+  const pairCounts = Object.freeze({ ...SPATIAL_VOICE_COUNTS, siren: 1 });
+  const precreatedVoicePairs = Object.values(pairCounts).reduce((sum, count) => sum + count, 0);
 
   function start() {
     if (started || disposed) return;
     started = true;
-    safePlay("ambience");
-    safePlay("cityDay");
-    safePlay("cityNight");
-    safePlay("engine");
-    safePlay("siren");
-    safePlay("rain");
-    safePlay("tire");
+    for (const name of ["ambience", "cityDay", "cityNight", "engine", "rain", "tire"]) {
+      safePlayElement(elements[name], `flat:${name}`);
+    }
+    // The sole siren loop is started silently now; wanted-state changes only
+    // alter its two gains and never create/open/play a new source mid-game.
+    safePlayElement(sirenPair.left, "siren:left");
+    safePlayElement(sirenPair.right, "siren:right");
   }
 
   function play(name, volume = 0.65) {
     const element = elements[name];
-    if (!element || !oneShots.has(name) || disposed) return;
+    if (!element || !oneShots.has(name) || disposed) return false;
+    element.pause?.();
     element.volume = Math.max(0, Math.min(1, Number(volume) || 0));
     element.currentTime = 0;
-    safePlay(name);
+    safePlayElement(element, `flat:${name}`);
+    return true;
   }
 
-  function update({ driving = false, speed = 0, wantedStars = 0, rain = 0, tireSlip = 0, timeHours = 12 } = {}) {
+  function updateListener(position, forward, up) {
+    return updateSpatialListener(listener, position, forward, up);
+  }
+
+  function playAt(name, volume = 0.65, worldPosition = null) {
+    lastSpatialEvent.serial += 1;
+    lastSpatialEvent.name = String(name ?? "");
+    const profile = SPATIAL_AUDIO_PROFILES[lastSpatialEvent.name];
+    const pool = spatialPools[lastSpatialEvent.name];
+    if (!profile || !pool || disposed || !worldPosition) {
+      lastSpatialEvent.sourceX = finiteComponent(worldPosition, "x", 0);
+      lastSpatialEvent.sourceY = finiteComponent(worldPosition, "y", 1);
+      lastSpatialEvent.sourceZ = finiteComponent(worldPosition, "z", 2);
+      lastSpatialEvent.distance = 0;
+      lastSpatialEvent.pan = 0;
+      lastSpatialEvent.attenuation = 0;
+      lastSpatialEvent.leftGain = 0;
+      lastSpatialEvent.rightGain = 0;
+      lastSpatialEvent.accepted = false;
+      lastSpatialEvent.voiceIndex = -1;
+      lastSpatialEvent.stolen = false;
+      return lastSpatialEvent;
+    }
+    calculateSpatialMix(listener, worldPosition, profile, volume, spatialMix);
+    lastSpatialEvent.sourceX = spatialMix.sourceX;
+    lastSpatialEvent.sourceY = spatialMix.sourceY;
+    lastSpatialEvent.sourceZ = spatialMix.sourceZ;
+    lastSpatialEvent.distance = spatialMix.distance;
+    lastSpatialEvent.pan = spatialMix.pan;
+    lastSpatialEvent.attenuation = spatialMix.attenuation;
+    lastSpatialEvent.leftGain = spatialMix.leftGain;
+    lastSpatialEvent.rightGain = spatialMix.rightGain;
+    lastSpatialEvent.accepted = spatialMix.accepted;
+    lastSpatialEvent.voiceIndex = pool.trigger(spatialMix);
+    lastSpatialEvent.stolen = pool.lastStolen;
+    return lastSpatialEvent;
+  }
+
+  function updateSiren(wantedStars, sourcePosition, sourceId) {
+    const activeSource = Number(wantedStars) > 0 && sourcePosition;
+    if (activeSource) {
+      const volume = Math.min(0.48, 0.19 + Math.max(0, Number(wantedStars) || 0) * 0.055);
+      calculateSpatialMix(listener, sourcePosition, SPATIAL_AUDIO_PROFILES.siren, volume, sirenMix);
+      sirenPair.left.volume = sirenMix.leftGain;
+      sirenPair.right.volume = sirenMix.rightGain;
+      sirenState.sourceId = sourceId === null || sourceId === undefined ? "police" : String(sourceId);
+      sirenState.active = true;
+      sirenState.audible = sirenMix.accepted;
+      sirenState.distance = sirenMix.distance;
+      sirenState.pan = sirenMix.pan;
+      sirenState.attenuation = sirenMix.attenuation;
+      sirenState.leftGain = sirenMix.leftGain;
+      sirenState.rightGain = sirenMix.rightGain;
+    } else {
+      sirenPair.left.volume = 0;
+      sirenPair.right.volume = 0;
+      sirenState.sourceId = null;
+      sirenState.active = false;
+      sirenState.audible = false;
+      sirenState.distance = 0;
+      sirenState.pan = 0;
+      sirenState.attenuation = 0;
+      sirenState.leftGain = 0;
+      sirenState.rightGain = 0;
+    }
+  }
+
+  function update({
+    driving = false,
+    speed = 0,
+    wantedStars = 0,
+    rain = 0,
+    tireSlip = 0,
+    timeHours = 12,
+    sirenPosition = null,
+    sirenSourceId = null,
+  } = {}) {
     start();
     const engine = elements.engine;
-    const siren = elements.siren;
     const rainfall = elements.rain;
     const tire = elements.tire;
     const dayBed = elements.cityDay;
@@ -286,19 +722,62 @@ export async function createGameAudio() {
     const outsideMix = (driving ? 0.48 : 1) * (1 - wetness * 0.52);
     engine.volume = driving ? 0.12 + normalizedSpeed * 0.22 : 0;
     engine.playbackRate = 0.72 + normalizedSpeed * 1.18;
-    siren.volume = wantedStars > 0 ? Math.min(0.34, 0.12 + wantedStars * 0.045) : 0;
     rainfall.volume = Math.min(0.28, wetness * 0.25);
     tire.volume = driving ? Math.min(0.24, Math.max(0, Number(tireSlip) || 0) * 0.22) : 0;
     tire.playbackRate = 0.82 + normalizedSpeed * 0.72;
     dayBed.volume = (0.018 + solar * 0.105) * outsideMix;
     nightBed.volume = (0.012 + night * 0.082) * outsideMix;
+    updateSiren(wantedStars, sirenPosition, sirenSourceId);
+  }
+
+  function snapshot() {
+    const event = Object.freeze({ ...lastSpatialEvent });
+    const siren = Object.freeze({ ...sirenState });
+    return Object.freeze({
+      backend: "native-html-audio-stereo-file-pairs",
+      policy: "startup-preloaded-fixed-stereo-pairs",
+      filesReady,
+      startupElementCount,
+      currentElementCount: allElements.length,
+      precreatedElementCount: startupElementCount,
+      startupSourceLoads,
+      currentSourceLoads: sourceLoads,
+      runtimeElementAllocations: elementAllocations - startupElementCount,
+      runtimeSourceLoads: sourceLoads - startupSourceLoads,
+      precreatedVoicePairs,
+      pairCounts,
+      listener: Object.freeze({
+        revision: listener.revision,
+        position: Object.freeze([listener.position.x, listener.position.y, listener.position.z]),
+        forward: Object.freeze([listener.forward.x, listener.forward.y, listener.forward.z]),
+        up: Object.freeze([listener.up.x, listener.up.y, listener.up.z]),
+        right: Object.freeze([listener.right.x, listener.right.y, listener.right.z]),
+      }),
+      lastSpatialEvent: event,
+      activeSirenSource: siren.sourceId,
+      siren,
+    });
   }
 
   function dispose() {
     if (disposed) return;
     disposed = true;
-    for (const element of Object.values(elements)) element.close?.();
+    sirenPair.left.volume = 0;
+    sirenPair.right.volume = 0;
+    for (const element of allElements) element.close?.();
   }
 
-  return { files, elements, start, play, update, dispose };
+  return {
+    files,
+    spatialFiles,
+    elements,
+    spatialPools,
+    start,
+    play,
+    playAt,
+    updateListener,
+    update,
+    snapshot,
+    dispose,
+  };
 }

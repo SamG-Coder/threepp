@@ -19,14 +19,26 @@ const ACTION_CODES = Object.freeze({
   quickLoad: ["KeyL"],
 });
 
-export function createInput(canvas) {
+const DEFAULT_ACTION_BUFFER_MS = 240;
+const DEFAULT_ACTION_BUFFER_FRAMES = 12;
+
+export function createInput(canvas, options = {}) {
   const held = new Set();
   const pressed = new Set();
   const released = new Set();
-  const injected = new Set();
   const injectedHeld = new Set();
   const mouseHeld = new Set();
-  const mousePressed = new Set();
+  const keyEdges = [];
+  const injectedEdges = [];
+  const mouseEdges = [];
+  const now = typeof options.now === "function"
+    ? options.now
+    : () => Number(globalThis.performance?.now?.() ?? Date.now());
+  const actionBufferMs = Math.max(0, Number(options.actionBufferMs ?? DEFAULT_ACTION_BUFFER_MS) || 0);
+  const actionBufferFrames = Math.max(
+    1,
+    Math.trunc(Number(options.actionBufferFrames ?? DEFAULT_ACTION_BUFFER_FRAMES) || 0),
+  );
   const pointer = {
     x: 0,
     y: 0,
@@ -39,11 +51,44 @@ export function createInput(canvas) {
     justLocked: false,
     lockError: null,
   };
+  let inputFrame = 0;
   let disposed = false;
+
+  const addEdge = (queue, value, mirror = null) => {
+    queue.push({ value, time: Number(now()) || 0, frame: inputFrame });
+    mirror?.add(value);
+  };
+  const edgeExpired = (edge, currentTime) =>
+    inputFrame - edge.frame >= actionBufferFrames || currentTime - edge.time >= actionBufferMs;
+  const syncMirrorValue = (queue, mirror, value) => {
+    if (!mirror) return;
+    if (queue.some(edge => edge.value === value)) mirror.add(value);
+    else mirror.delete(value);
+  };
+  const pruneEdges = (queue, mirror = null, currentTime = Number(now()) || 0) => {
+    for (let index = queue.length - 1; index >= 0; --index) {
+      const edge = queue[index];
+      if (!edgeExpired(edge, currentTime)) continue;
+      queue.splice(index, 1);
+      syncMirrorValue(queue, mirror, edge.value);
+    }
+  };
+  const consumeEdge = (queue, predicate, mirror = null) => {
+    pruneEdges(queue, mirror);
+    const index = queue.findIndex(edge => predicate(edge.value));
+    if (index < 0) return false;
+    const [edge] = queue.splice(index, 1);
+    syncMirrorValue(queue, mirror, edge.value);
+    return true;
+  };
+  const clearEdges = (queue, mirror = null) => {
+    queue.length = 0;
+    mirror?.clear();
+  };
 
   const prevent = event => event.preventDefault?.();
   const onKeyDown = event => {
-    if (!held.has(event.code)) pressed.add(event.code);
+    if (!held.has(event.code)) addEdge(keyEdges, event.code, pressed);
     held.add(event.code);
     if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.code)) prevent(event);
   };
@@ -57,6 +102,12 @@ export function createInput(canvas) {
     mouseHeld.clear();
     pointer.dx = 0;
     pointer.dy = 0;
+    pointer.wheel = 0;
+  };
+  const clearPhysicalInput = () => {
+    clearHeld();
+    clearEdges(keyEdges, pressed);
+    clearEdges(mouseEdges);
   };
   const onPointerMove = event => {
     pointer.x = Number(event.clientX) || 0;
@@ -75,7 +126,7 @@ export function createInput(canvas) {
       prevent(event);
       return;
     }
-    if (!mouseHeld.has(event.button)) mousePressed.add(event.button);
+    if (!mouseHeld.has(event.button)) addEdge(mouseEdges, event.button);
     mouseHeld.add(event.button);
     if (event.button === 2) prevent(event);
   };
@@ -89,17 +140,17 @@ export function createInput(canvas) {
     pointer.justLocked = locked && !pointer.locked;
     pointer.locked = locked;
     pointer.everLocked ||= locked;
-    if (!pointer.locked) clearHeld();
+    if (!pointer.locked) clearPhysicalInput();
   };
   const onPointerLockError = event => {
     pointer.locked = false;
     pointer.lockError = String(event?.message ?? "pointer-lock-denied");
-    clearHeld();
+    clearPhysicalInput();
   };
 
   globalThis.addEventListener("keydown", onKeyDown);
   globalThis.addEventListener("keyup", onKeyUp);
-  globalThis.addEventListener("blur", clearHeld);
+  globalThis.addEventListener("blur", clearPhysicalInput);
   canvas.addEventListener("pointermove", onPointerMove);
   canvas.addEventListener("pointerdown", onPointerDown);
   canvas.addEventListener("pointerup", onPointerUp);
@@ -110,7 +161,10 @@ export function createInput(canvas) {
   document.addEventListener("pointerlockerror", onPointerLockError);
 
   const codesFor = action => ACTION_CODES[action] ?? [String(action)];
-  const consumeCodes = action => codesFor(action).some(code => pressed.delete(code));
+  const consumeCodes = action => {
+    const codes = codesFor(action);
+    return consumeEdge(keyEdges, code => codes.includes(code), pressed);
+  };
 
   return {
     held,
@@ -125,12 +179,15 @@ export function createInput(canvas) {
     },
     actionPressed(action) {
       const name = String(action);
-      if (injected.delete(name)) return true;
-      if (name === "fire") return mousePressed.delete(0);
-      if (name === "aim") return mousePressed.delete(2);
+      if (consumeEdge(injectedEdges, value => value === name)) return true;
+      if (name === "fire") return consumeEdge(mouseEdges, button => button === 0);
+      if (name === "aim") return consumeEdge(mouseEdges, button => button === 2);
       return consumeCodes(name);
     },
-    consumeCode(code) { return pressed.delete(code); },
+    consumeCode(code) {
+      const key = String(code);
+      return consumeEdge(keyEdges, value => value === key, pressed);
+    },
     movement() {
       return {
         x: Number(held.has("KeyD") || held.has("ArrowRight")) - Number(held.has("KeyA") || held.has("ArrowLeft")),
@@ -144,7 +201,7 @@ export function createInput(canvas) {
       pointer.wheel = 0;
       return look;
     },
-    injectAction(action) { injected.add(String(action)); },
+    injectAction(action) { addEdge(injectedEdges, String(action)); },
     injectHeldAction(action, down = true) {
       const name = String(action);
       if (down) injectedHeld.add(name);
@@ -158,7 +215,7 @@ export function createInput(canvas) {
     injectKey(code, down = true) {
       const key = String(code);
       if (down) {
-        if (!held.has(key)) pressed.add(key);
+        if (!held.has(key)) addEdge(keyEdges, key, pressed);
         held.add(key);
       } else {
         held.delete(key);
@@ -180,10 +237,17 @@ export function createInput(canvas) {
         error: pointer.lockError,
       });
     },
-    endFrame() {
-      pressed.clear();
+    endFrame({ simulationAdvanced = true } = {}) {
+      // Native WebGPU may present several frames between 60 Hz simulation
+      // ticks. Keep one-shot actions and mouse motion intact until gameplay
+      // has actually had a chance to consume them.
+      if (!simulationAdvanced) return;
+      inputFrame += 1;
+      const currentTime = Number(now()) || 0;
+      pruneEdges(keyEdges, pressed, currentTime);
+      pruneEdges(injectedEdges, null, currentTime);
+      pruneEdges(mouseEdges, null, currentTime);
       released.clear();
-      mousePressed.clear();
       pointer.dx = 0;
       pointer.dy = 0;
       pointer.wheel = 0;
@@ -194,7 +258,7 @@ export function createInput(canvas) {
       disposed = true;
       globalThis.removeEventListener("keydown", onKeyDown);
       globalThis.removeEventListener("keyup", onKeyUp);
-      globalThis.removeEventListener("blur", clearHeld);
+      globalThis.removeEventListener("blur", clearPhysicalInput);
       canvas.removeEventListener("pointermove", onPointerMove);
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointerup", onPointerUp);
@@ -204,7 +268,8 @@ export function createInput(canvas) {
       document.removeEventListener("pointerlockchange", onPointerLockChange);
       document.removeEventListener("pointerlockerror", onPointerLockError);
       injectedHeld.clear();
-      clearHeld();
+      clearEdges(injectedEdges);
+      clearPhysicalInput();
     },
   };
 }
