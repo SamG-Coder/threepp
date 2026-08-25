@@ -1,0 +1,68 @@
+{
+  "format": 2,
+  "projectId": "gta-neon-city",
+  "virtualURL": "https://gta-neon-city.runtime.threebrowser.local/",
+  "source": "https://gta-neon-city.runtime.threebrowser.local/",
+  "pulledAt": "2026-08-25T00:00:00.000Z",
+  "entry": "site-entry.mjs",
+  "requiresWebGPU": true,
+  "html": "index.html",
+  "files": [
+    {
+      "url": "https://gta-neon-city.runtime.threebrowser.local/",
+      "path": "index.html",
+      "type": "html"
+    },
+    {
+      "url": "https://gta-neon-city.runtime.threebrowser.local/site-entry.mjs",
+      "path": "site-entry.mjs",
+      "type": "module"
+    },
+    {
+      "url": "https://gta-neon-city.runtime.threebrowser.local/assets/textures/facade-concrete-weathered-v1.png",
+      "path": "assets/textures/facade-concrete-weathered-v1.png",
+      "type": "image"
+    },
+    {
+      "url": "https://gta-neon-city.runtime.threebrowser.local/assets/textures/facade-brick-coastal-aged-v1.png",
+      "path": "assets/textures/facade-brick-coastal-aged-v1.png",
+      "type": "image"
+    },
+    {
+      "url": "https://gta-neon-city.runtime.threebrowser.local/assets/textures/asphalt-coastal-worn-v1.png",
+      "path": "assets/textures/asphalt-coastal-worn-v1.png",
+      "type": "image"
+    },
+    {
+      "url": "https://gta-neon-city.runtime.threebrowser.local/assets/textures/pavement-concrete-aggregate-v1.png",
+      "path": "assets/textures/pavement-concrete-aggregate-v1.png",
+      "type": "image"
+    },
+    {
+      "url": "https://gta-neon-city.runtime.threebrowser.local/assets/textures/court-painted-coastal-worn-v1.png",
+      "path": "assets/textures/court-painted-coastal-worn-v1.png",
+      "type": "image"
+    },
+    {
+      "url": "https://gta-neon-city.runtime.threebrowser.local/assets/textures/depot-corrugated-coastal-v1.png",
+      "path": "assets/textures/depot-corrugated-coastal-v1.png",
+      "type": "image"
+    }
+  ],
+  "compatibility": {
+    "threeImportable": true,
+    "bundledThree": false,
+    "threeMode": "importable",
+    "rendererCandidates": ["webgpu"],
+    "canvasOnly": true,
+    "uiMode": "canvas-only",
+    "htmlOverlay": false,
+    "domRequired": false,
+    "notes": [
+      "Self-contained JavaScript GTA-style game for the WebView-free native runtime.",
+      "All visible game UI and the minimap are rendered on the GPU.",
+      "The city, people, cars, effects and missions are locally authored; bundled concrete, brick, asphalt, pavement, painted-court, and corrugated-depot albedos augment deterministic procedural PBR normal/roughness fallbacks.",
+      "Gameplay has no sample-specific C++ path and runs through public Three.js/runtime APIs."
+    ]
+  }
+}
