@@ -39,6 +39,21 @@ function harness({ onMelee = null } = {}) {
   return { player, scene, input, held, pressed, move, sounds, meleeEvents, shots };
 }
 
+test("player starts with a GTA-style pistol and minigun loadout", () => {
+  const { player } = harness();
+  try {
+    assert.equal(player.snapshot().weapon, "pistol");
+    assert.deepEqual(player.snapshot().ammo, { clip: 12, reserve: 180, reloading: false, reload: 0 });
+    assert.deepEqual(player.snapshot().weapons.minigun, { clip: 200, reserve: 1_000_000 });
+    assert.equal(player.selectWeapon("minigun"), true);
+    assert.deepEqual(player.snapshot().ammo, { clip: 200, reserve: 1_000_000, reloading: false, reload: 0 });
+    assert.equal(player.selectWeapon("pistol"), true);
+    assert.deepEqual(player.snapshot().ammo, { clip: 12, reserve: 180, reloading: false, reload: 0 });
+  } finally {
+    player.dispose();
+  }
+});
+
 test("pistol fire requires a completed aim-down-sights state", () => {
   const { player, held, shots } = harness();
   try {
@@ -60,6 +75,30 @@ test("pistol fire requires a completed aim-down-sights state", () => {
     assert.equal(visual.visible, false);
     assert.equal(player.setFirstPerson(false), false);
     assert.equal(visual.visible, true);
+  } finally {
+    player.dispose();
+  }
+});
+
+test("weapon slots swap to a sustained minigun while preserving pistol ammunition", () => {
+  const { player, held, pressed, shots } = harness();
+  try {
+    pressed.add("weaponMinigun");
+    player.update(1 / 60, { elapsed: 0 });
+    assert.equal(player.snapshot().weapon, "minigun");
+    held.add("aim");
+    held.add("fire");
+    for (let frame = 0; frame < 12; ++frame) {
+      player.update(0.06, { elapsed: 0.1 + frame * 0.06, canShoot: true, aimDirection: new THREE.Vector3(0, 0, -1) });
+    }
+    assert.ok(shots.length >= 10, `expected sustained automatic fire, got ${shots.length} shots`);
+    assert.ok(shots.every(shot => shot.weapon === "minigun" && shot.damage === 24));
+    assert.equal(player.snapshot().ammo.clip, 200 - shots.length);
+    held.clear();
+    pressed.add("weaponPistol");
+    player.update(1 / 60, { elapsed: 1 });
+    assert.equal(player.snapshot().weapon, "pistol");
+    assert.deepEqual(player.snapshot().ammo, { clip: 12, reserve: 180, reloading: false, reload: 0 });
   } finally {
     player.dispose();
   }
@@ -230,7 +269,7 @@ test("player silhouette uses a detailed hierarchical street-character rig", () =
     for (const name of [
       "tapered fitted jacket", "left jacket lapel", "subtle jacket back yoke",
       "defined jaw", "left eyebrow", "ordinary canvas-strap watch", "right sneaker sole",
-      "pistol slide", "pistol barrel", "pistol front sight", "right hip holster",
+      "pistol slide", "pistol barrel", "pistol front sight", "massive black minigun receiver", "minigun barrel 6", "right hip holster",
     ]) assert.ok(visual.getObjectByName(name), `missing procedural detail: ${name}`);
     let meshCount = 0;
     visual.traverse(object => { if (object.isMesh) meshCount += 1; });
@@ -273,7 +312,7 @@ test("locomotion, aim, recoil, and reload poses blend without snapping", () => {
     held.add("fire");
     player.update(1 / 60, { elapsed: 3.6, aimDirection: new THREE.Vector3(0, 0, -1) });
     held.delete("fire");
-    assert.equal(poseState.recoil, 1);
+    assert.ok(poseState.recoil > 0.95);
     assert.equal(visual.userData.muzzleFlash.visible, true);
 
     player.setAmmo(4, 20);

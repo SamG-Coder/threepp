@@ -1,0 +1,62 @@
+import assert from "node:assert/strict";
+import net from "node:net";
+
+const pipePath = process.argv[2];
+const screenshotPath = process.argv[3] ?? null;
+if (!pipePath) throw new TypeError("Usage: node tests/native-phone-qa.mjs <pipe> [phone.png]");
+
+async function connect(path, timeoutMs = 60_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      return await new Promise((resolve, reject) => {
+        const socket = net.createConnection(path);
+        socket.once("connect", () => resolve(socket));
+        socket.once("error", reject);
+      });
+    } catch {
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+  }
+  throw new Error("phone QA could not connect to the native game");
+}
+
+const socket = await connect(pipePath);
+socket.setEncoding("utf8");
+let sequence = 0;
+let buffer = "";
+const pending = new Map();
+socket.on("data", chunk => {
+  buffer += chunk;
+  for (;;) {
+    const end = buffer.indexOf("\n");
+    if (end < 0) break;
+    const value = JSON.parse(buffer.slice(0, end));
+    buffer = buffer.slice(end + 1);
+    const callback = pending.get(value.id);
+    if (!callback) continue;
+    pending.delete(value.id);
+    value.ok ? callback.resolve(value.result) : callback.reject(new Error(value.error));
+  }
+});
+const request = (op, values = {}) => new Promise((resolve, reject) => {
+  const id = ++sequence;
+  pending.set(id, { resolve, reject });
+  socket.write(`${JSON.stringify({ id, op, ...values })}\n`);
+});
+
+try {
+  await request("action", { action: "phone" });
+  let state = (await request("advance", { steps: 2 })).state;
+  assert.equal(state.phone.open, true);
+  assert.equal(state.phone.title, "NEON LIFE");
+  assert.equal(state.phone.items.length, 4);
+  await request("action", { action: "interact" });
+  state = (await request("advance", { steps: 2 })).state;
+  assert.equal(state.phone.app, "wallet");
+  assert.match(state.phone.subtitle, /AVAILABLE/);
+  if (screenshotPath) await request("screenshot", { path: screenshotPath });
+  console.log(JSON.stringify({ phone: state.phone, screenshotPath }, null, 2));
+} finally {
+  socket.end();
+}

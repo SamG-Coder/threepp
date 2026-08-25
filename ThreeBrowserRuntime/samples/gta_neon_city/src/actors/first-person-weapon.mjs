@@ -5,14 +5,14 @@ function clamp(value, low = 0, high = 1) {
 }
 
 /**
- * A dedicated camera-space pistol rig. Reusing the third-person armature here
+ * A dedicated camera-space minigun rig. Reusing the third-person armature here
  * would put the player's head and shoulders inside the near plane, so the FPS
  * view owns a compact pair of hands, slide, barrel and aligned iron sights.
  */
 export function createFirstPersonWeapon(camera) {
   if (!camera?.add) throw new TypeError("createFirstPersonWeapon requires a camera");
   const root = new THREE.Group();
-  root.name = "First-person aimed pistol viewmodel";
+  root.name = "First-person aimed minigun viewmodel";
   root.visible = false;
   root.renderOrder = 10_000;
   // Camera-space geometry reads much larger than a world prop. Keeping the
@@ -101,6 +101,7 @@ export function createFirstPersonWeapon(camera) {
   const skin = material(0xaa765e, 0.79, 0.01);
   const gunMetal = material(0x63727a, 0.29, 0.76);
   const gunPolymer = material(0x161c21, 0.56, 0.22);
+  const heavyBlack = material(0x1b2025, 0.38, 0.68);
   const rearPlateMaterial = material(0x283137, 0.46, 0.48);
   const sightPaint = material(0xa7b8b2, 0.40, 0.42);
   const sightDotMaterial = new THREE.MeshBasicNodeMaterial({
@@ -132,7 +133,7 @@ export function createFirstPersonWeapon(camera) {
   triggerHand.scale.set(0.72, 0.76, 0.62);
 
   const pistol = new THREE.Group();
-  pistol.name = "FPS pistol aligned to iron sights";
+  pistol.name = "FPS minigun aligned to central sight";
   root.add(pistol);
   const slide = mesh("FPS pistol machined slide", slideBodyGeometry, gunMetal, [0, -0.095, -0.57], [0, 0, 0], pistol);
   const slideTop = mesh("FPS pistol anti-glare top rib", box, gunPolymer, [0, -0.044, -0.575], [0, 0, 0], pistol);
@@ -190,9 +191,47 @@ export function createFirstPersonWeapon(camera) {
   rearDotRight.scale.copy(rearDotLeft.scale);
   const frontDot = mesh("FPS front sight luminous dot", box, sightDotMaterial, [0, -0.027, -0.827], [0, 0, 0], pistol);
   frontDot.scale.set(0.006, 0.007, 0.004);
+  const pistolParts = [...pistol.children];
+  const minigunModel = new THREE.Group();
+  minigunModel.name = "FPS massive black minigun asset";
+  minigunModel.position.set(0.30, -0.28, -0.22);
+  minigunModel.rotation.y = 0.18;
+  minigunModel.scale.setScalar(0.76);
+  pistol.add(minigunModel);
+  const minigunReceiver = mesh("FPS minigun massive black armored receiver", box, heavyBlack, [0, -0.09, -0.48], [0, 0, 0], minigunModel);
+  minigunReceiver.scale.set(0.42, 0.30, 0.52);
+  const motorGeometry = geometry(new THREE.CylinderGeometry(0.13, 0.15, 0.38, 16));
+  const motor = mesh("FPS minigun electric drive motor", motorGeometry, heavyBlack, [0, -0.10, -0.63], [Math.PI * 0.5, 0, 0], minigunModel);
+  motor.scale.set(1.18, 1, 1.05);
+  const minigunDrumGeometry = geometry(new THREE.CylinderGeometry(0.24, 0.24, 0.34, 18));
+  const minigunDrum = mesh("FPS minigun huge ammunition drum", minigunDrumGeometry, heavyBlack, [0.19, -0.31, -0.37], [0, 0, Math.PI * 0.5], minigunModel);
+  minigunDrum.scale.set(1, 1, 0.86);
+  const drumHub = mesh("FPS minigun drum hub", motorGeometry, gunMetal, [0.00, -0.31, -0.37], [0, 0, Math.PI * 0.5], minigunModel);
+  drumHub.scale.set(0.42, 0.72, 0.42);
+  const carryHandle = mesh("FPS minigun upper carry handle", box, heavyBlack, [0, 0.10, -0.47], [0, 0, 0], minigunModel);
+  carryHandle.scale.set(0.34, 0.065, 0.34);
+  for (const side of [-1, 1]) {
+    const handlePost = mesh(`FPS minigun ${side < 0 ? "left" : "right"} handle post`, box, heavyBlack,
+      [side * 0.145, 0.02, -0.47], [0, 0, 0], minigunModel);
+    handlePost.scale.set(0.045, 0.20, 0.06);
+  }
+  const minigunBarrelGeometry = geometry(new THREE.CylinderGeometry(0.022, 0.022, 0.94, 12));
+  const barrelCluster = new THREE.Group();
+  barrelCluster.name = "FPS rotating six-barrel cluster";
+  barrelCluster.position.set(0, -0.08, -0.70);
+  minigunModel.add(barrelCluster);
+  for (let index = 0; index < 6; ++index) {
+    const phase = index * Math.PI / 3;
+    mesh(`FPS minigun long black barrel ${index + 1}`, minigunBarrelGeometry, gunMetal,
+      [Math.cos(phase) * 0.095, Math.sin(phase) * 0.095, -0.45], [Math.PI * 0.5, 0, 0], barrelCluster);
+  }
+  const braceGeometry = geometry(new THREE.TorusGeometry(0.13, 0.022, 8, 20));
+  mesh("FPS minigun rear barrel brace", braceGeometry, gunMetal, [0, 0, -0.11], [0, 0, 0], barrelCluster);
+  mesh("FPS minigun front barrel brace", braceGeometry, gunMetal, [0, 0, -0.78], [0, 0, 0], barrelCluster);
+  const minigunParts = [minigunModel];
   const muzzle = new THREE.Object3D();
   muzzle.name = "FPS muzzle world anchor";
-  muzzle.position.set(0, -0.09, -0.91);
+  muzzle.position.set(0, -0.21, -1.56);
   pistol.add(muzzle);
   const flash = mesh("FPS muzzle flash", flashGeometry, flashMaterial, [0, 0, -0.11], [-Math.PI * 0.5, 0, 0], muzzle);
   flash.visible = false;
@@ -202,6 +241,10 @@ export function createFirstPersonWeapon(camera) {
   function update(delta, state = {}) {
     const dt = Math.max(0, Math.min(0.1, Number(delta) || 0));
     const aiming = Boolean(state.aiming);
+    const weapon = state.weapon === "minigun" ? "minigun" : "pistol";
+    root.userData.weapon = weapon;
+    for (const part of pistolParts) part.visible = weapon === "pistol";
+    for (const part of minigunParts) part.visible = weapon === "minigun";
     blend += ((aiming ? 1 : 0) - blend) * (1 - Math.exp(-dt * (aiming ? 21 : 16)));
     if (aiming && blend > 0.997) blend = 1;
     if (!aiming && blend < 0.003) blend = 0;
@@ -217,9 +260,11 @@ export function createFirstPersonWeapon(camera) {
     const speed = clamp((Number(state.speed) || 0) / 7, 0, 1);
     const elapsed = Number(state.elapsed) || 0;
     const bob = Math.sin(elapsed * 10.5) * 0.006 * speed;
-    root.position.set(0, 0.029 - 0.34 * (1 - blend) + bob + recoil * 0.012, -0.38 + recoil * 0.028);
+    const heavyOffset = weapon === "minigun" ? -0.035 : 0;
+    root.position.set(0, 0.029 + heavyOffset - 0.34 * (1 - blend) + bob + recoil * 0.012, -0.38 + recoil * 0.028);
     root.rotation.set(recoil * -0.045, Math.sin(elapsed * 5.2) * 0.005 * speed, 0);
     slide.position.z = -0.57 + recoil * 0.055;
+    barrelCluster.rotation.z = elapsed * (muzzleFlash ? 34 : 4);
     flash.visible = flashTime > 0 && blend > 0.55;
     flashMaterial.opacity = clamp(flashTime / 0.052, 0, 1) * 0.94;
     return snapshot();
@@ -241,7 +286,8 @@ export function createFirstPersonWeapon(camera) {
       blend,
       recoil,
       muzzleFlash: flash.visible,
-      mode: blend > 0.9 ? "iron-sights" : blend > 0 ? "raising" : "holstered",
+      weapon: root.userData.weapon ?? "pistol",
+      mode: blend > 0.9 ? `${root.userData.weapon ?? "pistol"}-sight` : blend > 0 ? "raising" : "holstered",
     });
   }
 

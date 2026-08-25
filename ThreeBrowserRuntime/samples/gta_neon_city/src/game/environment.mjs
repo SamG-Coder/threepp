@@ -239,9 +239,8 @@ export function createCityEnvironment({ scene, world, seed = DEFAULT_SEED, rainC
   rainQuaternion.setFromEuler(rainTilt);
 
   const cloudGeometry = ownGeometry(new THREE.SphereGeometry(1, 10, 7));
-  const cloudMaterial = ownMaterial(new THREE.MeshStandardNodeMaterial({
+  const cloudMaterial = ownMaterial(new THREE.MeshBasicNodeMaterial({
     color: 0x304050,
-    roughness: 1,
     transparent: true,
     opacity: 0.34,
     depthWrite: false,
@@ -454,6 +453,7 @@ export function createCityEnvironment({ scene, world, seed = DEFAULT_SEED, rainC
 
   function updateClouds(dt, atmosphere) {
     cloudMaterial.opacity = 0.12 + state.rain * 0.46;
+    cloudMaterial.color.copy(atmosphere.fog).lerp(atmosphere.sky, 0.36).multiplyScalar(0.62 + atmosphere.daylight * 0.20);
     for (let index = 0; index < cloudData.length; ++index) {
       const cloud = cloudData[index];
       cloud.x += (cloud.speed + state.windX * 0.08) * dt;
@@ -473,6 +473,14 @@ export function createCityEnvironment({ scene, world, seed = DEFAULT_SEED, rainC
     state.hours = wrap(state.hours + dt * state.timeScale, 24);
     state.rain += (state.targetRain - state.rain) * (1 - Math.exp(-dt * 0.42));
     const atmosphere = currentAtmosphere();
+    const focusValue = focus?.position ?? focus;
+    if (focusValue) {
+      const focusX = Number(focusValue.x) || 0;
+      const focusY = Number(focusValue.y) || 0;
+      const focusZ = Number(focusValue.z) || 0;
+      sky.position.set(focusX, focusY, focusZ);
+      clouds.position.set(focusX, 0, focusZ);
+    }
     updateSky(atmosphere);
     scene.background?.copy?.(atmosphere.sky);
     if (scene.fog?.color) scene.fog.color.copy(atmosphere.fog);
@@ -494,12 +502,14 @@ export function createCityEnvironment({ scene, world, seed = DEFAULT_SEED, rainC
     lightning.intensity = state.lightning * 16;
     const skyRadius = 390;
     sun.position.fromArray(atmosphere.sunDirection).multiplyScalar(skyRadius);
+    if (focusValue) sun.position.add(sky.position);
     sun.visible = atmosphere.elevation > -0.09 && state.rain < 0.92;
     sunMaterial.color.copy(atmosphere.sunColor);
     sunHalo.position.copy(sun.position);
     sunHalo.visible = sun.visible && state.rain < 0.75;
     sunHaloMaterial.opacity = (0.045 + atmosphere.horizonWarmth * 0.12) * (1 - state.rain * 0.75);
     moon.position.fromArray(atmosphere.moonDirection).multiplyScalar(skyRadius);
+    if (focusValue) moon.position.add(sky.position);
     moon.visible = atmosphere.night > 0.08 && moon.position.y > -45;
     moonMaterial.opacity = clamp(atmosphere.night * 1.15, 0, 1);
     moonHalo.position.copy(moon.position);

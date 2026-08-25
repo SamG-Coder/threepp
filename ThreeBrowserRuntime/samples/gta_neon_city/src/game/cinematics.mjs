@@ -147,6 +147,14 @@ const SHOTS = Object.freeze({
     stagePlayerAnchor: "night_kai_stage", stagePlayerOffset: [0, 0, 0],
     fov: 47,
   }),
+  desert_arrival_wide: Object.freeze({
+    anchor: "desert_ruins", look: "desert_friend",
+    offset: [18, 8.5, -26], lookOffset: [0, 1.1, 0], fov: 52,
+  }),
+  desert_friend_close: Object.freeze({
+    anchor: "desert_friend", look: "desert_friend",
+    offset: [3.2, 1.75, -4.4], lookOffset: [0, 1.35, 0], fov: 40,
+  }),
 });
 const NIGHT_TABLEAU_KEYS = Object.freeze([
   "night_rosa",

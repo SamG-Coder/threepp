@@ -5,7 +5,8 @@ import net from "node:net";
 const pipePath = process.argv[2];
 const thirdPersonPath = process.argv[3] ?? null;
 const ironSightsPath = process.argv[4] ?? null;
-if (!pipePath) throw new TypeError("Usage: node tests/native-camera-qa.mjs <pipe> [third-person.png] [iron-sights.png]");
+const minigunSightsPath = process.argv[5] ?? null;
+if (!pipePath) throw new TypeError("Usage: node tests/native-camera-qa.mjs <pipe> [third-person.png] [iron-sights.png] [minigun-sights.png]");
 
 class Client {
   constructor(socket) {
@@ -113,7 +114,7 @@ async function main() {
     const aimRenderMs = performance.now() - aimRenderStarted;
     assert.ok(aimRenderMs < 250, `prewarmed first-person presentation stalled for ${aimRenderMs.toFixed(1)}ms`);
     assert.equal(state.diagnostics.camera.perspective, "first-person-aim");
-    assert.equal(state.diagnostics.firstPersonWeapon.mode, "iron-sights");
+    assert.equal(state.diagnostics.firstPersonWeapon.mode, "pistol-sight");
     assert.equal(state.diagnostics.firstPersonWeapon.visible, true);
     assert.ok(Math.abs(state.diagnostics.camera.rotation[2]) < 1e-6, state.diagnostics.camera);
     assert.ok(state.diagnostics.camera.worldUp[1] > 0.72, state.diagnostics.camera);
@@ -134,6 +135,20 @@ async function main() {
     state = await control.request("snapshot");
     assert.equal(state.diagnostics.camera.perspective, "third-person");
     assert.equal(state.diagnostics.firstPersonWeapon.visible, false);
+    await control.request("action", { action: "weaponMinigun" });
+    await control.request("advance", { steps: 2 });
+    state = await control.request("snapshot");
+    assert.equal(state.player.weapon, "minigun");
+    assert.equal(state.player.ammo.reserve, 1_000_000);
+    await control.request("aim", { down: true });
+    await control.request("advance", { steps: 55 });
+    state = await control.request("render");
+    assert.equal(state.diagnostics.firstPersonWeapon.mode, "minigun-sight");
+    assert.equal(state.diagnostics.firstPersonWeapon.visible, true);
+    if (minigunSightsPath) {
+      await control.request("screenshot", { path: minigunSightsPath, width: 1280, height: 720 });
+      assert.ok((await stat(minigunSightsPath)).size > 40_000);
+    }
     console.log(JSON.stringify({
       ready: state.ready,
       presentation: state.diagnostics.presentation,
@@ -146,6 +161,7 @@ async function main() {
       aimRenderMs,
       thirdPersonPath,
       ironSightsPath,
+      minigunSightsPath,
     }, null, 2));
   } finally {
     control.close();

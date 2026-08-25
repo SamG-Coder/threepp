@@ -171,7 +171,7 @@ test("warmup explicitly uploads generated PBR maps and nested virtual-interior t
   }
 });
 
-test("reveal-all HUD warmup uploads the font, black backing and pooled minimap", async () => {
+test("reveal-all HUD warmup uploads the font, panel skins and pooled minimap", async () => {
   const uploads = [];
   const renderer = {
     toneMapping: 0,
@@ -197,15 +197,16 @@ test("reveal-all HUD warmup uploads the font, black backing and pooled minimap",
       revealAll: true,
       compileMode: "render",
     }]);
-    assert.equal(result.textures, 3);
-    assert.equal(result.explicitTextureUploads, 3);
+    assert.equal(result.textures, 4);
+    assert.equal(result.explicitTextureUploads, 4);
     assert.equal(result.allTextureSourcesReady, true);
     assert.deepEqual(result.passes[0].textureNames, [
       "Neon City GPU bitmap font",
       "Neon City baked-alpha black HUD backdrop",
       "Neon City pooled raster navigation map",
+      "Neon Life tintable rounded panel texture",
     ]);
-    assert.equal(new Set(uploads).size, 3);
+    assert.equal(new Set(uploads).size, 4);
     assert.ok(uploads.includes(hud.minimapTexture));
   } finally {
     hud.dispose();

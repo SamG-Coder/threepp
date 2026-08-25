@@ -1614,6 +1614,9 @@ export function createVehicleSystem({
       root: visual.root,
       visual,
       radius: style.radius,
+      width: style.width,
+      length: style.length,
+      height: style.height,
       health: Math.max(1, finite(descriptor.health, style.health)),
       maxHealth: Math.max(1, finite(descriptor.health, style.health)),
       driver: mode === "traffic" ? "traffic" : mode === "police" ? "police" : null,
@@ -1820,6 +1823,44 @@ export function createVehicleSystem({
     try { onImpact(detail); } catch { /* Host callbacks cannot break simulation. */ }
   }
 
+  const vehicleContact = { normalX: 0, normalZ: 0, overlap: 0 };
+  function vehicleBoxOverlap(a, b) {
+    const dx = b.state.x - a.state.x;
+    const dz = b.state.z - a.state.z;
+    const aRightX = Math.cos(a.state.yaw);
+    const aRightZ = -Math.sin(a.state.yaw);
+    const aForwardX = -Math.sin(a.state.yaw);
+    const aForwardZ = -Math.cos(a.state.yaw);
+    const bRightX = Math.cos(b.state.yaw);
+    const bRightZ = -Math.sin(b.state.yaw);
+    const bForwardX = -Math.sin(b.state.yaw);
+    const bForwardZ = -Math.cos(b.state.yaw);
+    let minimumOverlap = Infinity;
+    let normalX = 1;
+    let normalZ = 0;
+    for (let axisIndex = 0; axisIndex < 4; ++axisIndex) {
+      const axisX = axisIndex === 0 ? aRightX : axisIndex === 1 ? aForwardX : axisIndex === 2 ? bRightX : bForwardX;
+      const axisZ = axisIndex === 0 ? aRightZ : axisIndex === 1 ? aForwardZ : axisIndex === 2 ? bRightZ : bForwardZ;
+      const centerProjection = dx * axisX + dz * axisZ;
+      const radiusA = Math.abs(aRightX * axisX + aRightZ * axisZ) * a.width * 0.5 +
+        Math.abs(aForwardX * axisX + aForwardZ * axisZ) * a.length * 0.5;
+      const radiusB = Math.abs(bRightX * axisX + bRightZ * axisZ) * b.width * 0.5 +
+        Math.abs(bForwardX * axisX + bForwardZ * axisZ) * b.length * 0.5;
+      const overlap = radiusA + radiusB - Math.abs(centerProjection);
+      if (overlap <= 0) return null;
+      if (overlap < minimumOverlap) {
+        minimumOverlap = overlap;
+        const sign = centerProjection < 0 ? -1 : 1;
+        normalX = axisX * sign;
+        normalZ = axisZ * sign;
+      }
+    }
+    vehicleContact.normalX = normalX;
+    vehicleContact.normalZ = normalZ;
+    vehicleContact.overlap = minimumOverlap;
+    return vehicleContact;
+  }
+
   function separateVehicles() {
     for (let first = 0; first < vehicles.length; ++first) {
       const a = vehicles[first];
@@ -1827,20 +1868,9 @@ export function createVehicleSystem({
       for (let second = first + 1; second < vehicles.length; ++second) {
         const b = vehicles[second];
         if (b.health <= 0) continue;
-        let dx = b.state.x - a.state.x;
-        let dz = b.state.z - a.state.z;
-        const minimum = (a.radius + b.radius) * 0.88;
-        let distance = Math.hypot(dx, dz);
-        if (distance >= minimum) continue;
-        if (distance < 1e-5) {
-          const sign = (first + second) % 2 ? -1 : 1;
-          dx = sign;
-          dz = 0;
-          distance = 1;
-        }
-        const normalX = dx / distance;
-        const normalZ = dz / distance;
-        const overlap = minimum - distance;
+        const contact = vehicleBoxOverlap(a, b);
+        if (!contact) continue;
+        const { normalX, normalZ, overlap } = contact;
         const mobilityA = a.aiMode === "parked" && a.driver !== "player" ? 0.22 : 1;
         const mobilityB = b.aiMode === "parked" && b.driver !== "player" ? 0.22 : 1;
         const total = mobilityA + mobilityB;

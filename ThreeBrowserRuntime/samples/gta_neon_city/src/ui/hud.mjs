@@ -77,6 +77,8 @@ const VEHICLE_WIDTH = 360;
 const VEHICLE_HEIGHT = 94;
 const SHOP_WIDTH = 820;
 const SHOP_HEIGHT = 390;
+const PHONE_WIDTH = 390;
+const PHONE_HEIGHT = 650;
 const DIALOGUE_WIDTH = 900;
 const DIALOGUE_TEXT_INSET = 24;
 const DIALOGUE_TEXT_SCALE = 1.55;
@@ -439,6 +441,28 @@ function createBackdropTexture() {
   return texture;
 }
 
+function createTintablePanelTexture() {
+  const size = 8;
+  const bytes = new Uint8Array(size * size * 4);
+  for (let y = 0; y < size; ++y) {
+    for (let x = 0; x < size; ++x) {
+      const edge = Math.min(x, y, size - 1 - x, size - 1 - y);
+      const offset = (y * size + x) * 4;
+      bytes[offset] = bytes[offset + 1] = bytes[offset + 2] = 255;
+      bytes[offset + 3] = edge === 0 ? 205 : edge === 1 ? 235 : 255;
+    }
+  }
+  const texture = new THREE.DataTexture(bytes, size, size, THREE.RGBAFormat, THREE.UnsignedByteType);
+  texture.name = "Neon Life tintable rounded panel texture";
+  texture.magFilter = THREE.LinearFilter;
+  texture.minFilter = THREE.LinearFilter;
+  texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.generateMipmaps = false;
+  texture.colorSpace = THREE.NoColorSpace;
+  texture.needsUpdate = true;
+  return texture;
+}
+
 function createText(text, atlas, color = 0xffffff, scale = 2, opacity = 1, maxCharacters = 160) {
   const built = buildTextGeometry(text, atlas, scale, 1, maxCharacters);
   const material = createHudMaterial({ color, opacity, map: atlas.texture, alphaTest: 0.35 });
@@ -573,6 +597,7 @@ export function createGtaHud({ renderer } = {}) {
   scene.add(root);
   const unitPlane = new THREE.PlaneGeometry(1, 1);
   const backdropTexture = createBackdropTexture();
+  const tintablePanelTexture = createTintablePanelTexture();
   const minimapPixels = new Uint8Array(MAP_INNER * MAP_INNER * 4);
   const minimapBasePixels = new Uint8Array(minimapPixels.length);
   const minimapTexture = new THREE.DataTexture(
@@ -652,7 +677,7 @@ export function createGtaHud({ renderer } = {}) {
   const staminaBack = panel(212, 10, 0x172317, 0.98, 2006);
   const staminaFill = panel(208, 6, 0x72ff9b, 1, 2008);
   const cashText = createText("$1,250", atlas, 0x72ff9b, 2.5);
-  const ammoText = createText("PISTOL 12 / 72", atlas, 0xf1f4ff, 1.5);
+  const ammoText = createText("PISTOL 12 / 180", atlas, 0xf1f4ff, 1.5);
   const environmentText = createText("21:39 RAIN", atlas, 0x8ee9ff, 1.25);
   const healthText = createText("HEALTH 100", atlas, 0xffa6b9, 1.25);
   const armorText = createText("ARMOR 35", atlas, 0x90ddff, 1.25);
@@ -941,6 +966,59 @@ export function createGtaHud({ renderer } = {}) {
   shopHint.position.set(32, 357, 1);
   shopGroup.visible = false;
 
+  // Neon Life is a fixed, RAM-resident phone. Its shell, app rows and text
+  // are created before pipeline warmup so opening it never discovers GPU work.
+  const phoneGroup = new THREE.Group();
+  phoneGroup.name = "Neon Life preloaded interactive phone";
+  const phonePanel = (panelWidth, panelHeight, color, opacity, order) => panel(
+    panelWidth, panelHeight, 0, 1, order,
+    createHudMaterial({ color, opacity, map: tintablePanelTexture, layered: true }),
+  );
+  const phoneShadow = phonePanel(PHONE_WIDTH, PHONE_HEIGHT, 0x020407, 0.97, 2082);
+  const phoneShell = phonePanel(PHONE_WIDTH - 14, PHONE_HEIGHT - 14, 0x111722, 1, 2084);
+  const phoneScreen = phonePanel(PHONE_WIDTH - 42, PHONE_HEIGHT - 74, 0x07131d, 1, 2086);
+  const phoneTopGlow = phonePanel(PHONE_WIDTH - 42, 7, 0x28dff5, 1, 2088);
+  const phoneSpeaker = phonePanel(72, 5, 0x34495d, 1, 2090);
+  const phoneHomeBar = phonePanel(94, 5, 0xb8d7df, 0.85, 2090);
+  const phoneClock = createText("21:39", atlas, 0x8ee9ff, 1.05);
+  const phoneSignal = createText("PULSE  5G", atlas, 0x8ee9ff, 1.05);
+  const phoneTitle = createText("NEON LIFE", atlas, 0xffffff, 2.25, 1, 46);
+  const phoneSubtitle = createText("YOUR CITY IN YOUR POCKET", atlas, 0x79ddec, 1.1, 1, 54);
+  const phoneRows = Array.from({ length: 7 }, (_, index) => {
+    const backing = phonePanel(PHONE_WIDTH - 74, 58, index % 2 ? 0x101e2a : 0x122535, 1, 2088);
+    const accent = phonePanel(5, 58, 0x405669, 1, 2090);
+    const title = createText("APP", atlas, 0xf1f7fa, 1.25, 1, 42);
+    const detail = createText("DETAIL", atlas, 0x93aabb, 0.92, 1, 58);
+    backing.position.set(37 + (PHONE_WIDTH - 74) * 0.5, 150 + index * 64, 1);
+    accent.position.set(39.5, 150 + index * 64, 2);
+    title.position.set(52, 135 + index * 64, 3);
+    detail.position.set(52, 161 + index * 64, 3);
+    phoneGroup.add(backing, accent, title, detail);
+    return { backing, accent, title, detail };
+  });
+  const phoneHint = createText("W / S SELECT   E OPEN   Q / F / TAB BACK", atlas, 0x7f99aa, 0.92, 1, 72);
+  for (const textMesh of [
+    phoneClock, phoneSignal, phoneTitle, phoneSubtitle, phoneHint,
+    ...phoneRows.flatMap(row => [row.title, row.detail]),
+  ]) textMesh.renderOrder = 2100;
+  phoneGroup.add(
+    phoneShadow, phoneShell, phoneScreen, phoneTopGlow, phoneSpeaker, phoneHomeBar,
+    phoneClock, phoneSignal, phoneTitle, phoneSubtitle, phoneHint,
+  );
+  root.add(phoneGroup);
+  placeTopLeft(phoneShadow, 0, 0);
+  placeTopLeft(phoneShell, 7, 7, 0.2);
+  placeTopLeft(phoneScreen, 21, 37, 0.4);
+  placeTopLeft(phoneTopGlow, 21, 37, 0.6);
+  phoneSpeaker.position.set(PHONE_WIDTH * 0.5, 20, 1);
+  phoneHomeBar.position.set(PHONE_WIDTH * 0.5, PHONE_HEIGHT - 20, 1);
+  phoneClock.position.set(31, 50, 2);
+  phoneSignal.position.set(282, 50, 2);
+  phoneTitle.position.set(36, 75, 2);
+  phoneSubtitle.position.set(36, 105, 2);
+  phoneHint.position.set(35, PHONE_HEIGHT - 51, 2);
+  phoneGroup.visible = false;
+
   // Four-part crosshair leaves an uncluttered center pixel.
   const reticleGroup = new THREE.Group();
   reticleGroup.name = "Neon City gameplay aiming reticle";
@@ -1063,7 +1141,7 @@ export function createGtaHud({ renderer } = {}) {
   const controlsPanel = panel(700, 72, 0x000000, 0.90, 2070);
   const controlsRule = panel(700, 3, 0xff2ec4, 0.88, 2072);
   const controlsTitle = createText("QUICK CONTROLS", atlas, 0x5de8ff, 1.45);
-  const controlsLine1 = createText("WASD MOVE / DRIVE   MOUSE LOOK   F VEHICLE   E INTERACT", atlas, 0xf2f5ff, 1.1, 1, 96);
+  const controlsLine1 = createText("WASD MOVE / DRIVE   MOUSE LOOK   F VEHICLE   E INTERACT   TAB PHONE", atlas, 0xf2f5ff, 1.1, 1, 112);
   const controlsLine2 = createText("HOLD RMB AIM   LMB FIRE SIGHTED   SPACE JUMP / HANDBRAKE   ESC RELEASE", atlas, 0xbac5d8, 1.1, 1, 112);
   controlsGroup.add(controlsPanel, controlsRule, controlsTitle, controlsLine1, controlsLine2);
   root.add(controlsGroup);
@@ -1169,6 +1247,9 @@ export function createGtaHud({ renderer } = {}) {
       height * 0.5 - SHOP_HEIGHT * 0.5 * shopScale,
       0,
     );
+    const phoneScale = Math.min(1, Math.max(0.58, Math.min((width - 30) / PHONE_WIDTH, (height - 30) / PHONE_HEIGHT)));
+    phoneGroup.scale.setScalar(phoneScale);
+    phoneGroup.position.set(width - 34 - PHONE_WIDTH * phoneScale, height * 0.5 - PHONE_HEIGHT * 0.5 * phoneScale, 0);
 
     cinematicTop.scale.set(width, 76, 1);
     cinematicTop.position.set(width * 0.5, 38, 0);
@@ -1472,6 +1553,8 @@ export function createGtaHud({ renderer } = {}) {
     const cinematic = Boolean(story.cinematic && authoredPresentation);
     const neighbourhood = snapshot.neighbourhood ?? {};
     const shopMenuVisible = Boolean(neighbourhood.menuOpen) && alive && captured && !authoredPresentation;
+    const phone = snapshot.phone ?? {};
+    const phoneVisible = Boolean(phone.open) && alive && captured && !authoredPresentation && !shopMenuVisible;
 
     statsGroup.visible = alive && captured && !authoredPresentation;
 
@@ -1487,9 +1570,12 @@ export function createGtaHud({ renderer } = {}) {
     cashText.setText(`$${formatInteger(player.cash)}`);
     alignRight(cashText, STATS_WIDTH - 18, 14);
     const ammo = player.ammo ?? {};
+    const weaponLabel = player.weapon === "minigun" ? "MINIGUN" : "PISTOL";
+    const reserveAmount = Math.max(0, Math.trunc(finite(ammo.reserve)));
+    const reserveLabel = reserveAmount >= 1_000_000 ? `${Math.floor(reserveAmount / 1_000_000)}M` : String(reserveAmount);
     ammoText.setText(ammo.reloading
-      ? `PISTOL RELOADING  ${Math.max(0, Math.ceil(finite(ammo.reload) * 10) / 10).toFixed(1)}S`
-      : `PISTOL ${Math.max(0, Math.trunc(finite(ammo.clip)))} / ${Math.max(0, Math.trunc(finite(ammo.reserve)))}`);
+      ? `${weaponLabel} RELOADING  ${Math.max(0, Math.ceil(finite(ammo.reload) * 10) / 10).toFixed(1)}S`
+      : `${weaponLabel} ${Math.max(0, Math.trunc(finite(ammo.clip)))} / ${reserveLabel}`);
     alignRight(ammoText, STATS_WIDTH - 18, 43);
     ammoText.visible = Boolean(player.aiming || ammo.reloading);
 
@@ -1675,6 +1761,31 @@ export function createGtaHud({ renderer } = {}) {
         : "W / S SELECT    E BUY    Q / F LEAVE    K SAVE");
     }
 
+    phoneGroup.visible = phoneVisible;
+    if (phoneVisible) {
+      phoneClock.setText(textValue(phone.time, "21:39"));
+      phoneTitle.setText(textValue(phone.title, "NEON LIFE"));
+      phoneSubtitle.setText(ellipsizeLine(textValue(phone.subtitle, "YOUR CITY IN YOUR POCKET"), 52));
+      const items = Array.isArray(phone.items) ? phone.items : [];
+      const selection = Math.max(0, Math.trunc(finite(phone.selection)));
+      for (let index = 0; index < phoneRows.length; ++index) {
+        const row = phoneRows[index];
+        const item = items[index];
+        row.backing.visible = row.accent.visible = row.title.visible = row.detail.visible = Boolean(item);
+        if (!item) continue;
+        const selected = index === selection;
+        row.title.setText(`${selected ? "→" : " "} ${textValue(item.title, "APP")}`);
+        row.detail.setText(ellipsizeLine(textValue(item.detail, "NEON CITY"), 55));
+        row.title.material.color.setHex(selected ? 0xffd46c : 0xf1f7fa);
+        row.detail.material.color.setHex(selected ? 0xbceefa : 0x93aabb);
+        row.accent.material.color.setHex(selected ? 0xff2ec4 : 0x405669);
+        row.backing.material.color.setHex(selected ? 0x17354a : index % 2 ? 0x101e2a : 0x122535);
+      }
+      phoneHint.setText(phone.app
+        ? "W / S BROWSE       Q / F / TAB BACK"
+        : "W / S SELECT      E OPEN      TAB CLOSE");
+    }
+
     reticleGroup.visible = alive && !driving && !paused && captured && !authoredPresentation && player.aiming;
     reticleGroup.scale.setScalar(0.72);
     reticleMaterial.color.setHex(0x8feaff);
@@ -1713,8 +1824,20 @@ export function createGtaHud({ renderer } = {}) {
       controlsGroup.visible = false;
     }
 
+    if (phoneVisible) {
+      statsGroup.visible = false;
+      missionGroup.visible = false;
+      vehicleGroup.visible = false;
+      minimapGroup.visible = false;
+      promptGroup.visible = false;
+      toastGroup.visible = false;
+      fareConversationGroup.visible = false;
+      reticleGroup.visible = false;
+      controlsGroup.visible = false;
+    }
+
     updateMinimap(snapshot, player, activeVehicle, mission, elapsed);
-    minimapGroup.visible = alive && captured && !authoredPresentation && !shopMenuVisible;
+    minimapGroup.visible = alive && captured && !authoredPresentation && !shopMenuVisible && !phoneVisible;
     mapTitle.setText(textValue(snapshot.world?.district?.name, "NEON CITY").toUpperCase());
 
     cinematicBars.visible = cinematic && captured;
@@ -1812,6 +1935,7 @@ export function createGtaHud({ renderer } = {}) {
       target.dispose();
       atlas.texture.dispose();
       backdropTexture.dispose();
+      tintablePanelTexture.dispose();
       minimapTexture.dispose();
       const geometries = new Set([unitPlane, starGeometry, circleGeometry, diamondGeometry, arrowGeometry]);
       const materials = new Set([

@@ -124,7 +124,7 @@ function createSharedResources() {
     torso: new THREE.CapsuleGeometry(0.24, 0.62, 5, 8),
     pelvis: new THREE.CapsuleGeometry(0.2, 0.2, 4, 8),
     neck: new THREE.CylinderGeometry(0.075, 0.095, 0.16, 8),
-    head: new THREE.SphereGeometry(0.2, 10, 8),
+    head: new THREE.SphereGeometry(0.2, 16, 12),
     hair: new THREE.SphereGeometry(0.207, 10, 7, 0, Math.PI * 2, 0, Math.PI * 0.58),
     hairBun: new THREE.SphereGeometry(0.095, 9, 7),
     eye: new THREE.SphereGeometry(0.024, 8, 6),
@@ -144,8 +144,8 @@ function createSharedResources() {
     umbrellaHandle: new THREE.TorusGeometry(0.064, 0.012, 5, 10, Math.PI * 1.15),
     distantBody: createDistantBodyGeometry(),
   };
-  const skin = [0x6f3f2d, 0x94583b, 0xb97655, 0xd5a17c, 0xe0b18b].map(color =>
-    new THREE.MeshStandardMaterial({ color, roughness: 0.86 }));
+  const skin = [0x6f3f2d, 0x94583b, 0xb97655, 0xd5a17c, 0xe0b18b].map((color, index) =>
+    new THREE.MeshStandardMaterial({ color, roughness: 0.74 + index * 0.025 }));
   const clothing = [0x25365f, 0x7b2436, 0x31705b, 0xc28932, 0x522b6d, 0x30343e, 0xd4d0c7].map(color =>
     new THREE.MeshStandardMaterial({ color, roughness: 0.76 }));
   const police = new THREE.MeshStandardMaterial({ color: 0x101a36, roughness: 0.58, metalness: 0.08 });
@@ -2100,7 +2100,7 @@ export function createPopulationSystem({ scene, world, onCrime = null, onPlayerD
     return hit;
   }
 
-  function hitByVehicle(position, radius, speed, playerDriven = false) {
+  function hitByVehicle(position, radius, speed, playerDriven = false, bodyBounds = null) {
     const impactSpeed = Math.abs(finite(speed));
     if (impactSpeed < 2.5) return EMPTY_VEHICLE_IMPACTS;
     const center = positionVector(position);
@@ -2111,7 +2111,15 @@ export function createPopulationSystem({ scene, world, onCrime = null, onPlayerD
       if (!actor.active || !actor.alive || !actor.root.visible || actor.ragdollActive) continue;
       const dx = actor.root.position.x - center.x;
       const dz = actor.root.position.z - center.z;
-      if (dx * dx + dz * dz > (vehicleRadius + actor.radius + 0.18) ** 2) continue;
+      if (bodyBounds && Number.isFinite(bodyBounds.width) && Number.isFinite(bodyBounds.length)) {
+        const yaw = finite(bodyBounds.yaw);
+        const cosine = Math.cos(yaw);
+        const sine = Math.sin(yaw);
+        const localX = dx * cosine - dz * sine;
+        const localZ = dx * sine + dz * cosine;
+        if (Math.abs(localX) > bodyBounds.width * 0.5 + actor.radius + 0.12 ||
+            Math.abs(localZ) > bodyBounds.length * 0.5 + actor.radius + 0.12) continue;
+      } else if (dx * dx + dz * dz > (vehicleRadius + actor.radius + 0.18) ** 2) continue;
       const result = damage(actor, Math.min(120, Math.max(8, (impactSpeed - 1.5) * 7.5)), playerDriven ? "player" : "traffic");
       if (result.accepted && impactSpeed >= 4) {
         beginRagdoll(actor, dx, dz, impactSpeed);

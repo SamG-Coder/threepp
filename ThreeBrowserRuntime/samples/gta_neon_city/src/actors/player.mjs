@@ -1,5 +1,11 @@
 import * as THREE from "three/webgpu";
 
+const MINIGUN_DRUM_SIZE = 200;
+const STARTING_MINIGUN_RESERVE = 1_000_000;
+const MINIGUN_RELOAD_SECONDS = 2.4;
+const PISTOL_MAGAZINE_SIZE = 12;
+const STARTING_PISTOL_RESERVE = 180;
+
 function mesh(geometry, material, name, position, parent, { castShadow = true } = {}) {
   const object = new THREE.Mesh(geometry, material);
   object.name = name;
@@ -28,6 +34,9 @@ function createPlayerVisual() {
     belt: new THREE.MeshStandardMaterial({ color: 0x171416, roughness: 0.68 }),
     metal: new THREE.MeshStandardMaterial({ color: 0x343a46, roughness: 0.25, metalness: 0.84 }),
     eye: new THREE.MeshStandardMaterial({ color: 0x10151c, roughness: 0.36 }),
+    eyeWhite: new THREE.MeshStandardMaterial({ color: 0xe2d9ca, roughness: 0.48 }),
+    iris: new THREE.MeshStandardMaterial({ color: 0x4a3828, roughness: 0.34 }),
+    lip: new THREE.MeshStandardMaterial({ color: 0x874a43, roughness: 0.72 }),
     flash: new THREE.MeshBasicNodeMaterial({ color: 0xffd36a, transparent: true, opacity: 0.96, depthWrite: false }),
   };
   const geometries = {
@@ -43,6 +52,9 @@ function createPlayerVisual() {
     ear: new THREE.SphereGeometry(0.052, 8, 6),
     hair: new THREE.SphereGeometry(0.247, 14, 9, 0, Math.PI * 2, 0, Math.PI * 0.57),
     eye: new THREE.SphereGeometry(0.032, 8, 5),
+    eyeWhite: new THREE.SphereGeometry(0.041, 12, 8),
+    iris: new THREE.CylinderGeometry(0.014, 0.014, 0.006, 12),
+    lip: new THREE.CapsuleGeometry(0.012, 0.085, 4, 10),
     brow: new THREE.BoxGeometry(0.09, 0.018, 0.02),
     nose: new THREE.ConeGeometry(0.043, 0.105, 7),
     shoulder: new THREE.SphereGeometry(0.098, 10, 8),
@@ -62,6 +74,10 @@ function createPlayerVisual() {
     gunGrip: new THREE.BoxGeometry(0.105, 0.24, 0.13),
     gunBarrel: new THREE.CylinderGeometry(0.032, 0.032, 0.3, 8),
     gunSight: new THREE.BoxGeometry(0.035, 0.035, 0.065),
+    minigunReceiver: new THREE.BoxGeometry(0.46, 0.34, 0.62),
+    minigunBarrel: new THREE.CylinderGeometry(0.024, 0.024, 1.05, 10),
+    minigunDrum: new THREE.CylinderGeometry(0.26, 0.26, 0.34, 16),
+    minigunBrace: new THREE.TorusGeometry(0.13, 0.022, 7, 18),
     flash: new THREE.ConeGeometry(0.085, 0.34, 7),
     phoneBody: new THREE.BoxGeometry(0.105, 0.205, 0.022),
     phoneScreen: new THREE.BoxGeometry(0.084, 0.164, 0.006),
@@ -113,13 +129,24 @@ function createPlayerVisual() {
   const hair = mesh(geometries.hair, materials.hair, "textured short hair", [0, 0.245, -0.002], head);
   hair.rotation.x = -0.06;
   hair.scale.set(0.94, 0.88, 0.92);
-  mesh(geometries.eye, materials.eye, "left eye", [-0.083, 0.235, -0.224], head, { castShadow: false });
-  mesh(geometries.eye, materials.eye, "right eye", [0.083, 0.235, -0.224], head, { castShadow: false });
+  for (const side of [-1, 1]) {
+    mesh(geometries.eyeWhite, materials.eyeWhite, `${side < 0 ? "left" : "right"} eye sclera`, [side * 0.083, 0.235, -0.224], head, { castShadow: false });
+    const iris = mesh(geometries.iris, materials.iris, `${side < 0 ? "left" : "right"} brown iris`, [side * 0.083, 0.235, -0.262], head, { castShadow: false });
+    iris.rotation.x = Math.PI * 0.5;
+    const pupil = mesh(geometries.eye, materials.eye, `${side < 0 ? "left" : "right"} pupil`, [side * 0.083, 0.235, -0.266], head, { castShadow: false });
+    pupil.scale.setScalar(0.39);
+  }
   const leftBrow = mesh(geometries.brow, materials.hair, "left eyebrow", [-0.083, 0.292, -0.231], head, { castShadow: false });
   leftBrow.rotation.z = -0.08;
   const rightBrow = mesh(geometries.brow, materials.hair, "right eyebrow", [0.083, 0.292, -0.231], head, { castShadow: false });
   rightBrow.rotation.z = 0.08;
   const nose = mesh(geometries.nose, materials.skinShadow, "nose", [0, 0.175, -0.248], head, { castShadow: false });
+  const upperLip = mesh(geometries.lip, materials.lip, "defined upper lip", [0, 0.085, -0.237], head, { castShadow: false });
+  upperLip.rotation.z = Math.PI * 0.5;
+  upperLip.scale.set(0.72, 1, 0.52);
+  const lowerLip = mesh(geometries.lip, materials.lip, "defined lower lip", [0, 0.067, -0.236], head, { castShadow: false });
+  lowerLip.rotation.z = Math.PI * 0.5;
+  lowerLip.scale.set(0.82, 1, 0.62);
   nose.rotation.x = -Math.PI * 0.5;
 
   function createArm(side, label) {
@@ -175,18 +202,37 @@ function createPlayerVisual() {
   watch.rotation.z = Math.PI * 0.5;
 
   const gun = new THREE.Group();
-  gun.name = "detailed compact sidearm";
-  gun.position.set(0.025, -0.02, -0.15);
+  gun.name = "six-barrel handheld minigun";
+  gun.position.set(0.025, -0.04, -0.18);
   rightArm.hand.add(gun);
-  mesh(geometries.gunSlide, materials.metal, "pistol slide", [0, 0.02, -0.12], gun);
-  const grip = mesh(geometries.gunGrip, materials.shoe, "pistol grip and magazine", [0, -0.13, 0.015], gun);
+  mesh(geometries.minigunReceiver, materials.shoe, "massive black minigun receiver", [0, -0.01, -0.30], gun);
+  const grip = mesh(geometries.gunGrip, materials.shoe, "minigun rear control grip", [0, -0.15, 0.015], gun);
   grip.rotation.x = -0.16;
-  const barrel = mesh(geometries.gunBarrel, materials.metal, "pistol barrel", [0, 0.02, -0.27], gun);
-  barrel.rotation.x = Math.PI * 0.5;
-  mesh(geometries.gunSight, materials.accent, "pistol front sight", [0, 0.095, -0.28], gun, { castShadow: false });
+  const drum = mesh(geometries.minigunDrum, materials.shoe, "huge black minigun ammunition drum", [0.20, -0.27, -0.22], gun);
+  drum.rotation.z = Math.PI * 0.5;
+  const motor = mesh(geometries.minigunDrum, materials.shoe, "black minigun drive motor", [0, -0.02, -0.53], gun);
+  motor.rotation.x = Math.PI * 0.5;
+  motor.scale.setScalar(0.62);
+  for (let index = 0; index < 6; ++index) {
+    const phase = index * Math.PI / 3;
+    const barrel = mesh(geometries.minigunBarrel, materials.shoe, `minigun barrel ${index + 1}`,
+      [Math.cos(phase) * 0.105, -0.02 + Math.sin(phase) * 0.105, -0.94], gun);
+    barrel.rotation.x = Math.PI * 0.5;
+  }
+  mesh(geometries.minigunBrace, materials.metal, "minigun rear barrel brace", [0, -0.02, -0.52], gun, { castShadow: false });
+  mesh(geometries.minigunBrace, materials.metal, "minigun front barrel brace", [0, -0.02, -1.31], gun, { castShadow: false });
+  const pistolModel = new THREE.Group();
+  pistolModel.name = "compact pistol model";
+  gun.add(pistolModel);
+  mesh(geometries.gunSlide, materials.metal, "pistol slide", [0, 0.02, -0.12], pistolModel);
+  const pistolGrip = mesh(geometries.gunGrip, materials.shoe, "pistol grip and magazine", [0, -0.13, 0.015], pistolModel);
+  pistolGrip.rotation.x = -0.16;
+  const pistolBarrel = mesh(geometries.gunBarrel, materials.metal, "pistol barrel", [0, 0.02, -0.27], pistolModel);
+  pistolBarrel.rotation.x = Math.PI * 0.5;
+  mesh(geometries.gunSight, materials.accent, "pistol front sight", [0, 0.095, -0.28], pistolModel, { castShadow: false });
   const muzzleAnchor = new THREE.Group();
   muzzleAnchor.name = "muzzle anchor";
-  muzzleAnchor.position.set(0, 0.02, -0.47);
+  muzzleAnchor.position.set(0, -0.02, -1.48);
   gun.add(muzzleAnchor);
   const flash = mesh(geometries.flash, materials.flash, "muzzle flash", [0, 0, 0], muzzleAnchor, { castShadow: false });
   flash.rotation.x = -Math.PI * 0.5;
@@ -211,7 +257,8 @@ function createPlayerVisual() {
   phoneLens.rotation.x = Math.PI * 0.5;
   phone.visible = false;
 
-  const rig = { hips, spine, head, leftArm, rightArm, leftLeg, rightLeg, gun, grip, phone };
+  const minigunParts = gun.children.filter(child => child !== pistolModel && child !== muzzleAnchor);
+  const rig = { hips, spine, head, leftArm, rightArm, leftLeg, rightLeg, gun, grip, phone, pistolModel, minigunParts };
   root.userData.rig = rig;
   root.userData.pivots = {
     leftArm: leftArm.shoulder,
@@ -266,8 +313,13 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
   let health = 100;
   let armor = 0;
   let cash = 1250;
-  let clip = 12;
-  let reserve = 72;
+  const loadout = {
+    pistol: { clip: PISTOL_MAGAZINE_SIZE, reserve: STARTING_PISTOL_RESERVE },
+    minigun: { clip: MINIGUN_DRUM_SIZE, reserve: STARTING_MINIGUN_RESERVE },
+  };
+  let selectedWeapon = "pistol";
+  let clip = loadout.pistol.clip;
+  let reserve = loadout.pistol.reserve;
   let reload = 0;
   let shotCooldown = 0;
   let invulnerable = 0;
@@ -303,9 +355,30 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
   let phoneCallActive = false;
   let phoneCallBlend = 0;
   let firstPerson = false;
+  let activeGroundHeight = null;
+  let activeMotionConstraint = null;
   let disposed = false;
   const meleeDuration = 0.52;
   const meleeHitTime = 0.29;
+
+  function weaponDefinition() {
+    return selectedWeapon === "minigun"
+      ? { capacity: MINIGUN_DRUM_SIZE, reloadSeconds: MINIGUN_RELOAD_SECONDS, cadence: 0.06, damage: 24 }
+      : { capacity: PISTOL_MAGAZINE_SIZE, reloadSeconds: 1.05, cadence: 0.145, damage: 42 };
+  }
+
+  function selectWeapon(name) {
+    const next = name === "minigun" ? "minigun" : "pistol";
+    if (next === selectedWeapon) return false;
+    loadout[selectedWeapon] = { clip, reserve };
+    selectedWeapon = next;
+    ({ clip, reserve } = loadout[selectedWeapon]);
+    reload = 0;
+    reloadPoseProgress = 0;
+    shotCooldown = 0;
+    emitSound("reload", 0.28);
+    return true;
+  }
 
   function emitSound(name, volume = 0.5) {
     try { onSound?.(name, volume); } catch { /* Sound feedback is optional. */ }
@@ -316,7 +389,9 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
     if (resolved?.position?.isVector3) root.position.copy(resolved.position);
     else if (resolved?.isVector3) root.position.copy(resolved);
     else root.position.add(deltaPosition);
-    const ground = Number(world.terrainHeight?.(root.position.x, root.position.z) ?? 0);
+    activeMotionConstraint?.(root.position, 0.43);
+    const ground = Number(activeGroundHeight?.(root.position.x, root.position.z, root.position.y, verticalVelocity) ??
+      world.terrainHeight?.(root.position.x, root.position.z) ?? 0);
     root.position.y = (Number.isFinite(ground) ? ground : 0) + verticalOffset;
   }
 
@@ -391,6 +466,8 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
   function updatePose(delta, elapsed, speed, { sprinting = false, dead = false, arrested = false, phoneCall = false } = {}) {
     const rig = visual.userData.rig;
     if (!rig) return;
+    rig.pistolModel.visible = selectedWeapon === "pistol";
+    for (const part of rig.minigunParts) part.visible = selectedWeapon === "minigun";
 
     // A phone call yields immediately to combat, custody, and death. The prop
     // is hidden on that exact frame, while the articulated pose still damps
@@ -621,7 +698,7 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
     });
   }
   function finishReload() {
-    const missing = Math.max(0, 12 - clip);
+    const missing = Math.max(0, weaponDefinition().capacity - clip);
     const moved = Math.min(missing, reserve);
     clip += moved;
     reserve -= moved;
@@ -629,8 +706,9 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
   }
 
   function startReload() {
-    if (!alive || inVehicle || meleeTimer > 0 || reload > 0 || clip >= 12 || reserve <= 0) return false;
-    reload = 1.05;
+    const definition = weaponDefinition();
+    if (!alive || inVehicle || meleeTimer > 0 || reload > 0 || clip >= definition.capacity || reserve <= 0) return false;
+    reload = definition.reloadSeconds;
     reloadPoseProgress = 0;
     emitSound("reload", 0.48);
     return true;
@@ -639,6 +717,8 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
   function update(delta, context = {}) {
     const dt = Math.max(0, Math.min(0.1, Number(delta) || 0));
     const updateResult = () => context.captureSnapshot === false ? null : snapshot();
+    activeGroundHeight = typeof context.groundHeight === "function" ? context.groundHeight : null;
+    activeMotionConstraint = typeof context.constrainMotion === "function" ? context.constrainMotion : null;
     phoneCallRequested = Boolean(context.phoneCall);
     invulnerable = Math.max(0, invulnerable - dt);
     shotCooldown = Math.max(0, shotCooldown - dt);
@@ -678,7 +758,7 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
     }
     if (reload > 0) {
       reload -= dt;
-      reloadPoseProgress = Math.max(0, Math.min(1, 1 - reload / 1.05));
+      reloadPoseProgress = Math.max(0, Math.min(1, 1 - reload / weaponDefinition().reloadSeconds));
       if (reload <= 0) {
         reloadPoseProgress = 1;
         finishReload();
@@ -772,7 +852,8 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
         verticalVelocity = 0;
         grounded = true;
       }
-      const ground = Number(world.terrainHeight?.(root.position.x, root.position.z) ?? 0);
+      const ground = Number(activeGroundHeight?.(root.position.x, root.position.z, root.position.y, verticalVelocity) ??
+        world.terrainHeight?.(root.position.x, root.position.z) ?? 0);
       root.position.y = (Number.isFinite(ground) ? ground : 0) + verticalOffset;
     }
     const footstepSpacing = sprinting ? 1.15 : 0.78;
@@ -780,6 +861,10 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
       stepTravel %= footstepSpacing;
       const surface = world.sampleGround?.(root.position.x, root.position.z)?.surfaceId;
       emitSound("footstep", surface === "park" ? 0.23 : sprinting ? 0.44 : 0.31);
+    }
+    if (!controlsDisabled && !aiming && !inVehicle) {
+      if (input.actionPressed("weaponPistol")) selectWeapon("pistol");
+      if (input.actionPressed("weaponMinigun")) selectWeapon("minigun");
     }
     if (!controlsDisabled && input.actionPressed("reload") && meleeTimer <= 0) startReload();
     const sightsReady = context.canShoot !== false;
@@ -791,10 +876,11 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
       else {
         clip -= 1;
         shotsFired += 1;
-        shotCooldown = 0.145;
-        muzzleFlash = 0.055;
-        recoil = 1;
-        const result = onShoot?.({ player: api, origin: getMuzzle(new THREE.Vector3()), direction: context.aimDirection?.clone?.(), aiming });
+        const definition = weaponDefinition();
+        shotCooldown = definition.cadence;
+        muzzleFlash = selectedWeapon === "minigun" ? 0.045 : 0.055;
+        recoil = selectedWeapon === "minigun" ? 0.58 : 1;
+        const result = onShoot?.({ player: api, weapon: selectedWeapon, damage: definition.damage, origin: getMuzzle(new THREE.Vector3()), direction: context.aimDirection?.clone?.(), aiming });
         if (!result?.crimeHandled) {
           onCrime?.({ type: "gunfire", heat: result?.hitPolice ? 38 : result?.hitCivilian ? 28 : 6 });
         }
@@ -894,7 +980,7 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
   function addCash(amount) { cash = Math.max(0, cash + Number(amount || 0)); return cash; }
   function setCash(value) { cash = Math.max(0, Number(value) || 0); return cash; }
   function setAmmo(nextClip, nextReserve = reserve) {
-    clip = Math.max(0, Math.min(12, Math.trunc(Number(nextClip) || 0)));
+    clip = Math.max(0, Math.min(weaponDefinition().capacity, Math.trunc(Number(nextClip) || 0)));
     reserve = Math.max(0, Math.trunc(Number(nextReserve) || 0));
   }
   function teleport(x, z) {
@@ -913,7 +999,7 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
     alive = true;
     health = 100;
     armor = 0;
-    clip = 12;
+    clip = weaponDefinition().capacity;
     reload = 0;
     stamina = 100;
     verticalOffset = 0;
@@ -943,6 +1029,11 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
       maxHealth: 100,
       armor,
       cash,
+      weapon: selectedWeapon,
+      weapons: Object.freeze({
+        pistol: Object.freeze(selectedWeapon === "pistol" ? { clip, reserve } : { ...loadout.pistol }),
+        minigun: Object.freeze(selectedWeapon === "minigun" ? { clip, reserve } : { ...loadout.minigun }),
+      }),
       ammo: { clip, reserve, reloading: reload > 0, reload },
       alive,
       inVehicle: inVehicle?.id ?? null,
@@ -981,7 +1072,17 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
     health = Math.max(0, Math.min(100, Number(value.health) || 0));
     armor = Math.max(0, Math.min(100, Number(value.armor) || 0));
     cash = Math.max(0, Number(value.cash) || 0);
-    setAmmo(value.ammo?.clip ?? 12, value.ammo?.reserve ?? 72);
+    selectedWeapon = value.weapon === "minigun" ? "minigun" : "pistol";
+    loadout.pistol = {
+      clip: Math.max(0, Math.min(PISTOL_MAGAZINE_SIZE, Math.trunc(Number(value.weapons?.pistol?.clip ?? PISTOL_MAGAZINE_SIZE) || 0))),
+      reserve: Math.max(0, Math.trunc(Number(value.weapons?.pistol?.reserve ?? STARTING_PISTOL_RESERVE) || 0)),
+    };
+    loadout.minigun = {
+      clip: Math.max(0, Math.min(MINIGUN_DRUM_SIZE, Math.trunc(Number(value.weapons?.minigun?.clip ?? MINIGUN_DRUM_SIZE) || 0))),
+      reserve: Math.max(0, Math.trunc(Number(value.weapons?.minigun?.reserve ?? STARTING_MINIGUN_RESERVE) || 0)),
+    };
+    ({ clip, reserve } = loadout[selectedWeapon]);
+    if (!value.weapons && value.ammo) setAmmo(value.ammo.clip, value.ammo.reserve);
     stamina = clampStamina(value.stamina ?? 100);
     verticalOffset = 0;
     verticalVelocity = 0;
@@ -1013,6 +1114,7 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
     get armor() { return armor; },
     get cash() { return cash; },
     get stamina() { return stamina; },
+    get weapon() { return selectedWeapon; },
     get muzzleFlash() { return muzzleFlash > 0; },
     get speed() { return Math.hypot(velocity.x, velocity.z); },
     get vehicle() { return inVehicle; },
@@ -1029,6 +1131,7 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
     addCash,
     setCash,
     setAmmo,
+    selectWeapon,
     startReload,
     teleport,
     respawn,

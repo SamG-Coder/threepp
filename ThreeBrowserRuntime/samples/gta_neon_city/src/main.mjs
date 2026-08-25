@@ -1,4 +1,5 @@
 import * as THREE from "three/webgpu";
+import { createCharacterNameplate } from "./actors/character-nameplate.mjs";
 import { createPopulationSystem } from "./actors/population.mjs";
 import { createFirstPersonWeapon } from "./actors/first-person-weapon.mjs";
 import { createPlayer } from "./actors/player.mjs";
@@ -47,6 +48,7 @@ import { STORY_PHASES, createStoryCampaign } from "./game/story.mjs";
 import { createWantedSystem } from "./game/wanted.mjs";
 import { createGtaHud, isAuthoredNarrativePresentation } from "./ui/hud.mjs";
 import { buildCity } from "./world/city.mjs";
+import { createDesertOutskirts } from "./world/desert-outskirts.mjs";
 
 document.title = "GTA Neon City — Native ThreeBrowser Runtime";
 
@@ -227,6 +229,15 @@ async function main() {
     authoredCourtTexture,
     authoredDepotTexture,
   });
+  let player = null;
+  const desertOutskirts = createDesertOutskirts({
+    scene,
+    world,
+    onPlayerDamage: amount => player?.damage(amount),
+  });
+  const desertRuinsPosition = new THREE.Vector3(0, 0, 505);
+  let desertCutsceneAnnounced = false;
+  let desertRescueAnnounced = false;
   const pulseTransitPracticalLights = Object.freeze(world.staticLights.filter(light =>
     light.userData?.practicalKind === "pulse-transit"));
   const practicalWorldLights = Object.freeze(world.staticLights.slice(2));
@@ -370,6 +381,15 @@ async function main() {
   const framePhaseMaximumMs = Object.seal({ simulation: 0, worldStage: 0, hud: 0, present: 0, animation: 0 });
   const crimeTimes = new Map();
   let selectedActivity = null;
+  const phoneApps = Object.freeze([
+    Object.freeze({ id: "wallet", name: "PULSE PAY", subtitle: "MONEY AND COMMUNITY TRUST" }),
+    Object.freeze({ id: "places", name: "OPEN DOORS", subtitle: "LOCAL STORES AND HOURS" }),
+    Object.freeze({ id: "work", name: "CITY WORK", subtitle: "LAWFUL JOBS AND ACTIVITIES" }),
+    Object.freeze({ id: "contacts", name: "CONTACTS", subtitle: "PEOPLE WHO KNOW KAI" }),
+  ]);
+  let phoneOpen = false;
+  let phoneApp = null;
+  let phoneSelection = 0;
   let communityTrust = 0;
   let lastActivityStage = null;
   let lastTaxiDialogueSerial = 0;
@@ -696,7 +716,7 @@ async function main() {
     return state;
   }
 
-  const player = createPlayer({
+  player = createPlayer({
     scene,
     world,
     input,
@@ -711,8 +731,65 @@ async function main() {
   const chaseCamera = createChaseCamera(camera, input, world);
   const cinematicDirector = createCinematicDirector(camera);
 
+  function cameraShakeAt(sourcePosition, amplitude, duration, maximumDistance = 90) {
+    const source = sourcePosition?.position ?? sourcePosition;
+    if (!source) return 0;
+    const listener = controlledPosition();
+    const distance = Math.hypot(
+      (Number(source.x) || 0) - listener.x,
+      (Number(source.y) || 0) - listener.y,
+      (Number(source.z) || 0) - listener.z,
+    );
+    const gain = clamp(1 - distance / Math.max(1, maximumDistance), 0, 1) ** 1.65;
+    if (gain < 0.012) return 0;
+    chaseCamera.shake(amplitude * gain, duration * (0.72 + gain * 0.28));
+    return gain;
+  }
+
+  function playerGroundHeight(x, z, currentY = 0) {
+    let height = Number(world.terrainHeight?.(x, z) ?? 0) || 0;
+    height = desertOutskirts.supportHeightAt(x, z, currentY, height);
+    for (const vehicle of vehicles?.vehicles ?? []) {
+      if (vehicle === vehicles.playerVehicle) continue;
+      const dx = x - vehicle.root.position.x;
+      const dz = z - vehicle.root.position.z;
+      const cosine = Math.cos(vehicle.state.yaw);
+      const sine = Math.sin(vehicle.state.yaw);
+      const localX = dx * cosine - dz * sine;
+      const localZ = dx * sine + dz * cosine;
+      if (Math.abs(localX) > vehicle.width * 0.5 || Math.abs(localZ) > vehicle.length * 0.5) continue;
+      const roof = vehicle.root.position.y + vehicle.height;
+      if (currentY >= roof - 0.72) height = Math.max(height, roof);
+    }
+    return height;
+  }
+
+  function constrainPlayerAgainstVehicleBoxes(position, radius = 0.43) {
+    for (const vehicle of vehicles?.vehicles ?? []) {
+      if (vehicle === vehicles.playerVehicle) continue;
+      const roof = vehicle.root.position.y + vehicle.height;
+      if (position.y >= roof - 0.72) continue;
+      const dx = position.x - vehicle.root.position.x;
+      const dz = position.z - vehicle.root.position.z;
+      const cosine = Math.cos(vehicle.state.yaw);
+      const sine = Math.sin(vehicle.state.yaw);
+      let localX = dx * cosine - dz * sine;
+      let localZ = dx * sine + dz * cosine;
+      const halfWidth = vehicle.width * 0.5 + radius;
+      const halfLength = vehicle.length * 0.5 + radius;
+      if (Math.abs(localX) >= halfWidth || Math.abs(localZ) >= halfLength) continue;
+      const pushX = halfWidth - Math.abs(localX);
+      const pushZ = halfLength - Math.abs(localZ);
+      if (pushX < pushZ) localX = (localX < 0 ? -1 : 1) * halfWidth;
+      else localZ = (localZ < 0 ? -1 : 1) * halfLength;
+      position.x = vehicle.root.position.x + localX * cosine + localZ * sine;
+      position.z = vehicle.root.position.z - localX * sine + localZ * cosine;
+    }
+  }
+
   const vehicleWorld = {
     ...world,
+    bounds: world.traversableBounds,
     roadRoutes: world.routes,
     spawnPoints: {
       vehicles: world.spawnPoints.vehicles.map(value => ({ ...value, yaw: value.heading, parked: true })),
@@ -736,7 +813,8 @@ async function main() {
       if (speed < 4) return;
       gameAudio.playAt("impact", Math.min(0.8, 0.25 + speed * 0.018),
         detail.position ?? detail.vehicle?.root?.position ?? detail.other?.root?.position);
-      chaseCamera.shake(Math.min(0.34, 0.035 + speed * 0.009), Math.min(0.62, 0.18 + speed * 0.012));
+      cameraShakeAt(detail.position ?? detail.vehicle?.root?.position ?? detail.other?.root?.position,
+        Math.min(0.34, 0.035 + speed * 0.009), Math.min(0.62, 0.18 + speed * 0.012), 72);
       if (selectedActivity === "taxi" && (detail.vehicle === vehicles.playerVehicle || detail.other === vehicles.playerVehicle)) {
         taxiActivity.notify({ type: "collision", severity: speed });
       }
@@ -782,9 +860,17 @@ async function main() {
         effects?.shot(origin, target, { hit: true });
         gameAudio.playAt("gunshot", 0.28, origin);
         gameAudio.playAt("impact", 0.2, target);
+        cameraShakeAt(origin, 0.042, 0.15, 70);
       }
       return player.damage(event.amount);
     },
+  });
+  const namedCharacterHomes = Object.freeze({
+    "juno-mercer": Object.freeze({ name: "Mercer apartment", address: "12 Cypress Walk", position: Object.freeze([-103.5, 0.2, 101.5]) }),
+    "rin-alvarez": Object.freeze({ name: "Alvarez apartment", address: "8 Lantern Court", position: Object.freeze([101.5, 0.2, 105.5]) }),
+    "leah_moreno": Object.freeze({ name: "Moreno flat", address: "31 Marisol Row", position: Object.freeze([-105.5, 0.2, -101.5]) }),
+    "mara-velez": Object.freeze({ name: "Velez apartment", address: "6 Cypress Walk", position: Object.freeze([-99.5, 0.2, 107.5]) }),
+    "dara-ibarra": Object.freeze({ name: "Ibarra flat", address: "19 Southline Terrace", position: Object.freeze([103.5, 0.2, -105.5]) }),
   });
   const junoPosition = contactPosition.clone().add(new THREE.Vector3(2.3, 0, 0.04));
   if (world.isBlockedCircle?.(junoPosition.x, junoPosition.z, 0.36)) junoPosition.copy(contactPosition);
@@ -857,8 +943,9 @@ async function main() {
     z: chapterTwoRecallCustomerPosition.z,
     yaw: -0.68,
     stationary: true,
-    protected: true,
+    protected: false,
   });
+  desertOutskirts.bindFriend(maraActor, { returnPosition: namedCharacterHomes["mara-velez"].position });
   const depotClerkPosition = vectorFrom(chapterTwoWorld.keeperWitnessAnchor ?? chapterTwoWorld.witnessAnchor ?? [-183.1, 0.2, -136]);
   depotClerkPosition.y = Number(world.terrainHeight?.(depotClerkPosition.x, depotClerkPosition.z) ?? depotClerkPosition.y);
   const depotClerkActor = population.spawn({
@@ -871,6 +958,19 @@ async function main() {
     stationary: true,
     protected: true,
   });
+  const mainCharacters = Object.freeze([
+    Object.freeze({ actor: junoActor, label: "JUNO" }),
+    Object.freeze({ actor: rinActor, label: "RIN" }),
+    Object.freeze({ actor: leahActor, label: "LEAH" }),
+    Object.freeze({ actor: maraActor, label: "MARA", existingLabel: true }),
+    Object.freeze({ actor: depotClerkActor, label: "DARA" }),
+  ]);
+  for (const character of mainCharacters) {
+    const home = namedCharacterHomes[character.actor.id];
+    character.actor.root.userData.mainCharacter = true;
+    character.actor.root.userData.home = home;
+    if (!character.existingLabel) createCharacterNameplate(character.actor.root, character.label);
+  }
   taxiPassengerActor = population.actors.find(actor =>
     !actor.police && !actor.storyRole && actor.active && actor.alive) ?? null;
   roadsideResponse = createRoadsideResponseSystem({
@@ -954,16 +1054,29 @@ async function main() {
     const maximum = worldRayDistance(origin, direction, 125);
     const personHit = population?.raycast(origin, direction, maximum);
     const vehicleHit = vehicles?.raycast(origin, direction, maximum);
+    const huskHit = desertOutskirts.raycast(origin, direction, maximum);
     const personDistance = personHit?.distance ?? Infinity;
     const vehicleDistance = vehicleHit?.distance ?? Infinity;
+    const huskDistance = huskHit?.distance ?? Infinity;
     let hitDistance = maximum;
     const hitWorld = maximum < 124.999;
     let result = { hit: hitWorld, hitWorld, crimeHandled: false };
-    if (personDistance <= vehicleDistance && personDistance <= maximum) {
+    if (huskDistance <= personDistance && huskDistance <= vehicleDistance && huskDistance <= maximum) {
+      hitDistance = huskDistance;
+      const damage = desertOutskirts.damage(huskHit.actor, clamp(request.damage ?? 42, 1, 80));
+      result = {
+        hit: true,
+        crimeHandled: true,
+        target: damage.id,
+        damage: damage.damage,
+        defeatedHusk: damage.defeated,
+      };
+    } else if (personDistance <= vehicleDistance && personDistance <= maximum) {
       hitDistance = personDistance;
       const hitHeight = (personHit.point?.y ?? personHit.actor.root.position.y + 1.1) - personHit.actor.root.position.y;
       const headshot = hitHeight > 1.5;
-      const damage = population.damage(personHit.actor, headshot ? 88 : request.aiming ? 42 : 34, "player");
+      const baseDamage = clamp(request.damage ?? 42, 1, 80);
+      const damage = population.damage(personHit.actor, headshot ? Math.min(88, baseDamage * 1.75) : baseDamage, "player");
       result = {
         hit: true,
         crimeHandled: true,
@@ -975,7 +1088,7 @@ async function main() {
       };
     } else if (vehicleDistance <= maximum) {
       hitDistance = vehicleDistance;
-      const damage = vehicles.damage(vehicleHit.vehicle, 18);
+      const damage = vehicles.damage(vehicleHit.vehicle, request.weapon === "minigun" ? 10 : 18);
       if (vehicleHit.vehicle.police) commitCrime({ type: "damage_police_vehicle", heat: 24 });
       result = { hit: true, crimeHandled: vehicleHit.vehicle.police, target: damage?.id, hitVehicle: true };
     }
@@ -2042,6 +2155,23 @@ async function main() {
     }
     if (narrativePresentation().controlsLocked) return;
     const neighbourhoodBeforeInput = neighbourhoodRoutine.snapshot();
+    if (phoneOpen) {
+      if (input.actionPressed("phone") || input.actionPressed("melee") || input.actionPressed("enterExit")) {
+        if (phoneApp) phoneApp = null;
+        else phoneOpen = false;
+        return;
+      }
+      const phoneItems = phoneApp === "places"
+        ? neighbourhoodRoutine.available(neighbourhoodContext())
+        : phoneApp === "work" ? lifeActivity.available(lifeUnlockContext()) : phoneApps;
+      if (input.actionPressed("forward")) phoneSelection = (phoneSelection - 1 + Math.max(1, phoneItems.length)) % Math.max(1, phoneItems.length);
+      if (input.actionPressed("backward")) phoneSelection = (phoneSelection + 1) % Math.max(1, phoneItems.length);
+      if (!phoneApp && (advanceDialogue || input.actionPressed("interact"))) {
+        phoneApp = phoneApps[phoneSelection]?.id ?? null;
+        phoneSelection = 0;
+      }
+      return;
+    }
     if (neighbourhoodBeforeInput.menuOpen) {
       if (input.actionPressed("enterExit") || input.actionPressed("melee")) {
         neighbourhoodRoutine.close("player_closed");
@@ -2065,6 +2195,15 @@ async function main() {
         void saveService.load("quicksave")
           .then(value => value ? restorePersistent(value) : showToast("NO QUICKSAVE FOUND", 2))
           .catch(error => showToast(`LOAD FAILED ${error?.message || error}`, 3));
+      }
+      return;
+    }
+    if (input.actionPressed("phone")) {
+      if (player.vehicle) showToast("PUT THE VEHICLE IN PARK TO USE THE PHONE", 2);
+      else {
+        phoneOpen = true;
+        phoneApp = null;
+        phoneSelection = 0;
       }
       return;
     }
@@ -2469,6 +2608,57 @@ async function main() {
     return { vehicles: cachedVehicleSnapshots, population: cachedPopulationSnapshots };
   }
 
+  function phoneSnapshot() {
+    const environmentState = environment.snapshot();
+    const playerState = player.snapshot();
+    let title = "NEON LIFE";
+    let subtitle = "YOUR CITY IN YOUR POCKET";
+    let items = phoneApps.map(app => ({ title: app.name, detail: app.subtitle }));
+    if (phoneApp === "wallet") {
+      title = "PULSE PAY";
+      subtitle = `AVAILABLE  $${Math.max(0, Math.trunc(playerState.cash)).toLocaleString("en-US")}`;
+      items = [
+        { title: "CASH", detail: `$${Math.max(0, Math.trunc(playerState.cash)).toLocaleString("en-US")} AVAILABLE` },
+        { title: "COMMUNITY TRUST", detail: `${Math.max(0, Math.trunc(communityTrust))} / EARNED BY HELPING` },
+        { title: "SPENDING", detail: "FOOD, LOCAL STORES, AND ORDINARY LIFE" },
+      ];
+    } else if (phoneApp === "places") {
+      title = "OPEN DOORS";
+      subtitle = "NEIGHBOURHOOD DIRECTORY";
+      items = neighbourhoodRoutine.available({
+        timeHours: environmentState.timeHours,
+        weather: environmentState.weather,
+        story: story.snapshot(),
+      }).map(place => ({
+        title: place.name,
+        detail: `${place.open ? "OPEN" : "CLOSED"}  ${place.openingHours?.label ?? "HOURS POSTED"}`,
+      }));
+    } else if (phoneApp === "work") {
+      title = "CITY WORK";
+      subtitle = "JOBS, SPORT, AND COMMUNITY LIFE";
+      items = [...lifeActivity.available(lifeUnlockContext()), basketballActivity.available()].map(activity => ({
+        title: activity.title,
+        detail: activity.locked ? "LOCKED / KEEP LIVING THE STORY" : activity.description ?? activity.objective ?? "AVAILABLE IN THE CITY",
+      }));
+    } else if (phoneApp === "contacts") {
+      title = "CONTACTS";
+      subtitle = "PEOPLE, NOT QUEST MARKERS";
+      items = mainCharacters.map(character => ({
+        title: character.actor.displayName,
+        detail: character.actor.root.userData.home?.address ?? character.actor.storyRole?.replaceAll("-", " ") ?? "NEON CITY",
+      }));
+    }
+    return Object.freeze({
+      open: phoneOpen,
+      app: phoneApp,
+      title,
+      subtitle,
+      selection: phoneSelection,
+      time: environmentState.timeLabel,
+      items: Object.freeze(items.slice(0, 7).map(item => Object.freeze(item))),
+    });
+  }
+
   function serializableSnapshot({ reuseEntitiesForHud = false } = {}) {
     const playerState = player.snapshot();
     const vehicleObject = vehicles.playerVehicle;
@@ -2498,7 +2688,7 @@ async function main() {
       chapterTwo: chapterTwo.snapshot(),
       nightRoute: nightRoute.snapshot(),
       nightRouteAvailability: nightRoute.availability(nightRouteUnlockContext()),
-      narrative: narrativePresentation(),
+      narrative: desertOutskirts.presentation() ?? narrativePresentation(),
       chapterTwoMission: chapterTwoMissionView(),
       communityTrust,
       neighbourhood: Object.freeze({
@@ -2515,6 +2705,14 @@ async function main() {
       lifeActivities: [...lifeActivity.available(lifeUnlockContext()), basketballActivity.available()],
       vehicles: entities.vehicles,
       population: entities.population,
+      phone: phoneSnapshot(),
+      mainCharacters: mainCharacters.map(character => Object.freeze({
+        id: character.actor.id,
+        name: character.actor.displayName,
+        home: character.actor.root.userData.home,
+        position: Object.freeze(character.actor.root.position.toArray()),
+      })),
+      desertOutskirts: desertOutskirts.snapshot(),
       pickups: effectsState,
       prompt: contextPrompt(),
       toast,
@@ -2699,11 +2897,11 @@ async function main() {
         player.damage(28, { ignoreArmor: true });
         showToast("VEHICLE DESTROYED", 2.8);
       }
-      const storyState = narrativePresentation();
+      const storyState = desertOutskirts.presentation() ?? narrativePresentation();
       const basketballState = selectedActivity === "basketball" ? basketballActivity.snapshot() : null;
       const basketballLocksPlayer = basketballState?.stage === BASKETBALL_STAGES.CHARGING ||
         basketballState?.stage === BASKETBALL_STAGES.FLIGHT;
-      const businessLocksPlayer = neighbourhoodState.menuOpen;
+      const businessLocksPlayer = neighbourhoodState.menuOpen || phoneOpen;
       const firstPersonAim = !storyState.controlsLocked && !basketballLocksPlayer && !businessLocksPlayer &&
         !vehicles.playerVehicle && input.actionDown("aim");
       player.setFirstPerson?.(firstPersonAim);
@@ -2721,6 +2919,8 @@ async function main() {
         phoneCall: Boolean(storyState.line?.radio),
         disabled: storyState.controlsLocked || basketballLocksPlayer || businessLocksPlayer,
         staminaRecoveryMultiplier: neighbourhoodState.recoveryMultiplier,
+        groundHeight: playerGroundHeight,
+        constrainMotion: constrainPlayerAgainstVehicleBoxes,
         captureSnapshot: false,
       });
       const focus = controlledPosition();
@@ -2738,12 +2938,23 @@ async function main() {
         daylight: lightingBeforeUpdate.daylight,
         captureSnapshot: false,
       });
+      desertOutskirts.update(dt, focus);
+      const desertState = desertOutskirts.snapshot();
+      if (desertState.cutsceneActive && !desertCutsceneAnnounced) {
+        desertCutsceneAnnounced = true;
+        showToast("ASHWIND RESCUE — FIND MARA IN THE RUINS", 7.2);
+      }
+      if (desertState.friend.rescued && !desertRescueAnnounced) {
+        desertRescueAnnounced = true;
+        showToast("MARA IS SAFE — THE RUINS ARE QUIET", 6);
+      }
       for (const vehicle of vehicles.vehicles) {
         const pedestrianImpacts = population.hitByVehicle(
           vehicle.root.position,
           vehicle.radius,
           vehicle.state.speed,
           vehicle === vehicles.playerVehicle,
+          { width: vehicle.width, length: vehicle.length, yaw: vehicle.state.yaw },
         );
         for (const impact of pedestrianImpacts) {
           if (!impact?.accepted || !impact.position) continue;
@@ -2762,8 +2973,15 @@ async function main() {
             chaseCamera.shake(Math.min(0.18, 0.045 + Math.abs(vehicle.state.speed) * 0.006), 0.22);
           }
         }
-        if (!player.vehicle && player.alive && Math.abs(vehicle.state.speed) > 4.2 &&
-            vehicle.root.position.distanceToSquared(player.root.position) < (vehicle.radius + 0.52) ** 2) {
+        const playerDx = player.root.position.x - vehicle.root.position.x;
+        const playerDz = player.root.position.z - vehicle.root.position.z;
+        const vehicleCos = Math.cos(vehicle.state.yaw);
+        const vehicleSin = Math.sin(vehicle.state.yaw);
+        const playerLocalX = playerDx * vehicleCos - playerDz * vehicleSin;
+        const playerLocalZ = playerDx * vehicleSin + playerDz * vehicleCos;
+        const playerInsideVehicleBox = Math.abs(playerLocalX) <= vehicle.width * 0.5 + 0.43 &&
+          Math.abs(playerLocalZ) <= vehicle.length * 0.5 + 0.43;
+        if (!player.vehicle && player.alive && Math.abs(vehicle.state.speed) > 4.2 && playerInsideVehicleBox) {
           player.damage(Math.min(48, Math.abs(vehicle.state.speed) * 1.8));
         }
       }
@@ -2811,7 +3029,7 @@ async function main() {
       // only a few percent away from third person, so every supposed cut read
       // as ordinary gameplay.  The chase rig resumes and snaps behind only
       // after the sequence ends.
-      const storyForCamera = narrativePresentation();
+      const storyForCamera = desertOutskirts.presentation() ?? narrativePresentation();
       if (!storyForCamera.cinematic) {
         chaseCamera.update(dt, vehicles.playerVehicle ?? player, {
           driving: Boolean(vehicles.playerVehicle),
@@ -2851,6 +3069,8 @@ async function main() {
         nightMalik: nightRouteParticipantActors.get(NIGHT_ROUTE_CHARACTERS.malik.id)?.root ?? null,
         nightEvelyn: nightRouteParticipantActors.get(NIGHT_ROUTE_CHARACTERS.evelyn.id)?.root ?? null,
         nightDesmond: nightRouteParticipantActors.get(NIGHT_ROUTE_CHARACTERS.desmond.id)?.root ?? null,
+        desertRuins: desertRuinsPosition,
+        desertFriend: desertOutskirts.friend,
         nightNadiya: nightRouteParticipantActors.get(NIGHT_ROUTE_CHARACTERS.nadiya.id)?.root ?? null,
       });
       if (cinematicResult.ended || (cinematicWasActive && !cinematicResult.active)) {
@@ -2889,6 +3109,7 @@ async function main() {
       });
       firstPersonWeapon.update(dt, {
         aiming: firstPersonAim,
+        weapon: player.weapon,
         muzzleFlash: player.muzzleFlash,
         speed: player.speed,
         elapsed,
@@ -2986,6 +3207,7 @@ async function main() {
     presenter.dispose();
     hud.dispose();
     effects.dispose();
+    desertOutskirts.dispose();
     environment.dispose();
     clearTaxiPassengerPresentation();
     releaseNightRouteParticipants();
@@ -3044,8 +3266,9 @@ async function main() {
         }
       }
       case "teleport": {
-        const x = clamp(request.x, world.bounds.minX + 2, world.bounds.maxX - 2);
-        const z = clamp(request.z, world.bounds.minZ + 2, world.bounds.maxZ - 2);
+        const movementBounds = world.traversableBounds ?? world.bounds;
+        const x = clamp(request.x, movementBounds.minX + 2, movementBounds.maxX - 2);
+        const z = clamp(request.z, movementBounds.minZ + 2, movementBounds.maxZ - 2);
         if (vehicles.playerVehicle) return vehicles.teleport(vehicles.playerVehicle.id, x, z, request.yaw);
         return { position: player.teleport(x, z).toArray() };
       }

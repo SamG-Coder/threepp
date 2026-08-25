@@ -21,6 +21,7 @@ const Z_ROADS = Object.freeze([-168, -120, -72, -24, 24, 72, 120, 168]);
 const X_BLOCKS = Object.freeze([-144, -96, -48, 0, 48, 96]);
 const Z_BLOCKS = Object.freeze([-144, -96, -48, 0, 48, 96, 144]);
 const CITY_BOUNDS = Object.freeze({ minX: -192, maxX: 155, minZ: -192, maxZ: 192 });
+const TRAVERSABLE_BOUNDS = Object.freeze({ minX: -192, maxX: 192, minZ: -192, maxZ: 620 });
 
 const PARK_BLOCK = Object.freeze([-48, -48]);
 const PLAZA_BLOCK = Object.freeze([0, 0]);
@@ -2553,6 +2554,7 @@ export function buildCity(scene, {
   }
 
   function terrainHeight(x, z) {
+    if (z > CITY_BOUNDS.maxZ) return 0.12 + Math.sin(x * 0.035) * 0.18 + Math.sin(z * 0.021) * 0.12;
     if (isRoad(x, z)) return ROAD_TOP;
     const court = x >= harbourCourt.bounds.minX && x <= harbourCourt.bounds.maxX &&
       z >= harbourCourt.bounds.minZ && z <= harbourCourt.bounds.maxZ;
@@ -2560,6 +2562,12 @@ export function buildCity(scene, {
   }
 
   function sampleGround(x, z) {
+    if (z > CITY_BOUNDS.maxZ) return {
+      height: terrainHeight(x, z),
+      normal: new THREE.Vector3(0, 1, 0),
+      surfaceId: "desert-sand",
+      districtId: z > 430 ? "sunken-ruins" : "desert-outskirts",
+    };
     const road = isRoad(x, z);
     const waterfront = x >= 126 && x <= CITY_BOUNDS.maxX;
     const park = Math.abs(x - PARK_BLOCK[0]) <= 17 && Math.abs(z - PARK_BLOCK[1]) <= 17;
@@ -2588,8 +2596,8 @@ export function buildCity(scene, {
     const x = finite(xValue, Infinity);
     const z = finite(zValue, Infinity);
     const radius = Math.max(0, finite(radiusValue, 0.4));
-    if (x - radius < CITY_BOUNDS.minX || x + radius > CITY_BOUNDS.maxX ||
-        z - radius < CITY_BOUNDS.minZ || z + radius > CITY_BOUNDS.maxZ) return true;
+    if (x - radius < TRAVERSABLE_BOUNDS.minX || x + radius > TRAVERSABLE_BOUNDS.maxX ||
+        z - radius < TRAVERSABLE_BOUNDS.minZ || z + radius > TRAVERSABLE_BOUNDS.maxZ) return true;
     return blockers.some(blocker => circleIntersectsBlocker(x, z, radius, blocker));
   }
 
@@ -2605,9 +2613,9 @@ export function buildCity(scene, {
     const dz = displacement.z / steps;
     const dy = displacement.y / steps;
     for (let step = 0; step < steps; ++step) {
-      const candidateX = clamp(output.x + dx, CITY_BOUNDS.minX + radius, CITY_BOUNDS.maxX - radius);
+      const candidateX = clamp(output.x + dx, TRAVERSABLE_BOUNDS.minX + radius, TRAVERSABLE_BOUNDS.maxX - radius);
       if (!isBlockedCircle(candidateX, output.z, radius)) output.x = candidateX;
-      const candidateZ = clamp(output.z + dz, CITY_BOUNDS.minZ + radius, CITY_BOUNDS.maxZ - radius);
+      const candidateZ = clamp(output.z + dz, TRAVERSABLE_BOUNDS.minZ + radius, TRAVERSABLE_BOUNDS.maxZ - radius);
       if (!isBlockedCircle(output.x, candidateZ, radius)) output.z = candidateZ;
       output.y += dy;
     }
@@ -2615,8 +2623,8 @@ export function buildCity(scene, {
   }
 
   function cameraPointBlocked(point, radius) {
-    if (point.x - radius < CITY_BOUNDS.minX || point.x + radius > CITY_BOUNDS.maxX ||
-        point.z - radius < CITY_BOUNDS.minZ || point.z + radius > CITY_BOUNDS.maxZ) return true;
+    if (point.x - radius < TRAVERSABLE_BOUNDS.minX || point.x + radius > TRAVERSABLE_BOUNDS.maxX ||
+        point.z - radius < TRAVERSABLE_BOUNDS.minZ || point.z + radius > TRAVERSABLE_BOUNDS.maxZ) return true;
     if (point.y < terrainHeight(point.x, point.z) + radius) return true;
     for (const blocker of blockers) {
       if (blocker.active === false) continue;
@@ -2825,7 +2833,11 @@ export function buildCity(scene, {
   return {
     root,
     seed: resolvedSeed,
+    // HUD/minimap bounds intentionally remain the authored city map. The
+    // desert is discovered through the breach instead of shrinking the city
+    // raster to fit a mostly empty expansion.
     bounds: { ...CITY_BOUNDS },
+    traversableBounds: { ...TRAVERSABLE_BOUNDS },
     blockers,
     roads,
     roadLines,
