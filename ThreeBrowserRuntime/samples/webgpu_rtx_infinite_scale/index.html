@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>RTX Infinite Descent — ThreeBrowser Runtime</title>
+  <style>
+    html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#020307;color:#dceaf0;font-family:ui-monospace,Consolas,monospace}
+    #startup{position:fixed;inset:0;display:grid;place-items:center;background:radial-gradient(circle at 50% 58%,#102433 0,#050b11 36%,#020307 72%);z-index:10;letter-spacing:.16em}
+    #startup>div{width:min(420px,72vw)}
+    #startup strong{display:block;font-size:13px;font-weight:500;margin-bottom:14px}
+    #startup span{display:block;height:2px;background:#172934;overflow:hidden}
+    #startup i{display:block;width:42%;height:100%;background:linear-gradient(90deg,transparent,#f09048,#87cce6,transparent);animation:scan 1.15s ease-in-out infinite}
+    @keyframes scan{from{transform:translateX(-110%)}to{transform:translateX(280%)}}
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "../../node_modules/three/build/three.module.js",
+      "three/webgpu": "../../node_modules/three/build/three.webgpu.js",
+      "three/tsl": "../../node_modules/three/build/three.tsl.js",
+      "three/addons/": "../../node_modules/three/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="startup"><div><strong>ENTERING THE INFINITE DESCENT</strong><span><i></i></span></div></div>
+  <script type="module" src="./site-entry.mjs"></script>
+</body>
+</html>
