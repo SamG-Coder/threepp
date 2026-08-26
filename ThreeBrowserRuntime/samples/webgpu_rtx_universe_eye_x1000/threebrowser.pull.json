@@ -1,0 +1,46 @@
+{
+  "format": 2,
+  "projectId": "0e1e1000a7c4d52b",
+  "virtualURL": "https://webgpu-rtx-universe-eye-x1000.runtime.threebrowser.local/",
+  "source": "https://webgpu-rtx-universe-eye-x1000.runtime.threebrowser.local/",
+  "pulledAt": "2026-08-26T00:00:00.000Z",
+  "entry": "site-entry.mjs",
+  "requiresWebGPU": true,
+  "html": "index.html",
+  "files": [
+    { "url": "https://webgpu-rtx-universe-eye-x1000.runtime.threebrowser.local/", "path": "index.html", "type": "html", "bytes": 0 },
+    { "url": "https://webgpu-rtx-universe-eye-x1000.runtime.threebrowser.local/README.md", "path": "README.md", "type": "text", "bytes": 0 },
+    { "url": "https://webgpu-rtx-universe-eye-x1000.runtime.threebrowser.local/site-entry.mjs", "path": "site-entry.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-universe-eye-x1000.runtime.threebrowser.local/src/main.mjs", "path": "src/main.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-universe-eye-x1000.runtime.threebrowser.local/src/universe-eye-model.mjs", "path": "src/universe-eye-model.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-universe-eye-x1000.runtime.threebrowser.local/src/eye-dynamics.mjs", "path": "src/eye-dynamics.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-universe-eye-x1000.runtime.threebrowser.local/src/eye-scene.mjs", "path": "src/eye-scene.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-universe-eye-x1000.runtime.threebrowser.local/src/native-rtx-renderer.mjs", "path": "src/native-rtx-renderer.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-universe-eye-x1000.runtime.threebrowser.local/src/rtx-scene.mjs", "path": "src/rtx-scene.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-universe-eye-x1000.runtime.threebrowser.local/assets/universe-spiral-iris.png", "path": "assets/universe-spiral-iris.png", "type": "image", "bytes": 2753070 },
+    { "url": "https://webgpu-rtx-universe-eye-x1000.runtime.threebrowser.local/assets/sclera-microvascular.png", "path": "assets/sclera-microvascular.png", "type": "image", "bytes": 2438446 },
+    { "url": "https://webgpu-rtx-universe-eye-x1000.runtime.threebrowser.local/tests/universe-eye-model.test.mjs", "path": "tests/universe-eye-model.test.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-universe-eye-x1000.runtime.threebrowser.local/tests/eye-dynamics.test.mjs", "path": "tests/eye-dynamics.test.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-universe-eye-x1000.runtime.threebrowser.local/tests/eye-scene.test.mjs", "path": "tests/eye-scene.test.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-universe-eye-x1000.runtime.threebrowser.local/tests/generated-assets.test.mjs", "path": "tests/generated-assets.test.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-universe-eye-x1000.runtime.threebrowser.local/tests/sample-contract.test.mjs", "path": "tests/sample-contract.test.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-universe-eye-x1000.runtime.threebrowser.local/threebrowser.pull.json", "path": "threebrowser.pull.json", "type": "json", "bytes": 0 }
+  ],
+  "compatibility": {
+    "threeImportable": true,
+    "bundledThree": false,
+    "rendererCandidates": ["webgpu"],
+    "canvasOnly": false,
+    "htmlOverlay": true,
+    "domRequired": true,
+    "notes": [
+      "Exactly 1,000 deterministic stromal micro-fibres are generated from numeric seed 0x0E1E1000.",
+      "The checked-in blue universe-spiral iris and ivory sclera microvascular albedos are local generated art assets.",
+      "Hybrid real-time WebGPU/RTX sample, not a full path tracer: WebGPU owns primary visibility, anatomy animation, transparent corneal optics and the tear film.",
+      "Only eligible opaque anatomy is collected for the native static ray-query scene; transparent cornea and tear-film materials remain physically rendered in WebGPU and excluded from BLAS construction.",
+      "Native visibility, contact shadow, ambient occlusion and reflection data augment the exact raster, and RTX and fallback paths share one tone-mapped swapchain presentation per frame.",
+      "Drag orbits, pointer movement guides gaze and the key light, the wheel performs macro zoom, Space blinks, L cycles studio rigs, P pauses biology, X compares RTX and raster, and R resets.",
+      "No sample-specific C++, downloaded model, remote asset, soundtrack or audio transport is required."
+    ]
+  }
+}
