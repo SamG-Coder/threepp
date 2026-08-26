@@ -393,6 +393,9 @@ async function main() {
   let phoneScroll = 0;
   let phoneHover = -1;
   let phonePressed = false;
+  let phonePressTarget = null;
+  let phoneOpenedAt = -Infinity;
+  let phoneAppTransitionAt = -Infinity;
   const phoneRecentApps = [];
   let communityTrust = 0;
   let lastActivityStage = null;
@@ -2179,8 +2182,9 @@ async function main() {
       }
       const phoneHit = hud?.phoneHitTest?.(input.pointer.x, input.pointer.y) ?? null;
       phoneHover = phoneHit?.type === "item" ? phoneHit.index : -1;
-      phonePressed = phoneHover >= 0 && input.actionDown("fire");
-      input.actionPressed("fire"); // consume mouse-down without activating; phone taps commit on release
+      if (input.actionPressed("fire")) phonePressTarget = phoneHit ? { ...phoneHit } : null;
+      phonePressed = Boolean(phonePressTarget && input.actionDown("fire") &&
+        phonePressTarget.type === phoneHit?.type && phonePressTarget.index === phoneHit?.index);
       if (phoneApp === "recents" && input.actionDown("fire")) {
         const swipe = input.consumeLookDelta?.() ?? { x: 0 };
         if (Math.abs(swipe.x) > 18) {
@@ -2188,7 +2192,11 @@ async function main() {
         }
       }
       if (input.actionReleased?.("fire")) {
-        if (phoneHit?.type === "back") {
+        const activation = phonePressTarget && phonePressTarget.type === phoneHit?.type &&
+          phonePressTarget.index === phoneHit?.index ? phoneHit : null;
+        phonePressTarget = null;
+        phonePressed = false;
+        if (activation?.type === "back") {
           if (phoneApp) {
             phoneApp = null;
             phoneSelection = 0;
@@ -2198,30 +2206,33 @@ async function main() {
             input.setUiPointerMode?.(false);
           }
           phoneScroll = 0;
-        } else if (phoneHit?.type === "home") {
+        } else if (activation?.type === "home") {
           phoneApp = null;
           phoneSelection = 0;
           phoneScroll = 0;
-        } else if (phoneHit?.type === "recent") {
+        } else if (activation?.type === "recent") {
           phoneApp = "recents";
+          phoneAppTransitionAt = elapsed;
           phoneSelection = 0;
           phoneScroll = 0;
-        } else if (phoneHit?.type === "closeAll") {
+        } else if (activation?.type === "closeAll") {
           phoneRecentApps.length = 0;
           phoneApp = null;
           phoneSelection = 0;
           phoneScroll = 0;
-        } else if (phoneHit?.type === "item" && !phoneApp) {
-          phoneApp = phoneApps[phoneHit.index]?.id ?? null;
+        } else if (activation?.type === "item" && !phoneApp) {
+          phoneApp = phoneApps[activation.index]?.id ?? null;
           if (phoneApp) {
+            phoneAppTransitionAt = elapsed;
             const existing = phoneRecentApps.indexOf(phoneApp);
             if (existing >= 0) phoneRecentApps.splice(existing, 1);
             phoneRecentApps.unshift(phoneApp);
           }
           phoneSelection = 0;
           phoneScroll = 0;
-        } else if (phoneHit?.type === "item" && phoneApp === "recents") {
-          phoneApp = phoneRecentApps[phoneScroll + phoneHit.index] ?? null;
+        } else if (activation?.type === "item" && phoneApp === "recents") {
+          phoneApp = phoneRecentApps[phoneScroll + activation.index] ?? null;
+          phoneAppTransitionAt = elapsed;
           phoneSelection = 0;
           phoneScroll = 0;
         }
@@ -2231,6 +2242,7 @@ async function main() {
       if (input.actionPressed("backward")) phoneSelection = (phoneSelection + 1) % Math.max(1, phoneItems.length);
       if (!phoneApp && (advanceDialogue || input.actionPressed("interact"))) {
         phoneApp = phoneApps[phoneSelection]?.id ?? null;
+        if (phoneApp) phoneAppTransitionAt = elapsed;
         if (phoneApp && !phoneRecentApps.includes(phoneApp)) phoneRecentApps.unshift(phoneApp);
         phoneSelection = 0;
         phoneScroll = 0;
@@ -2272,6 +2284,8 @@ async function main() {
         phoneScroll = 0;
         phoneHover = -1;
         phonePressed = false;
+        phonePressTarget = null;
+        phoneOpenedAt = elapsed;
         input.setUiPointerMode?.(true);
       }
       return;
@@ -2733,6 +2747,8 @@ async function main() {
       scroll: phoneScroll,
       hover: phoneHover,
       pressed: phonePressed,
+      openProgress: Math.max(0, Math.min(1, (elapsed - phoneOpenedAt) / 0.28)),
+      appProgress: phoneApp ? Math.max(0, Math.min(1, (elapsed - phoneAppTransitionAt) / 0.24)) : 1,
       time: environmentState.timeLabel,
       items: Object.freeze(items.map(item => Object.freeze(item))),
     });

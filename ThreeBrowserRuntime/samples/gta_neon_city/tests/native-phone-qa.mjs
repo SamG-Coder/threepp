@@ -52,11 +52,15 @@ try {
   assert.equal(state.phone.open, true);
   assert.equal(state.phone.title, "NEON LIFE");
   assert.equal(state.phone.items.length, 4);
+  state = (await request("advance", { steps: 30 })).state;
+  assert.equal(state.phone.openProgress, 1);
   if (homeScreenshotPath) await request("screenshot", { path: homeScreenshotPath });
   await request("action", { action: "interact" });
   state = (await request("advance", { steps: 2 })).state;
   assert.equal(state.phone.app, "wallet");
   assert.match(state.phone.subtitle, /AVAILABLE/);
+  state = (await request("advance", { steps: 30 })).state;
+  assert.equal(state.phone.appProgress, 1);
   if (screenshotPath) await request("screenshot", { path: screenshotPath });
   state = await request("render");
   const redrawsBeforeClockAdvance = state.diagnostics.phoneCanvasRedraws;

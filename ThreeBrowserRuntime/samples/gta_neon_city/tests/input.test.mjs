@@ -106,6 +106,21 @@ test("phone pointer mode releases capture and turns clicks into UI actions", () 
   }
 });
 
+test("entering phone pointer mode discards a stale release from the captured game", () => {
+  const game = harness();
+  try {
+    game.lock();
+    game.pointerDown(0);
+    assert.equal(game.input.actionPressed("fire"), true);
+    game.pointerUp(0);
+    game.input.setUiPointerMode(true);
+    assert.equal(game.input.actionReleased("fire"), false,
+      "the shot release that opened alongside the phone must not tap an app");
+  } finally {
+    game.restore();
+  }
+});
+
 test("quick car, interaction and story taps survive render-only frames and consume once", () => {
   let time = 0;
   const game = harness({ now: () => time });

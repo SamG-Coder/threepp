@@ -470,9 +470,24 @@ export function phoneRasterSignature(phone = {}) {
     hover: _hover,
     pressed: _pressed,
     time: _time,
+    openProgress: _openProgress,
+    appProgress: _appProgress,
     ...rasterPhone
   } = phone;
   return JSON.stringify(rasterPhone);
+}
+
+export function phoneCanvasTransform(appOpen = false, progress = 1) {
+  const canvasWidth = PHONE_WIDTH - 42;
+  const canvasHeight = PHONE_HEIGHT - 102;
+  const eased = 1 - Math.pow(1 - clamp(finite(progress, 1), 0, 1), 3);
+  const widthRatio = appOpen ? 0.96 + 0.04 * eased : 1;
+  const heightRatio = appOpen ? Math.max(0.001, eased) : 1;
+  return Object.freeze({
+    scaleX: canvasWidth * widthRatio,
+    scaleY: canvasHeight * heightRatio,
+    centerY: 37 + canvasHeight - canvasHeight * heightRatio * 0.5,
+  });
 }
 
 function createPhoneCanvasSurface() {
@@ -1371,7 +1386,7 @@ export function createGtaHud({ renderer } = {}) {
   let height = 1;
   let visible = true;
   let lastSnapshot = {};
-  const phoneLayout = { x: 0, y: 0, scale: 1 };
+  const phoneLayout = { x: 0, y: 0, baseY: 0, scale: 1, interactive: false };
 
   function alignRight(mesh, right, y, z = 0.6) {
     mesh.position.set(right - mesh.userData.width, y, z);
@@ -1465,6 +1480,7 @@ export function createGtaHud({ renderer } = {}) {
     phoneGroup.position.set(width - 34 - PHONE_WIDTH * phoneScale, height * 0.5 - PHONE_HEIGHT * 0.5 * phoneScale, 0);
     phoneLayout.x = phoneGroup.position.x;
     phoneLayout.y = phoneGroup.position.y;
+    phoneLayout.baseY = phoneGroup.position.y;
     phoneLayout.scale = phoneScale;
 
     cinematicTop.scale.set(width, 76, 1);
@@ -1979,6 +1995,17 @@ export function createGtaHud({ renderer } = {}) {
 
     phoneGroup.visible = phoneVisible;
     if (phoneVisible) {
+      // These are transform-only animations. The resident canvas texture is
+      // never redrawn or uploaded while the phone/app moves.
+      const openProgress = clamp(finite(phone.openProgress, 1), 0, 1);
+      const openEase = 1 - Math.pow(1 - openProgress, 3);
+      phoneGroup.position.y = phoneLayout.baseY + (1 - openEase) * (PHONE_HEIGHT * phoneLayout.scale + 30);
+      phoneLayout.y = phoneGroup.position.y;
+      const appProgress = phone.app ? clamp(finite(phone.appProgress, 1), 0, 1) : 1;
+      const canvasTransform = phoneCanvasTransform(Boolean(phone.app), appProgress);
+      phoneCanvas.scale.set(canvasTransform.scaleX, canvasTransform.scaleY, 1);
+      phoneCanvas.position.y = canvasTransform.centerY;
+      phoneLayout.interactive = openProgress >= 0.98 && (!phone.app || appProgress >= 0.98);
       phoneCanvasSurface.draw(phone);
       phoneCanvas.visible = phoneCanvasSurface.canvasMode;
       const legacyPhoneText = [phoneBack, phoneTitle, phoneSubtitle, phoneHint];
@@ -2163,6 +2190,7 @@ export function createGtaHud({ renderer } = {}) {
     resize,
     update,
     phoneHitTest(clientX, clientY) {
+      if (!phoneLayout.interactive) return null;
       const localX = (finite(clientX) - phoneLayout.x) / phoneLayout.scale;
       const localY = (finite(clientY) - phoneLayout.y) / phoneLayout.scale;
       if (localX < 0 || localY < 0 || localX > PHONE_WIDTH || localY > PHONE_HEIGHT) return null;

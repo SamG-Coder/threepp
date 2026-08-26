@@ -113,6 +113,7 @@ export function createInput(canvas, options = {}) {
     clearHeld();
     clearEdges(keyEdges, pressed);
     clearEdges(mouseEdges);
+    mouseReleased.clear();
   };
   const onPointerMove = event => {
     pointer.x = Number(event.clientX) || 0;

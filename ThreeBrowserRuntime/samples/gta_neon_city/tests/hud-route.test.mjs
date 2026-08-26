@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as THREE from "three/webgpu";
 
-import { createGtaHud, isAuthoredNarrativePresentation, phoneRasterSignature, planGridRoute } from "../src/ui/hud.mjs";
+import { createGtaHud, isAuthoredNarrativePresentation, phoneCanvasTransform, phoneRasterSignature, planGridRoute } from "../src/ui/hud.mjs";
 
 test("phone clock hover press and scroll never invalidate the resident app canvas", () => {
   const base = {
@@ -20,6 +20,19 @@ test("phone clock hover press and scroll never invalidate the resident app canva
   assert.equal(phoneRasterSignature({ ...base, time: "07:13" }), signature);
   assert.equal(phoneRasterSignature({ ...base, hover: 0, pressed: true }), signature);
   assert.equal(phoneRasterSignature({ ...base, scroll: 3 }), signature);
+  assert.equal(phoneRasterSignature({ ...base, openProgress: 0.4, appProgress: 0.7 }), signature,
+    "GPU-only phone transitions must not invalidate the cached canvas");
+});
+
+test("phone app animation preserves the full cached canvas dimensions", () => {
+  const home = phoneCanvasTransform(false, 1);
+  const opened = phoneCanvasTransform(true, 1);
+  const entering = phoneCanvasTransform(true, 0);
+  assert.deepEqual(home, { scaleX: 348, scaleY: 548, centerY: 311 });
+  assert.deepEqual(opened, home, "a completed app transition must fill the phone screen");
+  assert.ok(entering.scaleX > 300, "the cached canvas must never collapse to unit width");
+  assert.ok(entering.scaleY > 0 && entering.scaleY < opened.scaleY);
+  assert.ok(entering.centerY > opened.centerY, "the app should reveal upward from the bottom");
 });
 
 test("minimap navigation plans a deterministic axis-aligned road route", () => {
