@@ -1,0 +1,44 @@
+{
+  "format": 2,
+  "projectId": "f1a233c19e0d7b5a",
+  "virtualURL": "https://webgpu-rtx-fire-pattern-233.runtime.threebrowser.local/",
+  "source": "https://webgpu-rtx-fire-pattern-233.runtime.threebrowser.local/",
+  "pulledAt": "2026-08-26T00:00:00.000Z",
+  "entry": "site-entry.mjs",
+  "requiresWebGPU": true,
+  "html": "index.html",
+  "files": [
+    { "url": "https://webgpu-rtx-fire-pattern-233.runtime.threebrowser.local/", "path": "index.html", "type": "html", "bytes": 0 },
+    { "url": "https://webgpu-rtx-fire-pattern-233.runtime.threebrowser.local/README.md", "path": "README.md", "type": "text", "bytes": 0 },
+    { "url": "https://webgpu-rtx-fire-pattern-233.runtime.threebrowser.local/site-entry.mjs", "path": "site-entry.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-fire-pattern-233.runtime.threebrowser.local/src/main.mjs", "path": "src/main.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-fire-pattern-233.runtime.threebrowser.local/src/fire-score.mjs", "path": "src/fire-score.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-fire-pattern-233.runtime.threebrowser.local/src/fire-pattern.mjs", "path": "src/fire-pattern.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-fire-pattern-233.runtime.threebrowser.local/src/fire-scene.mjs", "path": "src/fire-scene.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-fire-pattern-233.runtime.threebrowser.local/src/native-rtx-renderer.mjs", "path": "src/native-rtx-renderer.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-fire-pattern-233.runtime.threebrowser.local/src/rtx-scene.mjs", "path": "src/rtx-scene.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-fire-pattern-233.runtime.threebrowser.local/assets/cin-sin-fire-pattern-233.wav", "path": "assets/cin-sin-fire-pattern-233.wav", "type": "audio", "bytes": 0 },
+    { "url": "https://webgpu-rtx-fire-pattern-233.runtime.threebrowser.local/tools/generate-fire-score.mjs", "path": "tools/generate-fire-score.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-fire-pattern-233.runtime.threebrowser.local/tests/fire-score.test.mjs", "path": "tests/fire-score.test.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-fire-pattern-233.runtime.threebrowser.local/tests/fire-pattern.test.mjs", "path": "tests/fire-pattern.test.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-fire-pattern-233.runtime.threebrowser.local/tests/sample-contract.test.mjs", "path": "tests/sample-contract.test.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-fire-pattern-233.runtime.threebrowser.local/threebrowser.pull.json", "path": "threebrowser.pull.json", "type": "json", "bytes": 0 }
+  ],
+  "compatibility": {
+    "threeImportable": true,
+    "bundledThree": false,
+    "rendererCandidates": ["webgpu"],
+    "canvasOnly": false,
+    "htmlOverlay": true,
+    "domRequired": true,
+    "notes": [
+      "Original project-owned 180-second, 48 kHz stereo PCM16 song with a non-looping nine-section arrangement and exactly 233 embedded RIFF cues.",
+      "The exact seed p4 + 11c9h 9fwhsa assa dasd sa u923t u3240-9t 0w3 deterministically authors both the score and a 233-node three-dimensional cin/sin fire instrument.",
+      "Native audio-clock cue packets address the matching fire nodes, while the same score table provides deterministic analysis when native cue polling is unavailable.",
+      "Hybrid real-time WebGPU/RTX sample, not a full path tracer: WebGPU owns primary visibility, translucent flames, embers and smoke, while native ray queries augment the exact raster with visibility, contact shadow, ambient occlusion and reflections.",
+      "RTX and raster fallback work remains offscreen and shares exactly one tone-mapped swapchain presentation per frame.",
+      "M controls music, P pauses the timeline, Space launches a manual flare, C toggles auto-camera, X compares RTX and raster, R restarts, 1-9 jump between movements, drag orbits and the wheel dollies.",
+      "No sample-specific C++, downloaded model, external texture or third-party music is required."
+    ]
+  }
+}
