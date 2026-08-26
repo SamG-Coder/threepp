@@ -1,0 +1,36 @@
+{
+  "format": 2,
+  "projectId": "1921bc5fdad70f50",
+  "virtualURL": "https://1921bc5fdad70f50.runtime.threebrowser.local/",
+  "source": "https://webgpu-camera-light-sculpture.runtime.threebrowser.local/",
+  "pulledAt": "2026-08-26T00:00:00.000Z",
+  "entry": "site-entry.mjs",
+  "requiresWebGPU": true,
+  "html": "index.html",
+  "files": [
+    { "url": "https://webgpu-camera-light-sculpture.runtime.threebrowser.local/", "path": "index.html", "type": "html", "bytes": 0 },
+    { "url": "https://webgpu-camera-light-sculpture.runtime.threebrowser.local/site-entry.mjs", "path": "site-entry.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-camera-light-sculpture.runtime.threebrowser.local/src/camera-background.mjs", "path": "src/camera-background.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-camera-light-sculpture.runtime.threebrowser.local/src/hud.mjs", "path": "src/hud.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-camera-light-sculpture.runtime.threebrowser.local/src/motion-tracker.mjs", "path": "src/motion-tracker.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-camera-light-sculpture.runtime.threebrowser.local/src/person-matte.mjs", "path": "src/person-matte.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-camera-light-sculpture.runtime.threebrowser.local/src/particle-field.mjs", "path": "src/particle-field.mjs", "type": "module", "bytes": 0 }
+  ],
+  "compatibility": {
+    "threeImportable": true,
+    "bundledThree": false,
+    "rendererCandidates": ["webgpu"],
+    "canvasOnly": true,
+    "htmlOverlay": false,
+    "domRequired": false,
+    "notes": [
+      "Client-only JavaScript/TSL sample; no native, runtime-host, C++ or RTX changes are required.",
+      "Camera permission is requested on startup for immediate gesture control; camera=0 keeps the procedural preview offline.",
+      "Camera frames remain local: RGB is converted to YCbCr first, then a skin-seeded connected foreground matte reveals only the moving person proxy rather than the raw room.",
+      "The broad person display matte and detailed skin-colour diffusion plus motion-seeding hand mask remain separate so body filling cannot damage fingertip or gesture shape tracking.",
+      "Only camera-derived hand motion and openness drive the interaction; pointer input is deliberately not wired.",
+      "Four camera-only modes are explicit: priority POINT follows the fingertip and arms the sequence, CLOSED charges and compresses, OPEN releases a bright shockwave, and SWIPE throws ribbons.",
+      "Persistent WebGPU particles use additive soft sprites and a bloom pipeline with a direct-render fallback."
+    ]
+  }
+}
