@@ -463,6 +463,184 @@ function createTintablePanelTexture() {
   return texture;
 }
 
+export function phoneRasterSignature(phone = {}) {
+  const {
+    scroll: _scroll,
+    selection: _selection,
+    hover: _hover,
+    pressed: _pressed,
+    time: _time,
+    ...rasterPhone
+  } = phone;
+  return JSON.stringify(rasterPhone);
+}
+
+function createPhoneCanvasSurface() {
+  if (typeof document === "undefined" || typeof document.createElement !== "function") {
+    const bytes = new Uint8Array([7, 19, 29, 255, 7, 19, 29, 255, 7, 19, 29, 255, 7, 19, 29, 255]);
+    const texture = new THREE.DataTexture(bytes, 2, 2, THREE.RGBAFormat, THREE.UnsignedByteType);
+    texture.name = "Neon Life phone canvas fallback";
+    texture.needsUpdate = true;
+    return { texture, canvasMode: false, draw() {} };
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = 696;
+  canvas.height = 2048;
+  const context = canvas.getContext("2d");
+  if (!context) return createPhoneCanvasSurface.call({ document: null });
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.name = "Neon Life high-resolution canvas app screen";
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.magFilter = THREE.LinearFilter;
+  texture.minFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false;
+  texture.flipY = false;
+  texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.repeat.set(1, 1096 / 2048);
+  let signature = "";
+  let redrawCount = 0;
+  const palette = [
+    ["#20d5a6", "#075b54"], ["#ff5fa5", "#6f174a"],
+    ["#6d9cff", "#253d8a"], ["#ffb84f", "#7f4510"],
+  ];
+  const rounded = (x, y, width, height, radius) => {
+    context.beginPath();
+    context.roundRect(x, y, width, height, radius);
+  };
+  const fillRoundedRaster = (x, y, width, height, radius) => {
+    const steps = 10;
+    context.fillRect(x + radius, y, width - radius * 2, height);
+    context.fillRect(x, y + radius, width, height - radius * 2);
+    for (let step = 0; step < steps; ++step) {
+      const dy = radius * (step + 0.5) / steps;
+      const inset = radius - Math.sqrt(Math.max(0, radius * radius - (radius - dy) * (radius - dy)));
+      const band = Math.max(1, radius / steps + 1);
+      context.fillRect(x + inset, y + dy - band * 0.5, width - inset * 2, band);
+      context.fillRect(x + inset, y + height - dy - band * 0.5, width - inset * 2, band);
+    }
+  };
+  const write = (text, x, y, size, color = "#ffffff", weight = 500, align = "left") => {
+    context.fillStyle = color;
+    context.font = `${weight} ${size}px sans-serif`;
+    context.textAlign = align;
+    context.fillText(String(text ?? ""), x, y);
+  };
+  const drawIcon = (index, x, y, size) => {
+    const [top, bottom] = palette[index % palette.length];
+    const gradient = context.createLinearGradient(x, y, x + size, y + size);
+    gradient.addColorStop(0, top);
+    gradient.addColorStop(1, bottom);
+    context.fillStyle = gradient;
+    fillRoundedRaster(x, y, size, size, size * 0.22);
+    context.strokeStyle = "rgba(255,255,255,0.92)";
+    context.lineWidth = 10;
+    context.beginPath();
+    if (index === 0) {
+      context.arc(x + size * 0.5, y + size * 0.5, size * 0.25, 0, Math.PI * 2);
+      context.moveTo(x + size * 0.34, y + size * 0.5);
+      context.lineTo(x + size * 0.66, y + size * 0.5);
+    } else if (index === 1) {
+      context.moveTo(x + size * 0.25, y + size * 0.68);
+      context.lineTo(x + size * 0.25, y + size * 0.4);
+      context.lineTo(x + size * 0.5, y + size * 0.22);
+      context.lineTo(x + size * 0.75, y + size * 0.4);
+      context.lineTo(x + size * 0.75, y + size * 0.68);
+    } else if (index === 2) {
+      context.moveTo(x + size * 0.25, y + size * 0.7);
+      context.lineTo(x + size * 0.25, y + size * 0.35);
+      context.lineTo(x + size * 0.75, y + size * 0.35);
+      context.lineTo(x + size * 0.75, y + size * 0.7);
+      context.moveTo(x + size * 0.4, y + size * 0.35);
+      context.lineTo(x + size * 0.4, y + size * 0.22);
+      context.lineTo(x + size * 0.6, y + size * 0.22);
+      context.lineTo(x + size * 0.6, y + size * 0.35);
+    } else {
+      context.arc(x + size * 0.38, y + size * 0.39, size * 0.13, 0, Math.PI * 2);
+      context.arc(x + size * 0.64, y + size * 0.42, size * 0.11, 0, Math.PI * 2);
+      context.moveTo(x + size * 0.2, y + size * 0.73);
+      context.quadraticCurveTo(x + size * 0.38, y + size * 0.53, x + size * 0.56, y + size * 0.73);
+    }
+    context.stroke();
+  };
+  return {
+    texture,
+    canvasMode: true,
+    get redrawCount() { return redrawCount; },
+    draw(phone = {}) {
+      texture.offset.y = Math.max(0, Number(phone.scroll) || 0) * 158 / 2048;
+      const nextSignature = phoneRasterSignature(phone);
+      if (nextSignature === signature) return;
+      signature = nextSignature;
+      redrawCount += 1;
+      const background = context.createLinearGradient(0, 0, 696, 1150);
+      background.addColorStop(0, "#071927");
+      background.addColorStop(1, "#02070d");
+      context.fillStyle = background;
+      context.fillRect(0, 0, 696, 2048);
+      if (!phone.app) {
+        context.fillStyle = "rgba(32,213,166,0.08)";
+        context.arc(570, 260, 260, 0, Math.PI * 2);
+        context.fill();
+        context.fillStyle = "rgba(109,156,255,0.08)";
+        context.arc(120, 900, 320, 0, Math.PI * 2);
+        context.fill();
+        const items = Array.isArray(phone.items) ? phone.items : [];
+        for (let index = 0; index < Math.min(4, items.length); ++index) {
+          const column = index % 2;
+          const row = Math.floor(index / 2);
+          const x = 90 + column * 330;
+          const y = 170 + row * 370;
+          drawIcon(index, x, y, 190);
+          write(items[index].title, x + 95, y + 240, 28, "#f6fbff", 600, "center");
+        }
+      } else {
+        const appIndex = Math.max(0, ["wallet", "places", "work", "contacts"].indexOf(phone.app));
+        context.fillStyle = palette[appIndex % palette.length][1];
+        context.fillRect(0, 62, 696, 128);
+        context.strokeStyle = "#ffffff";
+        context.lineWidth = 8;
+        context.beginPath();
+        context.moveTo(58, 92);
+        context.lineTo(30, 120);
+        context.lineTo(58, 148);
+        context.stroke();
+        write(phone.title ?? "NEON LIFE", 92, 124, 38, "#ffffff", 700);
+        write(phone.subtitle ?? "", 94, 162, 19, "#d8f7ff", 500);
+        const items = Array.isArray(phone.items) ? phone.items : [];
+        if (phone.app === "recents") {
+          for (let index = items.length - 1; index >= 0; --index) {
+            const depth = index;
+            const inset = 42 + Math.min(4, depth) * 24;
+            const y = 230 + index * 70;
+            context.fillStyle = palette[index % palette.length][1];
+            fillRoundedRaster(inset, y, 696 - inset * 2, 290, 30);
+            context.fillStyle = "rgba(255,255,255,0.09)";
+            context.fillRect(inset + 18, y + 70, 696 - inset * 2 - 36, 190);
+            write(items[index].title, inset + 28, y + 52, 32, "#ffffff", 700);
+            write("RUNNING IN MEMORY", inset + 30, y + 110, 20, "#b9d9e4", 500);
+          }
+          context.fillStyle = "#253746";
+          fillRoundedRaster(210, 920, 276, 74, 34);
+          write("CLOSE ALL", 348, 970, 26, "#ffffff", 650, "center");
+        } else {
+          for (let index = 0; index < items.length; ++index) {
+            const y = 220 + index * 158;
+            context.fillStyle = "#0d2230";
+            fillRoundedRaster(34, y, 628, 132, 24);
+            context.fillStyle = palette[appIndex % palette.length][0];
+            fillRoundedRaster(52, y + 34, 64, 64, 18);
+            write(String(index + 1), 84, y + 77, 28, "#ffffff", 700, "center");
+            write(items[index].title, 136, y + 51, 30, "#f6fbff", 650);
+            write(items[index].detail, 136, y + 94, 20, "#9bb9c8", 450);
+          }
+        }
+        if (items.length >= 5) write("SCROLL FOR MORE", 348, Math.min(1950, 292 + items.length * 158), 18, "#668697", 500, "center");
+      }
+      texture.needsUpdate = true;
+    },
+  };
+}
+
 function createText(text, atlas, color = 0xffffff, scale = 2, opacity = 1, maxCharacters = 160) {
   const built = buildTextGeometry(text, atlas, scale, 1, maxCharacters);
   const material = createHudMaterial({ color, opacity, map: atlas.texture, alphaTest: 0.35 });
@@ -598,6 +776,7 @@ export function createGtaHud({ renderer } = {}) {
   const unitPlane = new THREE.PlaneGeometry(1, 1);
   const backdropTexture = createBackdropTexture();
   const tintablePanelTexture = createTintablePanelTexture();
+  const phoneCanvasSurface = createPhoneCanvasSurface();
   const minimapPixels = new Uint8Array(MAP_INNER * MAP_INNER * 4);
   const minimapBasePixels = new Uint8Array(minimapPixels.length);
   const minimapTexture = new THREE.DataTexture(
@@ -980,8 +1159,36 @@ export function createGtaHud({ renderer } = {}) {
   const phoneTopGlow = phonePanel(PHONE_WIDTH - 42, 7, 0x28dff5, 1, 2088);
   const phoneSpeaker = phonePanel(72, 5, 0x34495d, 1, 2090);
   const phoneHomeBar = phonePanel(94, 5, 0xb8d7df, 0.85, 2090);
+  const phoneNavBackdrop = phonePanel(PHONE_WIDTH - 42, 54, 0x03080d, 0.98, 2102);
+  const phoneNavMaterial = createHudMaterial({ color: 0xd6edf2, opacity: 0.92, map: tintablePanelTexture, layered: true });
+  const phoneBackParts = [panel(24, 4, 0, 1, 2104, phoneNavMaterial), panel(24, 4, 0, 1, 2104, phoneNavMaterial)];
+  phoneBackParts[0].position.set(94, 610, 2);
+  phoneBackParts[0].rotation.z = -0.7;
+  phoneBackParts[1].position.set(94, 625, 2);
+  phoneBackParts[1].rotation.z = 0.7;
+  const phoneHomeRing = new THREE.Mesh(new THREE.RingGeometry(10, 14, 24), phoneNavMaterial);
+  phoneHomeRing.position.set(PHONE_WIDTH * 0.5, 617, 2);
+  phoneHomeRing.frustumCulled = false;
+  phoneHomeRing.renderOrder = 2104;
+  const phoneRecentParts = [
+    panel(25, 4, 0, 1, 2104, phoneNavMaterial), panel(25, 4, 0, 1, 2104, phoneNavMaterial),
+    panel(4, 25, 0, 1, 2104, phoneNavMaterial), panel(4, 25, 0, 1, 2104, phoneNavMaterial),
+  ];
+  phoneRecentParts[0].position.set(284, 605, 2);
+  phoneRecentParts[1].position.set(284, 629, 2);
+  phoneRecentParts[2].position.set(272, 617, 2);
+  phoneRecentParts[3].position.set(296, 617, 2);
+  const phoneCanvas = panel(
+    PHONE_WIDTH - 42, PHONE_HEIGHT - 102, 0, 1, 2094,
+    createHudMaterial({ color: 0xffffff, opacity: 1, map: phoneCanvasSurface.texture, layered: true }),
+  );
+  phoneCanvas.name = "Neon Life canvas-generated app grid and high-resolution text";
+  const phoneHoverGlow = phonePanel(116, 116, 0x000000, 0.18, 2098);
+  phoneHoverGlow.name = "Neon Life GPU-only app hover and press feedback";
+  phoneHoverGlow.visible = false;
   const phoneClock = createText("21:39", atlas, 0x8ee9ff, 1.05);
   const phoneSignal = createText("PULSE  5G", atlas, 0x8ee9ff, 1.05);
+  const phoneBack = createText("BACK", atlas, 0x64e8ff, 1.05);
   const phoneTitle = createText("NEON LIFE", atlas, 0xffffff, 2.25, 1, 46);
   const phoneSubtitle = createText("YOUR CITY IN YOUR POCKET", atlas, 0x79ddec, 1.1, 1, 54);
   const phoneRows = Array.from({ length: 7 }, (_, index) => {
@@ -996,24 +1203,29 @@ export function createGtaHud({ renderer } = {}) {
     phoneGroup.add(backing, accent, title, detail);
     return { backing, accent, title, detail };
   });
-  const phoneHint = createText("W / S SELECT   E OPEN   Q / F / TAB BACK", atlas, 0x7f99aa, 0.92, 1, 72);
+  const phoneHint = createText("MOVE POINTER AND CLICK   TAB CLOSE", atlas, 0x7f99aa, 0.92, 1, 72);
   for (const textMesh of [
-    phoneClock, phoneSignal, phoneTitle, phoneSubtitle, phoneHint,
+    phoneClock, phoneSignal, phoneBack, phoneTitle, phoneSubtitle, phoneHint,
     ...phoneRows.flatMap(row => [row.title, row.detail]),
   ]) textMesh.renderOrder = 2100;
   phoneGroup.add(
-    phoneShadow, phoneShell, phoneScreen, phoneTopGlow, phoneSpeaker, phoneHomeBar,
+    phoneShadow, phoneShell, phoneScreen, phoneCanvas, phoneHoverGlow, phoneTopGlow, phoneSpeaker, phoneHomeBar,
+    phoneNavBackdrop, ...phoneBackParts, phoneHomeRing, ...phoneRecentParts,
     phoneClock, phoneSignal, phoneTitle, phoneSubtitle, phoneHint,
   );
   root.add(phoneGroup);
   placeTopLeft(phoneShadow, 0, 0);
   placeTopLeft(phoneShell, 7, 7, 0.2);
   placeTopLeft(phoneScreen, 21, 37, 0.4);
+  placeTopLeft(phoneCanvas, 21, 37, 0.8);
   placeTopLeft(phoneTopGlow, 21, 37, 0.6);
   phoneSpeaker.position.set(PHONE_WIDTH * 0.5, 20, 1);
   phoneHomeBar.position.set(PHONE_WIDTH * 0.5, PHONE_HEIGHT - 20, 1);
+  phoneNavBackdrop.position.set(PHONE_WIDTH * 0.5, 617, 1.5);
+  phoneHomeBar.visible = false;
   phoneClock.position.set(31, 50, 2);
   phoneSignal.position.set(282, 50, 2);
+  phoneBack.position.set(31, 76, 2);
   phoneTitle.position.set(36, 75, 2);
   phoneSubtitle.position.set(36, 105, 2);
   phoneHint.position.set(35, PHONE_HEIGHT - 51, 2);
@@ -1159,6 +1371,7 @@ export function createGtaHud({ renderer } = {}) {
   let height = 1;
   let visible = true;
   let lastSnapshot = {};
+  const phoneLayout = { x: 0, y: 0, scale: 1 };
 
   function alignRight(mesh, right, y, z = 0.6) {
     mesh.position.set(right - mesh.userData.width, y, z);
@@ -1250,6 +1463,9 @@ export function createGtaHud({ renderer } = {}) {
     const phoneScale = Math.min(1, Math.max(0.58, Math.min((width - 30) / PHONE_WIDTH, (height - 30) / PHONE_HEIGHT)));
     phoneGroup.scale.setScalar(phoneScale);
     phoneGroup.position.set(width - 34 - PHONE_WIDTH * phoneScale, height * 0.5 - PHONE_HEIGHT * 0.5 * phoneScale, 0);
+    phoneLayout.x = phoneGroup.position.x;
+    phoneLayout.y = phoneGroup.position.y;
+    phoneLayout.scale = phoneScale;
 
     cinematicTop.scale.set(width, 76, 1);
     cinematicTop.position.set(width * 0.5, 38, 0);
@@ -1763,12 +1979,32 @@ export function createGtaHud({ renderer } = {}) {
 
     phoneGroup.visible = phoneVisible;
     if (phoneVisible) {
+      phoneCanvasSurface.draw(phone);
+      phoneCanvas.visible = phoneCanvasSurface.canvasMode;
+      const legacyPhoneText = [phoneBack, phoneTitle, phoneSubtitle, phoneHint];
+      for (const mesh of legacyPhoneText) mesh.visible = !phoneCanvasSurface.canvasMode;
+      phoneClock.visible = phoneSignal.visible = true;
+      for (const row of phoneRows) {
+        row.backing.visible = row.accent.visible = row.title.visible = row.detail.visible = !phoneCanvasSurface.canvasMode;
+      }
+      const hover = Math.trunc(finite(phone.hover, -1));
+      phoneHoverGlow.visible = phoneCanvasSurface.canvasMode && !phone.app && hover >= 0 && hover < 4;
+      if (phoneHoverGlow.visible) {
+        const column = hover % 2;
+        const row = Math.floor(hover / 2);
+        phoneHoverGlow.position.set(113.5 + column * 165, 169.5 + row * 185, 2.2);
+        const pressedScale = phone.pressed ? 0.88 : 1;
+        phoneHoverGlow.scale.set(pressedScale, pressedScale, 1);
+        phoneHoverGlow.material.opacity = phone.pressed ? 0.34 : 0.18;
+      }
       phoneClock.setText(textValue(phone.time, "21:39"));
       phoneTitle.setText(textValue(phone.title, "NEON LIFE"));
+      phoneTitle.position.x = phone.app ? 104 : 36;
+      phoneBack.visible = Boolean(phone.app);
       phoneSubtitle.setText(ellipsizeLine(textValue(phone.subtitle, "YOUR CITY IN YOUR POCKET"), 52));
       const items = Array.isArray(phone.items) ? phone.items : [];
       const selection = Math.max(0, Math.trunc(finite(phone.selection)));
-      for (let index = 0; index < phoneRows.length; ++index) {
+      for (let index = 0; index < phoneRows.length && !phoneCanvasSurface.canvasMode; ++index) {
         const row = phoneRows[index];
         const item = items[index];
         row.backing.visible = row.accent.visible = row.title.visible = row.detail.visible = Boolean(item);
@@ -1782,8 +2018,8 @@ export function createGtaHud({ renderer } = {}) {
         row.backing.material.color.setHex(selected ? 0x17354a : index % 2 ? 0x101e2a : 0x122535);
       }
       phoneHint.setText(phone.app
-        ? "W / S BROWSE       Q / F / TAB BACK"
-        : "W / S SELECT      E OPEN      TAB CLOSE");
+        ? "CLICK BACK OR HOME       TAB CLOSE"
+        : "MOVE POINTER AND CLICK       TAB CLOSE");
     }
 
     reticleGroup.visible = alive && !driving && !paused && captured && !authoredPresentation && player.aiming;
@@ -1922,9 +2158,46 @@ export function createGtaHud({ renderer } = {}) {
     target,
     get texture() { return target.texture; },
     get minimapTexture() { return minimapTexture; },
+    get phoneCanvasRedrawCount() { return phoneCanvasSurface.redrawCount ?? 0; },
     get snapshot() { return lastSnapshot; },
     resize,
     update,
+    phoneHitTest(clientX, clientY) {
+      const localX = (finite(clientX) - phoneLayout.x) / phoneLayout.scale;
+      const localY = (finite(clientY) - phoneLayout.y) / phoneLayout.scale;
+      if (localX < 0 || localY < 0 || localX > PHONE_WIDTH || localY > PHONE_HEIGHT) return null;
+      if (lastSnapshot.phone?.app && localX >= 21 && localX <= 105 && localY >= 62 && localY <= 110) return { type: "back" };
+      if (!lastSnapshot.phone?.app) {
+        for (let index = 0; index < 4; ++index) {
+          const column = index % 2;
+          const row = Math.floor(index / 2);
+          const left = 66 + column * 165;
+          const top = 122 + row * 185;
+          if (localX >= left && localX <= left + 135 && localY >= top && localY <= top + 150 && lastSnapshot.phone?.items?.[index]) {
+            return { type: "item", index };
+          }
+        }
+      } else {
+        if (lastSnapshot.phone.app === "recents" && localX >= 126 && localX <= 264 && localY >= 497 && localY <= 534) {
+          return { type: "closeAll" };
+        }
+        if (lastSnapshot.phone.app === "recents" && localX >= 42 && localX <= PHONE_WIDTH - 42 && localY >= 152 && localY <= 440) {
+          const available = lastSnapshot.phone.items?.length ?? 0;
+          return { type: "item", index: Math.min(Math.max(0, available - 1), Math.max(0, Math.floor((localY - 152) / 35))) };
+        }
+        const index = Math.floor((localY - 147) / 79);
+        if (index >= 0 && index < 5 && localX >= 38 && localX <= PHONE_WIDTH - 38 &&
+            lastSnapshot.phone?.items?.[(lastSnapshot.phone?.scroll ?? 0) + index]) {
+          return { type: "item", index };
+        }
+      }
+      if (localY >= 585) {
+        if (localX < 142) return { type: "back" };
+        if (localX < 250) return { type: "home" };
+        return { type: "recent" };
+      }
+      return { type: "phone" };
+    },
     render,
     renderToTexture,
     setVisible(value) {
@@ -1936,6 +2209,7 @@ export function createGtaHud({ renderer } = {}) {
       atlas.texture.dispose();
       backdropTexture.dispose();
       tintablePanelTexture.dispose();
+      phoneCanvasSurface.texture.dispose();
       minimapTexture.dispose();
       const geometries = new Set([unitPlane, starGeometry, circleGeometry, diamondGeometry, arrowGeometry]);
       const materials = new Set([

@@ -33,7 +33,12 @@ function harness(options = {}) {
   const windowTarget = new FakeEventTarget();
   const documentTarget = new FakeEventTarget();
   documentTarget.pointerLockElement = null;
+  documentTarget.exitPointerLock = () => {
+    documentTarget.pointerLockElement = null;
+    documentTarget.dispatch("pointerlockchange");
+  };
   const canvas = new FakeEventTarget();
+  canvas.style = {};
   canvas.captureRequests = 0;
   canvas.requestPointerLock = () => { canvas.captureRequests += 1; };
 
@@ -64,6 +69,7 @@ function harness(options = {}) {
     },
     pointerDown(button) { return canvas.dispatch("pointerdown", { button }); },
     pointerUp(button) { return canvas.dispatch("pointerup", { button }); },
+    wheel(deltaY) { return canvas.dispatch("wheel", { deltaY }); },
     restore() {
       input.dispose();
       if (previous.addEventListener === undefined) delete globalThis.addEventListener;
@@ -75,6 +81,30 @@ function harness(options = {}) {
     },
   };
 }
+
+test("phone pointer mode releases capture and turns clicks into UI actions", () => {
+  const game = harness();
+  try {
+    game.lock();
+    assert.equal(game.input.pointer.locked, true);
+    game.input.setUiPointerMode(true);
+    assert.equal(game.input.pointer.locked, false);
+    assert.equal(game.input.uiPointerMode, true);
+    assert.equal(game.canvas.style.cursor, "default");
+    game.pointerDown(0);
+    assert.equal(game.canvas.captureRequests, 0, "a phone tap must not recapture the camera");
+    assert.equal(game.input.actionPressed("fire"), true, "the phone should receive the click edge");
+    game.pointerUp(0);
+    assert.equal(game.input.actionReleased("fire"), true, "the phone should activate on the release edge");
+    assert.equal(game.input.actionReleased("fire"), false, "a release edge should be consumed once");
+    const wheel = game.wheel(120);
+    assert.equal(wheel.defaultPrevented, true, "phone scrolling must not reach the host window");
+    assert.equal(game.input.consumeWheel(), 1, "the phone should receive one normalized scroll step");
+    assert.equal(game.input.consumeLookDelta().wheel, 0, "consumed phone scroll must not zoom the camera");
+  } finally {
+    game.restore();
+  }
+});
 
 test("quick car, interaction and story taps survive render-only frames and consume once", () => {
   let time = 0;

@@ -2,7 +2,25 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as THREE from "three/webgpu";
 
-import { createGtaHud, isAuthoredNarrativePresentation, planGridRoute } from "../src/ui/hud.mjs";
+import { createGtaHud, isAuthoredNarrativePresentation, phoneRasterSignature, planGridRoute } from "../src/ui/hud.mjs";
+
+test("phone clock hover press and scroll never invalidate the resident app canvas", () => {
+  const base = {
+    open: true,
+    app: "work",
+    title: "CITY WORK",
+    subtitle: "JOBS AND ACTIVITIES",
+    time: "07:12",
+    scroll: 0,
+    hover: -1,
+    pressed: false,
+    items: [{ title: "ROADSIDE HELP", detail: "AVAILABLE" }],
+  };
+  const signature = phoneRasterSignature(base);
+  assert.equal(phoneRasterSignature({ ...base, time: "07:13" }), signature);
+  assert.equal(phoneRasterSignature({ ...base, hover: 0, pressed: true }), signature);
+  assert.equal(phoneRasterSignature({ ...base, scroll: 3 }), signature);
+});
 
 test("minimap navigation plans a deterministic axis-aligned road route", () => {
   const start = { x: 7, z: 11 };

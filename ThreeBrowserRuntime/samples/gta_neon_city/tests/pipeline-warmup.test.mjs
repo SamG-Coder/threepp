@@ -197,16 +197,17 @@ test("reveal-all HUD warmup uploads the font, panel skins and pooled minimap", a
       revealAll: true,
       compileMode: "render",
     }]);
-    assert.equal(result.textures, 4);
-    assert.equal(result.explicitTextureUploads, 4);
+    assert.equal(result.textures, 5);
+    assert.equal(result.explicitTextureUploads, 5);
     assert.equal(result.allTextureSourcesReady, true);
     assert.deepEqual(result.passes[0].textureNames, [
       "Neon City GPU bitmap font",
       "Neon City baked-alpha black HUD backdrop",
       "Neon City pooled raster navigation map",
+      "Neon Life phone canvas fallback",
       "Neon Life tintable rounded panel texture",
     ]);
-    assert.equal(new Set(uploads).size, 4);
+    assert.equal(new Set(uploads).size, 5);
     assert.ok(uploads.includes(hud.minimapTexture));
   } finally {
     hud.dispose();

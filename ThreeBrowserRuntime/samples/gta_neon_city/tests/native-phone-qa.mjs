@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import net from "node:net";
 
 const pipePath = process.argv[2];
-const screenshotPath = process.argv[3] ?? null;
+const homeScreenshotPath = process.argv[3] ?? null;
+const screenshotPath = process.argv[4] ?? homeScreenshotPath;
 if (!pipePath) throw new TypeError("Usage: node tests/native-phone-qa.mjs <pipe> [phone.png]");
 
 async function connect(path, timeoutMs = 60_000) {
@@ -51,11 +52,21 @@ try {
   assert.equal(state.phone.open, true);
   assert.equal(state.phone.title, "NEON LIFE");
   assert.equal(state.phone.items.length, 4);
+  if (homeScreenshotPath) await request("screenshot", { path: homeScreenshotPath });
   await request("action", { action: "interact" });
   state = (await request("advance", { steps: 2 })).state;
   assert.equal(state.phone.app, "wallet");
   assert.match(state.phone.subtitle, /AVAILABLE/);
   if (screenshotPath) await request("screenshot", { path: screenshotPath });
+  state = await request("render");
+  const redrawsBeforeClockAdvance = state.diagnostics.phoneCanvasRedraws;
+  await request("advance", { steps: 600 });
+  state = await request("render");
+  assert.equal(
+    state.diagnostics.phoneCanvasRedraws,
+    redrawsBeforeClockAdvance,
+    "accelerated clock ticks must not redraw the resident phone canvas",
+  );
   console.log(JSON.stringify({ phone: state.phone, screenshotPath }, null, 2));
 } finally {
   socket.end();

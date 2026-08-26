@@ -98,6 +98,11 @@ export function createChaseCamera(camera, input, world) {
   function update(delta, target, { driving = false, speed = 0, aiming = false, steering = 0, lateralSpeed = 0 } = {}) {
     const dt = Math.max(0, Math.min(0.1, Number(delta) || 0));
     const look = input.consumeLookDelta();
+    if (input.uiPointerMode) {
+      look.x = 0;
+      look.y = 0;
+      look.wheel = 0;
+    }
     const sensitivity = input.pointer.locked ? 0.00235 : 0.0012;
     state.targetYaw -= look.x * sensitivity;
     state.targetPitch = THREE.MathUtils.clamp(state.targetPitch + look.y * sensitivity, -0.12, driving ? 0.58 : 0.68);

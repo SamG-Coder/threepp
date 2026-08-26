@@ -34,6 +34,7 @@ export function createInput(canvas, options = {}) {
   const keyEdges = [];
   const injectedEdges = [];
   const mouseEdges = [];
+  const mouseReleased = new Set();
   const now = typeof options.now === "function"
     ? options.now
     : () => Number(globalThis.performance?.now?.() ?? Date.now());
@@ -56,6 +57,7 @@ export function createInput(canvas, options = {}) {
   };
   let inputFrame = 0;
   let disposed = false;
+  let uiPointerMode = false;
 
   const addEdge = (queue, value, mirror = null) => {
     queue.push({ value, time: Number(now()) || 0, frame: inputFrame });
@@ -121,6 +123,12 @@ export function createInput(canvas, options = {}) {
   const onPointerDown = event => {
     pointer.engaged = true;
     pointer.lockError = null;
+    if (uiPointerMode) {
+      if (!mouseHeld.has(event.button)) addEdge(mouseEdges, event.button);
+      mouseHeld.add(event.button);
+      prevent(event);
+      return;
+    }
     if (document.pointerLockElement !== canvas) {
       // The first click is a play/resume gesture, never an accidental shot or
       // aim transition. Pointer Lock requires a user gesture, so this is the
@@ -133,7 +141,10 @@ export function createInput(canvas, options = {}) {
     mouseHeld.add(event.button);
     if (event.button === 2) prevent(event);
   };
-  const onPointerUp = event => mouseHeld.delete(event.button);
+  const onPointerUp = event => {
+    if (mouseHeld.has(event.button)) mouseReleased.add(event.button);
+    mouseHeld.delete(event.button);
+  };
   const onWheel = event => {
     pointer.wheel += Math.sign(Number(event.deltaY) || 0);
     prevent(event);
@@ -187,6 +198,15 @@ export function createInput(canvas, options = {}) {
       if (name === "aim") return consumeEdge(mouseEdges, button => button === 2);
       return consumeCodes(name);
     },
+    actionReleased(action) {
+      const name = String(action);
+      const button = name === "fire" ? 0 : name === "aim" ? 2 : null;
+      if (button !== null && mouseReleased.has(button)) {
+        mouseReleased.delete(button);
+        return true;
+      }
+      return false;
+    },
     consumeCode(code) {
       const key = String(code);
       return consumeEdge(keyEdges, value => value === key, pressed);
@@ -204,6 +224,11 @@ export function createInput(canvas, options = {}) {
       pointer.wheel = 0;
       return look;
     },
+    consumeWheel() {
+      const wheel = pointer.wheel;
+      pointer.wheel = 0;
+      return wheel;
+    },
     injectAction(action) { addEdge(injectedEdges, String(action)); },
     injectHeldAction(action, down = true) {
       const name = String(action);
@@ -215,6 +240,14 @@ export function createInput(canvas, options = {}) {
       pointer.dy += Number(y) || 0;
       pointer.wheel += Number(wheel) || 0;
     },
+    setUiPointerMode(value) {
+      uiPointerMode = Boolean(value);
+      if (canvas.style) canvas.style.cursor = uiPointerMode ? "default" : "none";
+      if (uiPointerMode && document.pointerLockElement === canvas) document.exitPointerLock?.();
+      if (!uiPointerMode) mouseHeld.clear();
+      return uiPointerMode;
+    },
+    get uiPointerMode() { return uiPointerMode; },
     injectKey(code, down = true) {
       const key = String(code);
       if (down) {
@@ -251,6 +284,7 @@ export function createInput(canvas, options = {}) {
       pruneEdges(injectedEdges, null, currentTime);
       pruneEdges(mouseEdges, null, currentTime);
       released.clear();
+      mouseReleased.clear();
       pointer.dx = 0;
       pointer.dy = 0;
       pointer.wheel = 0;

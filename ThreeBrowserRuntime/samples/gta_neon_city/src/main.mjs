@@ -390,6 +390,10 @@ async function main() {
   let phoneOpen = false;
   let phoneApp = null;
   let phoneSelection = 0;
+  let phoneScroll = 0;
+  let phoneHover = -1;
+  let phonePressed = false;
+  const phoneRecentApps = [];
   let communityTrust = 0;
   let lastActivityStage = null;
   let lastTaxiDialogueSerial = 0;
@@ -2158,17 +2162,78 @@ async function main() {
     if (phoneOpen) {
       if (input.actionPressed("phone") || input.actionPressed("melee") || input.actionPressed("enterExit")) {
         if (phoneApp) phoneApp = null;
-        else phoneOpen = false;
+        else {
+          phoneOpen = false;
+          input.setUiPointerMode?.(false);
+        }
         return;
       }
       const phoneItems = phoneApp === "places"
         ? neighbourhoodRoutine.available(neighbourhoodContext())
-        : phoneApp === "work" ? lifeActivity.available(lifeUnlockContext()) : phoneApps;
+        : phoneApp === "work" ? lifeActivity.available(lifeUnlockContext())
+          : phoneApp === "recents" ? phoneRecentApps : phoneApps;
+      const wheel = input.consumeWheel?.() ?? 0;
+      if (phoneApp && wheel) {
+        phoneScroll = Math.max(0, Math.min(Math.max(0, phoneItems.length - 5), phoneScroll + Math.sign(wheel)));
+        phoneSelection = Math.max(phoneScroll, Math.min(phoneItems.length - 1, phoneSelection));
+      }
+      const phoneHit = hud?.phoneHitTest?.(input.pointer.x, input.pointer.y) ?? null;
+      phoneHover = phoneHit?.type === "item" ? phoneHit.index : -1;
+      phonePressed = phoneHover >= 0 && input.actionDown("fire");
+      input.actionPressed("fire"); // consume mouse-down without activating; phone taps commit on release
+      if (phoneApp === "recents" && input.actionDown("fire")) {
+        const swipe = input.consumeLookDelta?.() ?? { x: 0 };
+        if (Math.abs(swipe.x) > 18) {
+          phoneScroll = Math.max(0, Math.min(Math.max(0, phoneItems.length - 1), phoneScroll - Math.sign(swipe.x)));
+        }
+      }
+      if (input.actionReleased?.("fire")) {
+        if (phoneHit?.type === "back") {
+          if (phoneApp) {
+            phoneApp = null;
+            phoneSelection = 0;
+            phoneScroll = 0;
+          } else {
+            phoneOpen = false;
+            input.setUiPointerMode?.(false);
+          }
+          phoneScroll = 0;
+        } else if (phoneHit?.type === "home") {
+          phoneApp = null;
+          phoneSelection = 0;
+          phoneScroll = 0;
+        } else if (phoneHit?.type === "recent") {
+          phoneApp = "recents";
+          phoneSelection = 0;
+          phoneScroll = 0;
+        } else if (phoneHit?.type === "closeAll") {
+          phoneRecentApps.length = 0;
+          phoneApp = null;
+          phoneSelection = 0;
+          phoneScroll = 0;
+        } else if (phoneHit?.type === "item" && !phoneApp) {
+          phoneApp = phoneApps[phoneHit.index]?.id ?? null;
+          if (phoneApp) {
+            const existing = phoneRecentApps.indexOf(phoneApp);
+            if (existing >= 0) phoneRecentApps.splice(existing, 1);
+            phoneRecentApps.unshift(phoneApp);
+          }
+          phoneSelection = 0;
+          phoneScroll = 0;
+        } else if (phoneHit?.type === "item" && phoneApp === "recents") {
+          phoneApp = phoneRecentApps[phoneScroll + phoneHit.index] ?? null;
+          phoneSelection = 0;
+          phoneScroll = 0;
+        }
+        return;
+      }
       if (input.actionPressed("forward")) phoneSelection = (phoneSelection - 1 + Math.max(1, phoneItems.length)) % Math.max(1, phoneItems.length);
       if (input.actionPressed("backward")) phoneSelection = (phoneSelection + 1) % Math.max(1, phoneItems.length);
       if (!phoneApp && (advanceDialogue || input.actionPressed("interact"))) {
         phoneApp = phoneApps[phoneSelection]?.id ?? null;
+        if (phoneApp && !phoneRecentApps.includes(phoneApp)) phoneRecentApps.unshift(phoneApp);
         phoneSelection = 0;
+        phoneScroll = 0;
       }
       return;
     }
@@ -2204,6 +2269,10 @@ async function main() {
         phoneOpen = true;
         phoneApp = null;
         phoneSelection = 0;
+        phoneScroll = 0;
+        phoneHover = -1;
+        phonePressed = false;
+        input.setUiPointerMode?.(true);
       }
       return;
     }
@@ -2647,6 +2716,13 @@ async function main() {
         title: character.actor.displayName,
         detail: character.actor.root.userData.home?.address ?? character.actor.storyRole?.replaceAll("-", " ") ?? "NEON CITY",
       }));
+    } else if (phoneApp === "recents") {
+      title = "RECENT APPS";
+      subtitle = "TAP AN APP TO RETURN";
+      items = phoneRecentApps.map(id => {
+        const app = phoneApps.find(candidate => candidate.id === id);
+        return { title: app?.name ?? id, detail: "RUNNING IN MEMORY" };
+      });
     }
     return Object.freeze({
       open: phoneOpen,
@@ -2654,8 +2730,11 @@ async function main() {
       title,
       subtitle,
       selection: phoneSelection,
+      scroll: phoneScroll,
+      hover: phoneHover,
+      pressed: phonePressed,
       time: environmentState.timeLabel,
-      items: Object.freeze(items.slice(0, 7).map(item => Object.freeze(item))),
+      items: Object.freeze(items.map(item => Object.freeze(item))),
     });
   }
 
@@ -2677,7 +2756,7 @@ async function main() {
       paused,
       capture: Object.freeze({
         ...input.captureSnapshot(),
-        locked: input.pointer.locked || developmentCaptured,
+        locked: input.pointer.locked || input.uiPointerMode || developmentCaptured,
         synthetic: developmentCaptured && !input.pointer.locked,
       }),
       player: playerState,
@@ -2730,6 +2809,7 @@ async function main() {
       environment: environmentState,
       diagnostics: {
         backend: "NATIVE WEBGPU",
+        phoneCanvasRedraws: hud?.phoneCanvasRedrawCount ?? 0,
         calls: Number(renderer.info.render.calls) || 0,
         triangles: Number(renderer.info.render.triangles) || 0,
         fps: smoothedFps,

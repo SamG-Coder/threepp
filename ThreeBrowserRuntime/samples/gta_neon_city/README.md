@@ -85,7 +85,7 @@ again to resume.
 - `K` / `L` — quick-save / quick-load
 - `T` — respawn after being wasted
 - `Escape` — release cursor capture
-- `Tab` — open or close the Neon Life phone (`W` / `S` browse, `E` open, `Q` back)
+- `Tab` — open or close the Neon Life phone; it releases the cursor so apps can be hovered and clicked
 
 The Runtime reserves `Shift+Tab` for its feature panel and `F3` for its FPS
 overlay.
