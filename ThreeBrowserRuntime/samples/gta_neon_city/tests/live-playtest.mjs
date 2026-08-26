@@ -101,8 +101,8 @@ async function main() {
     assert.equal(state.world.stats.chapterTwoEvidencePartInstances, 10);
     assert.equal(state.world.stats.chapterTwoPropInstances, 20);
     assert.equal(state.world.stats.instancedMeshes, 64);
-    assert.equal(state.world.stats.instances, 5_535);
-    assert.equal(state.world.stats.staticLights, 80);
+    assert.equal(state.world.stats.instances, 5_858);
+    assert.equal(state.world.stats.staticLights, 82);
     assert.equal(state.world.stats.distantLights, 59);
     assert.equal(state.world.stats.linearLaneDividers, 0,
       "two-lane streets must not receive a duplicate internal white divider");
@@ -111,10 +111,10 @@ async function main() {
     assert.ok(state.world.stats.cafeFurniture >= 24);
     assert.ok(state.world.stats.streetClutter >= 20);
     assert.ok(state.world.stats.pedestrianNodes >= 800);
-    assert.equal(state.world.stats.pedestrianNodes, 953);
+    assert.equal(state.world.stats.pedestrianNodes, 1_103);
     assert.ok(state.vehicles.length >= 18);
     assert.ok(state.population.filter(actor => !actor.police && !actor.storyRole).length >= 30);
-    assert.equal(state.population.length, 46);
+    assert.equal(state.population.length, 56);
     assert.ok(state.population.some(actor =>
       actor.id === "leah_moreno" && actor.storyRole === "night-care-driver-and-pulse-customer"));
     assert.ok(state.population.some(actor =>
@@ -171,7 +171,8 @@ async function main() {
     assert.equal(state.diagnostics.simulationWarmup.aftermathPrepared.liveStatePreserved, true);
     assert.equal(state.neighbourhood.businesses.length, 4);
     assert.equal(new Set(state.neighbourhood.businesses.map(business => business.keeperName)).size, 4);
-    assert.ok(state.neighbourhood.businesses.every(business => business.itemCount === 4));
+    assert.ok(state.neighbourhood.businesses.every(business =>
+      business.itemCount === (business.id === "mina_market_kitchen" ? 5 : 4)));
     assert.equal(state.neighbourhood.businesses.filter(business => business.openingHours.overnight).length, 2);
     assert.equal(state.diagnostics.neighbourhood.businessCount, 4);
     assert.ok(Number.isFinite(state.neighbourhood.appetite));

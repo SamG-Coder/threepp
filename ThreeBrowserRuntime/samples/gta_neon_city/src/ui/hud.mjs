@@ -76,9 +76,50 @@ const MISSION_HEIGHT = 132;
 const VEHICLE_WIDTH = 360;
 const VEHICLE_HEIGHT = 94;
 const SHOP_WIDTH = 820;
-const SHOP_HEIGHT = 390;
+const SHOP_HEIGHT = 448;
 const PHONE_WIDTH = 390;
 const PHONE_HEIGHT = 650;
+const PHONE_LAUNCHER_LAYOUT = Object.freeze({
+  count: 7,
+  columns: 3,
+  left: 38,
+  top: 86,
+  columnStep: 106,
+  rowStep: 145,
+  hitWidth: 82,
+  hitHeight: 126,
+  iconSize: 68,
+});
+// The phone displays the same square retained GPS texture as the HUD map. A
+// square viewport keeps its north-up world scale exact instead of stretching
+// blocks vertically; the lower sheet is reserved for destination controls.
+export const PHONE_MAP_VIEWPORT = Object.freeze({ left: 39, top: 151, width: 312, height: 312 });
+const PHONE_MAP_ROUTE_BOUNDS = Object.freeze({ left: 250, top: 477, width: 96, height: 42 });
+const DEFAULT_PHONE_LAUNCHER = Object.freeze({
+  open: true,
+  app: null,
+  title: "NEON LIFE",
+  subtitle: "YOUR CITY IN YOUR POCKET",
+  items: Object.freeze([
+    Object.freeze({ title: "PULSE PAY", detail: "MONEY AND COMMUNITY TRUST" }),
+    Object.freeze({ title: "OPEN DOORS", detail: "LOCAL STORES AND HOURS" }),
+    Object.freeze({ title: "CITY WORK", detail: "LAWFUL JOBS AND ACTIVITIES" }),
+    Object.freeze({ title: "CONTACTS", detail: "PEOPLE WHO KNOW KAI" }),
+    Object.freeze({ title: "LIFE PROFILE", detail: "SKILLS, ENERGY, AND WORK HISTORY" }),
+    Object.freeze({ title: "MY HOME", detail: "ROOMS, ROUTINES, AND HOUSEHOLD" }),
+    Object.freeze({ title: "NEON MAP", detail: "PLACES, ROUTES, AND LIVE NAVIGATION" }),
+  ]),
+});
+const PHONE_APP_CACHE_DEFINITIONS = Object.freeze([
+  Object.freeze({ id: "wallet", title: "PULSE PAY", subtitle: "MONEY AND COMMUNITY TRUST" }),
+  Object.freeze({ id: "places", title: "OPEN DOORS", subtitle: "LOCAL STORES AND HOURS" }),
+  Object.freeze({ id: "work", title: "CITY WORK", subtitle: "LAWFUL JOBS AND ACTIVITIES" }),
+  Object.freeze({ id: "contacts", title: "CONTACTS", subtitle: "PEOPLE WHO KNOW KAI" }),
+  Object.freeze({ id: "profile", title: "LIFE PROFILE", subtitle: "SKILLS, ENERGY, AND WORK HISTORY" }),
+  Object.freeze({ id: "home", title: "MY HOME", subtitle: "ROOMS, ROUTINES, AND HOUSEHOLD" }),
+  Object.freeze({ id: "map", title: "NEON MAP", subtitle: "PLACES, ROUTES, AND LIVE NAVIGATION" }),
+  Object.freeze({ id: "recents", title: "RECENT APPS", subtitle: "RUNNING IN MEMORY" }),
+]);
 const DIALOGUE_WIDTH = 900;
 const DIALOGUE_TEXT_INSET = 24;
 const DIALOGUE_TEXT_SCALE = 1.55;
@@ -100,6 +141,108 @@ const MAP_SIZE = 224;
 const MAP_INSET = 14;
 const MAP_INNER = MAP_SIZE - MAP_INSET * 2;
 const MAP_CENTER = MAP_SIZE * 0.5;
+// Keep the on-screen map compact, but raster it at 2x resolution so authored
+// destination symbols retain a readable silhouette after WebGPU composition.
+// The one DataTexture is allocated here during HUD construction and reused for
+// every update; icons are immutable bitmap masks, never runtime textures.
+export const MINIMAP_RASTER_SCALE = 2;
+export const MINIMAP_RASTER_SIZE = MAP_INNER * MINIMAP_RASTER_SCALE;
+export const MINIMAP_PLACE_ICON_PALETTE = Object.freeze({
+  business: Object.freeze([255, 190, 92, 255]),
+  businessClosed: Object.freeze([132, 116, 98, 255]),
+  home: Object.freeze([116, 236, 255, 255]),
+  work: Object.freeze([105, 244, 151, 255]),
+  activity: Object.freeze([190, 129, 255, 255]),
+  transit: Object.freeze([87, 176, 255, 255]),
+  story: Object.freeze([255, 54, 195, 255]),
+  waypoint: Object.freeze([67, 226, 245, 255]),
+});
+export const MINIMAP_PLACE_ICON_MASKS = Object.freeze({
+  // A handled shopping bag.
+  business: Object.freeze([
+    "00011111000",
+    "00110001100",
+    "00100000100",
+    "01111111110",
+    "01100110110",
+    "01100110110",
+    "01100000110",
+    "01100000110",
+    "01111111110",
+  ]),
+  // A pitched roof, doorway and windows.
+  home: Object.freeze([
+    "00000100000",
+    "00001110000",
+    "00011111000",
+    "00111011100",
+    "01110001110",
+    "01100110110",
+    "01100110110",
+    "01100000110",
+    "01111111110",
+  ]),
+  // A briefcase, reserved for staffed lawful workplaces.
+  work: Object.freeze([
+    "00011111000",
+    "00110001100",
+    "00110001100",
+    "11111111111",
+    "11000100011",
+    "11011111011",
+    "11000100011",
+    "11000000011",
+    "11111111111",
+  ]),
+  // A five-point city-activity star.
+  activity: Object.freeze([
+    "00000100000",
+    "00001110000",
+    "11011111011",
+    "01111111110",
+    "00111111100",
+    "00011111000",
+    "00111011100",
+    "00110001100",
+    "01000000100",
+  ]),
+  // Front elevation of a bus with two windows and wheels.
+  transit: Object.freeze([
+    "00111111100",
+    "01100000110",
+    "01101110110",
+    "01101110110",
+    "01100000110",
+    "01111111110",
+    "01101010110",
+    "00110001100",
+    "00100000100",
+  ]),
+  // A map pin carrying an exclamation mark for the active story beat.
+  story: Object.freeze([
+    "00011111000",
+    "00110001100",
+    "01100100110",
+    "01100100110",
+    "01100000110",
+    "00100100100",
+    "00011011000",
+    "00001110000",
+    "00000100000",
+  ]),
+  // A neutral dropped GPS pin/crosshair, distinct from authored story work.
+  waypoint: Object.freeze([
+    "00000100000",
+    "00100100100",
+    "00011111000",
+    "00111011100",
+    "11100100111",
+    "00111011100",
+    "00011111000",
+    "00100100100",
+    "00000100000",
+  ]),
+});
 const ROAD_POOL_SIZE = 22;
 const ROUTE_SEGMENT_COUNT = 8;
 const CAR_BLIP_COUNT = 40;
@@ -490,33 +633,49 @@ export function phoneCanvasTransform(appOpen = false, progress = 1) {
   });
 }
 
-function createPhoneCanvasSurface() {
+function createPhoneFallbackSurface(policy) {
+  const bytes = new Uint8Array([7, 19, 29, 255, 7, 19, 29, 255, 7, 19, 29, 255, 7, 19, 29, 255]);
+  const texture = new THREE.DataTexture(bytes, 2, 2, THREE.RGBAFormat, THREE.UnsignedByteType);
+  texture.name = "Neon Life phone canvas fallback";
+  texture.userData.phoneRasterPolicy = policy;
+  texture.needsUpdate = true;
+  return Object.freeze({
+    texture,
+    canvasMode: false,
+    redrawCount: 1,
+  });
+}
+
+function createPhoneCanvasSurface({ immutable = false, initialPhone = DEFAULT_PHONE_LAUNCHER } = {}) {
+  const policy = initialPhone?.app ? "immutable-app-cache" : immutable ? "immutable-startup-data" : "mutable-app-canvas";
   if (typeof document === "undefined" || typeof document.createElement !== "function") {
-    const bytes = new Uint8Array([7, 19, 29, 255, 7, 19, 29, 255, 7, 19, 29, 255, 7, 19, 29, 255]);
-    const texture = new THREE.DataTexture(bytes, 2, 2, THREE.RGBAFormat, THREE.UnsignedByteType);
-    texture.name = "Neon Life phone canvas fallback";
-    texture.needsUpdate = true;
-    return { texture, canvasMode: false, draw() {} };
+    return createPhoneFallbackSurface(policy);
   }
   const canvas = document.createElement("canvas");
   canvas.width = 696;
-  canvas.height = 2048;
+  canvas.height = 1096;
   const context = canvas.getContext("2d");
-  if (!context) return createPhoneCanvasSurface.call({ document: null });
+  if (!context) {
+    canvas.width = 1;
+    canvas.height = 1;
+    return createPhoneFallbackSurface(policy);
+  }
   const texture = new THREE.CanvasTexture(canvas);
   texture.name = "Neon Life high-resolution canvas app screen";
+  texture.userData.phoneRasterPolicy = policy;
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.magFilter = THREE.LinearFilter;
   texture.minFilter = THREE.LinearFilter;
   texture.generateMipmaps = false;
   texture.flipY = false;
   texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
-  texture.repeat.set(1, 1096 / 2048);
+  texture.repeat.set(1, 1);
   let signature = "";
   let redrawCount = 0;
   const palette = [
     ["#20d5a6", "#075b54"], ["#ff5fa5", "#6f174a"],
     ["#6d9cff", "#253d8a"], ["#ffb84f", "#7f4510"],
+    ["#34d6b7", "#08675d"], ["#9b7cff", "#493195"], ["#35d8f2", "#12657d"],
   ];
   const rounded = (x, y, width, height, radius) => {
     context.beginPath();
@@ -569,20 +728,49 @@ function createPhoneCanvasSurface() {
       context.lineTo(x + size * 0.4, y + size * 0.22);
       context.lineTo(x + size * 0.6, y + size * 0.22);
       context.lineTo(x + size * 0.6, y + size * 0.35);
-    } else {
+    } else if (index === 3) {
       context.arc(x + size * 0.38, y + size * 0.39, size * 0.13, 0, Math.PI * 2);
       context.arc(x + size * 0.64, y + size * 0.42, size * 0.11, 0, Math.PI * 2);
       context.moveTo(x + size * 0.2, y + size * 0.73);
       context.quadraticCurveTo(x + size * 0.38, y + size * 0.53, x + size * 0.56, y + size * 0.73);
+    } else if (index === 4) {
+      context.arc(x + size * 0.5, y + size * 0.34, size * 0.14, 0, Math.PI * 2);
+      context.moveTo(x + size * 0.25, y + size * 0.72);
+      context.quadraticCurveTo(x + size * 0.5, y + size * 0.48, x + size * 0.75, y + size * 0.72);
+      context.moveTo(x + size * 0.68, y + size * 0.30);
+      context.lineTo(x + size * 0.68, y + size * 0.55);
+      context.lineTo(x + size * 0.82, y + size * 0.43);
+    } else if (index === 5) {
+      context.moveTo(x + size * 0.22, y + size * 0.70);
+      context.lineTo(x + size * 0.22, y + size * 0.38);
+      context.moveTo(x + size * 0.22, y + size * 0.56);
+      context.lineTo(x + size * 0.78, y + size * 0.56);
+      context.lineTo(x + size * 0.78, y + size * 0.70);
+      context.moveTo(x + size * 0.35, y + size * 0.46);
+      context.lineTo(x + size * 0.48, y + size * 0.46);
+    } else {
+      context.moveTo(x + size * 0.22, y + size * 0.30);
+      context.lineTo(x + size * 0.40, y + size * 0.22);
+      context.lineTo(x + size * 0.60, y + size * 0.30);
+      context.lineTo(x + size * 0.78, y + size * 0.22);
+      context.lineTo(x + size * 0.78, y + size * 0.70);
+      context.lineTo(x + size * 0.60, y + size * 0.78);
+      context.lineTo(x + size * 0.40, y + size * 0.70);
+      context.lineTo(x + size * 0.22, y + size * 0.78);
+      context.closePath();
+      context.moveTo(x + size * 0.50, y + size * 0.34);
+      context.arc(x + size * 0.50, y + size * 0.42, size * 0.10, -Math.PI * 0.5, Math.PI * 1.5);
+      context.moveTo(x + size * 0.50, y + size * 0.52);
+      context.lineTo(x + size * 0.50, y + size * 0.66);
     }
     context.stroke();
   };
-  return {
+  const surface = {
     texture,
     canvasMode: true,
     get redrawCount() { return redrawCount; },
     draw(phone = {}) {
-      texture.offset.y = Math.max(0, Number(phone.scroll) || 0) * 158 / 2048;
+      texture.offset.y = 0;
       const nextSignature = phoneRasterSignature(phone);
       if (nextSignature === signature) return;
       signature = nextSignature;
@@ -591,7 +779,7 @@ function createPhoneCanvasSurface() {
       background.addColorStop(0, "#071927");
       background.addColorStop(1, "#02070d");
       context.fillStyle = background;
-      context.fillRect(0, 0, 696, 2048);
+      context.fillRect(0, 0, canvas.width, canvas.height);
       if (!phone.app) {
         context.fillStyle = "rgba(32,213,166,0.08)";
         context.arc(570, 260, 260, 0, Math.PI * 2);
@@ -600,16 +788,19 @@ function createPhoneCanvasSurface() {
         context.arc(120, 900, 320, 0, Math.PI * 2);
         context.fill();
         const items = Array.isArray(phone.items) ? phone.items : [];
-        for (let index = 0; index < Math.min(4, items.length); ++index) {
-          const column = index % 2;
-          const row = Math.floor(index / 2);
-          const x = 90 + column * 330;
-          const y = 170 + row * 370;
-          drawIcon(index, x, y, 190);
-          write(items[index].title, x + 95, y + 240, 28, "#f6fbff", 600, "center");
+        for (let index = 0; index < Math.min(PHONE_LAUNCHER_LAYOUT.count, items.length); ++index) {
+          const column = index % PHONE_LAUNCHER_LAYOUT.columns;
+          const row = Math.floor(index / PHONE_LAUNCHER_LAYOUT.columns);
+          const localX = PHONE_LAUNCHER_LAYOUT.left + column * PHONE_LAUNCHER_LAYOUT.columnStep;
+          const localY = PHONE_LAUNCHER_LAYOUT.top + row * PHONE_LAUNCHER_LAYOUT.rowStep;
+          const x = (localX - 21) * 2;
+          const y = (localY - 37) * 2;
+          const size = PHONE_LAUNCHER_LAYOUT.iconSize * 2;
+          drawIcon(index, x, y, size);
+          write(items[index].title, x + size * 0.5, y + size + 38, 21, "#f6fbff", 600, "center");
         }
       } else {
-        const appIndex = Math.max(0, ["wallet", "places", "work", "contacts"].indexOf(phone.app));
+        const appIndex = Math.max(0, ["wallet", "places", "work", "contacts", "profile", "home", "map", "recents"].indexOf(phone.app));
         context.fillStyle = palette[appIndex % palette.length][1];
         context.fillRect(0, 62, 696, 128);
         context.strokeStyle = "#ffffff";
@@ -619,41 +810,97 @@ function createPhoneCanvasSurface() {
         context.lineTo(30, 120);
         context.lineTo(58, 148);
         context.stroke();
-        write(phone.title ?? "NEON LIFE", 92, 124, 38, "#ffffff", 700);
-        write(phone.subtitle ?? "", 94, 162, 19, "#d8f7ff", 500);
-        const items = Array.isArray(phone.items) ? phone.items : [];
-        if (phone.app === "recents") {
-          for (let index = items.length - 1; index >= 0; --index) {
-            const depth = index;
-            const inset = 42 + Math.min(4, depth) * 24;
-            const y = 230 + index * 70;
-            context.fillStyle = palette[index % palette.length][1];
-            fillRoundedRaster(inset, y, 696 - inset * 2, 290, 30);
-            context.fillStyle = "rgba(255,255,255,0.09)";
-            context.fillRect(inset + 18, y + 70, 696 - inset * 2 - 36, 190);
-            write(items[index].title, inset + 28, y + 52, 32, "#ffffff", 700);
-            write("RUNNING IN MEMORY", inset + 30, y + 110, 20, "#b9d9e4", 500);
+        if (phone.staticChromeOnly) {
+          const halo = context.createRadialGradient(560, 280, 20, 560, 280, 360);
+          halo.addColorStop(0, `${palette[appIndex % palette.length][0]}33`);
+          halo.addColorStop(1, "rgba(2,7,13,0)");
+          context.fillStyle = halo;
+          context.fillRect(0, 190, 696, 906);
+          if (phone.app === "recents") {
+            for (let index = 3; index >= 0; --index) {
+              const inset = 56 + index * 28;
+              const y = 246 + index * 56;
+              context.fillStyle = `${palette[index % palette.length][1]}aa`;
+              fillRoundedRaster(inset, y, 696 - inset * 2, 278, 30);
+            }
           }
-          context.fillStyle = "#253746";
-          fillRoundedRaster(210, 920, 276, 74, 34);
-          write("CLOSE ALL", 348, 970, 26, "#ffffff", 650, "center");
         } else {
-          for (let index = 0; index < items.length; ++index) {
-            const y = 220 + index * 158;
-            context.fillStyle = "#0d2230";
-            fillRoundedRaster(34, y, 628, 132, 24);
-            context.fillStyle = palette[appIndex % palette.length][0];
-            fillRoundedRaster(52, y + 34, 64, 64, 18);
-            write(String(index + 1), 84, y + 77, 28, "#ffffff", 700, "center");
-            write(items[index].title, 136, y + 51, 30, "#f6fbff", 650);
-            write(items[index].detail, 136, y + 94, 20, "#9bb9c8", 450);
+          write(phone.title ?? "NEON LIFE", 92, 124, 38, "#ffffff", 700);
+          write(phone.subtitle ?? "", 94, 162, 19, "#d8f7ff", 500);
+          const items = Array.isArray(phone.items) ? phone.items : [];
+          if (phone.app === "recents") {
+            for (let index = items.length - 1; index >= 0; --index) {
+              const depth = index;
+              const inset = 42 + Math.min(4, depth) * 24;
+              const y = 230 + index * 70;
+              context.fillStyle = palette[index % palette.length][1];
+              fillRoundedRaster(inset, y, 696 - inset * 2, 290, 30);
+              context.fillStyle = "rgba(255,255,255,0.09)";
+              context.fillRect(inset + 18, y + 70, 696 - inset * 2 - 36, 190);
+              write(items[index].title, inset + 28, y + 52, 32, "#ffffff", 700);
+              write("RUNNING IN MEMORY", inset + 30, y + 110, 20, "#b9d9e4", 500);
+            }
+            context.fillStyle = "#253746";
+            fillRoundedRaster(210, 920, 276, 74, 34);
+            write("CLOSE ALL", 348, 970, 26, "#ffffff", 650, "center");
+          } else {
+            for (let index = 0; index < items.length; ++index) {
+              const y = 220 + index * 158;
+              context.fillStyle = "#0d2230";
+              fillRoundedRaster(34, y, 628, 132, 24);
+              context.fillStyle = palette[appIndex % palette.length][0];
+              fillRoundedRaster(52, y + 34, 64, 64, 18);
+              write(String(index + 1), 84, y + 77, 28, "#ffffff", 700, "center");
+              write(items[index].title, 136, y + 51, 30, "#f6fbff", 650);
+              write(items[index].detail, 136, y + 94, 20, "#9bb9c8", 450);
+            }
           }
+          if (items.length >= 5) write("SCROLL FOR MORE", 348, Math.min(1040, 292 + items.length * 158), 18, "#668697", 500, "center");
         }
-        if (items.length >= 5) write("SCROLL FOR MORE", 348, Math.min(1950, 292 + items.length * 158), 18, "#668697", 500, "center");
       }
       texture.needsUpdate = true;
     },
   };
+  // Rasterize exactly once during HUD construction. Runtime app values are
+  // supplied by the fixed atlas glyph pool; the large phone textures contain
+  // immutable launcher/app chrome and never become dirty during play.
+  surface.draw(initialPhone);
+  if (!immutable || typeof context.getImageData !== "function") return surface;
+
+  // Detach the immutable raster from the native canvas compositor. The
+  // temporary CanvasTexture is never submitted, and both it and its backing
+  // canvas are released after the pixel copy so only the startup DataTexture
+  // remains resident.
+  try {
+    const pixels = new Uint8Array(context.getImageData(0, 0, canvas.width, canvas.height).data);
+    const retainedTexture = new THREE.DataTexture(
+      pixels,
+      canvas.width,
+      canvas.height,
+      THREE.RGBAFormat,
+      THREE.UnsignedByteType,
+    );
+    retainedTexture.colorSpace = THREE.SRGBColorSpace;
+    retainedTexture.magFilter = THREE.LinearFilter;
+    retainedTexture.minFilter = THREE.LinearFilter;
+    retainedTexture.generateMipmaps = false;
+    retainedTexture.flipY = false;
+    retainedTexture.wrapS = retainedTexture.wrapT = THREE.ClampToEdgeWrapping;
+    retainedTexture.repeat.set(1, 1);
+    retainedTexture.userData.phoneRasterPolicy = policy;
+    retainedTexture.userData.phoneAppId = initialPhone?.app ?? null;
+    retainedTexture.needsUpdate = true;
+    texture.dispose();
+    canvas.width = 1;
+    canvas.height = 1;
+    return Object.freeze({
+      texture: retainedTexture,
+      canvasMode: true,
+      redrawCount,
+    });
+  } catch {
+    return Object.freeze({ texture, canvasMode: true, redrawCount });
+  }
 }
 
 function createText(text, atlas, color = 0xffffff, scale = 2, opacity = 1, maxCharacters = 160) {
@@ -718,7 +965,53 @@ function boundsValues(bounds = {}) {
  * intentionally renderer-independent so navigation stays deterministic in
  * native tests and save/replay tooling.
  */
-export function planGridRoute(startValue, targetValue, spacingValue = 48, bounds = {}) {
+function minimapRasterX(worldX, centerX, pixelsPerMeter, rasterSize = MINIMAP_RASTER_SIZE) {
+  return rasterSize * 0.5 + (worldX - centerX) * pixelsPerMeter;
+}
+
+function minimapRasterY(worldZ, centerZ, pixelsPerMeter, rasterSize = MINIMAP_RASTER_SIZE) {
+  // Screen Y grows downward while authored max-Z is north.
+  return rasterSize * 0.5 - (worldZ - centerZ) * pixelsPerMeter;
+}
+
+function writeProjectedMinimapPoint(position, centerPosition, radiusValue, clampToEdge, rasterSize, edgeInset, output) {
+  const radius = Math.max(1, finite(radiusValue, 104));
+  let normalizedX = (position.x - centerPosition.x) / radius;
+  let normalizedZ = (position.z - centerPosition.z) / radius;
+  const inside = Math.abs(normalizedX) <= 1 && Math.abs(normalizedZ) <= 1;
+  if (!inside && !clampToEdge) return null;
+  normalizedX = clamp(normalizedX, -1, 1);
+  normalizedZ = clamp(normalizedZ, -1, 1);
+  const size = Math.max(32, finite(rasterSize, MINIMAP_RASTER_SIZE));
+  const half = size * 0.5 - clamp(edgeInset, 0, size * 0.45);
+  const pixelsPerNormalizedUnit = half;
+  output.x = minimapRasterX(normalizedX, 0, pixelsPerNormalizedUnit, size);
+  output.y = minimapRasterY(normalizedZ, 0, pixelsPerNormalizedUnit, size);
+  output.inside = inside;
+  return output;
+}
+
+export function projectWorldToMinimap(positionValue, centerValue, radiusValue, {
+  clampToEdge = false,
+  rasterSize = MINIMAP_RASTER_SIZE,
+  edgeInset = 9 * MINIMAP_RASTER_SCALE,
+} = {}) {
+  const position = vectorComponents(positionValue);
+  const centerPosition = vectorComponents(centerValue);
+  if (!position || !centerPosition) return null;
+  const projected = writeProjectedMinimapPoint(
+    position,
+    centerPosition,
+    radiusValue,
+    clampToEdge,
+    rasterSize,
+    edgeInset,
+    {},
+  );
+  return projected ? Object.freeze(projected) : null;
+}
+
+export function planGridRoute(startValue, targetValue, spacingValue = 48, bounds = {}, roadCentersValue = null) {
   const rawStart = vectorComponents(startValue);
   const rawTarget = vectorComponents(targetValue);
   if (!rawStart || !rawTarget) return Object.freeze([]);
@@ -733,10 +1026,32 @@ export function planGridRoute(startValue, targetValue, spacingValue = 48, bounds
   const target = clampPoint(rawTarget);
   const snapX = value => Math.min(limits.maxX, Math.max(limits.minX, Math.round(value / spacing) * spacing));
   const snapZ = value => Math.min(limits.maxZ, Math.max(limits.minZ, Math.round(value / spacing) * spacing));
-  const horizontalRoad = snapZ(start.z);
-  const verticalRoad = snapX(start.x);
-  const targetVerticalRoad = snapX(target.x);
-  const targetHorizontalRoad = snapZ(target.z);
+  const roadCenters = roadCentersValue ?? bounds?.roadCenters ?? null;
+  const nearestCenter = (value, centers, fallback) => {
+    if (!Array.isArray(centers) && !ArrayBuffer.isView(centers)) return fallback(value);
+    let nearest = null;
+    let nearestDistance = Infinity;
+    for (const center of centers) {
+      const resolved = Number(center);
+      if (!Number.isFinite(resolved)) continue;
+      const distance = Math.abs(value - resolved);
+      if (distance < nearestDistance) {
+        nearest = resolved;
+        nearestDistance = distance;
+      }
+    }
+    return nearest === null ? fallback(value) : nearest;
+  };
+  const nearestX = value => Math.min(limits.maxX, Math.max(limits.minX,
+    nearestCenter(value, roadCenters?.x, snapX)));
+  const nearestZ = value => {
+    const resolved = nearestCenter(value, roadCenters?.z, snapZ);
+    return Math.min(limits.maxZ, Math.max(limits.minZ, resolved));
+  };
+  const horizontalRoad = nearestZ(start.z);
+  const verticalRoad = nearestX(start.x);
+  const targetVerticalRoad = nearestX(target.x);
+  const targetHorizontalRoad = nearestZ(target.z);
   const candidates = [
     [
       start,
@@ -791,13 +1106,34 @@ export function createGtaHud({ renderer } = {}) {
   const unitPlane = new THREE.PlaneGeometry(1, 1);
   const backdropTexture = createBackdropTexture();
   const tintablePanelTexture = createTintablePanelTexture();
-  const phoneCanvasSurface = createPhoneCanvasSurface();
-  const minimapPixels = new Uint8Array(MAP_INNER * MAP_INNER * 4);
+  const phoneLauncherSurface = createPhoneCanvasSurface({ immutable: true });
+  phoneLauncherSurface.texture.name = "Neon Life resident launcher canvas";
+  const phoneAppSurfaces = PHONE_APP_CACHE_DEFINITIONS.map(definition => {
+    const surface = createPhoneCanvasSurface({
+      immutable: true,
+      initialPhone: {
+        open: true,
+        app: definition.id,
+        title: definition.title,
+        subtitle: definition.subtitle,
+        items: [],
+        staticChromeOnly: true,
+      },
+    });
+    surface.texture.name = `Neon Life resident app cache ${definition.id}`;
+    surface.texture.userData.phoneAppId = definition.id;
+    return surface;
+  });
+  const phoneAppSurfaceById = new Map(PHONE_APP_CACHE_DEFINITIONS.map((definition, index) => [definition.id, phoneAppSurfaces[index]]));
+  const phoneAppCacheTextures = Object.freeze(phoneAppSurfaces.map(surface => surface.texture));
+  const phoneAppCacheRedrawCount = phoneAppSurfaces.reduce((count, surface) => count + finite(surface.redrawCount), 0);
+  const defaultPhoneAppSurface = phoneAppSurfaceById.get("wallet");
+  const minimapPixels = new Uint8Array(MINIMAP_RASTER_SIZE * MINIMAP_RASTER_SIZE * 4);
   const minimapBasePixels = new Uint8Array(minimapPixels.length);
   const minimapTexture = new THREE.DataTexture(
     minimapPixels,
-    MAP_INNER,
-    MAP_INNER,
+    MINIMAP_RASTER_SIZE,
+    MINIMAP_RASTER_SIZE,
     THREE.RGBAFormat,
     THREE.UnsignedByteType,
   );
@@ -807,22 +1143,25 @@ export function createGtaHud({ renderer } = {}) {
   minimapTexture.minFilter = THREE.LinearFilter;
   minimapTexture.generateMipmaps = false;
   minimapTexture.flipY = false;
+  minimapTexture.userData.minimapRasterScale = MINIMAP_RASTER_SCALE;
+  minimapTexture.userData.placeIconPolicy = "immutable-mask-cache/single-pooled-texture";
   minimapTexture.needsUpdate = true;
 
   function writeMapPixel(target, xValue, yValue, color) {
     const x = Math.trunc(xValue);
     const y = Math.trunc(yValue);
-    if (x < 0 || y < 0 || x >= MAP_INNER || y >= MAP_INNER) return;
-    const offset = (y * MAP_INNER + x) * 4;
+    if (x < 0 || y < 0 || x >= MINIMAP_RASTER_SIZE || y >= MINIMAP_RASTER_SIZE) return;
+    const offset = (y * MINIMAP_RASTER_SIZE + x) * 4;
     target[offset] = color[0];
     target[offset + 1] = color[1];
     target[offset + 2] = color[2];
     target[offset + 3] = color[3] ?? 255;
   }
 
-  for (let y = 0; y < MAP_INNER; ++y) {
-    for (let x = 0; x < MAP_INNER; ++x) {
-      const vignette = Math.min(x, y, MAP_INNER - 1 - x, MAP_INNER - 1 - y) < 3;
+  for (let y = 0; y < MINIMAP_RASTER_SIZE; ++y) {
+    for (let x = 0; x < MINIMAP_RASTER_SIZE; ++x) {
+      const vignette = Math.min(x, y, MINIMAP_RASTER_SIZE - 1 - x, MINIMAP_RASTER_SIZE - 1 - y)
+        < 3 * MINIMAP_RASTER_SCALE;
       const grain = ((x * 17 + y * 29) % 19) === 0 ? 3 : 0;
       writeMapPixel(minimapBasePixels, x, y, vignette
         ? [21, 51, 68, 255]
@@ -911,6 +1250,7 @@ export function createGtaHud({ renderer } = {}) {
   const missionTitle = createText("HOME AGAIN", atlas, 0xff55d4, 2);
   const missionObjective = createText("MEET JUNO AT PULSE GARAGE", atlas, 0xf2f4ff, 1.5, 1, 120);
   const missionReward = createText("REWARD $5,000", atlas, 0x72ff9b, 1.25);
+  missionReward.name = "Mission activity detail line";
   const missionDistance = createText("TARGET 0M", atlas, 0xffd45e, 1.25);
   const basketballMeterBack = panel(272, 10, 0, 1, 2060,
     createHudMaterial({ color: 0x121d25, opacity: 1, layered: true }));
@@ -1124,10 +1464,10 @@ export function createGtaHud({ renderer } = {}) {
   const shopKeeper = createText("ASHA PATEL / NEW FACE", atlas, 0x72ff9b, 1.4, 1, 72);
   const shopVitals = createText("CASH $0  /  STEADY 72", atlas, 0xf5f7fb, 1.25, 1, 72);
   const shopLine = createText("TAKE A MINUTE. THE CITY WILL STILL BE HERE.", atlas, 0xd9e1ec, 1.45, 1, 180);
-  const shopRows = Array.from({ length: 4 }, (_, index) => {
+  const shopRows = Array.from({ length: 5 }, (_, index) => {
     const row = createText(`${index ? "  " : "→ "}MENU ITEM  $0`, atlas, index ? 0xe8edf4 : 0xffd17a, 1.4, 1, 132);
     row.name = `Open Doors fixed menu row ${index + 1}`;
-    row.position.set(34, 166 + index * 43, 1);
+    row.position.set(34, 166 + index * 41, 1);
     row.renderOrder = 2080;
     return row;
   });
@@ -1157,7 +1497,7 @@ export function createGtaHud({ renderer } = {}) {
   shopKeeper.position.set(32, 94, 1);
   shopVitals.position.set(548, 67, 1);
   shopLine.position.set(32, 124, 1);
-  shopHint.position.set(32, 357, 1);
+  shopHint.position.set(32, 414, 1);
   shopGroup.visible = false;
 
   // Neon Life is a fixed, RAM-resident phone. Its shell, app rows and text
@@ -1193,46 +1533,134 @@ export function createGtaHud({ renderer } = {}) {
   phoneRecentParts[1].position.set(284, 629, 2);
   phoneRecentParts[2].position.set(272, 617, 2);
   phoneRecentParts[3].position.set(296, 617, 2);
-  const phoneCanvas = panel(
-    PHONE_WIDTH - 42, PHONE_HEIGHT - 102, 0, 1, 2094,
-    createHudMaterial({ color: 0xffffff, opacity: 1, map: phoneCanvasSurface.texture, layered: true }),
+  const phoneLauncherCanvas = panel(
+    PHONE_WIDTH - 42, PHONE_HEIGHT - 102, 0, 1, 2093,
+    createHudMaterial({ color: 0xffffff, opacity: 1, map: phoneLauncherSurface.texture, layered: true }),
   );
-  phoneCanvas.name = "Neon Life canvas-generated app grid and high-resolution text";
+  phoneLauncherCanvas.name = "Neon Life retained launcher behind app transitions";
+  const phoneAppCanvases = PHONE_APP_CACHE_DEFINITIONS.map((definition, index) => {
+    const canvasMesh = panel(
+      PHONE_WIDTH - 42, PHONE_HEIGHT - 102, 0, 1, 2094,
+      createHudMaterial({ color: 0xffffff, opacity: 1, map: phoneAppSurfaces[index].texture, layered: true }),
+    );
+    canvasMesh.name = index === 0
+      ? "Neon Life canvas-generated app grid and high-resolution text"
+      : `Neon Life fixed app canvas ${definition.id}`;
+    canvasMesh.userData.phoneAppId = definition.id;
+    canvasMesh.visible = false;
+    return canvasMesh;
+  });
+  const phoneCanvas = phoneAppCanvases[0];
+  const phoneAppCanvasById = new Map(PHONE_APP_CACHE_DEFINITIONS.map((definition, index) => [definition.id, phoneAppCanvases[index]]));
   const phoneHoverGlow = phonePanel(116, 116, 0x000000, 0.18, 2098);
   phoneHoverGlow.name = "Neon Life GPU-only app hover and press feedback";
   phoneHoverGlow.visible = false;
   const phoneClock = createText("21:39", atlas, 0x8ee9ff, 1.05);
   const phoneSignal = createText("PULSE  5G", atlas, 0x8ee9ff, 1.05);
+  const phoneAppContentGroup = new THREE.Group();
+  phoneAppContentGroup.name = "Neon Life fixed live app glyph layer";
   const phoneBack = createText("BACK", atlas, 0x64e8ff, 1.05);
   const phoneTitle = createText("NEON LIFE", atlas, 0xffffff, 2.25, 1, 46);
   const phoneSubtitle = createText("YOUR CITY IN YOUR POCKET", atlas, 0x79ddec, 1.1, 1, 54);
+  const phoneCloseAllBacking = phonePanel(138, 37, 0x253746, 1, 2097);
+  phoneCloseAllBacking.position.set(PHONE_WIDTH * 0.5, 515, 2);
+  const phoneCloseAllText = createText("CLOSE ALL", atlas, 0xe9f7fb, 1.1, 1, 18);
+  phoneCloseAllText.position.set(165, 508, 3);
+  phoneCloseAllText.renderOrder = 2100;
+  phoneCloseAllBacking.visible = phoneCloseAllText.visible = false;
   const phoneRows = Array.from({ length: 7 }, (_, index) => {
-    const backing = phonePanel(PHONE_WIDTH - 74, 58, index % 2 ? 0x101e2a : 0x122535, 1, 2088);
-    const accent = phonePanel(5, 58, 0x405669, 1, 2090);
+    const backing = phonePanel(PHONE_WIDTH - 74, 58, index % 2 ? 0x101e2a : 0x122535, 0.96, 2096);
+    const accent = phonePanel(5, 58, 0x405669, 1, 2097);
     const title = createText("APP", atlas, 0xf1f7fa, 1.25, 1, 42);
     const detail = createText("DETAIL", atlas, 0x93aabb, 0.92, 1, 58);
-    backing.position.set(37 + (PHONE_WIDTH - 74) * 0.5, 150 + index * 64, 1);
-    accent.position.set(39.5, 150 + index * 64, 2);
-    title.position.set(52, 135 + index * 64, 3);
-    detail.position.set(52, 161 + index * 64, 3);
-    phoneGroup.add(backing, accent, title, detail);
+    backing.position.set(37 + (PHONE_WIDTH - 74) * 0.5, 180 + index * 79, 1);
+    accent.position.set(39.5, 180 + index * 79, 2);
+    title.position.set(52, 165 + index * 79, 3);
+    detail.position.set(52, 191 + index * 79, 3);
+    phoneAppContentGroup.add(backing, accent, title, detail);
     return { backing, accent, title, detail };
   });
+  // The phone Map app reuses the exact retained minimap DataTexture. Only the
+  // mesh/material and fixed glyph controls are separate; no second map texture,
+  // canvas, or per-open allocation exists.
+  const phoneMapGroup = new THREE.Group();
+  phoneMapGroup.name = "Neon Life shared retained GPS map viewport";
+  const phoneMapFrame = phonePanel(
+    PHONE_MAP_VIEWPORT.width + 8,
+    PHONE_MAP_VIEWPORT.height + 8,
+    0x55ddf4,
+    0.94,
+    2097,
+  );
+  const phoneMapMaterial = createHudMaterial({
+    color: 0xffffff,
+    opacity: 1,
+    map: minimapTexture,
+    layered: true,
+  });
+  const phoneMapViewport = panel(
+    PHONE_MAP_VIEWPORT.width,
+    PHONE_MAP_VIEWPORT.height,
+    0,
+    1,
+    2098,
+    phoneMapMaterial,
+  );
+  phoneMapViewport.name = "Neon Life phone GPS shares HUD minimap texture";
+  const phoneMapSheet = phonePanel(PHONE_MAP_VIEWPORT.width, 60, 0x0b1c28, 0.98, 2098);
+  const phoneMapDestination = createText("NO DESTINATION", atlas, 0xf4fbff, 1.2, 1, 30);
+  const phoneMapDistance = createText("TAP A PLACE OR DROP A PIN", atlas, 0x8eb3c3, 0.88, 1, 38);
+  const phoneMapRouteButton = phonePanel(
+    PHONE_MAP_ROUTE_BOUNDS.width,
+    PHONE_MAP_ROUTE_BOUNDS.height,
+    0x155c70,
+    1,
+    2100,
+  );
+  const phoneMapRouteText = createText("CLEAR", atlas, 0xffffff, 1.05, 1, 14);
+  phoneMapFrame.position.set(
+    PHONE_MAP_VIEWPORT.left + PHONE_MAP_VIEWPORT.width * 0.5,
+    PHONE_MAP_VIEWPORT.top + PHONE_MAP_VIEWPORT.height * 0.5,
+    2.1,
+  );
+  phoneMapViewport.position.copy(phoneMapFrame.position).setZ(2.2);
+  phoneMapSheet.position.set(PHONE_MAP_VIEWPORT.left + PHONE_MAP_VIEWPORT.width * 0.5, 500, 2.3);
+  phoneMapDestination.position.set(PHONE_MAP_VIEWPORT.left + 10, 478, 2.6);
+  phoneMapDistance.position.set(PHONE_MAP_VIEWPORT.left + 10, 502, 2.6);
+  phoneMapRouteButton.position.set(
+    PHONE_MAP_ROUTE_BOUNDS.left + PHONE_MAP_ROUTE_BOUNDS.width * 0.5,
+    PHONE_MAP_ROUTE_BOUNDS.top + PHONE_MAP_ROUTE_BOUNDS.height * 0.5,
+    2.7,
+  );
+  phoneMapRouteText.position.set(PHONE_MAP_ROUTE_BOUNDS.left + 18, PHONE_MAP_ROUTE_BOUNDS.top + 14, 2.9);
+  phoneMapDestination.renderOrder = phoneMapDistance.renderOrder = phoneMapRouteText.renderOrder = 2102;
+  phoneMapGroup.add(
+    phoneMapFrame,
+    phoneMapViewport,
+    phoneMapSheet,
+    phoneMapDestination,
+    phoneMapDistance,
+    phoneMapRouteButton,
+    phoneMapRouteText,
+  );
+  phoneMapGroup.visible = false;
   const phoneHint = createText("MOVE POINTER AND CLICK   TAB CLOSE", atlas, 0x7f99aa, 0.92, 1, 72);
   for (const textMesh of [
     phoneClock, phoneSignal, phoneBack, phoneTitle, phoneSubtitle, phoneHint,
     ...phoneRows.flatMap(row => [row.title, row.detail]),
   ]) textMesh.renderOrder = 2100;
+  phoneAppContentGroup.add(phoneBack, phoneTitle, phoneSubtitle, phoneCloseAllBacking, phoneCloseAllText);
   phoneGroup.add(
-    phoneShadow, phoneShell, phoneScreen, phoneCanvas, phoneHoverGlow, phoneTopGlow, phoneSpeaker, phoneHomeBar,
+    phoneShadow, phoneShell, phoneScreen, phoneLauncherCanvas, ...phoneAppCanvases, phoneHoverGlow, phoneTopGlow, phoneSpeaker, phoneHomeBar,
     phoneNavBackdrop, ...phoneBackParts, phoneHomeRing, ...phoneRecentParts,
-    phoneClock, phoneSignal, phoneTitle, phoneSubtitle, phoneHint,
+    phoneClock, phoneSignal, phoneAppContentGroup, phoneMapGroup, phoneHint,
   );
   root.add(phoneGroup);
   placeTopLeft(phoneShadow, 0, 0);
   placeTopLeft(phoneShell, 7, 7, 0.2);
   placeTopLeft(phoneScreen, 21, 37, 0.4);
-  placeTopLeft(phoneCanvas, 21, 37, 0.8);
+  placeTopLeft(phoneLauncherCanvas, 21, 37, 0.7);
+  for (const canvasMesh of phoneAppCanvases) placeTopLeft(canvasMesh, 21, 37, 0.8);
   placeTopLeft(phoneTopGlow, 21, 37, 0.6);
   phoneSpeaker.position.set(PHONE_WIDTH * 0.5, 20, 1);
   phoneHomeBar.position.set(PHONE_WIDTH * 0.5, PHONE_HEIGHT - 20, 1);
@@ -1521,33 +1949,33 @@ export function createGtaHud({ renderer } = {}) {
   function updateRoadGrid(playerPosition, radius, snapshot) {
     const world = snapshot.world ?? {};
     const bounds = boundsValues(world.bounds ?? snapshot.worldBounds);
-    const spacing = clamp(world.roadSpacing ?? world.blockSize ?? snapshot.roadSpacing ?? 28, 18, 64);
-    const pixelsPerMeter = (MAP_INNER * 0.5) / radius;
-    const firstX = Math.ceil((playerPosition.x - radius) / spacing) * spacing;
-    const firstZ = Math.ceil((playerPosition.z - radius) / spacing) * spacing;
+    const roads = world.mapFeatures?.roads ?? world.roadCenters;
+    const pixelsPerMeter = (MAP_INNER * 0.5 - 5) / radius;
 
     for (let index = 0; index < ROAD_POOL_SIZE; ++index) {
-      const worldX = firstX + index * spacing;
+      const worldX = Number(roads?.x?.[index]);
       const line = verticalRoads[index];
-      const screenX = MAP_CENTER + (worldX - playerPosition.x) * pixelsPerMeter;
-      const onMap = screenX >= MAP_INSET && screenX <= MAP_SIZE - MAP_INSET && worldX >= bounds.minX && worldX <= bounds.maxX;
+      const screenX = minimapRasterX(worldX, playerPosition.x, pixelsPerMeter, MAP_SIZE);
+      const onMap = Number.isFinite(worldX) && screenX >= MAP_INSET && screenX <= MAP_SIZE - MAP_INSET &&
+        worldX >= bounds.minX && worldX <= bounds.maxX;
       line.visible = onMap;
       if (onMap) {
-        const major = Math.abs(Math.round(worldX / spacing)) % 4 === 0;
+        const major = index === (roads?.x?.length ?? 0) - 1 || index === Math.floor((roads?.x?.length ?? 0) * 0.5);
         line.material = major ? primaryRoadMaterial : secondaryRoadMaterial;
-        line.scale.x = major ? 5 : 2.5;
+        line.scale.x = Math.max(2.5, finite(roads?.halfWidth, 6) * 2 * pixelsPerMeter);
         line.position.set(screenX, MAP_CENTER, 0.5);
       }
 
-      const worldZ = firstZ + index * spacing;
+      const worldZ = Number(roads?.z?.[index]);
       const horizontal = horizontalRoads[index];
-      const screenY = MAP_CENTER + (worldZ - playerPosition.z) * pixelsPerMeter;
-      const rowOnMap = screenY >= MAP_INSET && screenY <= MAP_SIZE - MAP_INSET && worldZ >= bounds.minZ && worldZ <= bounds.maxZ;
+      const screenY = minimapRasterY(worldZ, playerPosition.z, pixelsPerMeter, MAP_SIZE);
+      const rowOnMap = Number.isFinite(worldZ) && screenY >= MAP_INSET && screenY <= MAP_SIZE - MAP_INSET &&
+        worldZ >= bounds.minZ && worldZ <= bounds.maxZ;
       horizontal.visible = rowOnMap;
       if (rowOnMap) {
-        const major = Math.abs(Math.round(worldZ / spacing)) % 4 === 0;
+        const major = index === 3 || index === Math.floor((roads?.z?.length ?? 0) * 0.5);
         horizontal.material = major ? primaryRoadMaterial : secondaryRoadMaterial;
-        horizontal.scale.y = major ? 5 : 2.5;
+        horizontal.scale.y = Math.max(2.5, finite(roads?.halfWidth, 6) * 2 * pixelsPerMeter);
         horizontal.position.set(MAP_CENTER, screenY, 0.5);
       }
     }
@@ -1570,7 +1998,7 @@ export function createGtaHud({ renderer } = {}) {
       if (!mesh.visible) continue;
       mesh.position.set(
         MAP_CENTER + clamp(normalizedX, -1, 1) * half,
-        MAP_CENTER + clamp(normalizedZ, -1, 1) * half,
+        MAP_CENTER - clamp(normalizedZ, -1, 1) * half,
         1.1,
       );
       if (mesh.geometry === unitPlane) mesh.rotation.z = -finite(entity?.yaw ?? entity?.heading);
@@ -1579,12 +2007,18 @@ export function createGtaHud({ renderer } = {}) {
 
   function updateRoute(playerPosition, targetPosition, radius, world, elapsed) {
     const route = targetPosition
-      ? planGridRoute(playerPosition, targetPosition, world?.roadSpacing ?? 48, world?.bounds)
+      ? planGridRoute(
+          playerPosition,
+          targetPosition,
+          world?.roadSpacing ?? 48,
+          world?.mapFeatures?.bounds ?? world?.bounds,
+          world?.mapFeatures?.roads ?? world?.roadCenters,
+        )
       : [];
     const half = MAP_INNER * 0.5 - 6;
     const toMap = point => ({
       x: MAP_CENTER + clamp((point.x - playerPosition.x) / radius, -1, 1) * half,
-      y: MAP_CENTER + clamp((point.z - playerPosition.z) / radius, -1, 1) * half,
+      y: MAP_CENTER - clamp((point.z - playerPosition.z) / radius, -1, 1) * half,
     });
     routeMaterial.color.setHex(Math.sin(elapsed * 4.2) > 0 ? 0x72f2ff : 0x30d5ee);
     for (let index = 0; index < routeSegments.length; ++index) {
@@ -1610,20 +2044,58 @@ export function createGtaHud({ renderer } = {}) {
 
   const MAP_MINOR_ROAD = Object.freeze([48, 73, 98, 255]);
   const MAP_MAJOR_ROAD = Object.freeze([91, 127, 157, 255]);
+  const MAP_ROUTE_EDGE = Object.freeze([2, 14, 24, 255]);
   const MAP_ROUTE = Object.freeze([38, 224, 242, 255]);
   const MAP_POLICE_BLUE = Object.freeze([32, 164, 255, 255]);
   const MAP_POLICE_RED = Object.freeze([255, 55, 92, 255]);
   const MAP_POLICE_PERSON = Object.freeze([48, 154, 255, 255]);
   const MAP_CAR = Object.freeze([190, 207, 224, 255]);
   const MAP_CIVILIAN = Object.freeze([236, 189, 74, 255]);
-  const MAP_ACTIVITY = Object.freeze([98, 242, 142, 255]);
+  const MAP_ACTIVITY = MINIMAP_PLACE_ICON_PALETTE.activity;
   const MAP_BASKETBALL = Object.freeze([255, 164, 76, 255]);
-  const MAP_BUSINESS_OPEN = Object.freeze([255, 190, 92, 255]);
-  const MAP_BUSINESS_CLOSED = Object.freeze([105, 92, 78, 255]);
-  const MAP_MISSION = Object.freeze([255, 54, 195, 255]);
+  const MAP_BUSINESS_OPEN = MINIMAP_PLACE_ICON_PALETTE.business;
+  const MAP_BUSINESS_CLOSED = MINIMAP_PLACE_ICON_PALETTE.businessClosed;
+  const MAP_MISSION = MINIMAP_PLACE_ICON_PALETTE.story;
   const MAP_PLAYER = Object.freeze([246, 255, 255, 255]);
   const MAP_PLAYER_CENTER = Object.freeze([104, 238, 255, 255]);
+  const MAP_ICON_SHADOW = Object.freeze([2, 8, 15, 255]);
+  const MAP_ICON_BORDER = Object.freeze([237, 249, 255, 255]);
+  const MAP_ICON_GLYPH = Object.freeze([3, 7, 10, 255]);
+  const MAP_WATER = Object.freeze([8, 43, 66, 255]);
+  const MAP_WATER_EDGE = Object.freeze([34, 111, 139, 255]);
+  const MAP_PARK = Object.freeze([25, 70, 55, 255]);
+  const MAP_PLAZA = Object.freeze([36, 48, 62, 255]);
+  const MAP_RECREATION = Object.freeze([48, 60, 72, 255]);
+  const MAP_DESERT = Object.freeze([74, 61, 45, 255]);
+  const MAP_RUINS = Object.freeze([91, 76, 58, 255]);
+  const MAP_BUILDING_EDGE = Object.freeze([52, 69, 87, 255]);
+  const MAP_BUILDING = Object.freeze([19, 29, 42, 255]);
+  const MAP_DESTINATION_BUILDING = Object.freeze([25, 41, 55, 255]);
+  const MAP_ROAD_EDGE = Object.freeze([18, 34, 49, 255]);
+  const MAP_ICON_CAPACITY = 64;
+  const MAP_ICON_CELL = MINIMAP_RASTER_SCALE;
+  const MAP_ICON_CLEARANCE = 18 * MINIMAP_RASTER_SCALE;
+  const CLAMPED_RASTER_POINT = Object.freeze({ clampToEdge: true });
+  const WORK_ACTIVITY_KINDS = new Set([
+    "courier", "mechanic", "taxi", "community", "cafe", "market", "hospitality", "work",
+  ]);
+  const iconPlacementX = new Float32Array(MAP_ICON_CAPACITY);
+  const iconPlacementY = new Float32Array(MAP_ICON_CAPACITY);
+  const rasterPointScratchA = { x: 0, y: 0, inside: false };
+  const rasterPointScratchB = { x: 0, y: 0, inside: false };
+  let iconPlacementCount = 0;
+  const minimapPlaceIconStats = {
+    business: 0,
+    home: 0,
+    work: 0,
+    activity: 0,
+    transit: 0,
+    story: 0,
+    waypoint: 0,
+    culled: 0,
+  };
   let nextMinimapRasterAt = -Infinity;
+  let lastMinimapNavigationRevision = -1;
 
   function paintMapRect(xValue, yValue, halfWidth, halfHeight, color) {
     const centerX = Math.round(xValue);
@@ -1646,6 +2118,18 @@ export function createGtaHud({ renderer } = {}) {
     }
   }
 
+  function paintMapCircle(xValue, yValue, radiusValue, color) {
+    const centerX = Math.round(xValue);
+    const centerY = Math.round(yValue);
+    const radius = Math.max(1, Math.trunc(radiusValue));
+    const radiusSquared = radius * radius;
+    for (let y = -radius; y <= radius; ++y) {
+      for (let x = -radius; x <= radius; ++x) {
+        if (x * x + y * y <= radiusSquared) writeMapPixel(minimapPixels, centerX + x, centerY + y, color);
+      }
+    }
+  }
+
   function paintMapLine(startX, startY, endX, endY, thickness, color) {
     const dx = endX - startX;
     const dy = endY - startY;
@@ -1657,17 +2141,308 @@ export function createGtaHud({ renderer } = {}) {
     }
   }
 
-  function rasterPoint(positionValue, playerPosition, radius, { clampToEdge = false } = {}) {
+  function paintWorldRectangle(
+    worldX,
+    worldZ,
+    widthMeters,
+    depthMeters,
+    viewPosition,
+    pixelsPerMeter,
+    color,
+    borderColor = null,
+    borderMeters = 0,
+  ) {
+    const x = minimapRasterX(worldX, viewPosition.x, pixelsPerMeter);
+    const y = minimapRasterY(worldZ, viewPosition.z, pixelsPerMeter);
+    const halfWidth = Math.max(0.5, Math.abs(widthMeters) * pixelsPerMeter * 0.5);
+    const halfDepth = Math.max(0.5, Math.abs(depthMeters) * pixelsPerMeter * 0.5);
+    if (x + halfWidth < 0 || x - halfWidth >= MINIMAP_RASTER_SIZE ||
+        y + halfDepth < 0 || y - halfDepth >= MINIMAP_RASTER_SIZE) return;
+    if (borderColor && borderMeters > 0) {
+      const border = borderMeters * pixelsPerMeter;
+      paintMapRect(x, y, halfWidth + border, halfDepth + border, borderColor);
+    }
+    paintMapRect(x, y, halfWidth, halfDepth, color);
+  }
+
+  function paintAuthoredMapFeatures(features, viewPosition, pixelsPerMeter) {
+    if (!features || typeof features !== "object") return;
+    for (const area of Array.isArray(features.areas) ? features.areas : []) {
+      const areaBounds = area?.bounds;
+      if (!areaBounds) continue;
+      const minX = finite(areaBounds.minX);
+      const maxX = finite(areaBounds.maxX);
+      const minZ = finite(areaBounds.minZ);
+      const maxZ = finite(areaBounds.maxZ);
+      const kind = String(area.kind ?? "");
+      const color = kind === "water" ? MAP_WATER : kind === "park" ? MAP_PARK :
+        kind === "recreation" ? MAP_RECREATION : kind === "desert" ? MAP_DESERT :
+          kind === "ruins" ? MAP_RUINS : MAP_PLAZA;
+      paintWorldRectangle(
+        (minX + maxX) * 0.5,
+        (minZ + maxZ) * 0.5,
+        maxX - minX,
+        maxZ - minZ,
+        viewPosition,
+        pixelsPerMeter,
+        color,
+        kind === "water" ? MAP_WATER_EDGE : null,
+        kind === "water" ? 0.8 : 0,
+      );
+    }
+
+    for (const building of Array.isArray(features.buildings) ? features.buildings : []) {
+      const position = building?.position;
+      const size = building?.size;
+      if (!Array.isArray(position) || !Array.isArray(size)) continue;
+      paintWorldRectangle(
+        finite(position[0]),
+        finite(position[1]),
+        finite(size[0]),
+        finite(size[1]),
+        viewPosition,
+        pixelsPerMeter,
+        building.destination ? MAP_DESTINATION_BUILDING : MAP_BUILDING,
+        MAP_BUILDING_EDGE,
+        0.42,
+      );
+    }
+
+    const roads = features.roads;
+    if (!roads || typeof roads !== "object") return;
+    const mapBounds = boundsValues(roads.bounds ?? features.cityBounds ?? features.bounds);
+    if (!Number.isFinite(mapBounds.minX) || !Number.isFinite(mapBounds.maxX) ||
+        !Number.isFinite(mapBounds.minZ) || !Number.isFinite(mapBounds.maxZ)) return;
+    const roadHalfWidth = Math.max(1, finite(roads.halfWidth, 6));
+    const roadWidth = roadHalfWidth * 2;
+    const verticalDepth = mapBounds.maxZ - mapBounds.minZ;
+    for (let index = 0; index < (roads.x?.length ?? 0); ++index) {
+      const roadX = Number(roads.x[index]);
+      if (!Number.isFinite(roadX)) continue;
+      const major = index === roads.x.length - 1 || index === Math.floor(roads.x.length * 0.5);
+      paintWorldRectangle(
+        roadX,
+        (mapBounds.minZ + mapBounds.maxZ) * 0.5,
+        roadWidth,
+        verticalDepth,
+        viewPosition,
+        pixelsPerMeter,
+        major ? MAP_MAJOR_ROAD : MAP_MINOR_ROAD,
+        MAP_ROAD_EDGE,
+        0.85,
+      );
+    }
+    const horizontalWidth = mapBounds.maxX - mapBounds.minX;
+    for (let index = 0; index < (roads.z?.length ?? 0); ++index) {
+      const roadZ = Number(roads.z[index]);
+      if (!Number.isFinite(roadZ)) continue;
+      const major = index === 3 || index === Math.floor(roads.z.length * 0.5);
+      paintWorldRectangle(
+        (mapBounds.minX + mapBounds.maxX) * 0.5,
+        roadZ,
+        horizontalWidth,
+        roadWidth,
+        viewPosition,
+        pixelsPerMeter,
+        major ? MAP_MAJOR_ROAD : MAP_MINOR_ROAD,
+        MAP_ROAD_EDGE,
+        0.85,
+      );
+    }
+  }
+
+  function resetPlaceIconLayout() {
+    iconPlacementCount = 0;
+    minimapPlaceIconStats.business = 0;
+    minimapPlaceIconStats.home = 0;
+    minimapPlaceIconStats.work = 0;
+    minimapPlaceIconStats.activity = 0;
+    minimapPlaceIconStats.transit = 0;
+    minimapPlaceIconStats.story = 0;
+    minimapPlaceIconStats.waypoint = 0;
+    minimapPlaceIconStats.culled = 0;
+  }
+
+  function reservePlaceIcon(point) {
+    for (let index = 0; index < iconPlacementCount; ++index) {
+      const dx = point.x - iconPlacementX[index];
+      const dy = point.y - iconPlacementY[index];
+      if (dx * dx + dy * dy < MAP_ICON_CLEARANCE * MAP_ICON_CLEARANCE) {
+        minimapPlaceIconStats.culled += 1;
+        return false;
+      }
+    }
+    if (iconPlacementCount >= MAP_ICON_CAPACITY) {
+      minimapPlaceIconStats.culled += 1;
+      return false;
+    }
+    iconPlacementX[iconPlacementCount] = point.x;
+    iconPlacementY[iconPlacementCount] = point.y;
+    iconPlacementCount += 1;
+    return true;
+  }
+
+  function paintPlaceIconMask(point, category, color) {
+    const mask = MINIMAP_PLACE_ICON_MASKS[category];
+    if (!mask) return;
+    const badgeX = point.x;
+    const badgeY = point.y - 4 * MINIMAP_RASTER_SCALE;
+    paintMapDiamond(point.x, point.y, 5 * MINIMAP_RASTER_SCALE, MAP_ICON_SHADOW);
+    paintMapDiamond(point.x, point.y, 4 * MINIMAP_RASTER_SCALE, MAP_ICON_BORDER);
+    paintMapDiamond(point.x, point.y, 3 * MINIMAP_RASTER_SCALE, color);
+    paintMapCircle(badgeX, badgeY, 9 * MINIMAP_RASTER_SCALE, MAP_ICON_SHADOW);
+    paintMapCircle(badgeX, badgeY, 8 * MINIMAP_RASTER_SCALE, MAP_ICON_BORDER);
+    paintMapCircle(badgeX, badgeY, 7 * MINIMAP_RASTER_SCALE, color);
+    const width = mask[0].length * MAP_ICON_CELL;
+    const height = mask.length * MAP_ICON_CELL;
+    const originX = Math.round(badgeX - width * 0.5);
+    const originY = Math.round(badgeY - height * 0.5);
+    for (let row = 0; row < mask.length; ++row) {
+      for (let column = 0; column < mask[row].length; ++column) {
+        if (mask[row][column] !== "1") continue;
+        const left = originX + column * MAP_ICON_CELL;
+        const top = originY + row * MAP_ICON_CELL;
+        for (let y = 0; y < MAP_ICON_CELL; ++y) {
+          for (let x = 0; x < MAP_ICON_CELL; ++x) {
+            writeMapPixel(minimapPixels, left + x, top + y, MAP_ICON_GLYPH);
+          }
+        }
+      }
+    }
+  }
+
+  function entrancePosition(value) {
+    return vectorComponents(
+      value?.entrance?.exterior ?? value?.entrance?.threshold ?? value?.entrance
+      ?? value?.hubPosition ?? value?.hub ?? value?.position ?? value,
+    );
+  }
+
+  function storyObjectiveTarget(snapshot, mission, vehicles) {
+    const chapter = snapshot.chapterTwoMission;
+    if (chapter && chapter.status !== "completed") {
+      const chapterTarget = vectorComponents(chapter.targetPosition);
+      if (chapterTarget) return chapterTarget;
+    }
+    // A selected side activity owns the route, but it must not masquerade as
+    // the authored story pin. The original mission remains visible otherwise.
+    if (snapshot.activity && snapshot.activity.stage !== "idle") return null;
+    const storyMission = snapshot.mission ?? mission;
+    const explicit = vectorComponents(storyMission?.targetPosition);
+    if (explicit) return explicit;
+    const stage = String(storyMission?.stage ?? "");
+    if (stage === "available") return vectorComponents(storyMission?.startPosition);
+    if (stage === "deliver_target") return vectorComponents(storyMission?.dropoffPosition);
+    if (stage === "steal_target") {
+      const targetId = String(storyMission?.targetVehicleId ?? "");
+      return vectorComponents(vehicles.find(vehicle => String(vehicle?.id) === targetId));
+    }
+    return null;
+  }
+
+  function paintMinimapPlace(value, category, color, playerPosition, radius, clampToEdge = false) {
+    const position = entrancePosition(value);
+    if (!position) return false;
+    const point = rasterPoint(position, playerPosition, radius, clampToEdge ? CLAMPED_RASTER_POINT : undefined);
+    if (!point || !reservePlaceIcon(point)) return false;
+    paintPlaceIconMask(point, category, color);
+    minimapPlaceIconStats[category] += 1;
+    return true;
+  }
+
+  function paintMinimapPlaces(snapshot, viewPosition, radius, storyTarget) {
+    resetPlaceIconLayout();
+    const world = snapshot.world ?? {};
+    const navigationState = snapshot.phone?.mapNavigation ?? snapshot.mapNavigation ?? null;
+    const navigation = navigationState?.navigation ?? null;
+
+    // Priority is deliberate. Higher-value destinations reserve their screen
+    // space first, so a story pin cannot be buried under a co-located shop and
+    // dense edge-clamped landmarks collapse to one legible symbol.
+    paintMinimapPlace(storyTarget, "story", MAP_MISSION, viewPosition, radius, true);
+    if (navigation) {
+      const requestedCategory = String(navigation.category ?? "waypoint").toLowerCase();
+      const category = MINIMAP_PLACE_ICON_MASKS[requestedCategory] ? requestedCategory : "waypoint";
+      paintMinimapPlace(
+        navigation.target,
+        category,
+        MINIMAP_PLACE_ICON_PALETTE[category] ?? MINIMAP_PLACE_ICON_PALETTE.waypoint,
+        viewPosition,
+        radius,
+        true,
+      );
+    }
+
+    // The navigation model owns a stable, deduplicated place directory. Draw
+    // it by category priority without allocating a sorted array every frame.
+    const directory = Array.isArray(navigationState?.places) ? navigationState.places : null;
+    if (directory) {
+      for (const category of ["home", "work", "transit", "business", "activity"]) {
+        for (const place of directory) {
+          if (String(place?.category ?? "").toLowerCase() !== category) continue;
+          const color = category === "business"
+            ? place.open === false ? MAP_BUSINESS_CLOSED : MAP_BUSINESS_OPEN
+            : MINIMAP_PLACE_ICON_PALETTE[category];
+          paintMinimapPlace(place, category, color, viewPosition, radius);
+        }
+      }
+      return;
+    }
+
+    // Renderer-free HUD tests and older replay snapshots may not yet carry the
+    // directory; retain a bounded compatibility path using authored entrances.
+    paintMinimapPlace(world.residentialInterior, "home", MINIMAP_PLACE_ICON_PALETTE.home, viewPosition, radius);
+    paintMinimapPlace(world.pulseGarageInterior, "work", MINIMAP_PLACE_ICON_PALETTE.work, viewPosition, radius);
+    paintMinimapPlace(world.communityHub, "work", MINIMAP_PLACE_ICON_PALETTE.work, viewPosition, radius);
+    paintMinimapPlace(world.commonGroundCafe, "work", MINIMAP_PLACE_ICON_PALETTE.work, viewPosition, radius);
+    paintMinimapPlace(world.minaMarketKitchen, "work", MINIMAP_PLACE_ICON_PALETTE.work, viewPosition, radius);
+    paintMinimapPlace(world.pulseTransit, "transit", MINIMAP_PLACE_ICON_PALETTE.transit, viewPosition, radius);
+
+    const businesses = Array.isArray(snapshot.neighbourhood?.businesses)
+      ? snapshot.neighbourhood.businesses
+      : [];
+    for (const business of businesses) {
+      paintMinimapPlace(
+        business,
+        "business",
+        business.open === false ? MAP_BUSINESS_CLOSED : MAP_BUSINESS_OPEN,
+        viewPosition,
+        radius,
+      );
+    }
+
+    const activities = Array.isArray(snapshot.lifeActivities) ? snapshot.lifeActivities : [];
+    for (const activity of activities) {
+      if (!entrancePosition(activity)) continue;
+      const kind = String(activity?.kind ?? "").toLowerCase();
+      if (kind === "transit") {
+        paintMinimapPlace(activity, "transit", MINIMAP_PLACE_ICON_PALETTE.transit, viewPosition, radius);
+      } else if (WORK_ACTIVITY_KINDS.has(kind)) {
+        paintMinimapPlace(activity, "work", MINIMAP_PLACE_ICON_PALETTE.work, viewPosition, radius);
+      } else {
+        paintMinimapPlace(
+          activity,
+          "activity",
+          kind === "basketball" ? MAP_BASKETBALL : MAP_ACTIVITY,
+          viewPosition,
+          radius,
+        );
+      }
+    }
+  }
+
+  function rasterPoint(positionValue, playerPosition, radius, { clampToEdge = false } = {}, output = rasterPointScratchA) {
     const position = vectorComponents(positionValue);
-    if (!position) return null;
-    let nx = (position.x - playerPosition.x) / radius;
-    let ny = (position.z - playerPosition.z) / radius;
-    const inside = Math.abs(nx) <= 1 && Math.abs(ny) <= 1;
-    if (!inside && !clampToEdge) return null;
-    nx = clamp(nx, -1, 1);
-    ny = clamp(ny, -1, 1);
-    const half = MAP_INNER * 0.5 - 7;
-    return { x: MAP_INNER * 0.5 + nx * half, y: MAP_INNER * 0.5 + ny * half };
+    if (!position || !playerPosition) return null;
+    return writeProjectedMinimapPoint(
+      position,
+      playerPosition,
+      radius,
+      clampToEdge,
+      MINIMAP_RASTER_SIZE,
+      9 * MINIMAP_RASTER_SCALE,
+      output,
+    );
   }
 
   function paintMinimap(snapshot, player, activeVehicle, mission, elapsed) {
@@ -1680,83 +2455,91 @@ export function createGtaHud({ renderer } = {}) {
       Number.isFinite(bounds.maxX - bounds.minX) ? bounds.maxX - bounds.minX : 600,
       Number.isFinite(bounds.maxZ - bounds.minZ) ? bounds.maxZ - bounds.minZ : 600,
     );
-    const radius = clamp(snapshot.world?.minimapRadius ?? worldSpan * 0.18, 64, 130);
-    const spacing = clamp(snapshot.world?.roadSpacing ?? snapshot.world?.blockSize ?? snapshot.roadSpacing ?? 48, 18, 64);
-    const center = MAP_INNER * 0.5;
-    const pixelsPerMeter = (MAP_INNER * 0.5 - 7) / radius;
-    const firstX = Math.ceil((playerPosition.x - radius) / spacing) * spacing;
-    const firstZ = Math.ceil((playerPosition.z - radius) / spacing) * spacing;
-    for (let index = 0; index < ROAD_POOL_SIZE; ++index) {
-      const worldX = firstX + index * spacing;
-      if (worldX >= bounds.minX && worldX <= bounds.maxX) {
-        const x = center + (worldX - playerPosition.x) * pixelsPerMeter;
-        if (x >= 0 && x < MAP_INNER) {
-          const major = Math.abs(Math.round(worldX / spacing)) % 4 === 0;
-          paintMapLine(x, 2, x, MAP_INNER - 3, major ? 4 : 2, major ? MAP_MAJOR_ROAD : MAP_MINOR_ROAD);
-        }
-      }
-      const worldZ = firstZ + index * spacing;
-      if (worldZ >= bounds.minZ && worldZ <= bounds.maxZ) {
-        const y = center + (worldZ - playerPosition.z) * pixelsPerMeter;
-        if (y >= 0 && y < MAP_INNER) {
-          const major = Math.abs(Math.round(worldZ / spacing)) % 4 === 0;
-          paintMapLine(2, y, MAP_INNER - 3, y, major ? 4 : 2, major ? MAP_MAJOR_ROAD : MAP_MINOR_ROAD);
-        }
-      }
+    const navigationView = snapshot.phone?.mapNavigation ?? snapshot.mapNavigation ?? null;
+    const phoneMapActive = Boolean(snapshot.phone?.open && snapshot.phone?.app === "map" && navigationView);
+    const viewPosition = phoneMapActive
+      ? vectorComponents(navigationView.center) ?? playerPosition
+      : playerPosition;
+    let radius = clamp(snapshot.world?.minimapRadius ?? worldSpan * 0.18, 64, 130);
+    if (phoneMapActive) {
+      const navigationBounds = boundsValues(navigationView.bounds ?? snapshot.world?.mapFeatures?.bounds ?? bounds);
+      const viewportWidth = Math.max(1, finite(navigationView.viewport?.width, PHONE_MAP_VIEWPORT.width));
+      const viewportHeight = Math.max(1, finite(navigationView.viewport?.height, PHONE_MAP_VIEWPORT.height));
+      const navigationWidth = Math.max(1, navigationBounds.maxX - navigationBounds.minX);
+      const navigationHeight = Math.max(1, navigationBounds.maxZ - navigationBounds.minZ);
+      const navigationScale = Math.min(viewportWidth / navigationWidth, viewportHeight / navigationHeight) *
+        Math.max(0.01, finite(navigationView.zoom, 1));
+      radius = clamp((MINIMAP_RASTER_SIZE * 0.5 - 9 * MINIMAP_RASTER_SCALE) / navigationScale, 48, 520);
     }
+    const spacing = clamp(snapshot.world?.roadSpacing ?? snapshot.world?.blockSize ?? snapshot.roadSpacing ?? 48, 18, 64);
+    const pixelsPerMeter = (MINIMAP_RASTER_SIZE * 0.5 - 9 * MINIMAP_RASTER_SCALE) / radius;
+    const mapFeatures = snapshot.world?.mapFeatures;
+    paintAuthoredMapFeatures(mapFeatures, viewPosition, pixelsPerMeter);
 
     const targetPosition = targetForMission(snapshot, mission, vehicles);
     const route = targetPosition
-      ? planGridRoute(playerPosition, targetPosition, spacing, snapshot.world?.bounds)
+      ? planGridRoute(
+          playerPosition,
+          targetPosition,
+          spacing,
+          mapFeatures?.bounds ?? snapshot.world?.bounds,
+          mapFeatures?.roads ?? snapshot.world?.roadCenters,
+        )
       : [];
     for (let index = 0; index + 1 < route.length; ++index) {
-      const start = rasterPoint(route[index], playerPosition, radius, { clampToEdge: true });
-      const end = rasterPoint(route[index + 1], playerPosition, radius, { clampToEdge: true });
-      if (start && end) paintMapLine(start.x, start.y, end.x, end.y, 3, MAP_ROUTE);
+      const start = rasterPoint(route[index], viewPosition, radius, CLAMPED_RASTER_POINT, rasterPointScratchA);
+      const end = rasterPoint(route[index + 1], viewPosition, radius, CLAMPED_RASTER_POINT, rasterPointScratchB);
+      if (start && end) {
+        paintMapLine(start.x, start.y, end.x, end.y, 5 * MINIMAP_RASTER_SCALE, MAP_ROUTE_EDGE);
+        paintMapLine(start.x, start.y, end.x, end.y, 3 * MINIMAP_RASTER_SCALE, MAP_ROUTE);
+      }
     }
 
     const playerVehicleId = String(player?.inVehicle ?? activeVehicle?.id ?? "");
     for (const vehicle of vehicles) {
       if (String(vehicle?.id ?? "") === playerVehicleId) continue;
-      const point = rasterPoint(vehicle, playerPosition, radius);
+      const point = rasterPoint(vehicle, viewPosition, radius);
       if (!point) continue;
-      if (isPolice(vehicle)) paintMapDiamond(point.x, point.y, 3, Math.sin(elapsed * 10) > 0
+      if (isPolice(vehicle)) paintMapDiamond(point.x, point.y, 3 * MINIMAP_RASTER_SCALE, Math.sin(elapsed * 10) > 0
         ? MAP_POLICE_BLUE
         : MAP_POLICE_RED);
-      else paintMapRect(point.x, point.y, 2, 1, MAP_CAR);
+      else paintMapRect(point.x, point.y, 2 * MINIMAP_RASTER_SCALE, MINIMAP_RASTER_SCALE, MAP_CAR);
     }
     for (const person of people) {
-      const point = rasterPoint(person, playerPosition, radius);
+      const point = rasterPoint(person, viewPosition, radius);
       if (!point) continue;
-      if (isPolice(person)) paintMapDiamond(point.x, point.y, 2, MAP_POLICE_PERSON);
-      else paintMapRect(point.x, point.y, 1, 1, MAP_CIVILIAN);
-    }
-    for (const activity of Array.isArray(snapshot.lifeActivities) ? snapshot.lifeActivities : []) {
-      const point = rasterPoint(activity?.hubPosition, playerPosition, radius, { clampToEdge: true });
-      if (point) paintMapDiamond(point.x, point.y, 2, activity?.kind === "basketball" ? MAP_BASKETBALL : MAP_ACTIVITY);
-    }
-    for (const business of Array.isArray(snapshot.neighbourhood?.businesses) ? snapshot.neighbourhood.businesses : []) {
-      const point = rasterPoint(business?.position, playerPosition, radius);
-      if (point) paintMapRect(point.x, point.y, 1, 1, business.open ? MAP_BUSINESS_OPEN : MAP_BUSINESS_CLOSED);
-    }
-    if (targetPosition) {
-      const point = rasterPoint(targetPosition, playerPosition, radius, { clampToEdge: true });
-      if (point) paintMapDiamond(point.x, point.y, 4, MAP_MISSION);
+      if (isPolice(person)) paintMapDiamond(point.x, point.y, 2 * MINIMAP_RASTER_SCALE, MAP_POLICE_PERSON);
+      else paintMapRect(point.x, point.y, MINIMAP_RASTER_SCALE, MINIMAP_RASTER_SCALE, MAP_CIVILIAN);
     }
 
+    const storyTarget = storyObjectiveTarget(snapshot, mission, vehicles);
+    paintMinimapPlaces(snapshot, viewPosition, radius, storyTarget);
+
     const yaw = finite(activeVehicle?.yaw ?? player?.yaw);
-    const forward = { x: center + Math.sin(yaw) * 8, y: center + Math.cos(yaw) * 8 };
-    const tail = { x: center - Math.sin(yaw) * 5, y: center - Math.cos(yaw) * 5 };
-    paintMapLine(tail.x, tail.y, forward.x, forward.y, 2, MAP_PLAYER);
-    paintMapDiamond(forward.x, forward.y, 2, MAP_PLAYER);
-    paintMapRect(center, center, 2, 2, MAP_PLAYER_CENTER);
+    const playerPoint = rasterPoint(playerPosition, viewPosition, radius);
+    if (playerPoint) {
+      const playerX = playerPoint.x;
+      const playerY = playerPoint.y;
+      const forwardX = playerX + Math.sin(yaw) * 8 * MINIMAP_RASTER_SCALE;
+      const forwardY = playerY - Math.cos(yaw) * 8 * MINIMAP_RASTER_SCALE;
+      const tailX = playerX - Math.sin(yaw) * 5 * MINIMAP_RASTER_SCALE;
+      const tailY = playerY + Math.cos(yaw) * 5 * MINIMAP_RASTER_SCALE;
+      paintMapLine(tailX, tailY, forwardX, forwardY, 2 * MINIMAP_RASTER_SCALE, MAP_PLAYER);
+      paintMapDiamond(forwardX, forwardY, 2 * MINIMAP_RASTER_SCALE, MAP_PLAYER);
+      paintMapRect(playerX, playerY, 2 * MINIMAP_RASTER_SCALE, 2 * MINIMAP_RASTER_SCALE, MAP_PLAYER_CENTER);
+    }
     minimapTexture.needsUpdate = true;
-    return { playerPosition, vehicles, people, radius, targetPosition };
+    return { playerPosition, viewPosition, vehicles, people, radius, targetPosition };
   }
 
   function updateMinimap(snapshot, player, activeVehicle, mission, elapsed) {
-    if (elapsed + 1e-6 < nextMinimapRasterAt) return;
+    const navigationRevision = Math.trunc(finite(
+      snapshot.phone?.mapNavigation?.revision ?? snapshot.mapNavigation?.revision,
+      -1,
+    ));
+    if (elapsed + 1e-6 < nextMinimapRasterAt && navigationRevision === lastMinimapNavigationRevision) return;
     nextMinimapRasterAt = elapsed + 0.05;
+    lastMinimapNavigationRevision = navigationRevision;
     paintMinimap(snapshot, player, activeVehicle, mission, elapsed);
   }
 
@@ -1855,6 +2638,35 @@ export function createGtaHud({ renderer } = {}) {
             : activity.phase === "aftermath"
               ? `CONSEQUENCE ${formatInteger(activity.aftermathIndex)}/${formatInteger(activity.aftermathCount)}`
               : "NO PAYOUT  BUILD THE PUBLIC RECORD";
+      } else if (activity?.kind === "mechanic") {
+        missionRewardLabel = activity.status === "completed"
+          ? `WAGE FILED $${formatInteger(activity.totalEarned)}  MECHANICS XP ${formatInteger(activity.totalXp)}`
+          : activity.stage === "inspection"
+            ? `QUALITY ${formatInteger(activity.quality)}%  CLUES ${activity.inspectionClues?.length ?? 0}/3`
+            : activity.stage === "repair"
+              ? `QUALITY ${formatInteger(activity.quality)}%  REPAIR ${Math.round(clamp(activity.repairProgress, 0, 1) * 100)}%`
+              : `QUALITY ${formatInteger(activity.quality)}%  WORK ${Math.round(finite(activity.workMinutes))} MIN`;
+      } else if (activity?.kind === "community") {
+        const taskCount = Math.max(0, Math.trunc(finite(activity.taskCount)));
+        const step = Math.min(taskCount, Math.max(0, Math.trunc(finite(activity.taskIndex))) + 1);
+        missionRewardLabel = activity.stage === "working"
+          ? `STEP ${step}/${taskCount}  WORK ${Math.round(clamp(activity.taskProgress, 0, 1) * 100)}%${activity.safetyRequired ? "  SAFETY CHECK" : ""}`
+          : `STEP ${step}/${taskCount}  BASE WAGE $${formatInteger(activity.estimatedWage)}${activity.safetyRequired ? "  SAFETY FIRST" : ""}`;
+      } else if (activity?.kind === "cafe") {
+        const taskCount = Math.max(1, Math.trunc(finite(activity.taskCount, 1)));
+        const step = Math.min(taskCount, Math.max(0, Math.trunc(finite(activity.taskIndex))) + 1);
+        const quality = Math.round(clamp(activity.quality, 0, 100));
+        const reworkCount = Math.max(0, Math.trunc(finite(activity.reworkCount)));
+        const safetyLabel = activity.safetyRequired ? "  SAFE" : "";
+        const reworkLabel = reworkCount ? `  R${reworkCount}` : "";
+        if (activity.status === "completed") {
+          missionRewardLabel = `WAGE FILED $${formatInteger(activity.estimatedWage)}  QUALITY ${quality}%${reworkLabel}`;
+        } else if (activity.stage === "working") {
+          missionRewardLabel = `STEP ${step}/${taskCount}  WORK ${Math.round(clamp(activity.taskProgress, 0, 1) * 100)}%  Q${quality}${safetyLabel}${reworkLabel}`;
+        } else {
+          const station = textValue(activity.stage, "READY").replace(/^cafe[-_]/i, "").replaceAll("_", " ").toUpperCase();
+          missionRewardLabel = `STEP ${step}/${taskCount}  ${station}  WAGE $${formatInteger(activity.estimatedWage)}  Q${quality}${safetyLabel}${reworkLabel}`;
+        }
       } else if (mission.kind === "story_chapter") {
         missionRewardLabel = textValue(mission.hudDetail, "NO VIOLENCE REQUIRED");
       } else if (activity) {
@@ -1877,7 +2689,7 @@ export function createGtaHud({ renderer } = {}) {
       missionObjective.material.color.setHex(mission.status === "completed" ? 0x72ff9b : 0xf2f4ff);
       missionTitle.material.color.setHex(activity?.kind === "taxi" ? 0x5de8ff :
         activity?.kind === "street_race" ? 0xffd45e : activity?.kind === "basketball" ? 0xffa653 :
-          activity?.kind === "ordinary_story" ? 0xffbd62 : mission.kind === "story_chapter" ? 0xffbd62 :
+          activity?.kind === "mechanic" ? 0x6fe7c8 : activity?.kind === "community" ? 0x6fe7c8 : activity?.kind === "cafe" ? 0xffd17a : activity?.kind === "ordinary_story" ? 0xffbd62 : mission.kind === "story_chapter" ? 0xffbd62 :
             activity ? 0x72ff9b : 0xff55d4);
     }
 
@@ -1981,9 +2793,12 @@ export function createGtaHud({ renderer } = {}) {
         row.visible = Boolean(item);
         if (!item) continue;
         const selected = index === selection;
-        const benefit = item.payForward
-          ? "NO BUFF / SOMEONE EATS LATER"
-          : [item.heal ? `HEALTH +${formatInteger(item.heal)}` : "", item.stamina ? `STAMINA +${formatInteger(item.stamina)}` : "", item.appetite ? `FED +${formatInteger(item.appetite)}` : ""].filter(Boolean).join("  ");
+        const groceryUnits = Math.max(0, Math.trunc(finite(item.inventoryEffects?.groceries ?? item.groceries)));
+        const benefit = groceryUnits > 0
+          ? `TAKE HOME / PANTRY +${formatInteger(groceryUnits)}`
+          : item.payForward
+            ? "NO BUFF / SOMEONE EATS LATER"
+            : [item.heal ? `HEALTH +${formatInteger(item.heal)}` : "", item.stamina ? `STAMINA +${formatInteger(item.stamina)}` : "", item.appetite ? `FED +${formatInteger(item.appetite)}` : ""].filter(Boolean).join("  ");
         row.setText(`${selected ? "→" : " "} ${textValue(item.name, "MEAL")}  $${formatInteger(item.cost)}  ${benefit}`);
         const affordable = finite(player.cash) + 1e-9 >= finite(item.cost);
         row.material.color.setHex(!affordable ? 0x7c8795 : selected ? 0xffd17a : item.payForward ? 0x9dffb9 : 0xe8edf4);
@@ -2002,25 +2817,49 @@ export function createGtaHud({ renderer } = {}) {
       phoneGroup.position.y = phoneLayout.baseY + (1 - openEase) * (PHONE_HEIGHT * phoneLayout.scale + 30);
       phoneLayout.y = phoneGroup.position.y;
       const appProgress = phone.app ? clamp(finite(phone.appProgress, 1), 0, 1) : 1;
-      const canvasTransform = phoneCanvasTransform(Boolean(phone.app), appProgress);
-      phoneCanvas.scale.set(canvasTransform.scaleX, canvasTransform.scaleY, 1);
-      phoneCanvas.position.y = canvasTransform.centerY;
+      const appEase = 1 - Math.pow(1 - appProgress, 3);
+      const appOpen = Boolean(phone.app);
+      const appHeightRatio = appOpen ? Math.max(0.001, appEase) : 1;
+      const appCanvasWidth = (PHONE_WIDTH - 42) * (appOpen ? 0.96 + 0.04 * appEase : 1);
+      const appCanvasHeight = (PHONE_HEIGHT - 102) * appHeightRatio;
+      const appCanvasY = 37 + (PHONE_HEIGHT - 102) - appCanvasHeight * 0.5;
       phoneLayout.interactive = openProgress >= 0.98 && (!phone.app || appProgress >= 0.98);
-      phoneCanvasSurface.draw(phone);
-      phoneCanvas.visible = phoneCanvasSurface.canvasMode;
-      const legacyPhoneText = [phoneBack, phoneTitle, phoneSubtitle, phoneHint];
-      for (const mesh of legacyPhoneText) mesh.visible = !phoneCanvasSurface.canvasMode;
-      phoneClock.visible = phoneSignal.visible = true;
-      for (const row of phoneRows) {
-        row.backing.visible = row.accent.visible = row.title.visible = row.detail.visible = !phoneCanvasSurface.canvasMode;
+      const activeAppSurface = phoneAppSurfaceById.get(phone.app) ?? defaultPhoneAppSurface;
+      const activeAppCanvas = phoneAppCanvasById.get(phone.app) ?? phoneCanvas;
+      for (const canvasMesh of phoneAppCanvases) {
+        canvasMesh.scale.set(appCanvasWidth, appCanvasHeight, 1);
+        canvasMesh.position.y = appCanvasY;
+        canvasMesh.userData.phoneSelected = appOpen && canvasMesh === activeAppCanvas;
+        canvasMesh.visible = appOpen && activeAppSurface.canvasMode && canvasMesh === activeAppCanvas;
       }
+      phoneLauncherCanvas.visible = phoneLauncherSurface.canvasMode;
+      // The cached chrome rises first. Delay the live glyph/card layer until
+      // that opaque screen has covered the launcher, avoiding un-clipped rows
+      // ghosting over icons during the first half of the transition.
+      const appContentProgress = appOpen ? clamp((appProgress - 0.5) * 2, 0, 1) : 1;
+      const appContentEase = 1 - Math.pow(1 - appContentProgress, 3);
+      const mapOpen = appOpen && phone.app === "map";
+      phoneAppContentGroup.visible = (appOpen && appContentProgress > 0) || !phoneLauncherSurface.canvasMode;
+      phoneAppContentGroup.position.y = appOpen ? (1 - appContentEase) * 32 : 0;
+      setGroupOpacity(phoneAppContentGroup, appOpen ? appContentEase : 1);
+      phoneMapGroup.visible = mapOpen && appContentProgress > 0;
+      phoneMapGroup.position.y = (1 - appContentEase) * 32;
+      if (phoneMapGroup.visible) setGroupOpacity(phoneMapGroup, appContentEase);
+      phoneTitle.visible = appOpen || !phoneLauncherSurface.canvasMode;
+      phoneSubtitle.visible = appOpen || !phoneLauncherSurface.canvasMode;
+      phoneHint.visible = appOpen || !phoneLauncherSurface.canvasMode;
+      phoneClock.visible = phoneSignal.visible = true;
       const hover = Math.trunc(finite(phone.hover, -1));
-      phoneHoverGlow.visible = phoneCanvasSurface.canvasMode && !phone.app && hover >= 0 && hover < 4;
+      phoneHoverGlow.visible = phoneLauncherSurface.canvasMode && !appOpen && hover >= 0 && hover < PHONE_LAUNCHER_LAYOUT.count;
       if (phoneHoverGlow.visible) {
-        const column = hover % 2;
-        const row = Math.floor(hover / 2);
-        phoneHoverGlow.position.set(113.5 + column * 165, 169.5 + row * 185, 2.2);
-        const pressedScale = phone.pressed ? 0.88 : 1;
+        const column = hover % PHONE_LAUNCHER_LAYOUT.columns;
+        const row = Math.floor(hover / PHONE_LAUNCHER_LAYOUT.columns);
+        phoneHoverGlow.position.set(
+          PHONE_LAUNCHER_LAYOUT.left + column * PHONE_LAUNCHER_LAYOUT.columnStep + PHONE_LAUNCHER_LAYOUT.iconSize * 0.5,
+          PHONE_LAUNCHER_LAYOUT.top + row * PHONE_LAUNCHER_LAYOUT.rowStep + PHONE_LAUNCHER_LAYOUT.iconSize * 0.5,
+          2.2,
+        );
+        const pressedScale = (PHONE_LAUNCHER_LAYOUT.iconSize + 10) / 116 * (phone.pressed ? 0.88 : 1);
         phoneHoverGlow.scale.set(pressedScale, pressedScale, 1);
         phoneHoverGlow.material.opacity = phone.pressed ? 0.34 : 0.18;
       }
@@ -2031,12 +2870,29 @@ export function createGtaHud({ renderer } = {}) {
       phoneSubtitle.setText(ellipsizeLine(textValue(phone.subtitle, "YOUR CITY IN YOUR POCKET"), 52));
       const items = Array.isArray(phone.items) ? phone.items : [];
       const selection = Math.max(0, Math.trunc(finite(phone.selection)));
-      for (let index = 0; index < phoneRows.length && !phoneCanvasSurface.canvasMode; ++index) {
+      const scroll = appOpen ? Math.max(0, Math.trunc(finite(phone.scroll))) : 0;
+      const recentsOpen = appOpen && phone.app === "recents";
+      const visibleRows = mapOpen ? 0 : appOpen ? (recentsOpen ? 4 : 5) : phoneRows.length;
+      const showGlyphRows = appOpen || !phoneLauncherSurface.canvasMode;
+      phoneCloseAllBacking.visible = phoneCloseAllText.visible = recentsOpen;
+      for (let index = 0; index < phoneRows.length; ++index) {
         const row = phoneRows[index];
-        const item = items[index];
-        row.backing.visible = row.accent.visible = row.title.visible = row.detail.visible = Boolean(item);
+        const itemIndex = scroll + index;
+        const item = showGlyphRows && index < visibleRows ? items[itemIndex] : null;
+        if (recentsOpen) {
+          row.backing.visible = row.accent.visible = false;
+          row.title.position.set(72 + index * 14, 174 + index * 35, 3);
+          row.detail.position.set(72 + index * 14, 197 + index * 35, 3);
+        } else {
+          row.backing.position.y = 180 + index * 79;
+          row.accent.position.y = 180 + index * 79;
+          row.title.position.set(52, 165 + index * 79, 3);
+          row.detail.position.set(52, 191 + index * 79, 3);
+          row.backing.visible = row.accent.visible = Boolean(item);
+        }
+        row.title.visible = row.detail.visible = Boolean(item);
         if (!item) continue;
-        const selected = index === selection;
+        const selected = itemIndex === selection || (appOpen && hover === index);
         row.title.setText(`${selected ? "→" : " "} ${textValue(item.title, "APP")}`);
         row.detail.setText(ellipsizeLine(textValue(item.detail, "NEON CITY"), 55));
         row.title.material.color.setHex(selected ? 0xffd46c : 0xf1f7fa);
@@ -2044,8 +2900,35 @@ export function createGtaHud({ renderer } = {}) {
         row.accent.material.color.setHex(selected ? 0xff2ec4 : 0x405669);
         row.backing.material.color.setHex(selected ? 0x17354a : index % 2 ? 0x101e2a : 0x122535);
       }
-      phoneHint.setText(phone.app
-        ? "CLICK BACK OR HOME       TAB CLOSE"
+      if (mapOpen) {
+        const mapNavigation = phone.mapNavigation ?? {};
+        const navigation = mapNavigation.navigation ?? null;
+        const selectedDestination = mapNavigation.selectedDestination ?? null;
+        const destination = navigation ?? selectedDestination;
+        phoneMapDestination.setText(ellipsizeLine(textValue(destination?.title, "NO DESTINATION"), 28));
+        const destinationPosition = vectorComponents(destination?.target ?? destination?.position);
+        const controlledPosition = vectorComponents(activeVehicle ?? player);
+        const distance = destinationPosition && controlledPosition
+          ? Math.hypot(destinationPosition.x - controlledPosition.x, destinationPosition.z - controlledPosition.z)
+          : null;
+        phoneMapDistance.setText(destination
+          ? `${destination?.source === "user_waypoint" ? "DROPPED PIN" : textValue(destination?.category, "PLACE").toUpperCase()}${distance === null ? "" : `  /  ${formatDistance(distance)}`}`
+          : "TAP A PLACE OR DROP A PIN");
+        phoneMapRouteButton.visible = phoneMapRouteText.visible = Boolean(destination);
+        if (destination) {
+          const routeLabel = navigation ? "CLEAR" : "ROUTE";
+          phoneMapRouteText.setText(routeLabel);
+          phoneMapRouteText.position.x = PHONE_MAP_ROUTE_BOUNDS.left +
+            (PHONE_MAP_ROUTE_BOUNDS.width - phoneMapRouteText.userData.width) * 0.5;
+          phoneMapRouteButton.material.color.setHex(navigation ? 0x7b284e : 0x155c70);
+        }
+      } else {
+        phoneMapRouteButton.visible = phoneMapRouteText.visible = false;
+      }
+      phoneHint.setText(mapOpen
+        ? "DRAG MAP   WHEEL ZOOM   TAP TO ROUTE"
+        : phone.app
+          ? "CLICK BACK OR HOME       TAB CLOSE"
         : "MOVE POINTER AND CLICK       TAB CLOSE");
     }
 
@@ -2185,7 +3068,12 @@ export function createGtaHud({ renderer } = {}) {
     target,
     get texture() { return target.texture; },
     get minimapTexture() { return minimapTexture; },
-    get phoneCanvasRedrawCount() { return phoneCanvasSurface.redrawCount ?? 0; },
+    get minimapPlaceIconStats() {
+      return Object.freeze({ ...minimapPlaceIconStats, placed: iconPlacementCount });
+    },
+    get phoneCanvasRedrawCount() { return phoneLauncherSurface.redrawCount ?? 0; },
+    get phoneAppCacheRedrawCount() { return phoneAppCacheRedrawCount; },
+    get phoneAppCacheTextureCount() { return phoneAppCacheTextures.length; },
     get snapshot() { return lastSnapshot; },
     resize,
     update,
@@ -2196,16 +3084,32 @@ export function createGtaHud({ renderer } = {}) {
       if (localX < 0 || localY < 0 || localX > PHONE_WIDTH || localY > PHONE_HEIGHT) return null;
       if (lastSnapshot.phone?.app && localX >= 21 && localX <= 105 && localY >= 62 && localY <= 110) return { type: "back" };
       if (!lastSnapshot.phone?.app) {
-        for (let index = 0; index < 4; ++index) {
-          const column = index % 2;
-          const row = Math.floor(index / 2);
-          const left = 66 + column * 165;
-          const top = 122 + row * 185;
-          if (localX >= left && localX <= left + 135 && localY >= top && localY <= top + 150 && lastSnapshot.phone?.items?.[index]) {
+        for (let index = 0; index < PHONE_LAUNCHER_LAYOUT.count; ++index) {
+          const column = index % PHONE_LAUNCHER_LAYOUT.columns;
+          const row = Math.floor(index / PHONE_LAUNCHER_LAYOUT.columns);
+          const left = PHONE_LAUNCHER_LAYOUT.left + column * PHONE_LAUNCHER_LAYOUT.columnStep;
+          const top = PHONE_LAUNCHER_LAYOUT.top + row * PHONE_LAUNCHER_LAYOUT.rowStep;
+          if (localX >= left && localX <= left + PHONE_LAUNCHER_LAYOUT.hitWidth &&
+              localY >= top && localY <= top + PHONE_LAUNCHER_LAYOUT.hitHeight && lastSnapshot.phone?.items?.[index]) {
             return { type: "item", index };
           }
         }
       } else {
+        if (lastSnapshot.phone.app === "map") {
+          if (localX >= PHONE_MAP_ROUTE_BOUNDS.left && localX <= PHONE_MAP_ROUTE_BOUNDS.left + PHONE_MAP_ROUTE_BOUNDS.width &&
+              localY >= PHONE_MAP_ROUTE_BOUNDS.top && localY <= PHONE_MAP_ROUTE_BOUNDS.top + PHONE_MAP_ROUTE_BOUNDS.height &&
+              (lastSnapshot.phone.mapNavigation?.navigation || lastSnapshot.phone.mapNavigation?.selectedDestination)) {
+            return { type: "mapRoute" };
+          }
+          if (localX >= PHONE_MAP_VIEWPORT.left && localX <= PHONE_MAP_VIEWPORT.left + PHONE_MAP_VIEWPORT.width &&
+              localY >= PHONE_MAP_VIEWPORT.top && localY <= PHONE_MAP_VIEWPORT.top + PHONE_MAP_VIEWPORT.height) {
+            return {
+              type: "map",
+              x: localX - PHONE_MAP_VIEWPORT.left,
+              y: localY - PHONE_MAP_VIEWPORT.top,
+            };
+          }
+        }
         if (lastSnapshot.phone.app === "recents" && localX >= 126 && localX <= 264 && localY >= 497 && localY <= 534) {
           return { type: "closeAll" };
         }
@@ -2237,7 +3141,8 @@ export function createGtaHud({ renderer } = {}) {
       atlas.texture.dispose();
       backdropTexture.dispose();
       tintablePanelTexture.dispose();
-      phoneCanvasSurface.texture.dispose();
+      phoneLauncherSurface.texture.dispose();
+      for (const surface of phoneAppSurfaces) surface.texture.dispose();
       minimapTexture.dispose();
       const geometries = new Set([unitPlane, starGeometry, circleGeometry, diamondGeometry, arrowGeometry]);
       const materials = new Set([

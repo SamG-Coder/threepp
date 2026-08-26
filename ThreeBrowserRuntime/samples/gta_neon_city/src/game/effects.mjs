@@ -264,6 +264,7 @@ export function createGameEffects({ scene, world } = {}) {
       const value = position?.isVector3 ? position : new THREE.Vector3(...position);
       marker.position.copy(value);
       marker.position.y = Number(world?.terrainHeight?.(value.x, value.z) ?? value.y ?? 0);
+      marker.scale.setScalar(kind === "interior" ? 0.36 : 1);
       ring.material.color.copy(colorMaterial.color);
       beam.material.color.copy(colorMaterial.color);
     }

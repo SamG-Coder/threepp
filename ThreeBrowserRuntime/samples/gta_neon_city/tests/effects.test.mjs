@@ -35,7 +35,10 @@ test("gameplay effects pool tracers, blood, impacts, exhaust, tyre marks, wet sp
     assert.equal(tracer.visible, false);
     assert.ok(spray.some(puff => puff.visible), "wet spray should fade over multiple frames");
 
+    effects.setMissionTarget("interior", new THREE.Vector3(8, 0, -11));
+    assert.equal(effects.marker.scale.x, 0.36, "indoor work stations should use a compact guidance marker");
     effects.setMissionTarget("contact", new THREE.Vector3(9, 0, -12));
+    assert.equal(effects.marker.scale.x, 1, "street guidance must restore the full-size marker");
     assert.equal(effects.marker.visible, true);
     effects.update(0.1, 0.2, { guidanceVisible: false });
     assert.equal(effects.marker.visible, false,

@@ -158,7 +158,7 @@ async function main() {
     assert.equal(state.world.stats.pulseTransitPracticalLights, 2);
     assert.equal(state.world.stats.pulseTransitAllocatedInstances, 39);
     assert.equal(state.world.stats.instancedMeshes, 64);
-    assert.equal(state.world.stats.instances, 5_535);
+    assert.equal(state.world.stats.instances, 5_733);
     assert.equal(state.vehicles.length, 19);
     assert.equal(state.vehicles.filter(vehicle => vehicle.transitService).length, 1);
     assertTransitVehicle(state);

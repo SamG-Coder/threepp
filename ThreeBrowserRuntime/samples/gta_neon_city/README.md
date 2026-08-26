@@ -61,6 +61,9 @@ activity state bit-for-bit. It also completes both moral branches, all 44 lines,
 eight simulated survey stops and six aftermath tasks of The Night Count, while
 a renderer-backed presentation check borrows and releases the four named route
 participants before READY. Both warmups are RAM-only.
+The same micro-simulation covers all six homes, every household fixture action,
+rent, groceries, visitors, relationships and both weekday/weekend schedules for
+each named resident. It restores the live tenancy bit-for-bit before play.
 
 Click the game window once to capture the cursor. `Escape` releases it; click
 again to resume.
@@ -74,7 +77,7 @@ again to resume.
 - left mouse — fire only while right mouse is held
 - `Shift` — sprint on foot
 - `Space` — jump on foot or use the handbrake while driving; also advance dialogue
-- `E` — talk, advance dialogue, inspect evidence, use an activity objective, start a nearby job/story, or open a business
+- `E` — talk, advance dialogue, inspect evidence, use a home fixture or activity objective, start a nearby job/story, or open a business
 - `F` — enter or leave the nearest vehicle; close an open shop menu
 - `W` / `S`, then `E` — choose and buy from an open shop menu; `Q` closes it
 - `R` — reload; `Q` — melee
@@ -85,7 +88,9 @@ again to resume.
 - `K` / `L` — quick-save / quick-load
 - `T` — respawn after being wasted
 - `Escape` — release cursor capture
-- `Tab` — open or close the Neon Life phone; it releases the cursor so apps can be hovered and clicked
+- `Tab` — open or close the seven-app Neon Life phone; it releases the cursor so apps can be hovered and clicked
+- in **Neon Map**, click and release a place to select it and start navigation, or click and release empty map space to drop a waypoint
+- drag the phone map to pan, use the mouse wheel to zoom, and use **Clear Route** to remove the shared phone/HUD route
 
 The Runtime reserves `Shift+Tab` for its feature panel and `F3` for its FPS
 overlay.
@@ -235,20 +240,134 @@ Each keeper is a named, protected person standing at a collision-checked counter
 or threshold—not an anonymous menu floating over an empty shop.
 
 Every business has three authored meals or drinks plus a fourth option to pay a
-meal forward. Food can restore health and stamina and raises a gentle appetite
-state; appetite only changes idle stamina recovery, so ignoring it never damages
-or kills Kai and does not turn the game into a survival chore. Familiarity rises
-at most once per in-game day. Keeper lines respond to the hour, rain, the active
-story and Kai's evidence decision. Paying forward gives no stat or trust reward;
-return on a later day and the keeper tells Kai that the meal reached someone.
+meal forward. Mina's fifth option is a real weekly grocery bag rather than
+instant pantry credit. Food can restore health and stamina and raises a gentle
+appetite state; appetite only changes idle stamina recovery, so ignoring it never
+damages or kills Kai and does not turn the game into a survival chore.
+Familiarity rises at most once per in-game day. Keeper lines respond to the hour,
+rain, the active story and Kai's evidence decision. Paying forward gives no stat
+or trust reward; return on a later day and the keeper tells Kai that the meal
+reached someone.
 
 The routine is independent of the one-at-a-time job system, persists exact menu,
 meal, appetite, familiarity and pay-forward state in quick-saves, and uses one
 fixed preallocated GPU panel. All four menu variants and their consumption and
 acknowledgement states are exercised during the same RAM-only startup warmup.
-Common Ground, Harbour Lantern and Southline Diner also have pooled physical
-frontages—dark room-box glazing, counters, shelves, seating, service fixtures
-and opening-hour practical lights—rather than existing only as map prompts.
+Harbour Lantern and Southline Diner have pooled physical frontages rather than
+existing only as map prompts. Common Ground goes further: its original tower
+now contains a complete continuous-world cafe behind dark non-emissive glass.
+The exterior door opens directly onto real tables, a service counter, working
+kitchen, wash-up, stock room, staff nook and accessible toilet.
+
+## A physical home and resident lives
+
+Kai now rents **Southline Studio 3B**, at **18 Calder Street, Apt 3B**. It is a
+real ground-floor apartment in Westside rather than a menu or loading screen:
+walk through the north-facing entrance around `x=-136.6, z=-15.6` into its
+entry, living room, kitchen, bathroom and bedroom. The compound wall and
+furniture collision leaves every doorway and fixture reachable. A bounded warm
+domestic light remains readable while Kai is inside without spilling across
+the daytime city.
+
+The bed, shower, stove, dining table, sink, desk and sofa support sleeping,
+washing, cooking, eating, cleaning, studying and relaxing. These actions spend
+real game time, consume pantry stock, change energy, hygiene and appetite, add
+bounded fixture wear and award one of six persistent life skills. Groceries,
+prepared meals, rent, deposit, tenure, condition, cleanliness and fixture use
+survive save/load exactly once. `Tab` → **My Home** shows the address, tenancy,
+rent, pantry and condition. The launcher plus all seven apps and Recents are
+immutable in-memory textures permanently bound to prewarmed meshes; live values
+use the fixed glyph pool. Opening, switching, hovering, scrolling and clock
+updates therefore create no phone texture upload or canvas reraster.
+
+Amara Chen, Luis Moreno and Nia Okafor are persistent named residents with
+homes, jobs, relationships, contextual conversation and weekday/weekend
+schedules. They walk continuously through the existing collision-aware
+pedestrian graph between home, work and leisure instead of teleporting at a
+clock boundary. Mid-route positions and destinations are restored by save v14;
+story locks remain authoritative.
+
+## Harbour Skills House milestone
+
+**Harbour Skills House**, at **42 Mariner Walk**, is a seamless physical
+five-zone interior entered directly from the street. Its reception, kitchen,
+workshop, classroom and break room hold nine grounded stations for three lawful
+jobs: community kitchen, repair cafe and local archive shifts. Asha Malik, Tomas
+Varga and Priya Nwosu follow named weekly home, work and leisure schedules;
+active shifts, completed jobs and mechanics, photography, community and
+hospitality skill progress persist through save/load. Renderer and simulation
+warmup for the house remain RAM-only, with no disk cache.
+
+## Common Ground Cafe life-sim milestone
+
+**Common Ground Cafe**, at **16 Common Ground Lane**, is a seamless seven-room
+workplace entered through its real street door without loading or teleporting.
+It has nine physical interaction points, four customer anchors, three staff
+anchors, ordinary dark glazing and one bounded warm practical reallocated from
+the old Open Doors frontage. All 96 new visual pieces reuse resident geometry,
+materials and instance batches; that cafe milestone introduced no new batch.
+Current whole-city totals follow in the market milestone below.
+
+Kai can clock in at a handover point separate from the customer till and work a
+paid six-stage hospitality shift: read allergen and accessibility notes, take
+and repeat orders accurately, prepare food and drinks safely, serve customers,
+sanitise dishes, then reconcile waste, stock, till and the caller-owned
+pay-forward board. Unsafe or careless work consumes time and requires honest
+rework instead of silently rewarding a button press. Wage, needs, world time,
+community trust and Hospitality/Community skill progress are applied exactly
+once through the existing life ledger.
+
+Asha Patel, Dani Okoro and Rafael Chen are protected ordinary residents driven
+by the collision-aware pedestrian routine system. Asha has opening setup,
+service, a real break, close-down, commute, home and a weekly day off; her exact
+mid-route position and destination survive save/load. Nia Okafor's pre-existing
+leisure schedule now takes her to an actual customer table. Chapter Two's Leah
+conversation is staged at a clear cafe table without masking the customer till
+or staff handover. The seven phone apps list the rooms, shift and staff, while
+Neon Map reuses the same prewarmed GPS presentation and route as the HUD map.
+
+## Mina's Market Kitchen life-sim milestone
+
+**Mina's Market Kitchen**, at **84 Market Street**, is now a seamless eight-room
+market behind the retained North Market arcade. Kai walks from the street,
+through the real vestibule and onto its produce and grocery floor without a
+loading screen or teleport. The deli and checkout, prep kitchen, wash-up room,
+cold and dry receiving room, staff nook and accessible toilet are all physical,
+lit and collision-checked. Its 141 authored pieces, 37 collision volumes, dark
+ordinary glazing and three bounded practicals reuse the existing geometry,
+material and instance pools; the whole city remains at 64 batches, 82 static
+lights and 5,858 static instances.
+
+Buying the weekly grocery bag charges the shop transaction once, places a
+prebuilt canvas tote in Kai's hand and saves its exact zero-to-ten-unit contents.
+The tote stays carried on foot, yields cleanly to driving or combat poses, and
+must be taken back to Southline Studio 3B. Unpacking at the stove transfers only
+the pantry capacity available; cooking and eating then use the same household
+ledger. Save/load can interrupt the shop-to-tote-to-unpack-to-cook loop without
+duplicating cash, groceries, prepared meals or life-skill progress.
+
+Kai can also clock in for a paid seven-station stock-and-till shift. The work
+covers the handover, cold chain, honest produce grading, pantry rotation,
+customer packing, checkout reconciliation and safe wash-up. Failed temperature,
+allergen, date, pricing or sanitation checks require explicit rework. Mid-shift,
+the player must choose whether safe surplus is clearly marked down, documented
+for safe donation, or discarded; all three choices preserve their different
+wage, waste and community consequences instead of presenting a free good answer.
+
+Mina Okafor and checkout lead Emi Sato are protected named residents with their
+own homes, weekday/weekend rosters, breaks and collision-aware commutes into the
+correct market rooms. Ambient residents likewise enter through real thresholds,
+occupy reserved seats or work-safe customer slots, dwell, and walk back outside.
+That deterministic interior-occupancy director is shared by Mina's Market,
+Common Ground Cafe, Harbour Skills House and Pulse Garage, so nobody teleports
+through a wall or steals a protected staff position. Exact phase, room, dwell,
+route ownership and reservations survive save/load.
+
+All market meshes, tote pieces, actors, stations, decision branches and routine
+routes are created and exercised by the RAM-only startup prewarm. Opening the
+shop, starting a shift, choosing surplus, entering an interior, carrying the bag
+or unpacking it creates no runtime scene object and compiles no first-use GPU
+pipeline.
 
 ## Day, night and occupied buildings
 
@@ -261,9 +380,9 @@ moonlight, stars, wet-road response and shadow direction.
 Forty-eight street, plaza and promenade practicals, two cool Harbour Court
 floodlights, three warm North Market pendants, three warm garage canopy lights,
 fifteen selected occupied-shop entrance pools, two Southline yard/work pools,
-two bounded Pulse Street Exchange downlights and three usable-business frontage
-lights fade on at dusk and shut completely off during daylight. That is 78
-local practical light pools (80 static lights including ambience and moonlight)
+two bounded Pulse Street Exchange downlights and the fixed usable-business/interior
+practicals fade on at dusk and shut completely off during daylight. That is 80
+local practical light pools (82 static lights including ambience and moonlight)
 before moving vehicle lights.
 Every moving vehicle has visible headlamps, brake and tail lamps plus a bounded,
 shadow-free low-beam road pool. Office occupancy varies by floor and time instead
@@ -278,11 +397,12 @@ The tower glazing uses the same room-box illusion seen in large city games:
 view-dependent projected fake depth places dark glass in front of interior
 walls, lit and unlit offices, blinds, desks, partitions and occasional
 silhouettes. It reads as rooms behind a façade while remaining cheap enough for
-the native city. Forty-seven former 4.1 m generic podiums are now 0.82 m
-rain-darkened PBR plinths, so 60 of 61 buildings expose 240 four-sided occupied
-ground-floor room banks at walking height. That street-level correction reuses
-the same 64 batches and 5,535 static instances. Neon is concentrated on signs
-and street accents.
+the native city. Sixty of 61 buildings retain occupied ground floors, with 224
+projected room banks at walking height and 44 former 4.1 m generic podiums now
+serving as 0.82 m rain-darkened PBR plinths. The street-level correction and
+seamless physical interiors reuse the same 64 batches within 5,858 static
+instances.
+Neon is concentrated on signs and street accents.
 
 Concrete/stone façade families combine their procedural normal and roughness
 maps with bundled weathered coastal-concrete and salt-aged panel-stone albedos.
@@ -305,10 +425,11 @@ lighting. As rain builds, asphalt, curbs and pavement lose roughness, puddle
 opacity rises, and real headlights stretch across the wet surface.
 
 The deterministic map has five districts, 61 authored buildings, 15 road
-corridors, 30 traffic routes, exactly 5,535 batched static instances, 44
-recessed storefronts, 1,938 varied window banks, puddles and 59 distant light
-points across the skyline. Street furniture, buildings, planters and trees
-participate in the same collision and camera-obstruction system.
+corridors, 30 traffic routes, exactly 5,858 batched static instances, 44
+recessed storefronts, 1,912 varied window banks, 1,270 street-detail instances,
+puddles and 59 distant light points across the skyline. Street furniture,
+buildings, planters and trees participate in the same collision and
+camera-obstruction system.
 
 Street level now also includes café tables and chairs, bins, parcel boxes,
 parking meters and a complete waterfront court with painted markings, glass
@@ -346,14 +467,15 @@ destinations from the actual game clock. Rain shortens outdoor conversations,
 quickens walking pace and raises prewarmed umbrellas. Backpacks, phones and
 morning coffee add grounded individual variation. Together with Juno, Rin, the
 four Open Doors keepers and the seven-officer response pool, the native
-simulation also includes Leah Moreno, Dara Ibarra and recall customer Mara
-Velez, and maintains 46 authored people. Two additional hidden civilian reserves
+simulation also includes Leah Moreno, Dara Ibarra, recall customer Mara
+Velez, Amara Chen, Luis Moreno, Nia Okafor and a prewarmed garage customer,
+and maintains 50 authored people. Two additional hidden civilian reserves
 are rendered during startup but do not join the population until claimed; this
 keeps development or gameplay spawns from constructing a new actor hierarchy
 mid-frame. The Night Count borrows four of the existing 30 ambient residents
 for Malik, Evelyn, Desmond and Nadiya, then restores their exact identities,
 positions, routes, accessories and weather behaviour; the public count remains
-46 throughout the story.
+stable throughout the story.
 Nearby pedestrians keep their full articulated rigs; distant pedestrians use
 a two-mesh full-body silhouette LOD that retains legs and the umbrella canopy
 in rain. Both representations share the same grounded 0.015–1.902 m body
@@ -388,13 +510,23 @@ holds the clearest legal branch to prevent popping. Fully boxed-in spaces still
 use the nearest valid clip, mouse orbit remains authoritative and ADS bypasses
 the fallback entirely.
 
-The district minimap uses one fixed 196² in-memory texture backed by a
-preallocated byte buffer. Roads, the cyan navigation route, traffic,
-pedestrians, police, peaceful-activity hubs, four clock-aware business markers
-and mission/player markers update at 20 Hz while the world and camera remain
-uncapped. Its pixel storage is reused; no map mesh or bitmap is created during
-play. HUD text presentation refreshes at 30 Hz and entity/minimap data at
-20 Hz; input, simulation, camera motion and 3D rendering remain full-rate.
+The professional north-up GPS uses one fixed 392² in-memory raster, displayed
+in the 196² HUD footprint and backed by a preallocated byte buffer. Its road
+centrelines and widths, building footprints, parks, plaza, coast and desert
+features come from the same authored world coordinates as the playable city,
+so the drawing and route no longer drift half a block away from the roads.
+Bordered category icons identify homes, work, shops, transit, activities and
+story destinations without turning every off-screen prompt into clutter.
+
+The **Neon Map** phone app presents that same retained GPS map and navigation
+state rather than maintaining a second route system. Selecting a known place or
+dropping a blank-map waypoint updates the cyan route on both phone and HUD;
+dragging pans and the wheel zooms the phone view. Roads, route, traffic,
+pedestrians, police, place markers and the player update at 20 Hz while the
+world and camera remain uncapped. Pixel storage is reused; no map mesh or bitmap
+is created during play. HUD text presentation refreshes at 30 Hz and entity/GPS
+data at 20 Hz; input, simulation, camera motion and 3D rendering remain
+full-rate.
 One-shot keyboard and mouse edges are retained for up to 240 ms or twelve
 simulation ticks and are consumed exactly once. Render-only frames no longer
 erase `E`, `F`, story choices or mouse-look deltas before the 60 Hz simulation
@@ -416,21 +548,26 @@ its softer 38 m cones are capped at 330 intensity each in clear weather, with
 only an eight-percent wet-road boost, so nearby PBR surfaces retain detail.
 This avoids invalidating Three.js render-object caches when the player first
 aims. Two hidden pedestrian reserves are likewise included in
-the reveal-all pass. In the current fresh native verification, all 37 discovered
+the reveal-all pass. In the current fresh native verification, all 40 discovered
 world/HUD textures were source-ready and explicitly uploaded before READY. The
-latest repeated performance pass reached READY after a 9.23-second pipeline
-phase; its first ADS control round trip was 23.7 ms, dry baseline peaked at
-13.3 ms, the aim window at 12.6 ms and the combined
-night/rain/police/blood/ragdoll window at 25.9 ms, with zero
+latest repeated performance pass reached READY after a 10.44-second pipeline
+phase; its first ADS control round trip was 21.1 ms, dry baseline peaked at
+7.8 ms, the aim window at 13.7 ms and the combined
+night/rain/police/blood/ragdoll window at 23.1 ms, with zero
 frames over 50 ms. These are named-pipe evidence rather than a promised
 hardware-independent frame rate.
-Quick-saves are ordinary player-requested save data. Save schema v7 preserves
+Quick-saves are ordinary player-requested save data. Save schema v14 preserves
 Borrowed Time's exact phase, dialogue line, clue set, evidence method, decision,
 moral ledger and aftermath unlock alongside The Night Count's exact route line,
 choice, consequence ledger and borrowed actor identities, plus businesses,
-activities, named taxi dialogue and any active ambient roadside response. Saves
-from versions 1–6 remain accepted; missing later-story state is initialized
-safely from its locked state. Synthesized audio
+activities, named taxi dialogue, life skills, household state, named-resident
+travel, Harbour Skills House and Common Ground work ledgers, cafe staff routes,
+Mina's complete stock-and-till ledger, carried groceries, market staff routes,
+interior occupants, the selected GPS destination or waypoint, and any active
+ambient roadside response. Saves from versions 1–13 remain accepted; missing
+later-story, residential, community-work, cafe-work, market-work,
+interior-occupancy and map-navigation state is initialized safely from its
+locked state. Synthesized audio
 may be cached under `%LOCALAPPDATA%\ThreeBrowser\GtaNeonCity\audio-v2`; that
 storage is unrelated to graphics pipelines.
 
@@ -466,15 +603,25 @@ materials, the Southline evidence set, single-surface presentation, RAM-only
 renderer and simulation warmup, fixed-capacity HUD glyph buffers, first- and
 third-person cameras, aim-only shooting, player animation, vehicle dynamics,
 occupied ordinary traffic, named passenger staging, autonomous roadside
-response, grounded full/distant pedestrian LOD, local pedestrian navigation, clock-driven routines, weather props,
-collision, wanted response, HUD routing and save-v7 migration contracts. Pulse
+response, grounded full/distant pedestrian LOD, local pedestrian navigation,
+continuous named-resident schedules, the furnished apartment, household
+fixtures, rent, pantry, life skills, weather props, collision, wanted response,
+HUD routing, shared phone-map navigation and save-v14 migration contracts.
+Common Ground coverage includes
+its full physical interior, staff schedules, safety/rework shift ledger and
+allocation-free RAM prewarm. Mina's Market coverage includes its eight-room
+world contract, grocery-tote transfer and overflow-safe unpacking, all seven
+work stations, three surplus decisions, staff schedules, exact ledger restore
+and allocation-free RAM prewarm. Shared occupancy coverage proves residents
+walk through the market, cafe, hub and garage thresholds, reserve unique slots
+and restore mid-visit without adding an actor or scene node during play. Pulse
 Street Exchange coverage also verifies the pooled frontage, lawful minibus,
 commuter rain behavior, accessibility dwells, exact partial-shift restoration
 and RAM-only route warmup. Asset-readiness coverage proves that all seven
 authored bitmaps are valid, decoded before world creation, and that gameplay
 modules own no late bitmap loader; renderer tests prove generated PBR maps,
 virtual rooms, the font, black backing and minimap are explicitly uploaded.
-The current deterministic suite passes **197/197**
+The current renderer-free deterministic suite passes **314/314**
 tests. The command above is
 the source of truth after future integration changes.
 
@@ -537,14 +684,40 @@ node C:\ThreeBrowser\ThreeBrowserRuntime\samples\gta_neon_city\tests\native-nigh
 
 node C:\ThreeBrowser\ThreeBrowserRuntime\samples\gta_neon_city\tests\native-night-route-qa.mjs `
   '\\.\pipe\ThreeBrowserGtaNeonCityTest' C:\ThreeBrowser\artifacts\gta-neon-night-count
+
+node C:\ThreeBrowser\ThreeBrowserRuntime\samples\gta_neon_city\tests\native-residential-life-qa.mjs `
+  '\\.\pipe\ThreeBrowserGtaNeonCityTest' C:\ThreeBrowser\artifacts\gta-neon-southline-studio.png
+
+node C:\ThreeBrowser\ThreeBrowserRuntime\samples\gta_neon_city\tests\native-community-hub-qa.mjs `
+  '\\.\pipe\ThreeBrowserGtaNeonCityTest' C:\ThreeBrowser\artifacts\gta-neon-harbour-skills-house.png
+
+node C:\ThreeBrowser\ThreeBrowserRuntime\samples\gta_neon_city\tests\native-cafe-life-qa.mjs `
+  '\\.\pipe\ThreeBrowserGtaNeonCityTest' C:\ThreeBrowser\artifacts\gta-neon-common-ground-cafe.png
+
+node C:\ThreeBrowser\ThreeBrowserRuntime\samples\gta_neon_city\tests\native-market-life-qa.mjs `
+  '\\.\pipe\ThreeBrowserGtaNeonCityTest' C:\ThreeBrowser\artifacts\gta-neon-mina-market.png
+
+node C:\ThreeBrowser\ThreeBrowserRuntime\samples\gta_neon_city\tests\native-map-places-qa.mjs `
+  '\\.\pipe\ThreeBrowserGtaNeonCityTest' C:\ThreeBrowser\artifacts\gta-neon-place-icons-map.png
 ```
+
+The market harness is the focused native invocation for walking through the
+arcade entrance, buying and carrying groceries, save/restore, home unpacking,
+the market shift, staff schedules, interior occupancy and a PNG capture. It
+requires a running native game and is separate from the 300 renderer-free tests
+above; the command documents how to collect that evidence rather than claiming
+a native pass here.
 
 The control protocol supports `ping`, `snapshot`, `action`, `key`, `aim`,
 `look`, `render`, `advance`, `teleport`, `vehicle`, `enterVehicle`,
 `exitVehicle`, `startMission`, `startTaxi`, `startRace`, `startLife`,
-`startBasketball`, `startNightRoute`, `startChapterTwo`, `startCurrentChapter`,
+`startBasketball`, `startNightRoute`, `startCafeShift`, `startChapterTwo`, `startCurrentChapter`,
 `story`, `chapterTwo`, `nightRoute`, `activity`, `cancelActivity`, `setWanted`, `roadside`,
 `neighbourhood`, `openBusiness`, `shopSelect`, `shopBuy`, `closeBusiness`,
+`home`, `residential`, `residentSchedule`, `lifeProfile`, `garageShift`,
+`communityHub`, `communityShift`, `communityStaffSchedule`,
+`commonGroundCafe`, `cafeShift`, `cafeStaffSchedule`, `minaMarket`,
+`marketStaffSchedule`, `marketShift`, `interiorOccupancy`,
 `clearWanted`, `setWeather`,
 `setTime`, `resetFrameTiming`, `fire`, `shootAt`, `face`, `damage`, `spawnPed`, `save`, `restore`,
 `writeSave`, `loadSave`, `screenshot` and `dispose`.
@@ -566,21 +739,29 @@ does not need Node or .NET installed.
 
 ## Structure
 
-- `src/world/city.mjs`, `surface-textures.mjs` — districts, projected interiors, PBR surfaces, routes and collision
+- `src/world/city.mjs`, `surface-textures.mjs` — districts, authoritative GPS features, projected interiors, PBR surfaces, routes and collision
 - `assets/textures/*.png` — seven bundled authored albedos, including salt-aged panel stone and Southline's corrugated-steel cladding, with procedural PBR fallbacks
 - `src/actors/vehicles.mjs` — driving, traffic, pursuit and practical vehicle lighting
 - `src/actors/player.mjs`, `first-person-weapon.mjs` — third-person movement and first-person aim viewmodel
-- `src/actors/population.mjs` — story cast, civilians, witnesses and tactical police
+- `src/actors/population.mjs` — story cast, civilians, continuous named-resident routes, witnesses and tactical police
 - `src/game/story.mjs`, `chapter-two.mjs`, `night-route.mjs`, `cinematics.mjs` — two campaign chapters, the ordinary-life Night Count, persistent moral branches and camera direction
 - `src/game/life-activities.mjs`, `activities.mjs`, `basketball.mjs` — peaceful work, Pulse Line, taxi, time-trial, Harbour Court and four mutually exclusive story aftermaths
-- `src/game/neighbourhood-routine.mjs` — clock-driven businesses, appetite, familiarity, meals and pay-forward continuity
+- `src/game/neighbourhood-routine.mjs` — clock-driven businesses, appetite, familiarity, meals, physical grocery purchases and pay-forward continuity
+- `src/game/life-profile.mjs`, `garage-shift.mjs`, `residential-life.mjs`, `community-hub.mjs`, `cafe-shift.mjs`, `market-shift.mjs` — persistent needs and skills, complete physical garage, community-house, cafe and market shifts, homes, fixtures, rent, relationships and resident schedules
+- `src/game/interior-occupancy.mjs` — deterministic threshold travel, slot reservations, interior dwell and exact mid-visit restore for ambient residents
+- `src/game/map-navigation.mjs` — shared phone/HUD destination, waypoint, pan, zoom and save state
 - `src/game/roadside-response.mjs` — deterministic ambient reports, dispatch, repair, clearing and save continuity
 - `src/game/environment.mjs` — solar cycle, rain, sky, clock, lighting and atmosphere
 - `src/core/pipeline-warmup.mjs` — startup-only memory pipeline preparation
-- `src/ui/hud.mjs` — native-rendered HUD, dialogue and district minimap
+- `src/ui/hud.mjs` — native-rendered HUD, dialogue, retained phone and professional shared GPS
 - `src/core/control-pipe.mjs` — native development and play-test interface
 - `tests/chapter-two.test.mjs`, `native-borrowed-time-qa.mjs` — deterministic Borrowed Time coverage and native investigation/decision evidence
 - `tests/night-route.test.mjs`, `native-night-route-qa.mjs` — both Night Count ledgers plus native unlock, route, cutscene, save/load and stable-identity evidence
 - `tests/native-transit-qa.mjs` — native morning/rain/night exchange captures plus a complete five-stop no-stall shuttle proof
 - `tests/neighbourhood-routine.test.mjs`, `native-business-qa.mjs` — deterministic routine coverage and native Open Doors evidence
+- `tests/residential-life.test.mjs`, `native-residential-life-qa.mjs` — household determinism plus native entry, fixture, phone, schedule and save evidence
+- `tests/community-hub.test.mjs`, `native-community-hub-qa.mjs` — deterministic ethical work ledgers plus native doorway, room, station, staff, phone, wage, skill and save evidence
+- `tests/cafe-shift.test.mjs`, `native-cafe-life-qa.mjs` — deterministic hospitality, safety, schedule and exact-ledger coverage plus native doorway, room, phone, staff-route, shift, save and performance evidence
+- `tests/market-shift.test.mjs`, `household-loop.test.mjs`, `interior-occupancy.test.mjs`, `native-market-life-qa.mjs` — deterministic market ethics, carried-grocery continuity and shared walk-in occupancy coverage plus the focused native market invocation
+- `tests/map-navigation.test.mjs`, `native-map-places-qa.mjs` — north-up route, place selection, pan/zoom, save migration, aligned map features and native GPS evidence
 - `tests/roadside-response.test.mjs`, `native-night-shift-roadside-qa.mjs` — deterministic and native taxi/roadside lifecycle evidence

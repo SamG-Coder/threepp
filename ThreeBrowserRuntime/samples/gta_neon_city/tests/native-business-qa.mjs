@@ -155,10 +155,10 @@ async function main() {
     assert.equal(state.world.stats.northMarketPropInstances, 60);
     assert.equal(state.world.stats.businessLocations, 4);
     assert.equal(state.world.stats.businessFrontages, 3);
-    assert.equal(state.world.stats.businessFrontagePropInstances, 27);
+    assert.equal(state.world.stats.businessFrontagePropInstances, 18);
     assert.equal(state.world.stats.businessPracticalLights, 3);
     assert.equal(state.world.stats.instancedMeshes, 64);
-    assert.equal(state.world.stats.instances, 5_535);
+    assert.equal(state.world.stats.instances, 5_733);
     assert.equal(state.world.stats.staticLights, 80);
     assert.equal(state.neighbourhood.businesses.length, 4);
     assert.equal(state.neighbourhood.businessCount, 4);

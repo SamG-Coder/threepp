@@ -532,3 +532,63 @@ test("precreated story phone blends a one-handed listening pose and yields safel
     player.dispose();
   }
 });
+
+test("precreated grocery tote carries household supplies without runtime scene allocation", () => {
+  const { player, scene, held } = harness();
+  try {
+    const rig = player.root.children[0].userData.rig;
+    const tote = rig.groceryTote;
+    const initialSceneNodes = (() => { let count = 0; scene.traverse(() => count += 1); return count; })();
+    const toteChildCount = tote.children.length;
+
+    assert.equal(tote.name, "precreated household grocery tote");
+    assert.equal(tote.parent, rig.leftArm.hand);
+    assert.equal(tote.visible, false);
+    assert.equal(tote.userData.precreatedCarryProp, true);
+    for (const name of [
+      "dark reusable grocery bag",
+      "street grocery tote handle",
+      "body grocery tote handle",
+      "stitched grocery tote badge",
+      "paper pantry carton",
+      "fresh market greens",
+    ]) assert.ok(tote.getObjectByName(name), `missing precreated grocery detail: ${name}`);
+
+    assert.equal(player.setCarriedGroceries(5), 5);
+    for (let frame = 0; frame < 45; ++frame) player.update(1 / 60, { elapsed: frame / 60 });
+    const carrying = player.snapshot().groceryCarry;
+    assert.deepEqual({ units: carrying.units, capacity: carrying.capacity, visible: carrying.visible },
+      { units: 5, capacity: 10, visible: true });
+    assert.ok(carrying.blend > 0.99);
+    assert.equal(carrying.precreated, true);
+    assert.equal(carrying.geometryCount, 6);
+    assert.equal(carrying.runtimeAllocations, 0);
+
+    held.add("aim");
+    player.update(1 / 60, { elapsed: 1, aimDirection: new THREE.Vector3(0, 0, -1) });
+    assert.equal(tote.visible, false, "combat must clear the bag silhouette on the first frame");
+    assert.equal(player.snapshot().groceryCarry.units, 5, "stowing the visible tote must not discard its contents");
+    held.delete("aim");
+    for (let frame = 0; frame < 45; ++frame) player.update(1 / 60, { elapsed: 2 + frame / 60 });
+    assert.equal(tote.visible, true);
+
+    const vehicle = { id: "test-car", root: new THREE.Group() };
+    assert.equal(player.enterVehicle(vehicle), true);
+    assert.equal(tote.visible, false);
+    assert.equal(player.exitVehicle(new THREE.Vector3(2, 0, 3)), true);
+    player.update(1 / 60, { elapsed: 3 });
+    assert.equal(tote.visible, true);
+
+    player.restore({ ...player.snapshot(), groceryCarry: { units: 8 } });
+    assert.equal(player.snapshot().groceryCarry.units, 8);
+    assert.equal(player.setCarriedGroceries(99), 10);
+    assert.equal(player.setCarriedGroceries(-5), 0);
+    assert.equal(tote.visible, false);
+    assert.equal(tote.children.length, toteChildCount);
+    let finalSceneNodes = 0;
+    scene.traverse(() => finalSceneNodes += 1);
+    assert.equal(finalSceneNodes, initialSceneNodes, "carry toggles must not allocate or attach scene nodes");
+  } finally {
+    player.dispose();
+  }
+});

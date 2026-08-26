@@ -140,6 +140,13 @@ function freezePosition(position) {
   return Object.freeze(position.map(Number));
 }
 
+function deepFreeze(value, seen = new Set()) {
+  if (!value || typeof value !== "object" || seen.has(value)) return value;
+  seen.add(value);
+  for (const child of Object.values(value)) deepFreeze(child, seen);
+  return Object.freeze(value);
+}
+
 function spawn(id, position, heading = 0, extras = {}) {
   return Object.freeze({
     id,
@@ -273,9 +280,9 @@ export function buildCity(scene, {
       depthTest: true,
       blending: THREE.AdditiveBlending,
     }), "Warm practical streetlight pavement glow"),
-    shelterGlass: ownMaterial(standardMaterial(0x64b9ce, 0.12, 0.18, {
+    shelterGlass: ownMaterial(standardMaterial(0x233842, 0.16, 0.16, {
       transparent: true,
-      opacity: 0.22,
+      opacity: 0.28,
       depthWrite: false,
       side: THREE.DoubleSide,
     }), "Rain-streaked bus shelter glass"),
@@ -545,40 +552,7 @@ export function buildCity(scene, {
     recallDesk: chapterTwoCinematicAnchors.recall_board,
     fleetRecords: freezePosition([-181.50, SIDEWALK_TOP + 1.075, -135.70]),
   });
-  // Story actors and interaction markers deliberately do not share a point.
-  // This keeps Kai, Leah and Dara readable as separate people even when a
-  // native QA/control client teleports directly onto the interaction marker.
-  const chapterTwoConversationAnchors = Object.freeze({
-    leah: freezePosition([-41, SIDEWALK_TOP, -17]),
-    manifest: chapterTwoInteractAnchors.manifestDesk,
-  });
   const chapterTwoKeeperWitnessAnchor = freezePosition([-183.10, SIDEWALK_TOP, -138.2]);
-  const chapterTwoLeahAnchor = freezePosition([-44, SIDEWALK_TOP, -16.5]);
-  const chapterTwo = Object.freeze({
-    id: "borrowed-time",
-    title: "Borrowed Time",
-    depotId: "southline-parts-depot",
-    focus: freezePosition([-175.70, SIDEWALK_TOP, -144]),
-    roadApproach: freezePosition([-165.35, ROAD_TOP, -144]),
-    bounds: Object.freeze({ minX: -191.1, maxX: -175.1, minZ: -159.3, maxZ: -128.7 }),
-    interactAnchors: chapterTwoInteractAnchors,
-    evidenceAnchors: chapterTwoInteractAnchors,
-    manifestDesk: chapterTwoInteractAnchors.manifestDesk,
-    suspectPallet: chapterTwoInteractAnchors.suspectPallet,
-    loadingSeal: chapterTwoInteractAnchors.loadingSeal,
-    customerVehicleBay: chapterTwoInteractAnchors.customerVehicleBay,
-    keeperAnchor: chapterTwoKeeperWitnessAnchor,
-    witnessAnchor: chapterTwoKeeperWitnessAnchor,
-    keeperWitnessAnchor: chapterTwoKeeperWitnessAnchor,
-    garageClues: chapterTwoGarageClues,
-    cinematicAnchors: chapterTwoCinematicAnchors,
-    aftermathAnchors: chapterTwoAftermathAnchors,
-    leahAnchor: chapterTwoLeahAnchor,
-    conversationAnchors: chapterTwoConversationAnchors,
-    leahInteractionAnchor: chapterTwoConversationAnchors.leah,
-    manifestInteractionAnchor: chapterTwoConversationAnchors.manifest,
-    practicalPositions: chapterTwoPracticalPositions,
-  });
   const chapterTwoBayPaintTransforms = Object.freeze([
     transform([-181.75, SIDEWALK_TOP + 0.022, -152], [0.13, 0.026, 8.2]),
     transform([-176.25, SIDEWALK_TOP + 0.022, -152], [0.13, 0.026, 8.2]),
@@ -928,26 +902,66 @@ export function buildCity(scene, {
   let occupiedGroundFloorCount = 0;
   let groundFloorInteriorBankCount = 0;
   let streetLevelPlinthCount = 0;
+  let residentialInteriorHost = null;
+  let communityHubHost = null;
+  let commonGroundCafeHost = null;
+  let minaMarketHost = null;
 
-  function addBuilding(x, z, width, depth, height, style, id) {
+  function addBuilding(x, z, width, depth, height, style, id, options = {}) {
     const district = districtAt(x, z);
+    const hasPhysicalResidentialInterior = options.residentialInteriorHost === true;
+    const hasPhysicalCommunityHub = options.communityHubHost === true;
+    const hasPhysicalCommonGroundCafe = options.commonGroundCafeHost === true;
+    const hasPhysicalMinaMarket = options.minaMarketHost === true;
+    const hasPhysicalGroundFloor = hasPhysicalResidentialInterior || hasPhysicalCommunityHub ||
+      hasPhysicalCommonGroundCafe || hasPhysicalMinaMarket;
     const form = height >= 66 ? "tower" : height >= 34 ? "mid-rise" : height >= 20 ? "apartment" : "low-rise";
     const crownHeight = height >= 58 ? 3.8 + detailRandom() * 4.2 : 0;
     const totalHeight = height + crownHeight;
     const y = SIDEWALK_TOP + height * 0.5;
-    buildingTransforms[style].push(transform([x, y, z], [width, height, depth]));
+    if (hasPhysicalGroundFloor) {
+      // Leave a true 3.4 m ground-floor volume beneath the pooled upper
+      // building shell. The show-flat below supplies its own exterior walls,
+      // openings and fixtures through the same resident instancing batches.
+      const clearHeight = 3.42;
+      const upperHeight = Math.max(1.0, height - clearHeight);
+      buildingTransforms[style].push(transform(
+        [x, SIDEWALK_TOP + clearHeight + upperHeight * 0.5, z],
+        [width, upperHeight, depth],
+      ));
+      const physicalHost = {
+        id,
+        x,
+        z,
+        width,
+        depth,
+        height,
+        totalHeight,
+        style,
+        clearHeight,
+        districtId: district.id,
+      };
+      if (hasPhysicalResidentialInterior) residentialInteriorHost = physicalHost;
+      if (hasPhysicalCommunityHub) communityHubHost = physicalHost;
+      if (hasPhysicalCommonGroundCafe) commonGroundCafeHost = physicalHost;
+      if (hasPhysicalMinaMarket) minaMarketHost = physicalHost;
+    } else {
+      buildingTransforms[style].push(transform([x, y, z], [width, height, depth]));
+    }
     if (crownHeight > 0) {
       buildingTransforms[style].push(transform(
         [x, SIDEWALK_TOP + height + crownHeight * 0.5, z],
         [width * 0.72, crownHeight, depth * 0.72],
       ));
     }
-    addBlocker(id, "building", x, z, width, depth, totalHeight);
+    if (!hasPhysicalGroundFloor) addBlocker(id, "building", x, z, width, depth, totalHeight);
     const windowStyle = district.kind === "residential" ? 1 :
       district.kind === "waterfront" && detailRandom() < 0.48 ? 0 : Math.floor(random() * material.windows.length);
     const floorCount = Math.max(2, Math.floor((height - 4) / 4));
     let windowRows = 0;
     let groundFloorOccupied = false;
+    let physicalGroundFloorBucket = -1;
+    let physicalGroundFloorTransformStart = -1;
     const windowHeight = district.kind === "residential" ? 1.18 : form === "tower" ? 1.62 : 1.42;
     const glazingBase = district.kind === "residential" ? 0.42 : form === "tower" ? 0.62 : 0.52;
     const skippedFloorChance = form === "tower" ? 0.08 : district.kind === "residential" ? 0.17 : 0.12;
@@ -965,6 +979,8 @@ export function buildCity(scene, {
       const faceDepth = depth * (glazingBase + facadeRandom() * 0.10);
       const xOffset = (facadeRandom() - 0.5) * width * 0.12;
       const zOffset = (facadeRandom() - 0.5) * depth * 0.12;
+      const firstOccupiedRow = !groundFloorOccupied;
+      const bucketStart = windowTransforms[bucket].length;
       windowTransforms[bucket].push(transform([x + xOffset, windowY, z + depth * 0.5 + 0.014], [faceWidth, windowHeight, 1]));
       windowTransforms[bucket].push(transform([x - xOffset, windowY, z - depth * 0.5 - 0.014], [faceWidth, windowHeight, 1], [0, Math.PI, 0]));
       windowTransforms[bucket].push(transform([x + width * 0.5 + 0.014, windowY, z + zOffset], [faceDepth, windowHeight, 1], [0, Math.PI * 0.5, 0]));
@@ -975,13 +991,29 @@ export function buildCity(scene, {
         occupiedGroundFloorCount += 1;
         groundFloorInteriorBankCount += 4;
       }
+      if (hasPhysicalGroundFloor && firstOccupiedRow) {
+        physicalGroundFloorBucket = bucket;
+        physicalGroundFloorTransformStart = bucketStart;
+      }
+    }
+    if (hasPhysicalGroundFloor) {
+      // Consume the identical seeded facade stream as the procedural version,
+      // then replace only its first projected room bank with the real rooms.
+      // This keeps every later building and street asset bit-for-bit stable.
+      if (physicalGroundFloorBucket >= 0) {
+        windowTransforms[physicalGroundFloorBucket].splice(physicalGroundFloorTransformStart, 4);
+        groundFloorInteriorBankCount -= 4;
+      } else {
+        groundFloorOccupied = true;
+        occupiedGroundFloorCount += 1;
+      }
     }
 
     // The old 4.1 m podium hid the occupied room-box projection at walking
     // and driving height. Keep its pooled concrete geometry as a shallow,
     // rain-stained plinth so the facade still has a grounded PBR transition
     // without adding a material, texture, instance, or render batch.
-    if (height >= 26) {
+    if (height >= 26 && !hasPhysicalGroundFloor) {
       podiumTransforms.push(transform(
         [x, SIDEWALK_TOP + STREET_LEVEL_PLINTH_HEIGHT * 0.5, z],
         [width + 0.28, STREET_LEVEL_PLINTH_HEIGHT, depth + 0.28],
@@ -1031,7 +1063,7 @@ export function buildCity(scene, {
     }
     const hasStorefront = district.kind === "commercial" || district.kind === "downtown" ||
       district.kind === "waterfront" || district.kind === "mixed-use";
-    if (hasStorefront) {
+    if (hasStorefront && !hasPhysicalCommunityHub && !hasPhysicalCommonGroundCafe && !hasPhysicalMinaMarket) {
       const shopBucket = district.kind === "downtown" ? 2 : detailRandom() < 0.5 ? 0 : 1;
       const frontage = width * 0.74;
       const doorWidth = Math.min(1.45, frontage * 0.16);
@@ -1087,11 +1119,33 @@ export function buildCity(scene, {
       // dynamic light to all 31 façades or making the glass itself neon.
       if (storefrontCount % 3 === 0) {
         storefrontLightPositions.push(Object.freeze({
+          buildingId: id,
           position: freezePosition([
             x,
             SIDEWALK_TOP + 2.72,
             storefrontZ + storefrontSide * 1.18,
           ]),
+          outward: storefrontSide,
+          color: [0xffd0a0, 0xffe0b8, 0xd5e7ff][shopBucket],
+          baseIntensity: 58 + shopBucket * 4,
+        }));
+      }
+      storefrontCount += 1;
+    } else if (hasPhysicalCommunityHub || hasPhysicalCommonGroundCafe || hasPhysicalMinaMarket) {
+      // Preserve the storefront/detail random streams and fixed practical
+      // light budget that this occupied harbour frontage formerly consumed,
+      // but omit its opaque procedural bay. The authored public rooms below
+      // now provide the real glass, door aperture and depth at street level.
+      const shopBucket = district.kind === "downtown" ? 2 : detailRandom() < 0.5 ? 0 : 1;
+      const frontage = width * 0.74;
+      const storefrontSide = z >= 0 ? -1 : 1;
+      const storefrontZ = z + storefrontSide * (depth * 0.5 + 0.245);
+      facadeRandom();
+      facadeRandom();
+      if (storefrontCount % 3 === 0) {
+        storefrontLightPositions.push(Object.freeze({
+          buildingId: id,
+          position: freezePosition([x, SIDEWALK_TOP + 2.72, storefrontZ + storefrontSide * 1.18]),
           outward: storefrontSide,
           color: [0xffd0a0, 0xffe0b8, 0xd5e7ff][shopBucket],
           baseIntensity: 58 + shopBucket * 4,
@@ -1127,8 +1181,14 @@ export function buildCity(scene, {
       form,
       windowRows,
       groundFloorOccupied,
-      streetLevelPlinthHeight: height >= 26 ? STREET_LEVEL_PLINTH_HEIGHT : 0,
+      streetLevelPlinthHeight: height >= 26 && !hasPhysicalGroundFloor ? STREET_LEVEL_PLINTH_HEIGHT : 0,
       storefront: hasStorefront,
+      physicalInterior: hasPhysicalResidentialInterior ? "southline_studio_3b" : hasPhysicalCommunityHub ?
+        "harbour-skills-house" : hasPhysicalCommonGroundCafe ? "common_ground_cafe" : hasPhysicalMinaMarket ?
+          "mina_market_kitchen" : null,
+      propertyBuildingId: hasPhysicalResidentialInterior ? "southline_court" : hasPhysicalCommunityHub ?
+        "harbour-skills-house-building" : hasPhysicalCommonGroundCafe ? "common-ground-cafe-building" : hasPhysicalMinaMarket ?
+          "mina-market-building" : null,
     }));
   }
 
@@ -1142,7 +1202,13 @@ export function buildCity(scene, {
       const centrality = 1 - clamp(Math.hypot(blockX, blockZ) / 250, 0, 1);
       const style = district.facadeStyles[Math.floor(random() * district.facadeStyles.length)];
       const singleTowerChance = district.kind === "downtown" ? 0.72 : district.kind === "residential" ? 0.36 : 0.54;
-      if (random() < singleTowerChance) {
+      const residentialInteriorBlock = blockX === -144 && blockZ === 0;
+      const communityHubBlock = blockX === 96 && blockZ === 48;
+      const commonGroundCafeBlock = blockX === -48 && blockZ === 0;
+      const minaMarketBlock = blockX === -144 && blockZ === 144;
+      const singleTowerRoll = random();
+      if (communityHubBlock || commonGroundCafeBlock || minaMarketBlock ||
+          (!residentialInteriorBlock && singleTowerRoll < singleTowerChance)) {
         const width = 19 + random() * 8;
         const depth = 19 + random() * 8;
         const height = (20 + centrality * 55 + random() * (20 + centrality * 25)) * district.heightScale;
@@ -1154,9 +1220,15 @@ export function buildCity(scene, {
           height,
           style,
           `building-${String(++buildingIndex).padStart(3, "0")}`,
+          {
+            communityHubHost: communityHubBlock,
+            commonGroundCafeHost: commonGroundCafeBlock,
+            minaMarketHost: minaMarketBlock,
+          },
         );
       } else {
-        const splitX = random() < 0.5;
+        const splitXRoll = random();
+        const splitX = residentialInteriorBlock ? false : splitXRoll < 0.5;
         for (const side of [-1, 1]) {
           const width = splitX ? 12 + random() * 2.6 : 22 + random() * 3.5;
           const depth = splitX ? 22 + random() * 3.5 : 12 + random() * 2.6;
@@ -1172,11 +1244,2037 @@ export function buildCity(scene, {
             height,
             district.facadeStyles[(district.facadeStyles.indexOf(style) + (side > 0 ? 1 : 0)) % district.facadeStyles.length],
             `building-${String(++buildingIndex).padStart(3, "0")}`,
+            { residentialInteriorHost: residentialInteriorBlock && side < 0 },
           );
         }
       }
     }
   }
+
+  // Harbour View 01 is the first truly enterable home in the life-sim layer.
+  // It occupies the street level deliberately opened by addBuilding above,
+  // while every floor, wall, cabinet and furnishing appends to an already
+  // resident PBR instance batch. The result adds no draw type, runtime asset,
+  // light or emissive material and is ready before the first playable frame.
+  if (!residentialInteriorHost) throw new Error("Residential show-flat host building was not generated.");
+  const residentialInteriorSeed = (resolvedSeed ^ 0x484f4d45) >>> 0;
+  const residentialInteriorRandom = mulberry32(residentialInteriorSeed);
+  const residentialInteriorParts = [];
+  const residentialInteriorGlassTransforms = [];
+  const residentialInteriorBlockerIds = [];
+  const host = residentialInteriorHost;
+  const homeFloorY = SIDEWALK_TOP;
+  const homeMinX = host.x - host.width * 0.5;
+  const homeMaxX = host.x + host.width * 0.5;
+  const homeMinZ = host.z - host.depth * 0.5;
+  const homeMaxZ = host.z + host.depth * 0.5;
+  const entranceX = host.x + Math.min(7.0, host.width * 0.30);
+  const doorwayWidth = 1.46;
+  const wallHeight = 3.22;
+  const wallCenterY = homeFloorY + wallHeight * 0.5;
+  const coffeeTableYaw = (residentialInteriorRandom() - 0.5) * 0.14;
+  const stoolSpread = 0.82 + residentialInteriorRandom() * 0.10;
+  const upholsteryStyle = [0, 1, 2][Math.floor(residentialInteriorRandom() * 3)];
+  const linenStyle = [1, 2, 5][Math.floor(residentialInteriorRandom() * 3)];
+  const cabinetryStyle = [2, 3, 5][Math.floor(residentialInteriorRandom() * 3)];
+
+  const residentialPools = {
+    plaster: { transforms: buildingTransforms[5], batch: "Instanced city buildings style 6" },
+    timber: { transforms: buildingTransforms[3], batch: "Instanced city buildings style 4" },
+    upholstery: { transforms: buildingTransforms[upholsteryStyle], batch: `Instanced city buildings style ${upholsteryStyle + 1}` },
+    linen: { transforms: buildingTransforms[linenStyle], batch: `Instanced city buildings style ${linenStyle + 1}` },
+    cabinetry: { transforms: buildingTransforms[cabinetryStyle], batch: `Instanced city buildings style ${cabinetryStyle + 1}` },
+    concrete: { transforms: podiumTransforms, batch: "Instanced ground-floor podiums" },
+    trim: { transforms: facadeRibTransforms, batch: "Instanced facade corner ribs" },
+    metal: { transforms: balconyTransforms, batch: "Instanced apartment balconies" },
+    casework: { transforms: rooftopTransforms, batch: "Instanced rooftop mechanical housings" },
+    pole: { transforms: antennaTransforms, batch: "Instanced rooftop antennas" },
+  };
+  function addResidentialPart(id, poolName, position, scale, rotation = [0, 0, 0]) {
+    const pool = residentialPools[poolName];
+    const item = transform(position, scale, rotation);
+    pool.transforms.push(item);
+    residentialInteriorParts.push({
+      id,
+      pool: poolName,
+      batch: pool.batch,
+      position: [...position],
+      scale: [...scale],
+      rotation: [...rotation],
+    });
+  }
+  function addResidentialGlass(id, position, scale, rotation = [0, 0, 0]) {
+    const item = transform(position, scale, rotation);
+    residentialInteriorGlassTransforms.push(item);
+    residentialInteriorParts.push({
+      id,
+      pool: "glass",
+      batch: "Pulse Street bus shelter glass",
+      position: [...position],
+      scale: [...scale],
+      rotation: [...rotation],
+    });
+  }
+  function addResidentialBlocker(id, kind, x, z, width, depth, height = wallHeight) {
+    addBlocker(id, kind, x, z, width, depth, height, homeFloorY);
+    residentialInteriorBlockerIds.push(id);
+  }
+
+  // Architecture: a timber-toned floor, matte ceiling, solid side/rear walls
+  // and a street facade with a real door aperture and a broad dark-glass
+  // living-room window. There is no luminous glass or decorative neon.
+  addResidentialPart("floor", "timber", [host.x, homeFloorY + 0.055, host.z],
+    [host.width - 0.34, 0.11, host.depth - 0.34]);
+  addResidentialPart("ceiling", "plaster", [host.x, homeFloorY + host.clearHeight - 0.07, host.z],
+    [host.width - 0.28, 0.14, host.depth - 0.28]);
+  addResidentialPart("west-exterior-wall", "plaster", [homeMinX + 0.11, wallCenterY, host.z],
+    [0.22, wallHeight, host.depth]);
+  addResidentialPart("east-exterior-wall", "plaster", [homeMaxX - 0.11, wallCenterY, host.z],
+    [0.22, wallHeight, host.depth]);
+  addResidentialPart("north-exterior-wall", "plaster", [host.x, wallCenterY, homeMaxZ - 0.11],
+    [host.width, wallHeight, 0.22]);
+
+  const livingWindowLeft = host.x - 0.90;
+  const livingWindowRight = host.x + 3.80;
+  const doorLeft = entranceX - doorwayWidth * 0.5;
+  const doorRight = entranceX + doorwayWidth * 0.5;
+  const southWallZ = homeMinZ + 0.11;
+  const southWallSegments = [
+    ["south-wall-west", homeMinX, livingWindowLeft, wallCenterY, wallHeight],
+    ["living-window-sill", livingWindowLeft, livingWindowRight, homeFloorY + 0.39, 0.78],
+    ["living-window-header", livingWindowLeft, livingWindowRight, homeFloorY + 2.88, 0.68],
+    ["south-wall-window-to-door", livingWindowRight, doorLeft, wallCenterY, wallHeight],
+    ["front-door-lintel", doorLeft, doorRight, homeFloorY + 3.00, 0.44],
+    ["south-wall-east", doorRight, homeMaxX, wallCenterY, wallHeight],
+  ];
+  for (const [id, fromX, toX, y, height] of southWallSegments) {
+    addResidentialPart(id, "plaster", [(fromX + toX) * 0.5, y, southWallZ],
+      [toX - fromX, height, 0.22]);
+  }
+  addResidentialPart("living-window-west-jamb", "trim", [livingWindowLeft, wallCenterY, southWallZ - 0.025],
+    [0.10, wallHeight, 0.12]);
+  addResidentialPart("living-window-east-jamb", "trim", [livingWindowRight, wallCenterY, southWallZ - 0.025],
+    [0.10, wallHeight, 0.12]);
+  addResidentialPart("front-door-west-jamb", "trim", [doorLeft, homeFloorY + 1.45, southWallZ - 0.03],
+    [0.12, 2.90, 0.14]);
+  addResidentialPart("front-door-east-jamb", "trim", [doorRight, homeFloorY + 1.45, southWallZ - 0.03],
+    [0.12, 2.90, 0.14]);
+  addResidentialPart("weathered-entry-threshold", "concrete", [entranceX, homeFloorY + 0.025, homeMinZ - 0.36],
+    [doorwayWidth + 0.48, 0.05, 0.92]);
+  addResidentialGlass("living-room-dark-glass", [(livingWindowLeft + livingWindowRight) * 0.5, homeFloorY + 1.70, homeMinZ - 0.015],
+    [livingWindowRight - livingWindowLeft - 0.16, 1.68, 1], [0, Math.PI, 0]);
+
+  // Interior partitions define a private bedroom and bathroom while leaving
+  // an open kitchen/living plan. Each doorway is wider than a player-sized
+  // circle and represented by a matching split in both geometry and collision.
+  const bedroomEastX = host.x - 2.55;
+  const bedroomSouthZ = host.z + 0.84;
+  const bedroomDoorX = host.x - 4.25;
+  const bedroomDoorWidth = 1.12;
+  const bedroomSouthSegments = [
+    [homeMinX + 0.11, bedroomDoorX - bedroomDoorWidth * 0.5],
+    [bedroomDoorX + bedroomDoorWidth * 0.5, bedroomEastX],
+  ];
+  for (const [index, [fromX, toX]] of bedroomSouthSegments.entries()) {
+    addResidentialPart(`bedroom-south-wall-${index + 1}`, "plaster", [(fromX + toX) * 0.5, wallCenterY, bedroomSouthZ],
+      [toX - fromX, wallHeight, 0.16]);
+  }
+  addResidentialPart("bedroom-east-wall", "plaster", [bedroomEastX, wallCenterY, (bedroomSouthZ + homeMaxZ) * 0.5],
+    [0.16, wallHeight, homeMaxZ - bedroomSouthZ]);
+
+  const bathroomWestX = host.x - 1.20;
+  const bathroomEastX = host.x + 2.62;
+  const bathroomSouthZ = host.z + 2.02;
+  const bathroomDoorX = host.x + 0.34;
+  const bathroomDoorWidth = 0.98;
+  for (const [index, [fromX, toX]] of [
+    [bathroomWestX, bathroomDoorX - bathroomDoorWidth * 0.5],
+    [bathroomDoorX + bathroomDoorWidth * 0.5, bathroomEastX],
+  ].entries()) {
+    addResidentialPart(`bathroom-south-wall-${index + 1}`, "plaster", [(fromX + toX) * 0.5, wallCenterY, bathroomSouthZ],
+      [toX - fromX, wallHeight, 0.16]);
+  }
+  addResidentialPart("bathroom-west-wall", "plaster", [bathroomWestX, wallCenterY, (bathroomSouthZ + homeMaxZ) * 0.5],
+    [0.16, wallHeight, homeMaxZ - bathroomSouthZ]);
+  addResidentialPart("bathroom-east-wall", "plaster", [bathroomEastX, wallCenterY, (bathroomSouthZ + homeMaxZ) * 0.5],
+    [0.16, wallHeight, homeMaxZ - bathroomSouthZ]);
+
+  // Living room: a grounded fabric sofa, rug, table and media wall. The
+  // television is a dark reflective panel, never an emissive rectangle.
+  const sofaX = host.x + 4.55;
+  const sofaZ = host.z + 1.02;
+  addResidentialPart("living-rug", "metal", [sofaX, homeFloorY + 0.075, host.z - 0.15], [4.85, 0.025, 3.30]);
+  addResidentialPart("sofa-seat", "upholstery", [sofaX, homeFloorY + 0.46, sofaZ], [3.35, 0.46, 0.92]);
+  addResidentialPart("sofa-back", "upholstery", [sofaX, homeFloorY + 0.91, sofaZ + 0.39], [3.35, 0.90, 0.20]);
+  addResidentialPart("sofa-west-arm", "upholstery", [sofaX - 1.59, homeFloorY + 0.66, sofaZ], [0.18, 0.68, 0.94]);
+  addResidentialPart("sofa-east-arm", "upholstery", [sofaX + 1.59, homeFloorY + 0.66, sofaZ], [0.18, 0.68, 0.94]);
+  addResidentialPart("coffee-table", "casework", [host.x + 4.55, homeFloorY + 0.39, host.z - 1.02],
+    [1.55, 0.12, 0.78], [0, coffeeTableYaw, 0]);
+  addResidentialPart("media-console", "casework", [homeMaxX - 0.43, homeFloorY + 0.41, host.z + 0.10], [0.58, 0.62, 2.52]);
+  addResidentialPart("television-dark-panel", "metal", [homeMaxX - 0.20, homeFloorY + 1.55, host.z + 0.10], [0.08, 1.18, 1.98]);
+
+  // Kitchen: full-height fridge and cabinet run, stone worktop, island and
+  // two stools. Small seeded offsets make different world seeds feel lived-in
+  // without moving doorways or invalidating the navigation contract.
+  const kitchenRunX = homeMinX + 0.49;
+  addResidentialPart("kitchen-base-cabinets", "cabinetry", [kitchenRunX, homeFloorY + 0.47, host.z - 2.20], [0.70, 0.86, 3.15]);
+  addResidentialPart("kitchen-countertop", "concrete", [kitchenRunX + 0.03, homeFloorY + 0.93, host.z - 2.20], [0.82, 0.10, 3.30]);
+  addResidentialPart("kitchen-upper-cabinet-1", "cabinetry", [kitchenRunX, homeFloorY + 1.76, host.z - 2.90], [0.50, 0.72, 1.28]);
+  addResidentialPart("kitchen-upper-cabinet-2", "cabinetry", [kitchenRunX, homeFloorY + 1.76, host.z - 1.50], [0.50, 0.72, 1.28]);
+  addResidentialPart("kitchen-stove", "metal", [kitchenRunX + 0.44, homeFloorY + 0.995, host.z - 2.72], [0.06, 0.06, 0.62]);
+  addResidentialPart("kitchen-sink", "plaster", [kitchenRunX + 0.44, homeFloorY + 0.995, host.z - 1.58], [0.06, 0.06, 0.58]);
+  addResidentialPart("kitchen-fridge", "metal", [homeMinX + 0.55, homeFloorY + 1.00, host.z + 0.03], [0.90, 2.00, 0.86]);
+  const islandX = host.x - 4.55;
+  const islandZ = host.z - 2.05;
+  addResidentialPart("kitchen-island-base", "cabinetry", [islandX, homeFloorY + 0.44, islandZ], [3.05, 0.82, 0.80]);
+  addResidentialPart("kitchen-island-worktop", "concrete", [islandX, homeFloorY + 0.90, islandZ], [3.26, 0.10, 0.98]);
+  for (const [index, offset] of [-stoolSpread, stoolSpread].entries()) {
+    addResidentialPart(`kitchen-stool-seat-${index + 1}`, "casework", [islandX + offset, homeFloorY + 0.67, islandZ + 0.88], [0.48, 0.12, 0.48]);
+    addResidentialPart(`kitchen-stool-stem-${index + 1}`, "pole", [islandX + offset, homeFloorY + 0.35, islandZ + 0.88], [0.10, 0.58, 0.10]);
+  }
+  const diningTableX = host.x - 0.18;
+  const diningTableZ = host.z - 0.42;
+  addResidentialPart("dining-table", "casework", [diningTableX, homeFloorY + 0.73, diningTableZ], [1.62, 0.12, 1.02]);
+
+  // Bedroom: realistically scaled double bed, separate linen layer, side
+  // tables, wardrobe and dresser. Its door remains clear at the south wall.
+  const bedX = host.x - 7.18;
+  const bedZ = host.z + 3.68;
+  addResidentialPart("bed-base", "casework", [bedX, homeFloorY + 0.24, bedZ], [3.18, 0.38, 2.10]);
+  addResidentialPart("bed-mattress", "plaster", [bedX, homeFloorY + 0.55, bedZ], [3.02, 0.28, 1.96]);
+  addResidentialPart("bed-linen", "linen", [bedX, homeFloorY + 0.72, bedZ - 0.28], [2.92, 0.08, 1.28]);
+  addResidentialPart("bed-headboard", "timber", [bedX, homeFloorY + 0.88, bedZ + 1.00], [3.38, 1.12, 0.18]);
+  addResidentialPart("bedside-table-west", "casework", [bedX - 1.92, homeFloorY + 0.32, bedZ + 0.55], [0.56, 0.58, 0.54]);
+  addResidentialPart("bedside-table-east", "casework", [bedX + 1.92, homeFloorY + 0.32, bedZ + 0.55], [0.56, 0.58, 0.54]);
+  addResidentialPart("bedroom-wardrobe", "cabinetry", [homeMinX + 0.48, homeFloorY + 1.08, host.z + 2.20], [0.76, 2.16, 2.34]);
+  addResidentialPart("study-desk", "casework", [bedroomEastX - 0.45, homeFloorY + 0.43, host.z + 4.30], [0.72, 0.82, 1.46]);
+
+  // Bathroom fixtures stay matte and domestic: vanity, basin, toilet and a
+  // clear shower enclosure. Transparent panes reuse the resident glass batch.
+  addResidentialPart("bathroom-vanity", "cabinetry", [host.x - 0.18, homeFloorY + 0.43, homeMaxZ - 0.43], [1.52, 0.80, 0.58]);
+  addResidentialPart("bathroom-basin", "plaster", [host.x - 0.18, homeFloorY + 0.88, homeMaxZ - 0.43], [1.34, 0.10, 0.52]);
+  addResidentialPart("bathroom-toilet-base", "plaster", [host.x - 0.24, homeFloorY + 0.31, host.z + 3.24], [0.58, 0.50, 0.76]);
+  addResidentialPart("bathroom-toilet-cistern", "plaster", [host.x - 0.24, homeFloorY + 0.72, host.z + 3.55], [0.56, 0.72, 0.24]);
+  addResidentialPart("shower-tray", "concrete", [host.x + 1.75, homeFloorY + 0.07, host.z + 4.35], [1.48, 0.12, 1.58]);
+  addResidentialGlass("shower-glass-west", [host.x + 1.02, homeFloorY + 1.12, host.z + 4.35], [1.72, 1.92, 1], [0, Math.PI * 0.5, 0]);
+  addResidentialGlass("shower-glass-south", [host.x + 1.75, homeFloorY + 1.12, host.z + 3.57], [1.38, 1.92, 1]);
+
+  // Entry storage gives the threshold a domestic transition instead of
+  // dropping the player directly into an empty room.
+  addResidentialPart("entry-bench", "casework", [homeMaxX - 0.45, homeFloorY + 0.27, host.z - 3.78], [0.62, 0.48, 1.54]);
+  addResidentialPart("entry-shoe-cabinet", "cabinetry", [homeMaxX - 0.40, homeFloorY + 0.78, host.z - 2.62], [0.54, 1.42, 0.92]);
+  addResidentialPart("entry-coat-rail", "pole", [homeMaxX - 0.22, homeFloorY + 1.72, host.z - 3.78], [0.07, 1.40, 0.07]);
+  addResidentialPart("living-ceiling-practical", "plaster", [host.x + 4.20, homeFloorY + host.clearHeight - 0.16, host.z - 0.10], [1.22, 0.05, 0.38]);
+  addResidentialPart("kitchen-ceiling-practical", "plaster", [host.x - 5.10, homeFloorY + host.clearHeight - 0.16, host.z - 1.90], [1.04, 0.05, 0.34]);
+
+  // Compound shell collision preserves the front door; room partitions use
+  // the same split dimensions as their visible walls. Furniture blockers are
+  // conservative at foot height without closing the circulation spine.
+  addResidentialBlocker("harbour-view-west-wall", "residential-wall", homeMinX + 0.11, host.z, 0.22, host.depth);
+  addResidentialBlocker("harbour-view-east-wall", "residential-wall", homeMaxX - 0.11, host.z, 0.22, host.depth);
+  addResidentialBlocker("harbour-view-north-wall", "residential-wall", host.x, homeMaxZ - 0.11, host.width, 0.22);
+  addResidentialBlocker("harbour-view-south-wall-west", "residential-wall", (homeMinX + doorLeft) * 0.5, southWallZ,
+    doorLeft - homeMinX, 0.22);
+  addResidentialBlocker("harbour-view-south-wall-east", "residential-wall", (doorRight + homeMaxX) * 0.5, southWallZ,
+    homeMaxX - doorRight, 0.22);
+  for (const [index, [fromX, toX]] of bedroomSouthSegments.entries()) {
+    addResidentialBlocker(`harbour-view-bedroom-south-${index + 1}`, "residential-partition",
+      (fromX + toX) * 0.5, bedroomSouthZ, toX - fromX, 0.16);
+  }
+  addResidentialBlocker("harbour-view-bedroom-east", "residential-partition", bedroomEastX,
+    (bedroomSouthZ + homeMaxZ) * 0.5, 0.16, homeMaxZ - bedroomSouthZ);
+  for (const [index, [fromX, toX]] of [
+    [bathroomWestX, bathroomDoorX - bathroomDoorWidth * 0.5],
+    [bathroomDoorX + bathroomDoorWidth * 0.5, bathroomEastX],
+  ].entries()) {
+    addResidentialBlocker(`harbour-view-bathroom-south-${index + 1}`, "residential-partition",
+      (fromX + toX) * 0.5, bathroomSouthZ, toX - fromX, 0.16);
+  }
+  addResidentialBlocker("harbour-view-bathroom-west", "residential-partition", bathroomWestX,
+    (bathroomSouthZ + homeMaxZ) * 0.5, 0.16, homeMaxZ - bathroomSouthZ);
+  addResidentialBlocker("harbour-view-bathroom-east", "residential-partition", bathroomEastX,
+    (bathroomSouthZ + homeMaxZ) * 0.5, 0.16, homeMaxZ - bathroomSouthZ);
+  for (const fixture of [
+    ["kitchen-run", kitchenRunX, host.z - 2.20, 0.82, 3.30, 2.15],
+    ["kitchen-fridge", homeMinX + 0.55, host.z + 0.03, 0.90, 0.86, 2.00],
+    ["kitchen-island", islandX, islandZ, 3.26, 0.98, 1.00],
+    ["dining-table", diningTableX, diningTableZ, 1.62, 1.02, 0.86],
+    ["sofa", sofaX, sofaZ, 3.35, 0.94, 1.36],
+    ["coffee-table", host.x + 4.55, host.z - 1.02, 1.70, 0.92, 0.52],
+    ["media-console", homeMaxX - 0.43, host.z + 0.10, 0.58, 2.52, 1.60],
+    ["bed", bedX, bedZ, 3.38, 2.20, 1.45],
+    ["wardrobe", homeMinX + 0.48, host.z + 2.20, 0.76, 2.34, 2.16],
+    ["bathroom-vanity", host.x - 0.18, homeMaxZ - 0.43, 1.52, 0.58, 0.98],
+    ["bathroom-toilet", host.x - 0.24, host.z + 3.38, 0.64, 1.02, 1.10],
+    ["shower", host.x + 1.75, host.z + 4.35, 1.48, 1.58, 2.10],
+    ["entry-storage", homeMaxX - 0.42, host.z - 3.15, 0.66, 2.25, 1.55],
+  ]) {
+    addResidentialBlocker(`harbour-view-${fixture[0]}`, "residential-fixture",
+      fixture[1], fixture[2], fixture[3], fixture[4], fixture[5]);
+  }
+
+  const residentialInterior = deepFreeze({
+    id: "southline_studio_3b",
+    homeId: "southline_studio_3b",
+    label: "SOUTHLINE STUDIO 3B",
+    address: "18 Calder Street, Apt 3B",
+    buildingId: "southline_court",
+    hostBuildingRecordId: host.id,
+    districtId: host.districtId,
+    seed: residentialInteriorSeed,
+    bounds: {
+      minX: homeMinX,
+      maxX: homeMaxX,
+      minZ: homeMinZ,
+      maxZ: homeMaxZ,
+      floorY: homeFloorY,
+      ceilingY: homeFloorY + host.clearHeight,
+    },
+    entrance: {
+      exterior: [entranceX, homeFloorY, homeMinZ - 1.25],
+      threshold: [entranceX, homeFloorY, homeMinZ - 0.18],
+      interior: [entranceX, homeFloorY, homeMinZ + 1.16],
+      heading: 0,
+      clearWidth: doorwayWidth,
+    },
+    zones: {
+      entry: { id: "entry", label: "ENTRY", position: [entranceX, homeFloorY, host.z - 4.18], bounds: { minX: host.x + 4.20, maxX: homeMaxX - 0.22, minZ: homeMinZ + 0.22, maxZ: host.z - 2.40 } },
+      living: { id: "living", label: "LIVING ROOM", position: [host.x + 7.25, homeFloorY, host.z + 2.05], bounds: { minX: host.x + 2.82, maxX: homeMaxX - 0.22, minZ: host.z - 2.38, maxZ: homeMaxZ - 0.22 } },
+      kitchen: { id: "kitchen", label: "KITCHEN", position: [host.x - 6.35, homeFloorY, host.z - 0.58], bounds: { minX: homeMinX + 0.22, maxX: host.x - 2.65, minZ: homeMinZ + 0.22, maxZ: host.z + 0.62 } },
+      bathroom: { id: "bathroom", label: "BATHROOM", position: [host.x + 1.30, homeFloorY, host.z + 2.84], bounds: { minX: bathroomWestX + 0.16, maxX: bathroomEastX - 0.16, minZ: bathroomSouthZ + 0.16, maxZ: homeMaxZ - 0.22 } },
+      bedroom: { id: "bedroom", label: "BEDROOM", position: [host.x - 4.05, homeFloorY, host.z + 3.05], bounds: { minX: homeMinX + 0.22, maxX: bedroomEastX - 0.16, minZ: bedroomSouthZ + 0.16, maxZ: homeMaxZ - 0.22 } },
+    },
+    doorways: {
+      exterior: { position: [entranceX, homeFloorY, southWallZ], clearWidth: doorwayWidth },
+      bedroom: { position: [bedroomDoorX, homeFloorY, bedroomSouthZ], clearWidth: bedroomDoorWidth },
+      bathroom: { position: [bathroomDoorX, homeFloorY, bathroomSouthZ], clearWidth: bathroomDoorWidth },
+    },
+    interactionAnchors: {
+      frontDoor: [entranceX, homeFloorY, homeMinZ - 0.48],
+      sofa: [sofaX - 2.08, homeFloorY, sofaZ],
+      television: [homeMaxX - 1.18, homeFloorY, host.z + 0.10],
+      kitchenCounter: [kitchenRunX + 1.18, homeFloorY, host.z - 2.20],
+      kitchenIsland: [islandX, homeFloorY, islandZ + 1.18],
+      bed: [bedX + 2.18, homeFloorY, bedZ],
+      wardrobe: [homeMinX + 1.36, homeFloorY, host.z + 2.20],
+      bathroomSink: [host.x - 0.18, homeFloorY, homeMaxZ - 1.25],
+      shower: [host.x + 1.75, homeFloorY, host.z + 3.17],
+    },
+    stations: {
+      entry: { id: "home-entry", action: "enter", label: "FRONT DOOR", position: [entranceX, homeFloorY, homeMinZ - 0.48] },
+      visitor: { id: "home-visitor", action: "visit", label: "VISITOR SPOT", position: [host.x + 7.35, homeFloorY, host.z - 0.72] },
+      resident: { id: "home-resident", action: "resident", label: "RESIDENT SPOT", position: [host.x + 7.35, homeFloorY, host.z + 2.12] },
+      bed: { id: "home-bed", action: "sleep", label: "SLEEP", position: [bedX + 2.18, homeFloorY, bedZ], fixtureId: "bed-base" },
+      shower: { id: "home-shower", action: "shower", label: "SHOWER", position: [host.x + 1.75, homeFloorY, host.z + 3.17], fixtureId: "shower-tray" },
+      stove: { id: "home-stove", action: "cook", label: "COOK", position: [kitchenRunX + 1.18, homeFloorY, host.z - 2.72], fixtureId: "kitchen-stove" },
+      table: { id: "home-table", action: "eat", label: "EAT", position: [diningTableX, homeFloorY, diningTableZ - 0.92], fixtureId: "dining-table" },
+      sink: { id: "home-sink", action: "clean", label: "CLEAN", position: [kitchenRunX + 1.18, homeFloorY, host.z - 1.58], fixtureId: "kitchen-sink" },
+      desk: { id: "home-desk", action: "study", label: "STUDY", position: [bedroomEastX - 1.36, homeFloorY, host.z + 4.30], fixtureId: "study-desk" },
+      sofa: { id: "home-sofa", action: "relax", label: "RELAX", position: [sofaX - 2.08, homeFloorY, sofaZ], fixtureId: "sofa-seat" },
+    },
+    spawnPoints: {
+      player: { position: [entranceX, homeFloorY, host.z - 3.62], heading: 0 },
+      resident: { id: "resident-avery-bell", name: "Avery Bell", position: [host.x + 7.35, homeFloorY, host.z + 2.12], heading: -Math.PI * 0.5 },
+    },
+    variant: {
+      upholsteryStyle,
+      linenStyle,
+      cabinetryStyle,
+      coffeeTableYaw,
+      stoolSpread,
+    },
+    lighting: {
+      kind: "bounded-warm-residential-practical",
+      position: [host.x + 4.20, homeFloorY + 2.20, host.z - 0.10],
+      color: 0xffd7ad,
+      intensity: 8,
+      range: 11.5,
+      reallocates: "occupied-storefront-practical",
+    },
+    renderParts: residentialInteriorParts,
+    collisionIds: residentialInteriorBlockerIds,
+    stats: {
+      renderInstances: residentialInteriorParts.length,
+      glassPanels: residentialInteriorGlassTransforms.length,
+      collisionVolumes: residentialInteriorBlockerIds.length,
+      rooms: 5,
+      doorways: 3,
+      interactionAnchors: 9,
+      stations: 10,
+      residentSpawns: 1,
+      playerSpawns: 1,
+      practicalLights: 1,
+      emissiveMaterials: 0,
+    },
+  });
+
+  // Harbour Skills House turns an existing occupied Harbour Mile ground
+  // floor into a genuine public-life interior. Its shell, furniture and
+  // fixtures append only to city pools that already exist at startup: there
+  // is no loading screen, lazy mesh creation, new material or extra batch.
+  if (!communityHubHost) throw new Error("Harbour Skills House host building was not generated.");
+  const communityHubSeed = (resolvedSeed ^ 0x534b494c) >>> 0;
+  const communityHubRandom = mulberry32(communityHubSeed);
+  const communityHubParts = [];
+  const communityHubGlassTransforms = [];
+  const communityHubBlockerIds = [];
+  const hubHost = communityHubHost;
+  const hubFloorY = SIDEWALK_TOP;
+  const hubMinX = hubHost.x - hubHost.width * 0.5;
+  const hubMaxX = hubHost.x + hubHost.width * 0.5;
+  const hubMinZ = hubHost.z - hubHost.depth * 0.5;
+  const hubMaxZ = hubHost.z + hubHost.depth * 0.5;
+  const hubEntranceX = hubHost.x;
+  const hubDoorWidth = 2.24;
+  const hubWallHeight = 3.22;
+  const hubWallCenterY = hubFloorY + hubWallHeight * 0.5;
+  const hubWestPartitionX = hubHost.x - 1.64;
+  const hubEastPartitionX = hubHost.x + 1.64;
+  const hubPartitionStartZ = hubMinZ + 5.54;
+  const hubWestDividerZ = hubMinZ + 12.92;
+  const hubEastDividerZ = hubMinZ + 15.54;
+  const hubKitchenDoorZ = hubMinZ + 8.18;
+  const hubClassroomDoorZ = hubMinZ + 17.10;
+  const hubWorkshopDoorZ = hubMinZ + 10.15;
+  const hubBreakDoorZ = hubMinZ + 19.52;
+  const hubCabinetStyle = [2, 3, 5][Math.floor(communityHubRandom() * 3)];
+  const hubSeatStyle = [0, 1, 2][Math.floor(communityHubRandom() * 3)];
+  const hubTableYaw = (communityHubRandom() - 0.5) * 0.08;
+  const hubChairSpacing = 1.02 + communityHubRandom() * 0.10;
+  const hubPhotoBackdropOffset = (communityHubRandom() - 0.5) * 0.26;
+
+  const communityHubPools = {
+    plaster: { transforms: buildingTransforms[5], batch: "Instanced city buildings style 6" },
+    timber: { transforms: buildingTransforms[3], batch: "Instanced city buildings style 4" },
+    upholstery: { transforms: buildingTransforms[hubSeatStyle], batch: `Instanced city buildings style ${hubSeatStyle + 1}` },
+    cabinetry: { transforms: buildingTransforms[hubCabinetStyle], batch: `Instanced city buildings style ${hubCabinetStyle + 1}` },
+    concrete: { transforms: podiumTransforms, batch: "Instanced ground-floor podiums" },
+    trim: { transforms: facadeRibTransforms, batch: "Instanced facade corner ribs" },
+    metal: { transforms: balconyTransforms, batch: "Instanced apartment balconies" },
+    casework: { transforms: rooftopTransforms, batch: "Instanced rooftop mechanical housings" },
+    pole: { transforms: antennaTransforms, batch: "Instanced rooftop antennas" },
+    paper: { transforms: crosswalks, batch: "Downtown pedestrian crossings" },
+  };
+  function addCommunityHubPart(id, poolName, position, scale, rotation = [0, 0, 0]) {
+    const pool = communityHubPools[poolName];
+    const item = transform(position, scale, rotation);
+    pool.transforms.push(item);
+    communityHubParts.push({
+      id,
+      pool: poolName,
+      batch: pool.batch,
+      position: [...position],
+      scale: [...scale],
+      rotation: [...rotation],
+    });
+  }
+  function addCommunityHubGlass(id, position, scale, rotation = [0, 0, 0]) {
+    const item = transform(position, scale, rotation);
+    communityHubGlassTransforms.push(item);
+    communityHubParts.push({
+      id,
+      pool: "dark-glass",
+      batch: "Pulse Street bus shelter glass",
+      position: [...position],
+      scale: [...scale],
+      rotation: [...rotation],
+    });
+  }
+  function addCommunityHubBlocker(id, kind, x, z, width, depth, height = hubWallHeight) {
+    addBlocker(id, kind, x, z, width, depth, height, hubFloorY);
+    communityHubBlockerIds.push(id);
+  }
+  function addHubPartitionSegments(prefix, x, fromZ, toZ, doors) {
+    let cursor = fromZ;
+    for (const door of [...doors].sort((a, b) => a.center - b.center)) {
+      const doorStart = door.center - door.width * 0.5;
+      if (doorStart > cursor) {
+        const id = `${prefix}-${communityHubBlockerIds.length + 1}`;
+        addCommunityHubPart(id, "plaster", [x, hubWallCenterY, (cursor + doorStart) * 0.5],
+          [0.16, hubWallHeight, doorStart - cursor]);
+        addCommunityHubBlocker(id, "community-partition", x, (cursor + doorStart) * 0.5,
+          0.16, doorStart - cursor);
+      }
+      cursor = door.center + door.width * 0.5;
+    }
+    if (cursor < toZ) {
+      const id = `${prefix}-${communityHubBlockerIds.length + 1}`;
+      addCommunityHubPart(id, "plaster", [x, hubWallCenterY, (cursor + toZ) * 0.5],
+        [0.16, hubWallHeight, toZ - cursor]);
+      addCommunityHubBlocker(id, "community-partition", x, (cursor + toZ) * 0.5, 0.16, toZ - cursor);
+    }
+  }
+
+  // Continuous public floor and ceiling under the retained upper building.
+  addCommunityHubPart("hub-floor", "timber", [hubHost.x, hubFloorY + 0.03, hubHost.z],
+    [hubHost.width - 0.18, 0.06, hubHost.depth - 0.18]);
+  addCommunityHubPart("hub-ceiling", "plaster", [hubHost.x, hubFloorY + hubHost.clearHeight - 0.07, hubHost.z],
+    [hubHost.width - 0.18, 0.14, hubHost.depth - 0.18]);
+
+  // Street frontage: broad dark glass reads as normal daytime glazing, with
+  // a real 2.24 m double-door aperture and a shallow weather threshold.
+  const hubDoorLeft = hubEntranceX - hubDoorWidth * 0.5;
+  const hubDoorRight = hubEntranceX + hubDoorWidth * 0.5;
+  const hubSouthWallZ = hubMinZ + 0.11;
+  const hubLeftWindowLeft = hubMinX + 0.62;
+  const hubLeftWindowRight = hubDoorLeft - 0.18;
+  const hubRightWindowLeft = hubDoorRight + 0.18;
+  const hubRightWindowRight = hubMaxX - 0.62;
+  for (const [id, fromX, toX] of [
+    ["hub-south-west-column", hubMinX, hubLeftWindowLeft],
+    ["hub-south-east-column", hubRightWindowRight, hubMaxX],
+  ]) {
+    addCommunityHubPart(id, "plaster", [(fromX + toX) * 0.5, hubWallCenterY, hubSouthWallZ],
+      [toX - fromX, hubWallHeight, 0.22]);
+  }
+  for (const [side, fromX, toX] of [
+    ["west", hubLeftWindowLeft, hubLeftWindowRight],
+    ["east", hubRightWindowLeft, hubRightWindowRight],
+  ]) {
+    addCommunityHubPart(`hub-${side}-window-sill`, "concrete", [(fromX + toX) * 0.5, hubFloorY + 0.37, hubSouthWallZ],
+      [toX - fromX, 0.74, 0.22]);
+    addCommunityHubPart(`hub-${side}-window-header`, "plaster", [(fromX + toX) * 0.5, hubFloorY + 2.89, hubSouthWallZ],
+      [toX - fromX, 0.66, 0.22]);
+    addCommunityHubGlass(`hub-${side}-dark-glass`, [(fromX + toX) * 0.5, hubFloorY + 1.70, hubMinZ - 0.015],
+      [toX - fromX - 0.12, 1.72, 1], [0, Math.PI, 0]);
+  }
+  addCommunityHubPart("hub-door-lintel", "plaster", [hubEntranceX, hubFloorY + 3.00, hubSouthWallZ],
+    [hubDoorWidth + 0.18, 0.44, 0.22]);
+  for (const [side, x] of [["west", hubDoorLeft], ["east", hubDoorRight]]) {
+    addCommunityHubPart(`hub-door-${side}-jamb`, "trim", [x, hubFloorY + 1.45, hubSouthWallZ - 0.03],
+      [0.13, 2.90, 0.15]);
+  }
+  addCommunityHubPart("hub-weathered-threshold", "concrete", [hubEntranceX, hubFloorY + 0.026, hubMinZ - 0.46],
+    [hubDoorWidth + 0.74, 0.052, 1.12]);
+  addCommunityHubPart("hub-rain-canopy", "metal", [hubEntranceX, hubFloorY + 3.16, hubMinZ - 0.72],
+    [hubDoorWidth + 3.1, 0.16, 1.55], [-0.035, 0, 0]);
+  addCommunityHubPart("hub-restrained-sign-backing", "timber", [hubEntranceX, hubFloorY + 2.71, hubMinZ - 0.035],
+    [5.8, 0.38, 0.08]);
+
+  addCommunityHubPart("hub-west-wall", "plaster", [hubMinX + 0.11, hubWallCenterY, hubHost.z],
+    [0.22, hubWallHeight, hubHost.depth]);
+  addCommunityHubPart("hub-east-wall", "plaster", [hubMaxX - 0.11, hubWallCenterY, hubHost.z],
+    [0.22, hubWallHeight, hubHost.depth]);
+  addCommunityHubPart("hub-north-wall", "plaster", [hubHost.x, hubWallCenterY, hubMaxZ - 0.11],
+    [hubHost.width, hubWallHeight, 0.22]);
+
+  addCommunityHubBlocker("hub-west-shell", "community-wall", hubMinX + 0.11, hubHost.z, 0.22, hubHost.depth);
+  addCommunityHubBlocker("hub-east-shell", "community-wall", hubMaxX - 0.11, hubHost.z, 0.22, hubHost.depth);
+  addCommunityHubBlocker("hub-north-shell", "community-wall", hubHost.x, hubMaxZ - 0.11, hubHost.width, 0.22);
+  addCommunityHubBlocker("hub-south-shell-west", "community-wall", (hubMinX + hubDoorLeft) * 0.5,
+    hubSouthWallZ, hubDoorLeft - hubMinX, 0.22);
+  addCommunityHubBlocker("hub-south-shell-east", "community-wall", (hubDoorRight + hubMaxX) * 0.5,
+    hubSouthWallZ, hubMaxX - hubDoorRight, 0.22);
+
+  // A wide central circulation spine connects four full-height room doors.
+  // Side rooms receive their own dividing wall, so their labels correspond
+  // to real architecture rather than arbitrary trigger rectangles.
+  addHubPartitionSegments("hub-west-corridor-wall", hubWestPartitionX, hubPartitionStartZ, hubMaxZ - 0.11, [
+    { center: hubKitchenDoorZ, width: 1.34 },
+    { center: hubClassroomDoorZ, width: 1.38 },
+  ]);
+  addHubPartitionSegments("hub-east-corridor-wall", hubEastPartitionX, hubPartitionStartZ, hubMaxZ - 0.11, [
+    { center: hubWorkshopDoorZ, width: 1.42 },
+    { center: hubBreakDoorZ, width: 1.30 },
+  ]);
+  addCommunityHubPart("hub-west-room-divider", "plaster", [(hubMinX + hubWestPartitionX) * 0.5,
+    hubWallCenterY, hubWestDividerZ], [hubWestPartitionX - hubMinX, hubWallHeight, 0.16]);
+  addCommunityHubBlocker("hub-west-room-divider", "community-partition", (hubMinX + hubWestPartitionX) * 0.5,
+    hubWestDividerZ, hubWestPartitionX - hubMinX, 0.16);
+  addCommunityHubPart("hub-east-room-divider", "plaster", [(hubEastPartitionX + hubMaxX) * 0.5,
+    hubWallCenterY, hubEastDividerZ], [hubMaxX - hubEastPartitionX, hubWallHeight, 0.16]);
+  addCommunityHubBlocker("hub-east-room-divider", "community-partition", (hubEastPartitionX + hubMaxX) * 0.5,
+    hubEastDividerZ, hubMaxX - hubEastPartitionX, 0.16);
+
+  // Reception desk and grounded office storage.
+  const hubReceptionX = hubHost.x - 4.15;
+  const hubReceptionZ = hubMinZ + 3.30;
+  addCommunityHubPart("hub-reception-desk-base", "cabinetry", [hubReceptionX, hubFloorY + 0.47, hubReceptionZ], [3.45, 0.86, 0.72]);
+  addCommunityHubPart("hub-reception-desk-top", "casework", [hubReceptionX, hubFloorY + 0.94, hubReceptionZ], [3.66, 0.10, 0.86]);
+  addCommunityHubPart("hub-reception-monitor", "metal", [hubReceptionX + 0.58, hubFloorY + 1.32, hubReceptionZ + 0.18], [0.68, 0.58, 0.10]);
+  addCommunityHubPart("hub-reception-files", "cabinetry", [hubMinX + 0.48, hubFloorY + 0.78, hubMinZ + 4.68], [0.72, 1.42, 1.15]);
+
+  // Teaching kitchen: domestic-scaled cabinets, distinct preparation and
+  // service surfaces, sink, hob and a full-height refrigerator.
+  const hubKitchenRunX = hubMinX + 0.48;
+  const hubKitchenRunZ = hubMinZ + 8.55;
+  addCommunityHubPart("hub-kitchen-base-cabinets", "cabinetry", [hubKitchenRunX, hubFloorY + 0.47, hubKitchenRunZ], [0.72, 0.86, 4.65]);
+  addCommunityHubPart("hub-kitchen-worktop", "concrete", [hubKitchenRunX + 0.04, hubFloorY + 0.93, hubKitchenRunZ], [0.84, 0.10, 4.82]);
+  addCommunityHubPart("hub-kitchen-upper-1", "cabinetry", [hubKitchenRunX, hubFloorY + 1.78, hubKitchenRunZ - 1.20], [0.54, 0.72, 1.62]);
+  addCommunityHubPart("hub-kitchen-upper-2", "cabinetry", [hubKitchenRunX, hubFloorY + 1.78, hubKitchenRunZ + 1.28], [0.54, 0.72, 1.62]);
+  addCommunityHubPart("hub-kitchen-fridge", "metal", [hubMinX + 0.54, hubFloorY + 1.02, hubMinZ + 5.55], [0.92, 2.04, 0.88]);
+  addCommunityHubPart("hub-kitchen-hob", "metal", [hubKitchenRunX + 0.47, hubFloorY + 0.995, hubKitchenRunZ - 1.10], [0.06, 0.06, 0.68]);
+  addCommunityHubPart("hub-kitchen-sink", "plaster", [hubKitchenRunX + 0.47, hubFloorY + 0.995, hubKitchenRunZ + 1.12], [0.06, 0.06, 0.64]);
+  const hubServeX = hubHost.x - 5.08;
+  const hubServeZ = hubWestDividerZ - 1.20;
+  addCommunityHubPart("hub-serving-counter-base", "cabinetry", [hubServeX, hubFloorY + 0.46, hubServeZ], [3.15, 0.84, 0.76]);
+  addCommunityHubPart("hub-serving-counter-top", "concrete", [hubServeX, hubFloorY + 0.92, hubServeZ], [3.34, 0.10, 0.92]);
+
+  // Repair workshop: steel bench, real parts storage, intake desk, pegboard
+  // and stable seeded tools. The colours are matte industrial pools, never
+  // signage/emissive materials.
+  const hubRepairBenchX = hubMaxX - 0.49;
+  const hubRepairBenchZ = hubMinZ + 10.70;
+  addCommunityHubPart("hub-repair-workbench", "metal", [hubRepairBenchX, hubFloorY + 0.48, hubRepairBenchZ], [0.76, 0.92, 4.10]);
+  addCommunityHubPart("hub-repair-pegboard", "timber", [hubMaxX - 0.115, hubFloorY + 1.69, hubRepairBenchZ], [0.055, 1.28, 4.28]);
+  for (let tool = 0; tool < 6; ++tool) {
+    addCommunityHubPart(`hub-wall-tool-${tool + 1}`, tool % 3 === 0 ? "pole" : "trim",
+      [hubMaxX - 0.075, hubFloorY + 1.40 + Math.floor(tool / 3) * 0.50 + (communityHubRandom() - 0.5) * 0.06,
+        hubRepairBenchZ - 1.35 + (tool % 3) * 1.34],
+      [0.08, 0.34 + communityHubRandom() * 0.12, 0.07], [0, 0, tool % 2 ? -0.17 : 0.17]);
+  }
+  const hubShelfX = hubMaxX - 0.47;
+  const hubShelfZ = hubEastDividerZ - 1.34;
+  for (let level = 0; level < 3; ++level) {
+    addCommunityHubPart(`hub-parts-shelf-${level + 1}`, "trim", [hubShelfX, hubFloorY + 0.35 + level * 0.68, hubShelfZ], [0.72, 0.08, 2.28]);
+  }
+  for (let bin = 0; bin < 4; ++bin) {
+    addCommunityHubPart(`hub-labelled-parts-bin-${bin + 1}`, "metal",
+      [hubMaxX - 0.54, hubFloorY + 0.51 + (bin % 2) * 0.68, hubShelfZ - 0.64 + Math.floor(bin / 2) * 1.28],
+      [0.54, 0.25, 0.48]);
+  }
+  const hubIntakeX = hubHost.x + 4.10;
+  addCommunityHubPart("hub-repair-intake-desk", "casework", [hubIntakeX, hubFloorY + 0.72, hubReceptionZ], [2.45, 0.12, 0.88]);
+  addCommunityHubPart("hub-repair-intake-pedestal", "cabinetry", [hubIntakeX, hubFloorY + 0.36, hubReceptionZ], [0.34, 0.66, 0.52]);
+
+  // Classroom and photography desk: two shared worktables, proper chairs,
+  // a computer, camera body and a matte backdrop rail.
+  const hubClassX = hubMinX + 3.30;
+  const hubClassTableZs = [hubWestDividerZ + 2.35, hubWestDividerZ + 6.24];
+  for (const [tableIndex, tableZ] of hubClassTableZs.entries()) {
+    addCommunityHubPart(`hub-class-table-${tableIndex + 1}`, "casework", [hubClassX, hubFloorY + 0.73, tableZ], [3.25, 0.12, 1.12], [0, hubTableYaw, 0]);
+    for (const [chairIndex, offset] of [-hubChairSpacing, hubChairSpacing].entries()) {
+      addCommunityHubPart(`hub-class-${tableIndex + 1}-chair-${chairIndex + 1}-seat`, "upholstery",
+        [hubClassX + offset, hubFloorY + 0.48, tableZ - 1.05], [0.52, 0.12, 0.52]);
+      addCommunityHubPart(`hub-class-${tableIndex + 1}-chair-${chairIndex + 1}-back`, "upholstery",
+        [hubClassX + offset, hubFloorY + 0.84, tableZ - 1.29], [0.52, 0.68, 0.10]);
+    }
+  }
+  const hubPhotoDeskZ = hubMaxZ - 1.54;
+  addCommunityHubPart("hub-photo-desk", "casework", [hubMinX + 0.48, hubFloorY + 0.72, hubPhotoDeskZ], [0.72, 0.12, 2.15]);
+  addCommunityHubPart("hub-photo-monitor", "metal", [hubMinX + 0.90, hubFloorY + 1.30, hubPhotoDeskZ], [0.08, 0.64, 0.82]);
+  addCommunityHubPart("hub-photo-camera", "metal", [hubMinX + 0.93, hubFloorY + 1.02, hubPhotoDeskZ - 0.72], [0.18, 0.16, 0.28]);
+  addCommunityHubPart("hub-photo-backdrop", "plaster", [hubWestPartitionX - 0.68 + hubPhotoBackdropOffset,
+    hubFloorY + 1.52, hubMaxZ - 0.18], [2.16, 2.68, 0.08]);
+  addCommunityHubPart("hub-photo-backdrop-rail", "pole", [hubWestPartitionX - 0.68 + hubPhotoBackdropOffset,
+    hubFloorY + 2.92, hubMaxZ - 0.30], [2.42, 0.08, 0.08]);
+
+  // Staff break room with fabric sofa, coffee table, lockers and kitchenette.
+  const hubBreakSofaX = hubMaxX - 2.35;
+  const hubBreakSofaZ = hubMaxZ - 2.05;
+  addCommunityHubPart("hub-break-sofa-seat", "upholstery", [hubBreakSofaX, hubFloorY + 0.46, hubBreakSofaZ], [3.05, 0.46, 0.92]);
+  addCommunityHubPart("hub-break-sofa-back", "upholstery", [hubBreakSofaX, hubFloorY + 0.91, hubBreakSofaZ + 0.38], [3.05, 0.88, 0.18]);
+  addCommunityHubPart("hub-break-table", "casework", [hubHost.x + 4.48, hubFloorY + 0.39, hubMaxZ - 4.05], [1.45, 0.12, 0.78]);
+  addCommunityHubPart("hub-staff-lockers", "cabinetry", [hubEastPartitionX + 0.48, hubFloorY + 1.04, hubMaxZ - 1.42], [0.72, 2.08, 2.24]);
+  addCommunityHubPart("hub-break-counter", "cabinetry", [hubMaxX - 0.48, hubFloorY + 0.47, hubEastDividerZ + 1.68], [0.72, 0.86, 2.35]);
+  addCommunityHubPart("hub-break-countertop", "concrete", [hubMaxX - 0.44, hubFloorY + 0.93, hubEastDividerZ + 1.68], [0.82, 0.10, 2.48]);
+
+  for (const [id, x, z, width, depth, height] of [
+    ["hub-reception-desk", hubReceptionX, hubReceptionZ, 3.66, 0.86, 1.0],
+    ["hub-reception-files", hubMinX + 0.48, hubMinZ + 4.68, 0.72, 1.15, 1.5],
+    ["hub-kitchen-run", hubKitchenRunX, hubKitchenRunZ, 0.84, 4.82, 2.15],
+    ["hub-kitchen-fridge", hubMinX + 0.54, hubMinZ + 5.55, 0.92, 0.88, 2.04],
+    ["hub-serving-counter", hubServeX, hubServeZ, 3.34, 0.92, 1.0],
+    ["hub-repair-bench", hubRepairBenchX, hubRepairBenchZ, 0.76, 4.10, 1.0],
+    ["hub-parts-shelf", hubShelfX, hubShelfZ, 0.72, 2.28, 2.0],
+    ["hub-intake-desk", hubIntakeX, hubReceptionZ, 2.45, 0.88, 0.9],
+    ["hub-class-table-1", hubClassX, hubClassTableZs[0], 3.35, 1.22, 0.86],
+    ["hub-class-table-2", hubClassX, hubClassTableZs[1], 3.35, 1.22, 0.86],
+    ["hub-photo-desk", hubMinX + 0.48, hubPhotoDeskZ, 0.72, 2.15, 1.0],
+    ["hub-break-sofa", hubBreakSofaX, hubBreakSofaZ, 3.05, 0.94, 1.36],
+    ["hub-staff-lockers", hubEastPartitionX + 0.48, hubMaxZ - 1.42, 0.72, 2.24, 2.08],
+    ["hub-break-counter", hubMaxX - 0.48, hubEastDividerZ + 1.68, 0.82, 2.48, 1.0],
+  ]) addCommunityHubBlocker(id, "community-fixture", x, z, width, depth, height);
+
+  // Preallocated ceiling practical housings visually identify the working
+  // rooms. Their two actual lights are borrowed from the fixed storefront
+  // light pool below and are focus-bounded to this interior.
+  addCommunityHubPart("hub-kitchen-ceiling-practical", "plaster", [hubMinX + 3.5,
+    hubFloorY + hubHost.clearHeight - 0.16, hubMinZ + 8.7], [1.25, 0.05, 0.36]);
+  addCommunityHubPart("hub-workshop-ceiling-practical", "plaster", [hubMaxX - 3.5,
+    hubFloorY + hubHost.clearHeight - 0.16, hubMinZ + 10.7], [1.25, 0.05, 0.36]);
+  addCommunityHubPart("hub-classroom-ceiling-practical", "plaster", [hubMinX + 3.5,
+    hubFloorY + hubHost.clearHeight - 0.16, hubMaxZ - 5.4], [1.25, 0.05, 0.36]);
+
+  const communityHub = deepFreeze({
+    id: "harbour-skills-house",
+    buildingId: "harbour-skills-house-building",
+    label: "HARBOUR SKILLS HOUSE",
+    address: "42 Mariner Walk",
+    districtId: hubHost.districtId,
+    hostBuildingRecordId: hubHost.id,
+    seed: communityHubSeed,
+    bounds: {
+      minX: hubMinX,
+      maxX: hubMaxX,
+      minZ: hubMinZ,
+      maxZ: hubMaxZ,
+      floorY: hubFloorY,
+      ceilingY: hubFloorY + hubHost.clearHeight,
+    },
+    entrance: {
+      exterior: [hubEntranceX, hubFloorY, hubMinZ - 1.45],
+      threshold: [hubEntranceX, hubFloorY, hubMinZ - 0.18],
+      interior: [hubEntranceX, hubFloorY, hubMinZ + 1.52],
+      heading: 0,
+      clearWidth: hubDoorWidth,
+    },
+    zones: {
+      reception: { id: "reception", label: "RECEPTION", position: [hubHost.x, hubFloorY, hubMinZ + 3.12], bounds: { minX: hubMinX + 0.22, maxX: hubMaxX - 0.22, minZ: hubMinZ + 0.22, maxZ: hubPartitionStartZ - 0.10 } },
+      kitchen: { id: "kitchen", label: "TEACHING KITCHEN", position: [hubWestPartitionX - 1.18, hubFloorY, hubKitchenDoorZ], bounds: { minX: hubMinX + 0.22, maxX: hubWestPartitionX - 0.16, minZ: hubPartitionStartZ, maxZ: hubWestDividerZ - 0.16 } },
+      workshop: { id: "workshop", label: "REPAIR WORKSHOP", position: [hubEastPartitionX + 1.22, hubFloorY, hubWorkshopDoorZ], bounds: { minX: hubEastPartitionX + 0.16, maxX: hubMaxX - 0.22, minZ: hubPartitionStartZ, maxZ: hubEastDividerZ - 0.16 } },
+      classroom: { id: "classroom", label: "CLASSROOM + PHOTO LAB", position: [hubWestPartitionX - 1.18, hubFloorY, hubClassroomDoorZ], bounds: { minX: hubMinX + 0.22, maxX: hubWestPartitionX - 0.16, minZ: hubWestDividerZ + 0.16, maxZ: hubMaxZ - 0.22 } },
+      breakRoom: { id: "break-room", label: "STAFF BREAK ROOM", position: [hubEastPartitionX + 1.18, hubFloorY, hubBreakDoorZ], bounds: { minX: hubEastPartitionX + 0.16, maxX: hubMaxX - 0.22, minZ: hubEastDividerZ + 0.16, maxZ: hubMaxZ - 0.22 } },
+    },
+    doorways: {
+      exterior: { position: [hubEntranceX, hubFloorY, hubSouthWallZ], clearWidth: hubDoorWidth },
+      kitchen: { position: [hubWestPartitionX, hubFloorY, hubKitchenDoorZ], clearWidth: 1.34 },
+      workshop: { position: [hubEastPartitionX, hubFloorY, hubWorkshopDoorZ], clearWidth: 1.42 },
+      classroom: { position: [hubWestPartitionX, hubFloorY, hubClassroomDoorZ], clearWidth: 1.38 },
+      breakRoom: { position: [hubEastPartitionX, hubFloorY, hubBreakDoorZ], clearWidth: 1.30 },
+    },
+    stations: {
+      reception: { id: "hub-reception", action: "check_in", label: "RECEPTION", position: [hubReceptionX, hubFloorY, hubReceptionZ - 1.08], fixtureId: "hub-reception-desk-base" },
+      kitchenPrep: { id: "hub-kitchen-prep", action: "prepare_meal", label: "PREPARE A MEAL", position: [hubKitchenRunX + 1.30, hubFloorY, hubKitchenRunZ - 1.10], fixtureId: "hub-kitchen-hob" },
+      kitchenServe: { id: "hub-kitchen-serve", action: "serve_meal", label: "SERVE A MEAL", position: [hubServeX, hubFloorY, hubServeZ - 1.02], fixtureId: "hub-serving-counter-top" },
+      kitchenClean: { id: "hub-kitchen-clean", action: "clean_kitchen", label: "CLEAN THE KITCHEN", position: [hubKitchenRunX + 1.30, hubFloorY, hubKitchenRunZ + 1.12], fixtureId: "hub-kitchen-sink" },
+      repairIntake: { id: "hub-repair-intake", action: "intake_repair", label: "REPAIR INTAKE", position: [hubIntakeX, hubFloorY, hubReceptionZ - 1.08], fixtureId: "hub-repair-intake-desk" },
+      repairBench: { id: "hub-repair-bench", action: "repair", label: "REPAIR BENCH", position: [hubRepairBenchX - 1.32, hubFloorY, hubRepairBenchZ], fixtureId: "hub-repair-workbench" },
+      classroom: { id: "hub-classroom", action: "learn", label: "JOIN A CLASS", position: [hubWestPartitionX - 1.20, hubFloorY, hubClassTableZs[0]], fixtureId: "hub-class-table-1" },
+      photoDesk: { id: "hub-photo-desk", action: "photography", label: "PHOTO DESK", position: [hubMinX + 1.42, hubFloorY, hubPhotoDeskZ], fixtureId: "hub-photo-desk" },
+      breakArea: { id: "hub-break-area", action: "rest", label: "TAKE A BREAK", position: [hubBreakSofaX - 1.98, hubFloorY, hubBreakSofaZ], fixtureId: "hub-break-sofa-seat" },
+    },
+    spawnPoints: {
+      public: [
+        { id: "hub-public-1", position: [hubHost.x - 0.58, hubFloorY, hubMinZ + 2.10], heading: 0 },
+        { id: "hub-public-2", position: [hubWestPartitionX - 1.18, hubFloorY, hubKitchenDoorZ + 0.92], heading: Math.PI * 0.5 },
+        { id: "hub-public-3", position: [hubWestPartitionX - 1.18, hubFloorY, hubClassroomDoorZ + 0.92], heading: Math.PI * 0.5 },
+      ],
+      staff: [
+        { id: "hub-staff-reception", role: "reception", position: [hubReceptionX, hubFloorY, hubReceptionZ + 1.02], heading: Math.PI },
+        { id: "hub-staff-kitchen", role: "kitchen", position: [hubKitchenRunX + 1.30, hubFloorY, hubKitchenRunZ], heading: -Math.PI * 0.5 },
+        { id: "hub-staff-repair", role: "repair", position: [hubRepairBenchX - 1.32, hubFloorY, hubRepairBenchZ + 1.14], heading: Math.PI * 0.5 },
+        { id: "hub-staff-teacher", role: "teacher", position: [hubWestPartitionX - 1.18, hubFloorY, hubClassTableZs[1] + 1.20], heading: Math.PI },
+      ],
+    },
+    navigationNodes: [
+      [hubEntranceX, hubFloorY, hubMinZ - 1.45],
+      [hubEntranceX, hubFloorY, hubMinZ - 0.18],
+      [hubEntranceX, hubFloorY, hubMinZ + 1.52],
+      [hubHost.x, hubFloorY, hubPartitionStartZ + 0.60],
+      [hubHost.x, hubFloorY, hubWestDividerZ + 1.0],
+      [hubHost.x, hubFloorY, hubEastDividerZ + 1.0],
+      [hubHost.x, hubFloorY, hubMaxZ - 1.0],
+    ],
+    variant: {
+      cabinetStyle: hubCabinetStyle,
+      seatStyle: hubSeatStyle,
+      tableYaw: hubTableYaw,
+      chairSpacing: hubChairSpacing,
+      photoBackdropOffset: hubPhotoBackdropOffset,
+    },
+    glass: {
+      kind: "dark-neutral-public-glazing",
+      panels: 2,
+      emissive: false,
+      neon: false,
+    },
+    lighting: {
+      kind: "bounded-warm-public-practical",
+      positions: [
+        [hubMinX + 3.5, hubFloorY + 2.58, hubMinZ + 8.7],
+        [hubMaxX - 3.5, hubFloorY + 2.58, hubMinZ + 10.7],
+      ],
+      colors: [0xffd5a8, 0xdbeaff],
+      intensities: [12, 13],
+      ranges: [12.5, 12.5],
+      reallocates: "two-occupied-storefront-practicals",
+    },
+    renderParts: communityHubParts,
+    collisionIds: communityHubBlockerIds,
+    stats: {
+      rooms: 5,
+      doorways: 5,
+      stations: 9,
+      publicSpawns: 3,
+      staffSpawns: 4,
+      renderInstances: communityHubParts.length,
+      glassPanels: communityHubGlassTransforms.length,
+      collisionVolumes: communityHubBlockerIds.length,
+      practicalLights: 2,
+      emissiveMaterials: 0,
+    },
+  });
+
+  // Common Ground is the first ordinary hospitality workplace that is also a
+  // complete street-connected building. The former nine-piece pavement bay
+  // has been removed below; these rooms occupy the ground floor opened in the
+  // original tower shell, with no portal, scene swap or runtime asset work.
+  // Every surface and fixture appends to an existing resident GPU pool.
+  if (!commonGroundCafeHost) throw new Error("Common Ground Cafe host building was not generated.");
+  const commonGroundCafeSeed = (resolvedSeed ^ 0x43414645) >>> 0;
+  const commonGroundCafeRandom = mulberry32(commonGroundCafeSeed);
+  const commonGroundCafeParts = [];
+  const commonGroundCafeGlassTransforms = [];
+  const commonGroundCafeBlockerIds = [];
+  const cafeHost = commonGroundCafeHost;
+  const cafeFloorY = SIDEWALK_TOP;
+  const cafeMinX = cafeHost.x - cafeHost.width * 0.5;
+  const cafeMaxX = cafeHost.x + cafeHost.width * 0.5;
+  const cafeMinZ = cafeHost.z - cafeHost.depth * 0.5;
+  const cafeMaxZ = cafeHost.z + cafeHost.depth * 0.5;
+  // This is the exact long-standing Open Doors interaction coordinate on the
+  // south pavement. Keeping it as the physical doorway preserves story/NPC
+  // identity while finally giving that marker a place behind it.
+  const cafeEntranceX = -40;
+  const cafeDoorWidth = 1.62;
+  const cafeDoorLeft = cafeEntranceX - cafeDoorWidth * 0.5;
+  const cafeDoorRight = cafeEntranceX + cafeDoorWidth * 0.5;
+  const cafeWallHeight = 3.22;
+  const cafeWallCenterY = cafeFloorY + cafeWallHeight * 0.5;
+  const cafeSouthWallZ = cafeMinZ + 0.11;
+  const cafeBackOfHouseZ = cafeHost.z - 1.12;
+  const cafeKitchenDishX = cafeHost.x + 5.35;
+  const cafeRearRoomsZ = cafeHost.z + 6.86;
+  const cafeStockDividerX = cafeHost.x - 4.05;
+  const cafeToiletDividerX = cafeHost.x + 5.75;
+  const cafeCabinetStyle = [2, 3, 5][Math.floor(commonGroundCafeRandom() * 3)];
+  const cafeSeatStyle = [0, 1, 2][Math.floor(commonGroundCafeRandom() * 3)];
+  const cafeTableYaw = (commonGroundCafeRandom() - 0.5) * 0.075;
+  const cafeChairOffset = 0.92 + commonGroundCafeRandom() * 0.08;
+  const cafeShelfJitter = (commonGroundCafeRandom() - 0.5) * 0.10;
+
+  const commonGroundCafePools = {
+    plaster: { transforms: buildingTransforms[5], batch: "Instanced city buildings style 6" },
+    timber: { transforms: buildingTransforms[3], batch: "Instanced city buildings style 4" },
+    upholstery: { transforms: buildingTransforms[cafeSeatStyle], batch: `Instanced city buildings style ${cafeSeatStyle + 1}` },
+    cabinetry: { transforms: buildingTransforms[cafeCabinetStyle], batch: `Instanced city buildings style ${cafeCabinetStyle + 1}` },
+    concrete: { transforms: podiumTransforms, batch: "Instanced ground-floor podiums" },
+    trim: { transforms: facadeRibTransforms, batch: "Instanced facade corner ribs" },
+    metal: { transforms: balconyTransforms, batch: "Instanced apartment balconies" },
+    casework: { transforms: rooftopTransforms, batch: "Instanced rooftop mechanical housings" },
+    pole: { transforms: antennaTransforms, batch: "Instanced rooftop antennas" },
+  };
+  function addCommonGroundCafePart(id, poolName, position, scale, rotation = [0, 0, 0]) {
+    const pool = commonGroundCafePools[poolName];
+    const item = transform(position, scale, rotation);
+    pool.transforms.push(item);
+    commonGroundCafeParts.push({
+      id,
+      pool: poolName,
+      batch: pool.batch,
+      position: [...position],
+      scale: [...scale],
+      rotation: [...rotation],
+    });
+  }
+  function addCommonGroundCafeGlass(id, position, scale, rotation = [0, 0, 0]) {
+    const item = transform(position, scale, rotation);
+    commonGroundCafeGlassTransforms.push(item);
+    commonGroundCafeParts.push({
+      id,
+      pool: "glass",
+      batch: "Pulse Street bus shelter glass",
+      position: [...position],
+      scale: [...scale],
+      rotation: [...rotation],
+    });
+  }
+  function addCommonGroundCafeBlocker(id, kind, x, z, width, depth, height = cafeWallHeight) {
+    addBlocker(id, kind, x, z, width, depth, height, cafeFloorY);
+    commonGroundCafeBlockerIds.push(id);
+  }
+  function addCafeHorizontalWall(prefix, z, fromX, toX, doorways = []) {
+    let cursor = fromX;
+    const sorted = [...doorways].sort((a, b) => a.center - b.center);
+    for (const opening of sorted) {
+      const left = clamp(opening.center - opening.width * 0.5, fromX, toX);
+      const right = clamp(opening.center + opening.width * 0.5, fromX, toX);
+      if (left > cursor + 0.01) {
+        const id = `${prefix}-${commonGroundCafeBlockerIds.length + 1}`;
+        addCommonGroundCafePart(id, "plaster", [(cursor + left) * 0.5, cafeWallCenterY, z],
+          [left - cursor, cafeWallHeight, 0.16]);
+        addCommonGroundCafeBlocker(id, "cafe-partition", (cursor + left) * 0.5, z, left - cursor, 0.16);
+      }
+      cursor = Math.max(cursor, right);
+    }
+    if (cursor < toX - 0.01) {
+      const id = `${prefix}-${commonGroundCafeBlockerIds.length + 1}`;
+      addCommonGroundCafePart(id, "plaster", [(cursor + toX) * 0.5, cafeWallCenterY, z],
+        [toX - cursor, cafeWallHeight, 0.16]);
+      addCommonGroundCafeBlocker(id, "cafe-partition", (cursor + toX) * 0.5, z, toX - cursor, 0.16);
+    }
+  }
+  function addCafeVerticalWall(prefix, x, fromZ, toZ, doorways = []) {
+    let cursor = fromZ;
+    const sorted = [...doorways].sort((a, b) => a.center - b.center);
+    for (const opening of sorted) {
+      const near = clamp(opening.center - opening.width * 0.5, fromZ, toZ);
+      const far = clamp(opening.center + opening.width * 0.5, fromZ, toZ);
+      if (near > cursor + 0.01) {
+        const id = `${prefix}-${commonGroundCafeBlockerIds.length + 1}`;
+        addCommonGroundCafePart(id, "plaster", [x, cafeWallCenterY, (cursor + near) * 0.5],
+          [0.16, cafeWallHeight, near - cursor]);
+        addCommonGroundCafeBlocker(id, "cafe-partition", x, (cursor + near) * 0.5, 0.16, near - cursor);
+      }
+      cursor = Math.max(cursor, far);
+    }
+    if (cursor < toZ - 0.01) {
+      const id = `${prefix}-${commonGroundCafeBlockerIds.length + 1}`;
+      addCommonGroundCafePart(id, "plaster", [x, cafeWallCenterY, (cursor + toZ) * 0.5],
+        [0.16, cafeWallHeight, toZ - cursor]);
+      addCommonGroundCafeBlocker(id, "cafe-partition", x, (cursor + toZ) * 0.5, 0.16, toZ - cursor);
+    }
+  }
+
+  // Shell and street facade. The broad glazing is neutral dark glass with a
+  // conventional sill/header and mullions; only the wider city may use neon.
+  addCommonGroundCafePart("cafe-floor", "timber", [cafeHost.x, cafeFloorY + 0.055, cafeHost.z],
+    [cafeHost.width - 0.34, 0.11, cafeHost.depth - 0.34]);
+  addCommonGroundCafePart("cafe-ceiling", "plaster", [cafeHost.x,
+    cafeFloorY + cafeHost.clearHeight - 0.07, cafeHost.z], [cafeHost.width - 0.28, 0.14, cafeHost.depth - 0.28]);
+  addCommonGroundCafePart("cafe-west-shell", "plaster", [cafeMinX + 0.11, cafeWallCenterY, cafeHost.z],
+    [0.22, cafeWallHeight, cafeHost.depth]);
+  addCommonGroundCafePart("cafe-east-shell", "plaster", [cafeMaxX - 0.11, cafeWallCenterY, cafeHost.z],
+    [0.22, cafeWallHeight, cafeHost.depth]);
+  addCommonGroundCafePart("cafe-north-shell", "plaster", [cafeHost.x, cafeWallCenterY, cafeMaxZ - 0.11],
+    [cafeHost.width, cafeWallHeight, 0.22]);
+  const cafeWindowLeft = cafeMinX + 0.42;
+  const cafeWindowRight = cafeDoorLeft - 0.52;
+  for (const [id, fromX, toX, y, height] of [
+    ["cafe-front-west-return", cafeMinX, cafeWindowLeft, cafeWallCenterY, cafeWallHeight],
+    ["cafe-front-window-sill", cafeWindowLeft, cafeWindowRight, cafeFloorY + 0.34, 0.68],
+    ["cafe-front-window-header", cafeWindowLeft, cafeWindowRight, cafeFloorY + 2.93, 0.58],
+    ["cafe-front-window-to-door", cafeWindowRight, cafeDoorLeft, cafeWallCenterY, cafeWallHeight],
+    ["cafe-front-door-lintel", cafeDoorLeft, cafeDoorRight, cafeFloorY + 3.01, 0.42],
+    ["cafe-front-east-return", cafeDoorRight, cafeMaxX, cafeWallCenterY, cafeWallHeight],
+  ]) addCommonGroundCafePart(id, "plaster", [(fromX + toX) * 0.5, y, cafeSouthWallZ],
+    [toX - fromX, height, 0.22]);
+  const cafeGlassPanelWidth = (cafeWindowRight - cafeWindowLeft) / 3;
+  for (let panel = 0; panel < 3; ++panel) {
+    const panelLeft = cafeWindowLeft + panel * cafeGlassPanelWidth;
+    const panelRight = panelLeft + cafeGlassPanelWidth;
+    addCommonGroundCafeGlass(`cafe-front-dark-glass-${panel + 1}`,
+      [(panelLeft + panelRight) * 0.5, cafeFloorY + 1.69, cafeMinZ - 0.015],
+      [panelRight - panelLeft - 0.12, 1.78, 1], [0, Math.PI, 0]);
+    addCommonGroundCafePart(`cafe-window-mullion-${panel + 1}`, "trim",
+      [panelLeft, cafeFloorY + 1.70, cafeSouthWallZ - 0.03], [0.10, 2.62, 0.12]);
+  }
+  addCommonGroundCafePart("cafe-window-mullion-east", "trim",
+    [cafeWindowRight, cafeFloorY + 1.70, cafeSouthWallZ - 0.03], [0.10, 2.62, 0.12]);
+  addCommonGroundCafePart("cafe-door-west-jamb", "trim",
+    [cafeDoorLeft, cafeFloorY + 1.46, cafeSouthWallZ - 0.03], [0.12, 2.92, 0.14]);
+  addCommonGroundCafePart("cafe-door-east-jamb", "trim",
+    [cafeDoorRight, cafeFloorY + 1.46, cafeSouthWallZ - 0.03], [0.12, 2.92, 0.14]);
+  addCommonGroundCafePart("cafe-weathered-threshold", "concrete",
+    [cafeEntranceX, cafeFloorY + 0.025, cafeMinZ - 0.42], [cafeDoorWidth + 0.52, 0.05, 1.06]);
+  addCommonGroundCafePart("cafe-awning", "metal", [cafeHost.x, cafeFloorY + 3.06, cafeMinZ - 0.72],
+    [cafeHost.width - 1.10, 0.15, 1.56], [-0.035, 0, 0]);
+  addCommonGroundCafePart("cafe-name-board", "timber", [cafeHost.x - 1.20, cafeFloorY + 2.66, cafeMinZ - 0.22],
+    [7.20, 0.46, 0.12]);
+
+  addCommonGroundCafeBlocker("cafe-west-shell", "cafe-wall", cafeMinX + 0.11, cafeHost.z, 0.22, cafeHost.depth);
+  addCommonGroundCafeBlocker("cafe-east-shell", "cafe-wall", cafeMaxX - 0.11, cafeHost.z, 0.22, cafeHost.depth);
+  addCommonGroundCafeBlocker("cafe-north-shell", "cafe-wall", cafeHost.x, cafeMaxZ - 0.11, cafeHost.width, 0.22);
+  addCommonGroundCafeBlocker("cafe-south-shell-west", "cafe-wall", (cafeMinX + cafeDoorLeft) * 0.5,
+    cafeSouthWallZ, cafeDoorLeft - cafeMinX, 0.22);
+  addCommonGroundCafeBlocker("cafe-south-shell-east", "cafe-wall", (cafeDoorRight + cafeMaxX) * 0.5,
+    cafeSouthWallZ, cafeMaxX - cafeDoorRight, 0.22);
+
+  // Back-of-house architecture. Staff can walk from the public entrance past
+  // the counter through a 1.5 m door, then into kitchen, dish, stock, staff
+  // nook and an actual toilet. All door gaps exceed Kai's full collision
+  // diameter and are identical in visible geometry and blockers.
+  const cafeStaffDoorX = cafeEntranceX;
+  const cafeStaffDoorWidth = 1.50;
+  const cafeKitchenDishDoorZ = cafeHost.z + 3.78;
+  const cafeKitchenDishDoorWidth = 1.34;
+  const cafeStockDoorX = cafeHost.x - 8.25;
+  const cafeBreakDoorX = cafeHost.x + 0.15;
+  const cafeToiletDoorX = cafeHost.x + 8.75;
+  addCafeHorizontalWall("cafe-boh-wall", cafeBackOfHouseZ, cafeMinX + 0.11, cafeMaxX - 0.11,
+    [{ center: cafeStaffDoorX, width: cafeStaffDoorWidth }]);
+  addCafeVerticalWall("cafe-kitchen-dish-wall", cafeKitchenDishX, cafeBackOfHouseZ, cafeRearRoomsZ,
+    [{ center: cafeKitchenDishDoorZ, width: cafeKitchenDishDoorWidth }]);
+  addCafeHorizontalWall("cafe-rear-room-wall", cafeRearRoomsZ, cafeMinX + 0.11, cafeMaxX - 0.11, [
+    { center: cafeStockDoorX, width: 1.26 },
+    { center: cafeBreakDoorX, width: 1.30 },
+    { center: cafeToiletDoorX, width: 1.08 },
+  ]);
+  addCafeVerticalWall("cafe-stock-divider", cafeStockDividerX, cafeRearRoomsZ, cafeMaxZ - 0.11);
+  addCafeVerticalWall("cafe-toilet-divider", cafeToiletDividerX, cafeRearRoomsZ, cafeMaxZ - 0.11);
+
+  // Customer room: a long upholstered wall seat, four two-person tables and
+  // eight proper chairs. Chair dressing stays visual/movable while table and
+  // banquette footprints use conservative physical collision.
+  const cafeBanquetteX = cafeMinX + 0.49;
+  const cafeBanquetteZ = cafeMinZ + 5.65;
+  addCommonGroundCafePart("cafe-banquette-seat", "upholstery",
+    [cafeBanquetteX, cafeFloorY + 0.46, cafeBanquetteZ], [0.74, 0.46, 7.70]);
+  addCommonGroundCafePart("cafe-banquette-back", "upholstery",
+    [cafeMinX + 0.20, cafeFloorY + 0.91, cafeBanquetteZ], [0.18, 0.90, 7.70]);
+  const cafeTablePositions = [
+    [cafeMinX + 3.15, cafeMinZ + 4.05],
+    [cafeMinX + 7.65, cafeMinZ + 4.05],
+    [cafeMinX + 3.15, cafeMinZ + 8.25],
+    [cafeMinX + 7.65, cafeMinZ + 8.25],
+  ];
+  for (const [tableIndex, [tableX, tableZ]] of cafeTablePositions.entries()) {
+    addCommonGroundCafePart(`cafe-table-${tableIndex + 1}-top`, "casework",
+      [tableX, cafeFloorY + 0.73, tableZ], [1.42, 0.11, 0.90], [0, cafeTableYaw * (tableIndex % 2 ? -1 : 1), 0]);
+    addCommonGroundCafePart(`cafe-table-${tableIndex + 1}-stem`, "pole",
+      [tableX, cafeFloorY + 0.37, tableZ], [0.12, 0.68, 0.12]);
+    for (const [chairIndex, direction] of [-1, 1].entries()) {
+      const chairX = tableX + direction * cafeChairOffset;
+      addCommonGroundCafePart(`cafe-table-${tableIndex + 1}-chair-${chairIndex + 1}-seat`, "upholstery",
+        [chairX, cafeFloorY + 0.48, tableZ], [0.48, 0.12, 0.48]);
+      addCommonGroundCafePart(`cafe-table-${tableIndex + 1}-chair-${chairIndex + 1}-back`, "upholstery",
+        [chairX + direction * 0.22, cafeFloorY + 0.84, tableZ], [0.10, 0.68, 0.48]);
+    }
+    addCommonGroundCafeBlocker(`cafe-table-${tableIndex + 1}`, "cafe-fixture", tableX, tableZ, 1.48, 0.96, 0.86);
+  }
+  addCommonGroundCafeBlocker("cafe-banquette", "cafe-fixture", cafeBanquetteX, cafeBanquetteZ, 0.76, 7.70, 1.36);
+
+  // Service counter: customer side, staff working face, point-of-sale and
+  // espresso equipment are individually legible without emissive screens.
+  const cafeCounterX = cafeHost.x - 0.30;
+  // A full 1.32 m staff aisle separates the counter from the back-room wall;
+  // this is intentionally wider than Kai's 0.76 m collision diameter.
+  const cafeCounterZ = cafeBackOfHouseZ - 1.80;
+  addCommonGroundCafePart("cafe-service-counter-base", "cabinetry",
+    [cafeCounterX, cafeFloorY + 0.47, cafeCounterZ], [9.60, 0.86, 0.78]);
+  addCommonGroundCafePart("cafe-service-counter-top", "concrete",
+    [cafeCounterX, cafeFloorY + 0.94, cafeCounterZ], [9.84, 0.10, 0.96]);
+  addCommonGroundCafeGlass("cafe-food-display-dark-glass",
+    [cafeCounterX - 2.75, cafeFloorY + 1.28, cafeCounterZ - 0.18], [3.16, 0.54, 1], [0, Math.PI, 0]);
+  addCommonGroundCafePart("cafe-pos-terminal", "metal",
+    [cafeCounterX + 3.56, cafeFloorY + 1.28, cafeCounterZ - 0.02], [0.54, 0.54, 0.12], [0.08, 0, 0]);
+  addCommonGroundCafePart("cafe-espresso-machine", "metal",
+    [cafeCounterX + 0.35, cafeFloorY + 1.22, cafeCounterZ + 0.10], [1.32, 0.48, 0.46]);
+  addCommonGroundCafePart("cafe-coffee-grinder", "casework",
+    [cafeCounterX + 1.52, cafeFloorY + 1.30, cafeCounterZ + 0.08], [0.32, 0.64, 0.34]);
+  addCommonGroundCafeBlocker("cafe-service-counter", "cafe-fixture", cafeCounterX, cafeCounterZ, 9.84, 0.96, 1.48);
+
+  // Working kitchen and preparation island.
+  const cafeKitchenRunX = cafeMinX + 0.49;
+  const cafeKitchenRunZ = cafeHost.z + 2.18;
+  addCommonGroundCafePart("cafe-kitchen-base-cabinets", "cabinetry",
+    [cafeKitchenRunX, cafeFloorY + 0.47, cafeKitchenRunZ], [0.74, 0.86, 5.15]);
+  addCommonGroundCafePart("cafe-kitchen-worktop", "concrete",
+    [cafeKitchenRunX + 0.04, cafeFloorY + 0.93, cafeKitchenRunZ], [0.86, 0.10, 5.34]);
+  addCommonGroundCafePart("cafe-kitchen-hob", "metal",
+    [cafeKitchenRunX + 0.48, cafeFloorY + 0.995, cafeKitchenRunZ - 1.36], [0.06, 0.06, 0.72]);
+  addCommonGroundCafePart("cafe-kitchen-oven", "metal",
+    [cafeKitchenRunX + 0.46, cafeFloorY + 0.52, cafeKitchenRunZ - 1.36], [0.06, 0.72, 0.72]);
+  addCommonGroundCafePart("cafe-kitchen-fridge", "metal",
+    [cafeMinX + 0.56, cafeFloorY + 1.02, cafeBackOfHouseZ + 1.10], [0.94, 2.04, 0.90]);
+  const cafePrepX = cafeHost.x - 4.15;
+  const cafePrepZ = cafeHost.z + 2.25;
+  addCommonGroundCafePart("cafe-prep-island-base", "cabinetry",
+    [cafePrepX, cafeFloorY + 0.45, cafePrepZ], [4.35, 0.84, 0.90]);
+  addCommonGroundCafePart("cafe-prep-island-worktop", "concrete",
+    [cafePrepX, cafeFloorY + 0.91, cafePrepZ], [4.58, 0.10, 1.08]);
+  addCommonGroundCafePart("cafe-prep-board", "timber",
+    [cafePrepX - 0.65, cafeFloorY + 0.985, cafePrepZ], [1.12, 0.045, 0.62], [0, cafeTableYaw, 0]);
+  addCommonGroundCafeBlocker("cafe-kitchen-run", "cafe-fixture", cafeKitchenRunX, cafeKitchenRunZ, 0.86, 5.34, 2.15);
+  addCommonGroundCafeBlocker("cafe-kitchen-fridge", "cafe-fixture", cafeMinX + 0.56,
+    cafeBackOfHouseZ + 1.10, 0.94, 0.90, 2.04);
+  addCommonGroundCafeBlocker("cafe-prep-island", "cafe-fixture", cafePrepX, cafePrepZ, 4.58, 1.08, 1.0);
+
+  // Dish return and sanitation area on the opposite wall.
+  const cafeDishRunX = cafeMaxX - 0.49;
+  const cafeDishRunZ = cafeHost.z + 2.16;
+  addCommonGroundCafePart("cafe-dish-base-cabinets", "cabinetry",
+    [cafeDishRunX, cafeFloorY + 0.47, cafeDishRunZ], [0.74, 0.86, 4.72]);
+  addCommonGroundCafePart("cafe-dish-worktop", "concrete",
+    [cafeDishRunX - 0.04, cafeFloorY + 0.93, cafeDishRunZ], [0.86, 0.10, 4.92]);
+  addCommonGroundCafePart("cafe-double-sink", "plaster",
+    [cafeDishRunX - 0.48, cafeFloorY + 0.995, cafeDishRunZ - 0.72], [0.06, 0.06, 1.26]);
+  addCommonGroundCafePart("cafe-dishwasher", "metal",
+    [cafeDishRunX - 0.48, cafeFloorY + 0.48, cafeDishRunZ + 1.30], [0.06, 0.80, 0.82]);
+  addCommonGroundCafePart("cafe-dish-drying-rack", "trim",
+    [cafeDishRunX - 0.52, cafeFloorY + 1.52, cafeDishRunZ - 0.45], [0.10, 0.80, 1.82]);
+  addCommonGroundCafeBlocker("cafe-dish-run", "cafe-fixture", cafeDishRunX, cafeDishRunZ, 0.86, 4.92, 1.72);
+
+  // Stock room, staff nook and toilet complete the workplace rather than
+  // using abstract back-room triggers.
+  const cafeStockShelfX = cafeMinX + 0.48;
+  const cafeStockShelfZ = cafeRearRoomsZ + 3.35;
+  for (let level = 0; level < 3; ++level) {
+    addCommonGroundCafePart(`cafe-stock-shelf-${level + 1}`, "trim",
+      [cafeStockShelfX, cafeFloorY + 0.38 + level * 0.69, cafeStockShelfZ + cafeShelfJitter],
+      [0.72, 0.08, 4.25]);
+  }
+  for (let crate = 0; crate < 4; ++crate) {
+    addCommonGroundCafePart(`cafe-stock-crate-${crate + 1}`, "casework",
+      [cafeMinX + 1.10 + (crate % 2) * 1.08, cafeFloorY + 0.32,
+        cafeRearRoomsZ + 1.32 + Math.floor(crate / 2) * 1.20], [0.76, 0.58, 0.72]);
+  }
+  addCommonGroundCafeBlocker("cafe-stock-shelves", "cafe-fixture", cafeStockShelfX,
+    cafeStockShelfZ, 0.76, 4.35, 2.05);
+
+  const cafeBreakX = cafeHost.x + 0.70;
+  const cafeBreakZ = cafeMaxZ - 2.25;
+  addCommonGroundCafePart("cafe-staff-bench-seat", "upholstery",
+    [cafeBreakX, cafeFloorY + 0.46, cafeBreakZ], [3.20, 0.46, 0.86]);
+  addCommonGroundCafePart("cafe-staff-bench-back", "upholstery",
+    [cafeBreakX, cafeFloorY + 0.89, cafeBreakZ + 0.34], [3.20, 0.84, 0.18]);
+  addCommonGroundCafePart("cafe-staff-table", "casework",
+    [cafeBreakX, cafeFloorY + 0.70, cafeRearRoomsZ + 1.50], [1.38, 0.11, 0.82]);
+  addCommonGroundCafePart("cafe-staff-lockers", "cabinetry",
+    [cafeStockDividerX + 0.49, cafeFloorY + 1.04, cafeRearRoomsZ + 2.20], [0.72, 2.08, 2.30]);
+  addCommonGroundCafeBlocker("cafe-staff-bench", "cafe-fixture", cafeBreakX, cafeBreakZ, 3.20, 0.92, 1.34);
+  addCommonGroundCafeBlocker("cafe-staff-lockers", "cafe-fixture", cafeStockDividerX + 0.49,
+    cafeRearRoomsZ + 2.20, 0.72, 2.30, 2.08);
+
+  const cafeToiletX = cafeMaxX - 2.16;
+  addCommonGroundCafePart("cafe-toilet-base", "plaster",
+    [cafeToiletX, cafeFloorY + 0.31, cafeMaxZ - 1.52], [0.58, 0.50, 0.76]);
+  addCommonGroundCafePart("cafe-toilet-cistern", "plaster",
+    [cafeToiletX, cafeFloorY + 0.72, cafeMaxZ - 1.23], [0.56, 0.72, 0.24]);
+  addCommonGroundCafePart("cafe-toilet-vanity", "cabinetry",
+    [cafeMaxX - 0.49, cafeFloorY + 0.43, cafeRearRoomsZ + 2.10], [0.72, 0.80, 1.45]);
+  addCommonGroundCafePart("cafe-toilet-basin", "plaster",
+    [cafeMaxX - 0.54, cafeFloorY + 0.88, cafeRearRoomsZ + 2.10], [0.74, 0.10, 1.24]);
+  addCommonGroundCafeBlocker("cafe-toilet", "cafe-fixture", cafeToiletX, cafeMaxZ - 1.40, 0.66, 1.08, 1.10);
+  addCommonGroundCafeBlocker("cafe-toilet-vanity", "cafe-fixture", cafeMaxX - 0.49,
+    cafeRearRoomsZ + 2.10, 0.72, 1.45, 0.98);
+
+  // Resident housings make the single reallocated Open Doors practical read
+  // as deliberate warm task lighting; no extra light or shader is created.
+  for (const [index, [x, z]] of [
+    [cafeCounterX, cafeCounterZ + 1.25],
+    [cafePrepX, cafePrepZ],
+    [cafeDishRunX - 1.65, cafeDishRunZ],
+  ].entries()) addCommonGroundCafePart(`cafe-ceiling-practical-${index + 1}`, "plaster",
+    [x, cafeFloorY + cafeHost.clearHeight - 0.16, z], [1.18, 0.05, 0.34]);
+
+  const cafeHandoverPosition = [cafeCounterX + 5.62, cafeFloorY, cafeCounterZ - 0.86];
+  const cafeTillPosition = [cafeCounterX + 3.55, cafeFloorY, cafeCounterZ + 0.92];
+  const cafePrepPosition = [cafePrepX, cafeFloorY, cafePrepZ - 1.05];
+  const cafeServePosition = [cafeCounterX, cafeFloorY, cafeCounterZ + 0.94];
+  const cafeDishesPosition = [cafeDishRunX - 1.30, cafeFloorY, cafeDishRunZ - 0.72];
+  const cafeStockPosition = [cafeMinX + 2.35, cafeFloorY, cafeStockShelfZ];
+  const cafeBreakPosition = [cafeBreakX - 2.05, cafeFloorY, cafeBreakZ];
+  const cafeKeeperPosition = cafeTillPosition;
+  const cafeCustomerAnchors = {
+    queue: [
+      [cafeCounterX + 3.55, cafeFloorY, cafeCounterZ - 1.24],
+      [cafeCounterX + 5.38, cafeFloorY, cafeCounterZ - 2.15],
+      [cafeCounterX + 5.38, cafeFloorY, cafeCounterZ - 4.05],
+    ],
+    pickup: [cafeCounterX - 0.35, cafeFloorY, cafeCounterZ - 1.24],
+    seating: [
+      [cafeTablePositions[0][0], cafeFloorY, cafeTablePositions[0][1] - 1.18],
+      [cafeTablePositions[1][0], cafeFloorY, cafeTablePositions[1][1] - 1.18],
+      [cafeTablePositions[2][0], cafeFloorY, cafeTablePositions[2][1] + 1.18],
+      [cafeTablePositions[3][0], cafeFloorY, cafeTablePositions[3][1] + 1.18],
+    ],
+    story: {
+      leah: [cafeTablePositions[3][0] + 1.40, cafeFloorY, cafeTablePositions[3][1]],
+      interaction: [cafeTablePositions[3][0] + 3.90, cafeFloorY, cafeTablePositions[3][1]],
+    },
+  };
+  const cafeJobAnchors = {
+    handover: cafeHandoverPosition,
+    till: cafeTillPosition,
+    prep: cafePrepPosition,
+    serve: cafeServePosition,
+    dishes: cafeDishesPosition,
+    stock: cafeStockPosition,
+    break: cafeBreakPosition,
+  };
+  const cafeFrontagePartIds = [
+    "cafe-front-west-return", "cafe-front-window-sill", "cafe-front-window-header",
+    "cafe-front-window-to-door", "cafe-front-door-lintel", "cafe-front-east-return",
+    "cafe-front-dark-glass-1", "cafe-front-dark-glass-2", "cafe-front-dark-glass-3",
+    "cafe-window-mullion-1", "cafe-window-mullion-2", "cafe-window-mullion-3",
+    "cafe-window-mullion-east", "cafe-door-west-jamb", "cafe-door-east-jamb",
+    "cafe-weathered-threshold", "cafe-awning", "cafe-name-board",
+  ];
+  const commonGroundCafe = deepFreeze({
+    id: "common_ground_cafe",
+    businessId: "common_ground_cafe",
+    buildingId: "common-ground-cafe-building",
+    label: "COMMON GROUND CAFE",
+    address: "16 Common Ground Lane",
+    districtId: cafeHost.districtId,
+    hostBuildingRecordId: cafeHost.id,
+    seed: commonGroundCafeSeed,
+    bounds: {
+      minX: cafeMinX,
+      maxX: cafeMaxX,
+      minZ: cafeMinZ,
+      maxZ: cafeMaxZ,
+      floorY: cafeFloorY,
+      ceilingY: cafeFloorY + cafeHost.clearHeight,
+    },
+    entrance: {
+      exterior: [cafeEntranceX, cafeFloorY, -16.5],
+      threshold: [cafeEntranceX, cafeFloorY, cafeMinZ - 0.18],
+      interior: [cafeEntranceX, cafeFloorY, cafeMinZ + 1.38],
+      heading: 0,
+      clearWidth: cafeDoorWidth,
+      transition: "continuous-world",
+      loading: false,
+      teleport: false,
+    },
+    keeperAnchor: cafeKeeperPosition,
+    zones: {
+      dining: { id: "dining", label: "CUSTOMER DINING", position: [cafeHost.x - 0.2, cafeFloorY, cafeMinZ + 6.0], bounds: { minX: cafeMinX + 0.22, maxX: cafeMaxX - 0.22, minZ: cafeMinZ + 0.22, maxZ: cafeBackOfHouseZ - 0.08 } },
+      service: { id: "service", label: "SERVICE COUNTER", position: [cafeCounterX + 5.45, cafeFloorY, cafeCounterZ + 0.95], bounds: { minX: cafeMinX + 0.22, maxX: cafeMaxX - 0.22, minZ: cafeCounterZ - 1.80, maxZ: cafeBackOfHouseZ - 0.08 } },
+      kitchen: { id: "kitchen", label: "WORKING KITCHEN", position: [cafeKitchenDishX - 2.0, cafeFloorY, cafeBackOfHouseZ + 1.10], bounds: { minX: cafeMinX + 0.22, maxX: cafeKitchenDishX - 0.16, minZ: cafeBackOfHouseZ + 0.16, maxZ: cafeRearRoomsZ - 0.16 } },
+      dishes: { id: "dishes", label: "DISH + SANITATION", position: [cafeKitchenDishX + 1.32, cafeFloorY, cafeBackOfHouseZ + 1.15], bounds: { minX: cafeKitchenDishX + 0.16, maxX: cafeMaxX - 0.22, minZ: cafeBackOfHouseZ + 0.16, maxZ: cafeRearRoomsZ - 0.16 } },
+      stock: { id: "stock", label: "DRY + COLD STOCK", position: [cafeStockDoorX, cafeFloorY, cafeRearRoomsZ + 1.12], bounds: { minX: cafeMinX + 0.22, maxX: cafeStockDividerX - 0.16, minZ: cafeRearRoomsZ + 0.16, maxZ: cafeMaxZ - 0.22 } },
+      staffNook: { id: "staff-nook", label: "STAFF NOOK", position: [cafeBreakDoorX, cafeFloorY, cafeRearRoomsZ + 1.12], bounds: { minX: cafeStockDividerX + 0.16, maxX: cafeToiletDividerX - 0.16, minZ: cafeRearRoomsZ + 0.16, maxZ: cafeMaxZ - 0.22 } },
+      toilet: { id: "toilet", label: "ACCESSIBLE TOILET", position: [cafeToiletDoorX, cafeFloorY, cafeRearRoomsZ + 1.12], bounds: { minX: cafeToiletDividerX + 0.16, maxX: cafeMaxX - 0.22, minZ: cafeRearRoomsZ + 0.16, maxZ: cafeMaxZ - 0.22 } },
+    },
+    doorways: {
+      exterior: { position: [cafeEntranceX, cafeFloorY, cafeSouthWallZ], clearWidth: cafeDoorWidth },
+      backOfHouse: { position: [cafeStaffDoorX, cafeFloorY, cafeBackOfHouseZ], clearWidth: cafeStaffDoorWidth },
+      kitchenDishes: { position: [cafeKitchenDishX, cafeFloorY, cafeKitchenDishDoorZ], clearWidth: cafeKitchenDishDoorWidth },
+      stock: { position: [cafeStockDoorX, cafeFloorY, cafeRearRoomsZ], clearWidth: 1.26 },
+      staffNook: { position: [cafeBreakDoorX, cafeFloorY, cafeRearRoomsZ], clearWidth: 1.30 },
+      toilet: { position: [cafeToiletDoorX, cafeFloorY, cafeRearRoomsZ], clearWidth: 1.08 },
+    },
+    stations: {
+      handover: { id: "cafe-handover", action: "clock_in", label: "SHIFT HANDOVER", position: cafeHandoverPosition, fixtureId: "cafe-service-counter-top" },
+      till: { id: "cafe-till", action: "take_order", label: "TAKE AN ORDER", position: cafeTillPosition, fixtureId: "cafe-pos-terminal" },
+      prep: { id: "cafe-prep", action: "prepare_order", label: "PREPARE ORDER", position: cafePrepPosition, fixtureId: "cafe-prep-island-worktop" },
+      serve: { id: "cafe-serve", action: "serve_order", label: "SERVE ORDER", position: cafeServePosition, fixtureId: "cafe-espresso-machine" },
+      dishes: { id: "cafe-dishes", action: "wash_dishes", label: "WASH + SANITISE", position: cafeDishesPosition, fixtureId: "cafe-double-sink" },
+      stock: { id: "cafe-stock", action: "restock", label: "ROTATE STOCK", position: cafeStockPosition, fixtureId: "cafe-stock-shelf-2" },
+      break: { id: "cafe-break", action: "take_break", label: "TAKE A BREAK", position: cafeBreakPosition, fixtureId: "cafe-staff-bench-seat" },
+      customerTable1: { id: "cafe-customer-table-1", action: "sit", label: "WINDOW TABLE", position: cafeCustomerAnchors.seating[0], fixtureId: "cafe-table-1-top" },
+      customerTable2: { id: "cafe-customer-table-2", action: "sit", label: "COMMUNITY TABLE", position: cafeCustomerAnchors.seating[3], fixtureId: "cafe-table-4-top" },
+    },
+    jobAnchors: cafeJobAnchors,
+    customerAnchors: cafeCustomerAnchors,
+    spawnPoints: {
+      customers: [
+        { id: "cafe-customer-1", position: cafeCustomerAnchors.seating[0], heading: 0 },
+        { id: "cafe-customer-2", position: cafeCustomerAnchors.seating[1], heading: 0 },
+        { id: "cafe-customer-3", position: cafeCustomerAnchors.queue[0], heading: Math.PI },
+        { id: "cafe-customer-4", position: cafeCustomerAnchors.queue[1], heading: Math.PI },
+      ],
+      staff: [
+        { id: "cafe-staff-manager", role: "manager", position: cafeKeeperPosition, heading: Math.PI },
+        { id: "cafe-staff-barista", role: "barista", position: cafeServePosition, heading: Math.PI },
+        { id: "cafe-staff-kitchen", role: "kitchen", position: cafePrepPosition, heading: 0 },
+      ],
+    },
+    navigationNodes: [
+      [cafeEntranceX, cafeFloorY, -16.5],
+      [cafeEntranceX, cafeFloorY, cafeMinZ - 0.18],
+      [cafeEntranceX, cafeFloorY, cafeMinZ + 1.38],
+      [cafeCounterX + 5.45, cafeFloorY, cafeCounterZ - 1.85],
+      [cafeStaffDoorX, cafeFloorY, cafeBackOfHouseZ + 0.72],
+      [cafeKitchenDishX, cafeFloorY, cafeKitchenDishDoorZ],
+      [cafeStockDoorX, cafeFloorY, cafeRearRoomsZ + 0.72],
+      [cafeBreakDoorX, cafeFloorY, cafeRearRoomsZ + 0.72],
+      [cafeToiletDoorX, cafeFloorY, cafeRearRoomsZ + 0.72],
+    ],
+    variant: {
+      cabinetStyle: cafeCabinetStyle,
+      seatStyle: cafeSeatStyle,
+      tableYaw: cafeTableYaw,
+      chairOffset: cafeChairOffset,
+      shelfJitter: cafeShelfJitter,
+    },
+    glass: {
+      kind: "dark-neutral-ordinary-glazing",
+      panels: commonGroundCafeGlassTransforms.length,
+      emissive: false,
+      neon: false,
+    },
+    lighting: {
+      kind: "bounded-warm-hospitality-practical",
+      position: [cafeHost.x - 0.30, cafeFloorY + 2.68, cafeHost.z + 0.40],
+      color: 0xffd1a0,
+      intensity: 46,
+      range: 18,
+      reallocates: "existing-open-doors-business-practical",
+    },
+    renderParts: commonGroundCafeParts,
+    frontagePartIds: cafeFrontagePartIds,
+    collisionIds: commonGroundCafeBlockerIds,
+    renderBudget: {
+      geometriesAdded: 0,
+      materialsAdded: 0,
+      instancedBatchesAdded: 0,
+      lightsAdded: 0,
+    },
+    stats: {
+      rooms: 7,
+      doorways: 6,
+      stations: 9,
+      customerSpawns: 4,
+      staffSpawns: 3,
+      renderInstances: commonGroundCafeParts.length,
+      frontageRenderInstances: cafeFrontagePartIds.length,
+      glassPanels: commonGroundCafeGlassTransforms.length,
+      collisionVolumes: commonGroundCafeBlockerIds.length,
+      practicalLights: 1,
+      emissiveMaterials: 0,
+    },
+  });
+
+  // Mina's Market Kitchen turns the occupied brick ground floor behind North
+  // Market's four long-standing stalls into a real neighbourhood shop. The
+  // central 2.28 m gap between stalls two and three remains the public route:
+  // pavement, arcade, rear apron, threshold and vestibule are one continuous
+  // collision field, with no scene swap or teleport. The outdoor counters stay
+  // intact as Mina's produce/takeaway frontage while the grocery, deli and
+  // working rooms occupy the tower volume opened by addBuilding above.
+  if (!minaMarketHost) throw new Error("Mina's Market Kitchen host building was not generated.");
+  const minaMarketSeed = (resolvedSeed ^ 0x4d494e41) >>> 0;
+  const minaMarketRandom = mulberry32(minaMarketSeed);
+  const minaMarketParts = [];
+  const minaMarketGlassTransforms = [];
+  const minaMarketBlockerIds = [];
+  const marketHost = minaMarketHost;
+  const marketFloorY = SIDEWALK_TOP;
+  const marketMinX = marketHost.x - marketHost.width * 0.5;
+  const marketMaxX = marketHost.x + marketHost.width * 0.5;
+  const marketMinZ = marketHost.z - marketHost.depth * 0.5;
+  const marketMaxZ = marketHost.z + marketHost.depth * 0.5;
+  const marketEntranceX = -144;
+  const marketDoorWidth = 1.72;
+  const marketDoorLeft = marketEntranceX - marketDoorWidth * 0.5;
+  const marketDoorRight = marketEntranceX + marketDoorWidth * 0.5;
+  const marketWallHeight = 3.22;
+  const marketWallCenterY = marketFloorY + marketWallHeight * 0.5;
+  const marketSouthWallZ = marketMinZ + 0.11;
+  const marketBackOfHouseZ = marketHost.z - 0.27;
+  const marketRearRoomsZ = marketHost.z + 4.63;
+  const marketKitchenWashX = marketHost.x + 3.65;
+  const marketStockDividerX = marketHost.x - 2.80;
+  const marketToiletDividerX = marketHost.x + 6.50;
+  const marketCabinetStyle = [2, 3, 5][Math.floor(minaMarketRandom() * 3)];
+  const marketAccentStyle = [0, 1, 2][Math.floor(minaMarketRandom() * 3)];
+  const marketAisleOffset = (minaMarketRandom() - 0.5) * 0.12;
+  const marketCrateYaw = (minaMarketRandom() - 0.5) * 0.16;
+  const marketBasketSpread = 0.16 + minaMarketRandom() * 0.04;
+
+  const minaMarketPools = {
+    plaster: { transforms: buildingTransforms[5], batch: "Instanced city buildings style 6" },
+    brick: { transforms: buildingTransforms[3], batch: "Instanced city buildings style 4" },
+    accent: { transforms: buildingTransforms[marketAccentStyle], batch: `Instanced city buildings style ${marketAccentStyle + 1}` },
+    cabinetry: { transforms: buildingTransforms[marketCabinetStyle], batch: `Instanced city buildings style ${marketCabinetStyle + 1}` },
+    concrete: { transforms: podiumTransforms, batch: "Instanced ground-floor podiums" },
+    trim: { transforms: facadeRibTransforms, batch: "Instanced facade corner ribs" },
+    metal: { transforms: balconyTransforms, batch: "Instanced apartment balconies" },
+    casework: { transforms: rooftopTransforms, batch: "Instanced rooftop mechanical housings" },
+    pole: { transforms: antennaTransforms, batch: "Instanced rooftop antennas" },
+  };
+  function addMinaMarketPart(id, poolName, position, scale, rotation = [0, 0, 0]) {
+    const pool = minaMarketPools[poolName];
+    const item = transform(position, scale, rotation);
+    pool.transforms.push(item);
+    minaMarketParts.push({
+      id,
+      pool: poolName,
+      batch: pool.batch,
+      position: [...position],
+      scale: [...scale],
+      rotation: [...rotation],
+    });
+  }
+  function addMinaMarketGlass(id, position, scale, rotation = [0, 0, 0]) {
+    const item = transform(position, scale, rotation);
+    minaMarketGlassTransforms.push(item);
+    minaMarketParts.push({
+      id,
+      pool: "glass",
+      batch: "Pulse Street bus shelter glass",
+      position: [...position],
+      scale: [...scale],
+      rotation: [...rotation],
+    });
+  }
+  function addMinaMarketBlocker(id, kind, x, z, width, depth, height = marketWallHeight) {
+    addBlocker(id, kind, x, z, width, depth, height, marketFloorY);
+    minaMarketBlockerIds.push(id);
+  }
+  function addMarketHorizontalWall(prefix, z, fromX, toX, doorways = []) {
+    let cursor = fromX;
+    const sorted = [...doorways].sort((a, b) => a.center - b.center);
+    for (const opening of sorted) {
+      const left = clamp(opening.center - opening.width * 0.5, fromX, toX);
+      const right = clamp(opening.center + opening.width * 0.5, fromX, toX);
+      if (left > cursor + 0.01) {
+        const id = `${prefix}-${minaMarketBlockerIds.length + 1}`;
+        addMinaMarketPart(id, "plaster", [(cursor + left) * 0.5, marketWallCenterY, z],
+          [left - cursor, marketWallHeight, 0.16]);
+        addMinaMarketBlocker(id, "market-partition", (cursor + left) * 0.5, z, left - cursor, 0.16);
+      }
+      cursor = Math.max(cursor, right);
+    }
+    if (cursor < toX - 0.01) {
+      const id = `${prefix}-${minaMarketBlockerIds.length + 1}`;
+      addMinaMarketPart(id, "plaster", [(cursor + toX) * 0.5, marketWallCenterY, z],
+        [toX - cursor, marketWallHeight, 0.16]);
+      addMinaMarketBlocker(id, "market-partition", (cursor + toX) * 0.5, z, toX - cursor, 0.16);
+    }
+  }
+  function addMarketVerticalWall(prefix, x, fromZ, toZ, doorways = []) {
+    let cursor = fromZ;
+    const sorted = [...doorways].sort((a, b) => a.center - b.center);
+    for (const opening of sorted) {
+      const near = clamp(opening.center - opening.width * 0.5, fromZ, toZ);
+      const far = clamp(opening.center + opening.width * 0.5, fromZ, toZ);
+      if (near > cursor + 0.01) {
+        const id = `${prefix}-${minaMarketBlockerIds.length + 1}`;
+        addMinaMarketPart(id, "plaster", [x, marketWallCenterY, (cursor + near) * 0.5],
+          [0.16, marketWallHeight, near - cursor]);
+        addMinaMarketBlocker(id, "market-partition", x, (cursor + near) * 0.5, 0.16, near - cursor);
+      }
+      cursor = Math.max(cursor, far);
+    }
+    if (cursor < toZ - 0.01) {
+      const id = `${prefix}-${minaMarketBlockerIds.length + 1}`;
+      addMinaMarketPart(id, "plaster", [x, marketWallCenterY, (cursor + toZ) * 0.5],
+        [0.16, marketWallHeight, toZ - cursor]);
+      addMinaMarketBlocker(id, "market-partition", x, (cursor + toZ) * 0.5, 0.16, toZ - cursor);
+    }
+  }
+
+  // Complete shell and ordinary glazed market frontage. The facade remains
+  // warm brick, neutral glass and painted metal rather than neon signage.
+  addMinaMarketPart("mina-market-floor", "concrete",
+    [marketHost.x, marketFloorY + 0.055, marketHost.z],
+    [marketHost.width - 0.34, 0.11, marketHost.depth - 0.34]);
+  addMinaMarketPart("mina-market-ceiling", "plaster",
+    [marketHost.x, marketFloorY + marketHost.clearHeight - 0.07, marketHost.z],
+    [marketHost.width - 0.28, 0.14, marketHost.depth - 0.28]);
+  addMinaMarketPart("mina-market-west-shell", "brick",
+    [marketMinX + 0.11, marketWallCenterY, marketHost.z], [0.22, marketWallHeight, marketHost.depth]);
+  addMinaMarketPart("mina-market-east-shell", "brick",
+    [marketMaxX - 0.11, marketWallCenterY, marketHost.z], [0.22, marketWallHeight, marketHost.depth]);
+  addMinaMarketPart("mina-market-north-shell", "brick",
+    [marketHost.x, marketWallCenterY, marketMaxZ - 0.11], [marketHost.width, marketWallHeight, 0.22]);
+  addMinaMarketBlocker("mina-market-west-shell", "market-wall", marketMinX + 0.11,
+    marketHost.z, 0.22, marketHost.depth);
+  addMinaMarketBlocker("mina-market-east-shell", "market-wall", marketMaxX - 0.11,
+    marketHost.z, 0.22, marketHost.depth);
+  addMinaMarketBlocker("mina-market-north-shell", "market-wall", marketHost.x,
+    marketMaxZ - 0.11, marketHost.width, 0.22);
+  addMinaMarketBlocker("mina-market-south-shell-west", "market-wall",
+    (marketMinX + marketDoorLeft) * 0.5, marketSouthWallZ, marketDoorLeft - marketMinX, 0.22);
+  addMinaMarketBlocker("mina-market-south-shell-east", "market-wall",
+    (marketDoorRight + marketMaxX) * 0.5, marketSouthWallZ, marketMaxX - marketDoorRight, 0.22);
+
+  for (const [side, fromX, toX] of [
+    ["west", marketMinX, marketDoorLeft],
+    ["east", marketDoorRight, marketMaxX],
+  ]) {
+    addMinaMarketPart(`mina-market-front-${side}-sill`, "brick",
+      [(fromX + toX) * 0.5, marketFloorY + 0.31, marketSouthWallZ],
+      [toX - fromX, 0.62, 0.22]);
+    addMinaMarketPart(`mina-market-front-${side}-header`, "brick",
+      [(fromX + toX) * 0.5, marketFloorY + 2.96, marketSouthWallZ],
+      [toX - fromX, 0.52, 0.22]);
+    const panelCount = 3;
+    const panelWidth = (toX - fromX) / panelCount;
+    for (let panel = 0; panel < panelCount; ++panel) {
+      const left = fromX + panel * panelWidth;
+      const right = left + panelWidth;
+      addMinaMarketGlass(`mina-market-front-${side}-glass-${panel + 1}`,
+        [(left + right) * 0.5, marketFloorY + 1.64, marketMinZ - 0.015],
+        [Math.max(0.30, right - left - 0.12), 2.02, 1], [0, Math.PI, 0]);
+      if (panel > 0) addMinaMarketPart(`mina-market-front-${side}-mullion-${panel}`,
+        "trim", [left, marketFloorY + 1.65, marketSouthWallZ - 0.03], [0.10, 2.34, 0.12]);
+    }
+  }
+  addMinaMarketPart("mina-market-door-west-jamb", "trim",
+    [marketDoorLeft, marketFloorY + 1.46, marketSouthWallZ - 0.03], [0.12, 2.92, 0.14]);
+  addMinaMarketPart("mina-market-door-east-jamb", "trim",
+    [marketDoorRight, marketFloorY + 1.46, marketSouthWallZ - 0.03], [0.12, 2.92, 0.14]);
+  addMinaMarketPart("mina-market-door-lintel", "brick",
+    [marketEntranceX, marketFloorY + 3.01, marketSouthWallZ], [marketDoorWidth, 0.42, 0.22]);
+  addMinaMarketPart("mina-market-weathered-threshold", "concrete",
+    [marketEntranceX, marketFloorY + 0.025, marketMinZ - 0.42], [marketDoorWidth + 0.52, 0.05, 1.06]);
+  addMinaMarketPart("mina-market-awning", "metal",
+    [marketHost.x, marketFloorY + 3.06, marketMinZ - 0.72],
+    [marketHost.width - 1.10, 0.15, 1.56], [-0.035, 0, 0]);
+  addMinaMarketPart("mina-market-name-board", "brick",
+    [marketHost.x, marketFloorY + 2.66, marketMinZ - 0.22], [8.40, 0.48, 0.12]);
+
+  // A glazed wind lobby protects the grocery floor without narrowing the
+  // public route. Its 2.68 m internal opening is wider than the street door.
+  const marketVestibuleLeft = marketEntranceX - 1.46;
+  const marketVestibuleRight = marketEntranceX + 1.46;
+  const marketVestibuleEndZ = marketMinZ + 3.16;
+  for (const [side, x] of [["west", marketVestibuleLeft], ["east", marketVestibuleRight]]) {
+    addMinaMarketGlass(`mina-market-vestibule-${side}-glass`,
+      [x, marketFloorY + 1.54, marketMinZ + 1.68], [3.02, 2.32, 1], [0, Math.PI * 0.5, 0]);
+    addMinaMarketPart(`mina-market-vestibule-${side}-rail`, "trim",
+      [x, marketFloorY + 1.54, marketMinZ + 1.68], [0.10, 2.46, 3.12]);
+    addMinaMarketBlocker(`mina-market-vestibule-${side}`, "market-partition",
+      x, marketMinZ + 1.68, 0.10, 3.12);
+  }
+  addMinaMarketPart("mina-market-entry-mat", "accent",
+    [marketEntranceX, marketFloorY + 0.064, marketMinZ + 1.15], [1.46, 0.018, 1.72]);
+
+  // Back-of-house partitions use the same dimensions for visible surfaces and
+  // AABB collision. Every aperture is at least 1.08 m, including the WC.
+  const marketStaffDoorX = marketEntranceX;
+  const marketStaffDoorWidth = 1.56;
+  const marketKitchenWashDoorZ = marketHost.z + 2.10;
+  const marketKitchenWashDoorWidth = 1.34;
+  const marketStockDoorX = marketHost.x - 8.05;
+  const marketBreakDoorX = marketHost.x + 0.25;
+  const marketToiletDoorX = marketHost.x + 9.20;
+  addMarketHorizontalWall("mina-market-boh-wall", marketBackOfHouseZ,
+    marketMinX + 0.11, marketMaxX - 0.11,
+    [{ center: marketStaffDoorX, width: marketStaffDoorWidth }]);
+  addMarketVerticalWall("mina-market-kitchen-wash-wall", marketKitchenWashX,
+    marketBackOfHouseZ, marketRearRoomsZ,
+    [{ center: marketKitchenWashDoorZ, width: marketKitchenWashDoorWidth }]);
+  addMarketHorizontalWall("mina-market-rear-room-wall", marketRearRoomsZ,
+    marketMinX + 0.11, marketMaxX - 0.11, [
+      { center: marketStockDoorX, width: 1.28 },
+      { center: marketBreakDoorX, width: 1.22 },
+      { center: marketToiletDoorX, width: 1.08 },
+    ]);
+  addMarketVerticalWall("mina-market-stock-divider", marketStockDividerX,
+    marketRearRoomsZ, marketMaxZ - 0.11);
+  addMarketVerticalWall("mina-market-toilet-divider", marketToiletDividerX,
+    marketRearRoomsZ, marketMaxZ - 0.11);
+
+  // Produce wall: four low angled bins, a readable scale and stacked hand
+  // baskets. Only the consolidated footprints collide, leaving a 1.45 m aisle.
+  const marketProduceX = marketMinX + 0.72;
+  for (let bin = 0; bin < 4; ++bin) {
+    const z = marketMinZ + 3.90 + bin * 1.45 + marketAisleOffset;
+    addMinaMarketPart(`mina-market-produce-bin-${bin + 1}-base`, "cabinetry",
+      [marketProduceX, marketFloorY + 0.38, z], [1.04, 0.70, 1.16]);
+    addMinaMarketPart(`mina-market-produce-bin-${bin + 1}-tray`, "accent",
+      [marketProduceX + 0.20, marketFloorY + 0.82, z], [0.82, 0.14, 1.04], [0, 0, -0.12]);
+  }
+  addMinaMarketPart("mina-market-produce-scale-base", "casework",
+    [marketMinX + 2.05, marketFloorY + 0.52, marketMinZ + 5.86], [0.72, 1.02, 0.62]);
+  addMinaMarketPart("mina-market-produce-scale-head", "metal",
+    [marketMinX + 2.05, marketFloorY + 1.24, marketMinZ + 5.86], [0.58, 0.36, 0.18]);
+  addMinaMarketBlocker("mina-market-produce-wall", "market-fixture", marketProduceX,
+    marketMinZ + 6.08 + marketAisleOffset, 1.10, 5.72, 1.02);
+  addMinaMarketBlocker("mina-market-produce-scale", "market-fixture", marketMinX + 2.05,
+    marketMinZ + 5.86, 0.72, 0.62, 1.42);
+
+  const marketBasketX = marketVestibuleLeft - 0.72;
+  const marketBasketZ = marketMinZ + 1.22;
+  addMinaMarketPart("mina-market-basket-corral", "trim",
+    [marketBasketX, marketFloorY + 0.42, marketBasketZ], [1.12, 0.82, 1.18]);
+  for (let basket = 0; basket < 5; ++basket) addMinaMarketPart(`mina-market-basket-${basket + 1}`,
+    "accent", [marketBasketX, marketFloorY + 0.20 + basket * marketBasketSpread,
+      marketBasketZ], [0.82 - basket * 0.035, 0.12, 0.72 - basket * 0.025]);
+  addMinaMarketBlocker("mina-market-basket-corral", "market-fixture",
+    marketBasketX, marketBasketZ, 1.12, 1.18, 0.96);
+
+  // Two stocked gondolas make a legible grocery floor. Shelves, end caps and
+  // small product blocks are detailed separately while collision remains one
+  // conservative footprint per aisle.
+  const marketGondolaXs = [marketMinX + 5.45, marketMinX + 9.05];
+  const marketGondolaZ = marketMinZ + 7.05;
+  for (const [aisle, x] of marketGondolaXs.entries()) {
+    addMinaMarketPart(`mina-market-gondola-${aisle + 1}-base`, "cabinetry",
+      [x, marketFloorY + 0.13, marketGondolaZ], [1.22, 0.24, 4.82]);
+    addMinaMarketPart(`mina-market-gondola-${aisle + 1}-spine`, "trim",
+      [x, marketFloorY + 0.92, marketGondolaZ], [0.10, 1.62, 4.70]);
+    for (let shelf = 0; shelf < 3; ++shelf) {
+      const y = marketFloorY + 0.45 + shelf * 0.53;
+      addMinaMarketPart(`mina-market-gondola-${aisle + 1}-shelf-${shelf + 1}`, "metal",
+        [x, y, marketGondolaZ], [1.34, 0.08, 4.72]);
+      for (const side of [-1, 1]) addMinaMarketPart(
+        `mina-market-gondola-${aisle + 1}-goods-${shelf + 1}-${side < 0 ? "west" : "east"}`,
+        aisle === 0 ? "accent" : "casework",
+        [x + side * 0.40, y + 0.18, marketGondolaZ + (shelf - 1) * 0.10],
+        [0.34, 0.30, 3.92]);
+    }
+    for (const [end, z] of [["south", marketGondolaZ - 2.42], ["north", marketGondolaZ + 2.42]]) {
+      addMinaMarketPart(`mina-market-gondola-${aisle + 1}-${end}-cap`, "trim",
+        [x, marketFloorY + 0.90, z], [1.28, 1.58, 0.10]);
+    }
+    addMinaMarketBlocker(`mina-market-gondola-${aisle + 1}`, "market-fixture",
+      x, marketGondolaZ, 1.36, 4.88, 1.82);
+  }
+
+  // Refrigerated groceries and a compact customer bench occupy the east wall.
+  const marketColdCaseX = marketMaxX - 0.58;
+  const marketColdCaseZ = marketMinZ + 5.42;
+  addMinaMarketPart("mina-market-cold-case-base", "metal",
+    [marketColdCaseX, marketFloorY + 0.92, marketColdCaseZ], [0.92, 1.84, 4.30]);
+  for (let door = 0; door < 3; ++door) addMinaMarketGlass(`mina-market-cold-case-door-${door + 1}`,
+    [marketColdCaseX - 0.48, marketFloorY + 1.16,
+      marketColdCaseZ - 1.36 + door * 1.36], [1.18, 1.24, 1], [0, -Math.PI * 0.5, 0]);
+  addMinaMarketPart("mina-market-cold-case-header", "trim",
+    [marketColdCaseX - 0.50, marketFloorY + 1.91, marketColdCaseZ], [0.12, 0.18, 4.36]);
+  addMinaMarketBlocker("mina-market-cold-case", "market-fixture",
+    marketColdCaseX, marketColdCaseZ, 0.96, 4.34, 2.02);
+  const marketCustomerBenchX = marketMaxX - 0.66;
+  const marketCustomerBenchZ = marketMinZ + 1.62;
+  addMinaMarketPart("mina-market-customer-bench-seat", "accent",
+    [marketCustomerBenchX, marketFloorY + 0.46, marketCustomerBenchZ], [0.82, 0.46, 2.78]);
+  addMinaMarketPart("mina-market-customer-bench-back", "accent",
+    [marketMaxX - 0.24, marketFloorY + 0.90, marketCustomerBenchZ], [0.18, 0.86, 2.78]);
+  addMinaMarketBlocker("mina-market-customer-bench", "market-fixture",
+    marketCustomerBenchX, marketCustomerBenchZ, 0.86, 2.82, 1.36);
+
+  // Deli and checkout share one long staffed counter but retain separate
+  // customer stations. Groceries are packed at the east end; hot food is
+  // ordered at the west display, so neither transaction masquerades as the
+  // other in the life-sim contract.
+  const marketCounterX = marketHost.x + 7.70;
+  const marketCounterZ = marketBackOfHouseZ - 1.52;
+  addMinaMarketPart("mina-market-service-counter-base", "cabinetry",
+    [marketCounterX, marketFloorY + 0.47, marketCounterZ], [7.65, 0.86, 0.82]);
+  addMinaMarketPart("mina-market-service-counter-top", "concrete",
+    [marketCounterX, marketFloorY + 0.94, marketCounterZ], [7.88, 0.10, 1.00]);
+  addMinaMarketGlass("mina-market-deli-display-glass",
+    [marketCounterX - 1.80, marketFloorY + 1.30, marketCounterZ - 0.20],
+    [3.12, 0.58, 1], [0, Math.PI, 0]);
+  addMinaMarketPart("mina-market-hot-hold", "metal",
+    [marketCounterX - 1.72, marketFloorY + 1.20, marketCounterZ + 0.10], [2.68, 0.42, 0.46]);
+  addMinaMarketPart("mina-market-pos-terminal", "metal",
+    [marketCounterX + 2.40, marketFloorY + 1.28, marketCounterZ - 0.02], [0.54, 0.54, 0.12], [0.08, 0, 0]);
+  addMinaMarketPart("mina-market-card-reader", "casework",
+    [marketCounterX + 2.92, marketFloorY + 1.10, marketCounterZ - 0.40], [0.24, 0.28, 0.18], [-0.12, 0, 0]);
+  addMinaMarketPart("mina-market-packing-shelf", "metal",
+    [marketCounterX + 3.32, marketFloorY + 0.72, marketCounterZ - 1.02], [1.24, 0.12, 1.14]);
+  for (let bag = 0; bag < 3; ++bag) addMinaMarketPart(`mina-market-paper-bag-${bag + 1}`, "accent",
+    [marketCounterX + 3.04 + bag * 0.28, marketFloorY + 0.98,
+      marketCounterZ - 1.02], [0.22, 0.42 + bag * 0.05, 0.28]);
+  addMinaMarketBlocker("mina-market-service-counter", "market-fixture",
+    marketCounterX, marketCounterZ, 7.90, 1.00, 1.52);
+  addMinaMarketBlocker("mina-market-packing-shelf", "market-fixture",
+    marketCounterX + 3.32, marketCounterZ - 1.02, 1.24, 1.14, 0.90);
+
+  // Working prep kitchen with wall run, hob, hood, upright fridge and central
+  // island. The central staff spine from the public door remains clear.
+  const marketKitchenRunX = marketMinX + 0.52;
+  const marketKitchenRunZ = marketHost.z + 2.08;
+  addMinaMarketPart("mina-market-kitchen-base-cabinets", "cabinetry",
+    [marketKitchenRunX, marketFloorY + 0.47, marketKitchenRunZ], [0.78, 0.86, 3.58]);
+  addMinaMarketPart("mina-market-kitchen-worktop", "concrete",
+    [marketKitchenRunX + 0.04, marketFloorY + 0.93, marketKitchenRunZ], [0.90, 0.10, 3.76]);
+  addMinaMarketPart("mina-market-kitchen-hob", "metal",
+    [marketKitchenRunX + 0.50, marketFloorY + 0.995, marketKitchenRunZ - 0.75], [0.06, 0.06, 0.82]);
+  addMinaMarketPart("mina-market-kitchen-oven", "metal",
+    [marketKitchenRunX + 0.48, marketFloorY + 0.52, marketKitchenRunZ - 0.75], [0.06, 0.72, 0.82]);
+  addMinaMarketPart("mina-market-kitchen-hood", "metal",
+    [marketKitchenRunX + 0.42, marketFloorY + 2.18, marketKitchenRunZ - 0.75], [0.72, 0.46, 1.24]);
+  addMinaMarketPart("mina-market-kitchen-fridge", "metal",
+    [marketMinX + 0.60, marketFloorY + 1.02, marketBackOfHouseZ + 0.86], [1.02, 2.04, 0.94]);
+  const marketPrepX = marketHost.x - 6.10;
+  const marketPrepZ = marketHost.z + 2.18;
+  addMinaMarketPart("mina-market-prep-island-base", "cabinetry",
+    [marketPrepX, marketFloorY + 0.45, marketPrepZ], [4.00, 0.84, 0.92]);
+  addMinaMarketPart("mina-market-prep-island-worktop", "concrete",
+    [marketPrepX, marketFloorY + 0.91, marketPrepZ], [4.24, 0.10, 1.10]);
+  addMinaMarketPart("mina-market-prep-board", "brick",
+    [marketPrepX - 0.62, marketFloorY + 0.985, marketPrepZ], [1.18, 0.045, 0.64], [0, marketCrateYaw, 0]);
+  addMinaMarketBlocker("mina-market-kitchen-run", "market-fixture",
+    marketKitchenRunX, marketKitchenRunZ, 0.92, 3.82, 2.42);
+  addMinaMarketBlocker("mina-market-kitchen-fridge", "market-fixture",
+    marketMinX + 0.60, marketBackOfHouseZ + 0.86, 1.02, 0.94, 2.04);
+  addMinaMarketBlocker("mina-market-prep-island", "market-fixture",
+    marketPrepX, marketPrepZ, 4.28, 1.12, 1.02);
+
+  // Separate wash-up room keeps dirty return, sink and drying rack out of the
+  // food-prep circulation line.
+  const marketDishRunX = marketMaxX - 0.52;
+  const marketDishRunZ = marketHost.z + 2.18;
+  addMinaMarketPart("mina-market-dish-base-cabinets", "cabinetry",
+    [marketDishRunX, marketFloorY + 0.47, marketDishRunZ], [0.78, 0.86, 3.58]);
+  addMinaMarketPart("mina-market-dish-worktop", "concrete",
+    [marketDishRunX - 0.04, marketFloorY + 0.93, marketDishRunZ], [0.90, 0.10, 3.76]);
+  addMinaMarketPart("mina-market-double-sink", "plaster",
+    [marketDishRunX - 0.50, marketFloorY + 0.995, marketDishRunZ - 0.70], [0.06, 0.06, 1.34]);
+  addMinaMarketPart("mina-market-dishwasher", "metal",
+    [marketDishRunX - 0.49, marketFloorY + 0.48, marketDishRunZ + 0.95], [0.06, 0.80, 0.84]);
+  addMinaMarketPart("mina-market-drying-rack", "trim",
+    [marketDishRunX - 0.54, marketFloorY + 1.54, marketDishRunZ - 0.42], [0.10, 0.82, 1.92]);
+  addMinaMarketBlocker("mina-market-dish-run", "market-fixture",
+    marketDishRunX, marketDishRunZ, 0.92, 3.82, 1.78);
+
+  // Cold/dry receiving stock: tall shelving, cold cabinet, delivery crates
+  // and a proper trolley all remain physically legible and navigable.
+  const marketStockShelfX = marketMinX + 0.52;
+  const marketStockShelfZ = marketRearRoomsZ + 2.62;
+  for (let level = 0; level < 3; ++level) addMinaMarketPart(`mina-market-stock-shelf-${level + 1}`,
+    "trim", [marketStockShelfX, marketFloorY + 0.42 + level * 0.68, marketStockShelfZ],
+    [0.78, 0.08, 3.86]);
+  addMinaMarketPart("mina-market-stock-cold-cabinet", "metal",
+    [marketHost.x - 6.20, marketFloorY + 1.03, marketMaxZ - 0.55], [4.22, 2.06, 0.86]);
+  for (let crate = 0; crate < 6; ++crate) addMinaMarketPart(`mina-market-stock-crate-${crate + 1}`,
+    crate % 2 ? "casework" : "accent",
+    [marketMinX + 2.05 + (crate % 3) * 1.10, marketFloorY + 0.31,
+      marketRearRoomsZ + 0.90 + Math.floor(crate / 3) * 1.05],
+    [0.78, 0.58, 0.74], [0, marketCrateYaw * (crate % 2 ? -1 : 1), 0]);
+  const marketTrolleyX = marketHost.x - 4.25;
+  const marketTrolleyZ = marketRearRoomsZ + 1.25;
+  addMinaMarketPart("mina-market-delivery-trolley-deck", "metal",
+    [marketTrolleyX, marketFloorY + 0.30, marketTrolleyZ], [1.52, 0.12, 0.86]);
+  addMinaMarketPart("mina-market-delivery-trolley-handle", "trim",
+    [marketTrolleyX + 0.68, marketFloorY + 0.83, marketTrolleyZ], [0.10, 1.02, 0.78]);
+  for (const [wheel, x, z] of [
+    [1, marketTrolleyX - 0.56, marketTrolleyZ - 0.29],
+    [2, marketTrolleyX - 0.56, marketTrolleyZ + 0.29],
+    [3, marketTrolleyX + 0.56, marketTrolleyZ - 0.29],
+    [4, marketTrolleyX + 0.56, marketTrolleyZ + 0.29],
+  ]) addMinaMarketPart(`mina-market-delivery-trolley-wheel-${wheel}`, "pole",
+    [x, marketFloorY + 0.13, z], [0.18, 0.18, 0.18], [Math.PI * 0.5, 0, 0]);
+  addMinaMarketBlocker("mina-market-stock-shelves", "market-fixture",
+    marketStockShelfX, marketStockShelfZ, 0.82, 3.94, 2.05);
+  addMinaMarketBlocker("mina-market-stock-cold-cabinet", "market-fixture",
+    marketHost.x - 6.20, marketMaxZ - 0.55, 4.24, 0.90, 2.08);
+  addMinaMarketBlocker("mina-market-delivery-trolley", "market-fixture",
+    marketTrolleyX, marketTrolleyZ, 1.56, 0.90, 1.34);
+
+  // Staff nook and accessible WC complete the occupied workplace.
+  const marketBreakX = marketHost.x + 1.22;
+  const marketBreakZ = marketMaxZ - 1.45;
+  addMinaMarketPart("mina-market-staff-bench-seat", "accent",
+    [marketBreakX, marketFloorY + 0.46, marketBreakZ], [3.10, 0.46, 0.86]);
+  addMinaMarketPart("mina-market-staff-bench-back", "accent",
+    [marketBreakX, marketFloorY + 0.90, marketBreakZ + 0.34], [3.10, 0.84, 0.18]);
+  addMinaMarketPart("mina-market-staff-table", "casework",
+    [marketBreakX, marketFloorY + 0.70, marketRearRoomsZ + 1.35], [1.42, 0.11, 0.84]);
+  addMinaMarketPart("mina-market-staff-lockers", "cabinetry",
+    [marketStockDividerX + 0.50, marketFloorY + 1.04, marketRearRoomsZ + 2.15], [0.74, 2.08, 2.42]);
+  addMinaMarketBlocker("mina-market-staff-bench", "market-fixture",
+    marketBreakX, marketBreakZ, 3.12, 0.92, 1.36);
+  addMinaMarketBlocker("mina-market-staff-lockers", "market-fixture",
+    marketStockDividerX + 0.50, marketRearRoomsZ + 2.15, 0.76, 2.44, 2.08);
+
+  const marketToiletX = marketMaxX - 2.10;
+  addMinaMarketPart("mina-market-toilet-base", "plaster",
+    [marketToiletX, marketFloorY + 0.31, marketMaxZ - 1.48], [0.60, 0.50, 0.78]);
+  addMinaMarketPart("mina-market-toilet-cistern", "plaster",
+    [marketToiletX, marketFloorY + 0.72, marketMaxZ - 1.18], [0.58, 0.72, 0.24]);
+  addMinaMarketPart("mina-market-accessible-grab-rail", "trim",
+    [marketToiletX - 0.70, marketFloorY + 0.78, marketMaxZ - 1.36], [1.12, 0.10, 0.10]);
+  addMinaMarketPart("mina-market-toilet-vanity", "cabinetry",
+    [marketMaxX - 0.50, marketFloorY + 0.43, marketRearRoomsZ + 1.82], [0.74, 0.80, 1.42]);
+  addMinaMarketPart("mina-market-toilet-basin", "plaster",
+    [marketMaxX - 0.54, marketFloorY + 0.88, marketRearRoomsZ + 1.82], [0.76, 0.10, 1.20]);
+  addMinaMarketBlocker("mina-market-toilet", "market-fixture",
+    marketToiletX, marketMaxZ - 1.36, 0.68, 1.10, 1.10);
+  addMinaMarketBlocker("mina-market-toilet-vanity", "market-fixture",
+    marketMaxX - 0.50, marketRearRoomsZ + 1.82, 0.76, 1.44, 0.98);
+
+  // Three non-emissive housings correspond to one reallocated entrance light
+  // plus two tightly bounded room practicals created with the world lights.
+  const marketLightingPositions = [
+    [marketHost.x + 3.10, marketFloorY + 2.76, marketMinZ + 6.45],
+    [marketHost.x - 4.85, marketFloorY + 2.76, marketHost.z + 2.02],
+    [marketHost.x - 4.90, marketFloorY + 2.76, marketRearRoomsZ + 2.12],
+  ];
+  for (const [index, [x, y, z]] of marketLightingPositions.entries()) addMinaMarketPart(
+    `mina-market-ceiling-practical-${index + 1}`, "plaster", [x, y + 0.40, z], [1.24, 0.05, 0.36]);
+
+  const marketCheckoutCustomer = [marketCounterX + 1.85, marketFloorY, marketCounterZ - 1.52];
+  const marketOrderCustomer = [marketCounterX - 1.80, marketFloorY, marketCounterZ - 1.38];
+  const marketKeeperPosition = [marketCounterX + 2.40, marketFloorY, marketCounterZ + 0.92];
+  const marketPrepPosition = [marketPrepX + 0.20, marketFloorY, marketPrepZ - 1.08];
+  const marketWashPosition = [marketDishRunX - 1.35, marketFloorY, marketDishRunZ - 0.68];
+  const marketStockPosition = [marketMinX + 2.05, marketFloorY, marketStockShelfZ];
+  const marketBreakPosition = [marketBreakX - 2.04, marketFloorY, marketBreakZ];
+  const marketReceivingPosition = [marketTrolleyX - 1.32, marketFloorY, marketTrolleyZ];
+  const marketProducePosition = [marketMinX + 3.00, marketFloorY, marketMinZ + 5.86];
+  const marketColdCasePosition = [marketColdCaseX - 1.40, marketFloorY, marketColdCaseZ];
+  const marketPantryPosition = [marketGondolaXs[1] + 1.52, marketFloorY, marketGondolaZ];
+  const marketPackingPosition = [marketCounterX + 3.20, marketFloorY, marketCounterZ - 2.10];
+  const marketCustomerAnchors = {
+    browse: [
+      marketProducePosition,
+      [marketGondolaXs[0] + 1.25, marketFloorY, marketGondolaZ - 1.35],
+      [marketGondolaXs[1] + 1.30, marketFloorY, marketGondolaZ + 1.20],
+      marketColdCasePosition,
+    ],
+    queue: [
+      marketCheckoutCustomer,
+      [marketCounterX + 2.40, marketFloorY, marketCounterZ - 3.05],
+      marketOrderCustomer,
+    ],
+    checkout: marketCheckoutCustomer,
+    order: marketOrderCustomer,
+    seating: [
+      [marketCustomerBenchX - 1.02, marketFloorY, marketCustomerBenchZ - 0.72],
+      [marketCustomerBenchX - 1.02, marketFloorY, marketCustomerBenchZ + 0.72],
+    ],
+    exit: [marketEntranceX, marketFloorY, marketMinZ + 1.36],
+  };
+  const marketStaffAnchors = {
+    keeper: marketKeeperPosition,
+    checkout: marketKeeperPosition,
+    order: [marketCounterX - 1.80, marketFloorY, marketCounterZ + 0.92],
+    prep: marketPrepPosition,
+    wash: marketWashPosition,
+    stock: marketStockPosition,
+    receiving: marketReceivingPosition,
+    break: marketBreakPosition,
+  };
+  const marketOccupancySlots = [
+    { id: "mina-market-keeper", role: "keeper", zoneId: "deli-checkout", position: marketKeeperPosition, heading: Math.PI },
+    { id: "mina-market-deli-worker", role: "deli-worker", zoneId: "deli-checkout", position: marketStaffAnchors.order, heading: Math.PI },
+    { id: "mina-market-kitchen-worker", role: "kitchen-worker", zoneId: "prep-kitchen", position: marketPrepPosition, heading: 0 },
+    { id: "mina-market-stock-worker", role: "stock-worker", zoneId: "stock-receiving", position: marketReceivingPosition, heading: Math.PI * 0.5 },
+    ...marketCustomerAnchors.browse.map((position, index) => ({
+      id: `mina-market-shopper-browse-${index + 1}`, role: "shopper", zoneId: "sales-floor", position, heading: index % 2 ? -Math.PI * 0.5 : Math.PI * 0.5,
+    })),
+    ...marketCustomerAnchors.queue.map((position, index) => ({
+      id: `mina-market-shopper-queue-${index + 1}`, role: "shopper", zoneId: "deli-checkout", position, heading: 0,
+    })),
+    ...marketCustomerAnchors.seating.map((position, index) => ({
+      id: `mina-market-customer-seat-${index + 1}`, role: "customer", zoneId: "vestibule", position, heading: Math.PI * 0.5,
+    })),
+  ];
+  const marketItineraries = [
+    {
+      id: "mina-market-shopper-loop",
+      role: "shopper",
+      loop: false,
+      stops: [
+        { anchorId: "arcade-gap", position: [marketEntranceX, marketFloorY, 132.20] },
+        { anchorId: "produce", position: marketCustomerAnchors.browse[0] },
+        { anchorId: "pantry", position: marketCustomerAnchors.browse[2] },
+        { anchorId: "checkout", position: marketCustomerAnchors.checkout },
+        { anchorId: "exit", position: marketCustomerAnchors.exit },
+      ],
+    },
+    {
+      id: "mina-market-takeaway-loop",
+      role: "customer",
+      loop: false,
+      stops: [
+        { anchorId: "arcade-gap", position: [marketEntranceX, marketFloorY, 132.20] },
+        { anchorId: "order", position: marketCustomerAnchors.order },
+        { anchorId: "seat", position: marketCustomerAnchors.seating[0] },
+        { anchorId: "exit", position: marketCustomerAnchors.exit },
+      ],
+    },
+    {
+      id: "mina-market-keeper-shift",
+      role: "keeper",
+      loop: true,
+      stops: [
+        { anchorId: "checkout", position: marketStaffAnchors.checkout },
+        { anchorId: "order", position: marketStaffAnchors.order },
+        { anchorId: "prep", position: marketStaffAnchors.prep },
+        { anchorId: "break", position: marketStaffAnchors.break },
+      ],
+    },
+    {
+      id: "mina-market-stock-loop",
+      role: "stock-worker",
+      loop: true,
+      stops: [
+        { anchorId: "receiving", position: marketStaffAnchors.receiving },
+        { anchorId: "stock", position: marketStaffAnchors.stock },
+        { anchorId: "pantry", position: marketPantryPosition },
+      ],
+    },
+  ];
+  const minaMarketKitchen = deepFreeze({
+    id: "mina_market_kitchen",
+    businessId: "mina_market_kitchen",
+    buildingId: "mina-market-building",
+    label: "MINA'S MARKET KITCHEN",
+    address: "84 Market Street",
+    districtId: marketHost.districtId,
+    hostBuildingRecordId: marketHost.id,
+    seed: minaMarketSeed,
+    openingHours: { opens: 7, closes: 21 },
+    arcade: {
+      id: "north-market-street-arcade",
+      retainedStallIds: [
+        "north-market-stall-1-counter",
+        "north-market-stall-2-counter",
+        "north-market-stall-3-counter",
+        "north-market-stall-4-counter",
+      ],
+      minaStallId: "north-market-stall-2-counter",
+      stallPosition: [-148, marketFloorY, 130.60],
+      visitorPosition: [-148, marketFloorY, 127.70],
+      keeperPosition: [-148, marketFloorY, 131.35],
+    },
+    bounds: {
+      minX: marketMinX,
+      maxX: marketMaxX,
+      minZ: marketMinZ,
+      maxZ: marketMaxZ,
+      floorY: marketFloorY,
+      ceilingY: marketFloorY + marketHost.clearHeight,
+    },
+    entrance: {
+      street: [marketEntranceX, marketFloorY, 127.70],
+      arcadeGap: [marketEntranceX, marketFloorY, 130.60],
+      apron: [marketEntranceX, marketFloorY, 132.20],
+      exterior: [marketEntranceX, marketFloorY, 132.20],
+      threshold: [marketEntranceX, marketFloorY, marketMinZ - 0.18],
+      interior: [marketEntranceX, marketFloorY, marketMinZ + 1.36],
+      heading: 0,
+      clearWidth: marketDoorWidth,
+      arcadeGapBounds: { minX: -145.14, maxX: -142.86, width: 2.28 },
+      transition: "continuous-world",
+      loading: false,
+      teleport: false,
+    },
+    keeperAnchor: marketKeeperPosition,
+    zones: {
+      vestibule: { id: "vestibule", label: "WEATHER VESTIBULE", position: [marketEntranceX, marketFloorY, marketMinZ + 1.55], bounds: { minX: marketVestibuleLeft + 0.10, maxX: marketVestibuleRight - 0.10, minZ: marketMinZ + 0.22, maxZ: marketVestibuleEndZ } },
+      salesFloor: { id: "sales-floor", label: "PRODUCE + GROCERY SALES", position: [marketHost.x - 1.35, marketFloorY, marketMinZ + 7.15], bounds: { minX: marketMinX + 0.22, maxX: marketHost.x + 2.20, minZ: marketMinZ + 0.22, maxZ: marketBackOfHouseZ - 0.08 } },
+      deliCheckout: { id: "deli-checkout", label: "DELI + CHECKOUT", position: [marketCounterX - 0.20, marketFloorY, marketCounterZ - 1.48], bounds: { minX: marketHost.x + 2.20, maxX: marketMaxX - 0.22, minZ: marketMinZ + 0.22, maxZ: marketBackOfHouseZ - 0.08 } },
+      prepKitchen: { id: "prep-kitchen", label: "PREP KITCHEN", position: [marketHost.x - 2.15, marketFloorY, marketBackOfHouseZ + 1.22], bounds: { minX: marketMinX + 0.22, maxX: marketKitchenWashX - 0.16, minZ: marketBackOfHouseZ + 0.16, maxZ: marketRearRoomsZ - 0.16 } },
+      washUp: { id: "wash-up", label: "WASH-UP + SANITATION", position: [marketKitchenWashX + 1.42, marketFloorY, marketBackOfHouseZ + 1.18], bounds: { minX: marketKitchenWashX + 0.16, maxX: marketMaxX - 0.22, minZ: marketBackOfHouseZ + 0.16, maxZ: marketRearRoomsZ - 0.16 } },
+      stockReceiving: { id: "stock-receiving", label: "COLD + DRY RECEIVING", position: [marketStockDoorX, marketFloorY, marketRearRoomsZ + 1.02], bounds: { minX: marketMinX + 0.22, maxX: marketStockDividerX - 0.16, minZ: marketRearRoomsZ + 0.16, maxZ: marketMaxZ - 0.22 } },
+      staffNook: { id: "staff-nook", label: "STAFF NOOK", position: [marketBreakDoorX, marketFloorY, marketRearRoomsZ + 1.02], bounds: { minX: marketStockDividerX + 0.16, maxX: marketToiletDividerX - 0.16, minZ: marketRearRoomsZ + 0.16, maxZ: marketMaxZ - 0.22 } },
+      toilet: { id: "toilet", label: "ACCESSIBLE WC", position: [marketToiletDoorX, marketFloorY, marketRearRoomsZ + 1.02], bounds: { minX: marketToiletDividerX + 0.16, maxX: marketMaxX - 0.22, minZ: marketRearRoomsZ + 0.16, maxZ: marketMaxZ - 0.22 } },
+    },
+    doorways: {
+      exterior: { position: [marketEntranceX, marketFloorY, marketSouthWallZ], clearWidth: marketDoorWidth },
+      vestibuleInner: { position: [marketEntranceX, marketFloorY, marketVestibuleEndZ], clearWidth: 2.68 },
+      backOfHouse: { position: [marketStaffDoorX, marketFloorY, marketBackOfHouseZ], clearWidth: marketStaffDoorWidth },
+      kitchenWash: { position: [marketKitchenWashX, marketFloorY, marketKitchenWashDoorZ], clearWidth: marketKitchenWashDoorWidth },
+      stock: { position: [marketStockDoorX, marketFloorY, marketRearRoomsZ], clearWidth: 1.28 },
+      staffNook: { position: [marketBreakDoorX, marketFloorY, marketRearRoomsZ], clearWidth: 1.22 },
+      toilet: { position: [marketToiletDoorX, marketFloorY, marketRearRoomsZ], clearWidth: 1.08 },
+    },
+    stations: {
+      groceryCheckout: { id: "mina-grocery-checkout", action: "buy_groceries", label: "BUY WEEKLY GROCERIES", position: marketCheckoutCustomer, fixtureId: "mina-market-pos-terminal", transactionKind: "household_supplies" },
+      orderCounter: { id: "mina-order-counter", action: "open_menu", label: "ORDER FROM MINA", position: marketOrderCustomer, fixtureId: "mina-market-deli-display-glass", transactionKind: "prepared_food" },
+      produceScale: { id: "mina-produce-scale", action: "weigh_produce", label: "WEIGH PRODUCE", position: marketProducePosition, fixtureId: "mina-market-produce-scale-head" },
+      coldCase: { id: "mina-cold-case", action: "browse_groceries", label: "BROWSE CHILLED GOODS", position: marketColdCasePosition, fixtureId: "mina-market-cold-case-base" },
+      pantryShelf: { id: "mina-pantry-shelf", action: "stock_shelves", label: "FACE THE PANTRY AISLE", position: marketPantryPosition, fixtureId: "mina-market-gondola-2-shelf-2" },
+      kitchenPrep: { id: "mina-kitchen-prep", action: "prepare_food", label: "PREPARE MARKET FOOD", position: marketPrepPosition, fixtureId: "mina-market-prep-island-worktop" },
+      dishSink: { id: "mina-dish-sink", action: "wash_dishes", label: "WASH + SANITISE", position: marketWashPosition, fixtureId: "mina-market-double-sink" },
+      packingBench: { id: "mina-packing-bench", action: "pack_groceries", label: "PACK GROCERIES", position: marketPackingPosition, fixtureId: "mina-market-packing-shelf" },
+    },
+    staffAnchors: marketStaffAnchors,
+    customerAnchors: marketCustomerAnchors,
+    spawnPoints: {
+      customers: [
+        { id: "mina-customer-1", position: marketCustomerAnchors.browse[0], heading: Math.PI * 0.5 },
+        { id: "mina-customer-2", position: marketCustomerAnchors.browse[1], heading: -Math.PI * 0.5 },
+        { id: "mina-customer-3", position: marketCustomerAnchors.browse[2], heading: Math.PI * 0.5 },
+        { id: "mina-customer-4", position: marketCustomerAnchors.queue[0], heading: 0 },
+        { id: "mina-customer-5", position: marketCustomerAnchors.queue[1], heading: 0 },
+        { id: "mina-customer-6", position: marketCustomerAnchors.seating[0], heading: Math.PI * 0.5 },
+      ],
+      staff: [
+        { id: "mina-staff-keeper", role: "keeper", position: marketStaffAnchors.keeper, heading: Math.PI },
+        { id: "mina-staff-deli", role: "deli-worker", position: marketStaffAnchors.order, heading: Math.PI },
+        { id: "mina-staff-kitchen", role: "kitchen-worker", position: marketStaffAnchors.prep, heading: 0 },
+        { id: "mina-staff-stock", role: "stock-worker", position: marketStaffAnchors.receiving, heading: Math.PI * 0.5 },
+      ],
+    },
+    occupancySlots: marketOccupancySlots,
+    occupancy: {
+      capacity: marketOccupancySlots.length,
+      staffCapacity: marketOccupancySlots.filter(slot => slot.role !== "shopper" && slot.role !== "customer").length,
+      customerCapacity: marketOccupancySlots.filter(slot => slot.role === "shopper" || slot.role === "customer").length,
+    },
+    itineraries: marketItineraries,
+    navigationNodes: [
+      [marketEntranceX, marketFloorY, 127.70],
+      [marketEntranceX, marketFloorY, 130.60],
+      [marketEntranceX, marketFloorY, 132.20],
+      [marketEntranceX, marketFloorY, marketMinZ - 0.18],
+      [marketEntranceX, marketFloorY, marketMinZ + 1.36],
+      [marketEntranceX, marketFloorY, marketVestibuleEndZ + 0.68],
+      [marketHost.x - 0.20, marketFloorY, marketMinZ + 6.10],
+      [marketHost.x - 0.20, marketFloorY, marketBackOfHouseZ - 1.20],
+      [marketStaffDoorX, marketFloorY, marketBackOfHouseZ + 0.72],
+      [marketHost.x - 1.20, marketFloorY, marketHost.z + 2.08],
+      [marketKitchenWashX, marketFloorY, marketKitchenWashDoorZ],
+      [marketStockDoorX, marketFloorY, marketRearRoomsZ + 0.68],
+      [marketBreakDoorX, marketFloorY, marketRearRoomsZ + 0.68],
+      [marketToiletDoorX, marketFloorY, marketRearRoomsZ + 0.68],
+    ],
+    variant: {
+      cabinetStyle: marketCabinetStyle,
+      accentStyle: marketAccentStyle,
+      aisleOffset: marketAisleOffset,
+      crateYaw: marketCrateYaw,
+      basketSpread: marketBasketSpread,
+    },
+    glass: {
+      kind: "dark-neutral-ordinary-glazing",
+      panels: minaMarketGlassTransforms.length,
+      emissive: false,
+      neon: false,
+    },
+    lighting: {
+      kind: "focus-bounded-warm-market-practicals",
+      positions: marketLightingPositions,
+      colors: [0xffcf9d, 0xffdfbb, 0xdcecff],
+      intensities: [70, 64, 54],
+      ranges: [15, 12, 10],
+      reallocates: "host-occupied-storefront-practical",
+      lightsAdded: 2,
+      opens: 7,
+      closes: 21,
+    },
+    renderParts: minaMarketParts,
+    collisionIds: minaMarketBlockerIds,
+    renderBudget: {
+      geometriesAdded: 0,
+      materialsAdded: 0,
+      instancedBatchesAdded: 0,
+      lightsAdded: 2,
+    },
+    stats: {
+      rooms: 8,
+      doorways: 7,
+      stations: 8,
+      customerSpawns: 6,
+      staffSpawns: 4,
+      occupancySlots: marketOccupancySlots.length,
+      itineraries: marketItineraries.length,
+      renderInstances: minaMarketParts.length,
+      glassPanels: minaMarketGlassTransforms.length,
+      collisionVolumes: minaMarketBlockerIds.length,
+      practicalLights: 3,
+      reallocatedPracticalLights: 1,
+      addedPracticalLights: 2,
+      emissiveMaterials: 0,
+    },
+  });
+
+  // Chapter Two's Common Ground conversation now happens at a real table in
+  // the café instead of beside the old detached pavement prop. Actor and
+  // interaction marks deliberately remain separate for clean two-shots.
+  const chapterTwoConversationAnchors = Object.freeze({
+    leah: commonGroundCafe.customerAnchors.story.interaction,
+    manifest: chapterTwoInteractAnchors.manifestDesk,
+  });
+  const chapterTwoLeahAnchor = commonGroundCafe.customerAnchors.story.leah;
+  const chapterTwo = Object.freeze({
+    id: "borrowed-time",
+    title: "Borrowed Time",
+    depotId: "southline-parts-depot",
+    focus: freezePosition([-175.70, SIDEWALK_TOP, -144]),
+    roadApproach: freezePosition([-165.35, ROAD_TOP, -144]),
+    bounds: Object.freeze({ minX: -191.1, maxX: -175.1, minZ: -159.3, maxZ: -128.7 }),
+    interactAnchors: chapterTwoInteractAnchors,
+    evidenceAnchors: chapterTwoInteractAnchors,
+    manifestDesk: chapterTwoInteractAnchors.manifestDesk,
+    suspectPallet: chapterTwoInteractAnchors.suspectPallet,
+    loadingSeal: chapterTwoInteractAnchors.loadingSeal,
+    customerVehicleBay: chapterTwoInteractAnchors.customerVehicleBay,
+    keeperAnchor: chapterTwoKeeperWitnessAnchor,
+    witnessAnchor: chapterTwoKeeperWitnessAnchor,
+    keeperWitnessAnchor: chapterTwoKeeperWitnessAnchor,
+    garageClues: chapterTwoGarageClues,
+    cinematicAnchors: chapterTwoCinematicAnchors,
+    aftermathAnchors: chapterTwoAftermathAnchors,
+    leahAnchor: chapterTwoLeahAnchor,
+    conversationAnchors: chapterTwoConversationAnchors,
+    leahInteractionAnchor: chapterTwoConversationAnchors.leah,
+    manifestInteractionAnchor: chapterTwoConversationAnchors.manifest,
+    practicalPositions: chapterTwoPracticalPositions,
+  });
 
   // A low terminal gives the waterfront scale without walling off the entire
   // promenade. Its main entrance faces the open pedestrian strip to the west.
@@ -1219,14 +3317,23 @@ export function buildCity(scene, {
     Object.freeze({
       id: "common_ground_cafe",
       district: "pulse-core",
-      position: freezePosition([-40, SIDEWALK_TOP, -16.5]),
-      keeperPosition: freezePosition([-40, SIDEWALK_TOP, -14.8]),
+      position: commonGroundCafe.entrance.exterior,
+      keeperPosition: commonGroundCafe.keeperAnchor,
+      keeperYaw: Math.PI,
+      physicalInteriorId: commonGroundCafe.id,
+      buildingId: commonGroundCafe.buildingId,
     }),
     Object.freeze({
       id: "mina_market_kitchen",
       district: "north-market",
-      position: northMarketVisitorAnchors[1],
-      keeperPosition: northMarketBusinessAnchors[1],
+      position: minaMarketKitchen.entrance.street,
+      interactionPosition: minaMarketKitchen.stations.orderCounter.position,
+      keeperPosition: minaMarketKitchen.keeperAnchor,
+      keeperYaw: Math.PI,
+      arcadeStallPosition: northMarketVisitorAnchors[1],
+      arcadeKeeperPosition: northMarketBusinessAnchors[1],
+      physicalInteriorId: minaMarketKitchen.id,
+      buildingId: minaMarketKitchen.buildingId,
     }),
     Object.freeze({
       id: "harbour_lantern",
@@ -1247,17 +3354,18 @@ export function buildCity(scene, {
     Object.freeze({
       id: "common_ground_cafe",
       district: "pulse-core",
-      kind: "cafe-frontage",
-      center: freezePosition([-40, SIDEWALK_TOP, -13.75]),
+      kind: "walk-in-cafe",
+      center: freezePosition([cafeHost.x, SIDEWALK_TOP, cafeMinZ - 0.10]),
       interactionPosition: businessById.get("common_ground_cafe").position,
       yaw: Math.PI,
-      width: 6.8,
+      width: cafeHost.width - 0.66,
       interiorStyle: 0,
       signStyle: 0,
-      practicalPosition: freezePosition([-40, SIDEWALK_TOP + 2.76, -14.8]),
-      practicalColor: 0xffc98c,
-      practicalIntensity: 82,
-      practicalRange: 16,
+      practicalPosition: commonGroundCafe.lighting.position,
+      practicalColor: commonGroundCafe.lighting.color,
+      practicalIntensity: commonGroundCafe.lighting.intensity,
+      practicalRange: commonGroundCafe.lighting.range,
+      physicalInteriorId: commonGroundCafe.id,
     }),
     Object.freeze({
       id: "harbour_lantern",
@@ -1290,7 +3398,7 @@ export function buildCity(scene, {
       practicalRange: 17,
     }),
   ]);
-  const businessOpenStates = new Map(businessFrontages.map(frontage => [frontage.id, false]));
+  const businessOpenStates = new Map(businesses.map(business => [business.id, false]));
 
   function businessFrontagePoint(frontage, localX, localY, localZ) {
     const cosine = Math.cos(frontage.yaw);
@@ -1309,6 +3417,7 @@ export function buildCity(scene, {
   // discover a shader topology or create a 65th instanced draw.
   let businessFrontagePropInstances = 0;
   for (const frontage of businessFrontages) {
+    if (frontage.id === commonGroundCafe.id) continue;
     const rotation = [0, frontage.yaw, 0];
     balconyTransforms.push(transform(
       businessFrontagePoint(frontage, 0, 3.03, 0.62),
@@ -1373,7 +3482,7 @@ export function buildCity(scene, {
     businessFriendlyAnchors: northMarketBusinessAnchors,
     businesses: northMarketBusinesses,
     practicalPositions: northMarketPracticalPositions,
-    openHours: Object.freeze({ opens: 7, closes: 19.5 }),
+    openHours: minaMarketKitchen.openingHours,
   });
   let northMarketPropInstances = 0;
   for (const [stallIndex, [x, , z]] of northMarketStallCenters.entries()) {
@@ -1760,10 +3869,34 @@ export function buildCity(scene, {
   addInstances("Instanced broadleaf and waterfront palm crowns", roundCanopyGeometry, material.foliage, roundCanopyTransforms, { castShadow: true });
 
   // Four-storey parking garage with open decks, columns, emissive wayfinding
-  // and a visibly sloped arrival ramp. Collision uses one conservative AABB.
+  // and a visibly sloped arrival ramp. The left street-facing bay is a real,
+  // prebuilt workshop; compound collision leaves its entrance and work aisle
+  // traversable without weakening the rest of the garage shell.
+  const pulseGarageInteriorSeed = (resolvedSeed ^ 0x50554c53) >>> 0;
+  const pulseGarageRandom = mulberry32(pulseGarageInteriorSeed);
+  const pulseGarageFloorY = SIDEWALK_TOP + 0.18;
+  const pulseGarageCeilingY = SIDEWALK_TOP + 3.84;
+  const pulseGarageLiftZ = 87.15 + (pulseGarageRandom() - 0.5) * 0.34;
+  const pulseGarageBenchZ = 84.05 + (pulseGarageRandom() - 0.5) * 0.28;
+  const pulseGarageShelfZ = 89.75 + (pulseGarageRandom() - 0.5) * 0.20;
+  const pulseGarageBayBounds = {
+    minX: -155.68,
+    maxX: -150.32,
+    minZ: 80.18,
+    maxZ: 91.48,
+    floorY: pulseGarageFloorY,
+    ceilingY: pulseGarageCeilingY,
+  };
   const garageDecks = [];
   for (let level = 0; level < 4; ++level) {
-    garageDecks.push(transform([-144, SIDEWALK_TOP + 0.35 + level * 4.0, 96], [29, 0.55, 30]));
+    if (level === 0) {
+      // Keep the pooled ground deck out of the workshop aperture. The bay owns
+      // a lower, gently ramped service floor while the rest of the garage
+      // retains its original slab.
+      garageDecks.push(transform([-139.85, pulseGarageFloorY - 0.18, 96], [20.7, 0.36, 30]));
+    } else {
+      garageDecks.push(transform([-144, SIDEWALK_TOP + 0.35 + level * 4.0, 96], [29, 0.55, 30]));
+    }
   }
   const garageColumns = [];
   for (const x of [-156.5, -144, -131.5]) {
@@ -1785,10 +3918,12 @@ export function buildCity(scene, {
   // parking-deck slab.  Dark recessed bays, a rain canopy, framed office
   // windows and a restrained sign give the briefing cutscene useful depth.
   for (const [index, x] of [[1, -153], [2, -135]]) {
-    addStaticMesh(`Pulse Garage dark service bay ${index}`, boxGeometry, material.concreteDark,
-      [x, SIDEWALK_TOP + 1.85, 80.48], [6.2, 3.25, 0.48], [0, 0, 0], { castShadow: true });
-    addStaticMesh(`Pulse Garage open service bay illusion ${index}`, planeGeometry, material.windows[index % material.windows.length],
-      [x, SIDEWALK_TOP + 1.78, 80.18], [5.35, 2.82, 1], [0, Math.PI, 0], { receiveShadow: false });
+    if (index !== 1) {
+      addStaticMesh(`Pulse Garage dark service bay ${index}`, boxGeometry, material.concreteDark,
+        [x, SIDEWALK_TOP + 1.85, 80.48], [6.2, 3.25, 0.48], [0, 0, 0], { castShadow: true });
+      addStaticMesh(`Pulse Garage open service bay illusion ${index}`, planeGeometry, material.windows[index % material.windows.length],
+        [x, SIDEWALK_TOP + 1.78, 80.18], [5.35, 2.82, 1], [0, Math.PI, 0], { receiveShadow: false });
+    }
     for (const [frame, px, py, sx, sy] of [
       ["left", x - 2.78, SIDEWALK_TOP + 1.78, 0.18, 3.12],
       ["right", x + 2.78, SIDEWALK_TOP + 1.78, 0.18, 3.12],
@@ -1808,7 +3943,154 @@ export function buildCity(scene, {
     [-144, 8.18, 80.54], [21.8, 1.62, 1], [0, Math.PI, 0], { receiveShadow: false });
   addStaticMesh("Pulse Garage restrained wayfinding", planeGeometry, material.signs[0],
     [-144, 5.65, 80.10], [7.6, 0.58, 1], [0, Math.PI, 0], { receiveShadow: false });
-  addBlocker("pulse-garage", "garage", -144, 96, 29, 30, 15.2);
+
+  let pulseGarageInteriorMeshCount = 0;
+  function addPulseGarageMesh(name, meshMaterial, position, scale, rotation = [0, 0, 0], options = {}) {
+    pulseGarageInteriorMeshCount += 1;
+    return addStaticMesh(name, boxGeometry, meshMaterial, position, scale, rotation, {
+      castShadow: options.castShadow ?? true,
+      receiveShadow: options.receiveShadow ?? true,
+      rtxIgnore: options.rtxIgnore ?? false,
+      rtxStatic: options.rtxStatic ?? true,
+    });
+  }
+
+  // Raised sealed service floor and a shallow threshold ramp. All meshes use
+  // city-owned geometry/materials, so startup reveal-all warming discovers no
+  // new gameplay-time topology or texture upload.
+  addPulseGarageMesh("Pulse Garage left service bay raised floor", material.concrete,
+    [-153, pulseGarageFloorY - 0.07, 85.83], [5.36, 0.14, 11.30], [0, 0, 0], { castShadow: false });
+  addPulseGarageMesh("Pulse Garage left service bay threshold ramp", material.concrete,
+    [-153, SIDEWALK_TOP + 0.02, 79.84], [5.02, 0.14, 1.62], [-0.11, 0, 0], { castShadow: false });
+  addPulseGarageMesh("Pulse Garage left service bay ceiling", material.concreteDark,
+    [-153, pulseGarageCeilingY, 85.83], [5.62, 0.18, 11.34]);
+  addPulseGarageMesh("Pulse Garage left service bay west wall", material.concreteDark,
+    [-155.79, 2.13, 85.83], [0.22, 3.68, 11.34]);
+  addPulseGarageMesh("Pulse Garage left service bay east wall", material.concreteDark,
+    [-150.21, 2.13, 85.83], [0.22, 3.68, 11.34]);
+  addPulseGarageMesh("Pulse Garage left service bay rear wall", material.concreteDark,
+    [-153, 2.13, 91.59], [5.80, 3.68, 0.22]);
+  addPulseGarageMesh("Pulse Garage left service bay washable west wainscot", material.buildings[5],
+    [-155.665, 1.08, 85.83], [0.035, 1.34, 10.96], [0, 0, 0], { castShadow: false });
+  addPulseGarageMesh("Pulse Garage left service bay washable east wainscot", material.buildings[5],
+    [-150.335, 1.08, 85.83], [0.035, 1.34, 10.96], [0, 0, 0], { castShadow: false });
+
+  // Two-post lift, grounded arms and overhead crossmember establish a usable
+  // mechanic station rather than decorative garage dressing.
+  const liftPostXs = [-154.88, -151.12];
+  for (const [index, x] of liftPostXs.entries()) {
+    addPulseGarageMesh(`Pulse Garage service lift post ${index + 1}`, material.pole,
+      [x, pulseGarageFloorY + 1.42, pulseGarageLiftZ], [0.28, 2.84, 0.34]);
+    addPulseGarageMesh(`Pulse Garage service lift foot ${index + 1}`, material.facadeTrim,
+      [x, pulseGarageFloorY + 0.055, pulseGarageLiftZ], [0.62, 0.11, 0.74]);
+    addPulseGarageMesh(`Pulse Garage service lift arm ${index + 1}`, material.facadeTrim,
+      [(x - 153) * 0.42 - 153, pulseGarageFloorY + 0.16, pulseGarageLiftZ - 0.44], [1.45, 0.09, 0.18], [0, (index ? -1 : 1) * 0.16, 0]);
+  }
+  addPulseGarageMesh("Pulse Garage service lift overhead crossmember", material.pole,
+    [-153, pulseGarageFloorY + 2.79, pulseGarageLiftZ], [4.04, 0.22, 0.30]);
+
+  // Workbench, pegboard, shelves and physically separate parts bins are all
+  // seeded once from the city seed. Their stable layout becomes gameplay data
+  // through the contract below.
+  addPulseGarageMesh("Pulse Garage mechanic workbench", material.utility,
+    [-155.20, pulseGarageFloorY + 0.46, pulseGarageBenchZ], [0.72, 0.92, 2.36]);
+  addPulseGarageMesh("Pulse Garage mechanic pegboard", material.buildings[3],
+    [-155.61, pulseGarageFloorY + 1.72, pulseGarageBenchZ], [0.055, 1.32, 2.60]);
+  for (let tool = 0; tool < 8; ++tool) {
+    const z = pulseGarageBenchZ - 0.96 + (tool % 4) * 0.62;
+    const y = pulseGarageFloorY + 1.45 + Math.floor(tool / 4) * 0.48 + (pulseGarageRandom() - 0.5) * 0.08;
+    addPulseGarageMesh(`Pulse Garage wall tool ${tool + 1}`, tool % 3 === 0 ? material.hydrant : material.facadeTrim,
+      [-155.565, y, z], [0.09, 0.34 + pulseGarageRandom() * 0.16, 0.07], [0, 0, (tool % 2 ? -1 : 1) * 0.18]);
+  }
+  for (let shelf = 0; shelf < 3; ++shelf) {
+    addPulseGarageMesh(`Pulse Garage parts shelf ${shelf + 1}`, material.facadeTrim,
+      [-150.73, pulseGarageFloorY + 0.40 + shelf * 0.66, pulseGarageShelfZ], [0.68, 0.08, 2.06]);
+  }
+  for (let part = 0; part < 6; ++part) {
+    const level = part % 3;
+    const z = pulseGarageShelfZ - 0.72 + Math.floor(part / 3) * 1.34 + (pulseGarageRandom() - 0.5) * 0.12;
+    addPulseGarageMesh(`Pulse Garage labelled parts bin ${part + 1}`, material.containers[part % material.containers.length],
+      [-150.78, pulseGarageFloorY + 0.55 + level * 0.66, z], [0.52, 0.26, 0.46], [0, (pulseGarageRandom() - 0.5) * 0.08, 0]);
+  }
+
+  // A framed glass office nook and occupied-room projection retain sightline
+  // depth on the east wall while the bay itself remains physically open.
+  const garageOfficeGlass = addStaticMesh("Pulse Garage service office glazing", planeGeometry, material.shelterGlass,
+    [-150.075, pulseGarageFloorY + 1.70, 83.48], [2.76, 2.22, 1], [0, -Math.PI * 0.5, 0], {
+      receiveShadow: false, rtxIgnore: true, rtxStatic: false,
+    });
+  pulseGarageInteriorMeshCount += 1;
+  const garageOfficeRoom = addStaticMesh("Pulse Garage service office occupied room", planeGeometry, material.windows[0],
+    [-150.105, pulseGarageFloorY + 1.70, 83.48], [2.64, 2.10, 1], [0, -Math.PI * 0.5, 0], {
+      receiveShadow: false,
+    });
+  pulseGarageInteriorMeshCount += 1;
+  for (const [index, z] of [82.06, 84.90].entries()) {
+    addPulseGarageMesh(`Pulse Garage office glazing jamb ${index + 1}`, material.facadeTrim,
+      [-150.11, pulseGarageFloorY + 1.70, z], [0.14, 2.34, 0.14]);
+  }
+  addPulseGarageMesh("Pulse Garage office glazing sill", material.facadeTrim,
+    [-150.11, pulseGarageFloorY + 0.59, 83.48], [0.14, 0.14, 2.98]);
+  addPulseGarageMesh("Pulse Garage office glazing header", material.facadeTrim,
+    [-150.11, pulseGarageFloorY + 2.81, 83.48], [0.14, 0.14, 2.98]);
+  for (const [index, [x, z]] of [[-154.25, 84.05], [-151.65, 88.55]].entries()) {
+    addPulseGarageMesh(`Pulse Garage service bay ceiling luminaire ${index + 1}`, material.laneWhite,
+      [x, pulseGarageCeilingY - 0.105, z], [1.55, 0.035, 0.42], [0, 0, 0], { castShadow: false });
+  }
+
+  // The former single AABB made both painted service doors impossible to
+  // enter. Three shell volumes preserve identical outer coverage everywhere
+  // except the authored left aperture; only real fixtures block its aisle.
+  addBlocker("pulse-garage-west-structure", "garage-structure", -157.15, 96, 2.70, 30, 15.2);
+  addBlocker("pulse-garage-east-structure", "garage-structure", -139.85, 96, 20.70, 30, 15.2);
+  addBlocker("pulse-garage-bay-rear-structure", "garage-structure", -153, 101.30, 5.60, 19.40, 15.2);
+  addBlocker("pulse-garage-service-workbench", "garage-fixture", -155.20, pulseGarageBenchZ, 0.72, 2.36, 0.92, pulseGarageFloorY);
+  for (const [index, x] of liftPostXs.entries()) {
+    addBlocker(`pulse-garage-service-lift-post-${index + 1}`, "garage-fixture", x, pulseGarageLiftZ, 0.28, 0.34, 2.84, pulseGarageFloorY);
+  }
+  addBlocker("pulse-garage-service-parts-shelf", "garage-fixture", -150.73, pulseGarageShelfZ, 0.68, 2.06, 2.08, pulseGarageFloorY);
+
+  const pulseGarageInterior = deepFreeze({
+    id: "pulse-garage-left-service-bay",
+    buildingId: "pulse-garage",
+    seed: pulseGarageInteriorSeed,
+    entrance: {
+      exterior: [-153, SIDEWALK_TOP, 78.90],
+      threshold: [-153, SIDEWALK_TOP + 0.09, 79.90],
+      interior: [-153, pulseGarageFloorY, 81.45],
+      heading: Math.PI,
+      clearWidth: 5.02,
+    },
+    bounds: pulseGarageBayBounds,
+    layout: {
+      kind: "seeded-two-post-service-bay",
+      seed: pulseGarageInteriorSeed,
+      floorHeight: pulseGarageFloorY,
+      ceilingHeight: pulseGarageCeilingY,
+      ramp: { minZ: 79.03, maxZ: 80.65, lowY: SIDEWALK_TOP, highY: pulseGarageFloorY },
+      liftZ: pulseGarageLiftZ,
+      benchZ: pulseGarageBenchZ,
+      shelfZ: pulseGarageShelfZ,
+    },
+    stations: {
+      diagnostics: { id: "garage-diagnostics", label: "DIAGNOSTICS BENCH", position: [-154.10, pulseGarageFloorY, pulseGarageBenchZ], fixturePosition: [-155.20, pulseGarageFloorY, pulseGarageBenchZ] },
+      lift: { id: "garage-lift", label: "TWO-POST SERVICE LIFT", position: [-153, pulseGarageFloorY, pulseGarageLiftZ - 1.55], fixturePosition: [-153, pulseGarageFloorY, pulseGarageLiftZ] },
+      parts: { id: "garage-parts", label: "LABELLED PARTS SHELVES", position: [-151.75, pulseGarageFloorY, pulseGarageShelfZ - 0.15], fixturePosition: [-150.73, pulseGarageFloorY, pulseGarageShelfZ] },
+      office: { id: "garage-office", label: "SERVICE OFFICE WINDOW", position: [-151.20, pulseGarageFloorY, 83.48], fixturePosition: [-150.11, pulseGarageFloorY + 1.70, 83.48] },
+    },
+    customerAnchor: [-153, pulseGarageFloorY, 82.12],
+    stats: {
+      renderMeshes: pulseGarageInteriorMeshCount,
+      collisionVolumes: 7,
+      stations: 4,
+      liftPosts: 2,
+      shelves: 3,
+      wallTools: 8,
+      partsBins: 6,
+      officeGlazingPanels: 1,
+      practicalLights: 2,
+    },
+  });
 
   // Promenade, seawall, piers and railings create a clear coastal edge. The
   // navigable bounds end just inside the rail, so no invisible water collider
@@ -2221,6 +4503,10 @@ export function buildCity(scene, {
   shelterGlass.push(...northMarketDisplayPanes);
   shelterGlass.push(...businessDisplayPanes);
   shelterGlass.push(...pulseTransitMachineScreenTransforms);
+  shelterGlass.push(...residentialInteriorGlassTransforms);
+  shelterGlass.push(...communityHubGlassTransforms);
+  shelterGlass.push(...commonGroundCafeGlassTransforms);
+  shelterGlass.push(...minaMarketGlassTransforms);
   addInstances("Pulse Street bus shelter frames", boxGeometry, material.pole, shelterFrames, { castShadow: true });
   addInstances("Pulse Street bus shelter glass", planeGeometry, material.shelterGlass, shelterGlass, {
     receiveShadow: false,
@@ -2324,29 +4610,100 @@ export function buildCity(scene, {
     light.userData.practicalKind = "open-doors-business";
     light.userData.businessId = frontage.id;
     light.userData.bounded = true;
+    if (frontage.id === commonGroundCafe.id) {
+      light.name = "Common Ground Cafe bounded warm practical";
+      light.userData.cafeId = commonGroundCafe.id;
+      light.userData.physicalInterior = true;
+    }
     root.add(light);
     staticLights.push(light);
   }
+  const communityHubPracticalReallocationStart = storefrontLightPositions.length - 3;
+  const residentialInteriorPracticalReallocationIndex = storefrontLightPositions.length - 1;
   for (const [index, entry] of storefrontLightPositions.entries()) {
-    const light = new THREE.PointLight(entry.color, entry.baseIntensity, 17, 2);
-    light.name = `Occupied storefront entrance practical ${index + 1}`;
-    light.position.fromArray(entry.position);
+    const communityHubPracticalIndex = index - communityHubPracticalReallocationStart;
+    const isCommunityHubPractical = communityHubPracticalIndex >= 0 && communityHubPracticalIndex < 2;
+    const isResidentialPractical = index === residentialInteriorPracticalReallocationIndex;
+    const isMinaMarketPractical = entry.buildingId === minaMarketKitchen.hostBuildingRecordId;
+    const hubLightPosition = isCommunityHubPractical ? communityHub.lighting.positions[communityHubPracticalIndex] : null;
+    const hubLightColor = isCommunityHubPractical ? communityHub.lighting.colors[communityHubPracticalIndex] : null;
+    const hubLightIntensity = isCommunityHubPractical ? communityHub.lighting.intensities[communityHubPracticalIndex] : null;
+    const hubLightRange = isCommunityHubPractical ? communityHub.lighting.ranges[communityHubPracticalIndex] : null;
+    const light = new THREE.PointLight(
+      isMinaMarketPractical ? minaMarketKitchen.lighting.colors[0] : isResidentialPractical ?
+        residentialInterior.lighting.color : isCommunityHubPractical ? hubLightColor : entry.color,
+      isMinaMarketPractical ? minaMarketKitchen.lighting.intensities[0] : isResidentialPractical ?
+        residentialInterior.lighting.intensity : isCommunityHubPractical ? hubLightIntensity : entry.baseIntensity,
+      isMinaMarketPractical ? minaMarketKitchen.lighting.ranges[0] : isResidentialPractical ?
+        residentialInterior.lighting.range : isCommunityHubPractical ? hubLightRange : 17,
+      2,
+    );
+    light.name = isMinaMarketPractical
+      ? "Mina's Market bounded practical 1"
+      : isResidentialPractical
+      ? "Southline Studio bounded warm practical"
+      : isCommunityHubPractical
+        ? `Harbour Skills House bounded practical ${communityHubPracticalIndex + 1}`
+      : `Occupied storefront entrance practical ${index + 1}`;
+    light.position.fromArray(isMinaMarketPractical ? minaMarketKitchen.lighting.positions[0] : isResidentialPractical ?
+      residentialInterior.lighting.position : isCommunityHubPractical ? hubLightPosition : entry.position);
     light.userData.staticWorld = true;
-    light.userData.baseIntensity = entry.baseIntensity;
+    light.userData.baseIntensity = isMinaMarketPractical ? minaMarketKitchen.lighting.intensities[0] : isResidentialPractical ?
+      residentialInterior.lighting.intensity : isCommunityHubPractical ? hubLightIntensity : entry.baseIntensity;
+    if (isMinaMarketPractical) {
+      light.userData.practicalKind = "mina-market-interior";
+      light.userData.marketId = minaMarketKitchen.id;
+      light.userData.businessId = minaMarketKitchen.businessId;
+      light.userData.physicalInterior = true;
+      light.userData.bounded = true;
+    } else if (isResidentialPractical) {
+      light.userData.practicalKind = "residential-interior";
+      light.userData.homeId = residentialInterior.homeId;
+      light.userData.bounded = true;
+    } else if (isCommunityHubPractical) {
+      light.userData.practicalKind = "community-hub-interior";
+      light.userData.hubId = communityHub.id;
+      light.userData.bounded = true;
+    }
     root.add(light);
     staticLights.push(light);
   }
-  for (const [index, position] of [
-    [-153, SIDEWALK_TOP + 3.75, 78.3],
-    [-144, SIDEWALK_TOP + 3.75, 78.3],
-    [-135, SIDEWALK_TOP + 3.75, 78.3],
-  ].entries()) {
-    const baseIntensity = 88;
-    const light = new THREE.PointLight(0xffd0a0, baseIntensity, 19, 2);
-    light.name = `Pulse Garage canopy practical ${index + 1}`;
-    light.position.set(...position);
+  for (let index = 1; index < minaMarketKitchen.lighting.positions.length; ++index) {
+    const light = new THREE.PointLight(
+      minaMarketKitchen.lighting.colors[index],
+      minaMarketKitchen.lighting.intensities[index],
+      minaMarketKitchen.lighting.ranges[index],
+      2,
+    );
+    light.name = `Mina's Market bounded practical ${index + 1}`;
+    light.position.fromArray(minaMarketKitchen.lighting.positions[index]);
+    light.castShadow = false;
+    light.userData.staticWorld = true;
+    light.userData.baseIntensity = minaMarketKitchen.lighting.intensities[index];
+    light.userData.practicalKind = "mina-market-interior";
+    light.userData.marketId = minaMarketKitchen.id;
+    light.userData.businessId = minaMarketKitchen.businessId;
+    light.userData.physicalInterior = true;
+    light.userData.bounded = true;
+    root.add(light);
+    staticLights.push(light);
+  }
+  const pulseGaragePracticalSpecs = [
+    { position: [-144, SIDEWALK_TOP + 3.75, 78.3], kind: "canopy", color: 0xffd0a0, intensity: 88, range: 19 },
+    { position: [-154.25, pulseGarageCeilingY - 0.28, 84.05], kind: "service-bay", color: 0xffe1ba, intensity: 118, range: 10.5 },
+    { position: [-151.65, pulseGarageCeilingY - 0.28, 88.55], kind: "service-bay", color: 0xd9edff, intensity: 108, range: 10.5 },
+  ];
+  for (const [index, spec] of pulseGaragePracticalSpecs.entries()) {
+    const baseIntensity = spec.intensity;
+    const light = new THREE.PointLight(spec.color, baseIntensity, spec.range, 2);
+    light.name = spec.kind === "service-bay"
+      ? `Pulse Garage service bay practical ${index}`
+      : "Pulse Garage canopy practical";
+    light.position.set(...spec.position);
     light.userData.staticWorld = true;
     light.userData.baseIntensity = baseIntensity;
+    light.userData.practicalKind = `pulse-garage-${spec.kind}`;
+    light.userData.bounded = true;
     root.add(light);
     staticLights.push(light);
   }
@@ -2441,7 +4798,7 @@ export function buildCity(scene, {
   // across intersections, and are rejected against the same collision data
   // used by the player and camera.
   const pedestrianNodeMap = new Map();
-  function addPedestrianNode(xValue, zValue) {
+  function addPedestrianNode(xValue, zValue, yValue = SIDEWALK_TOP) {
     const x = Math.round(finite(xValue) * 100) / 100;
     const z = Math.round(finite(zValue) * 100) / 100;
     if (x < CITY_BOUNDS.minX + 0.5 || x > CITY_BOUNDS.maxX - 0.5 ||
@@ -2449,7 +4806,7 @@ export function buildCity(scene, {
     if (isBlockedCircle(x, z, 0.38)) return;
     const key = `${x.toFixed(2)}:${z.toFixed(2)}`;
     if (!pedestrianNodeMap.has(key)) {
-      pedestrianNodeMap.set(key, Object.freeze([x, SIDEWALK_TOP, z]));
+      pedestrianNodeMap.set(key, Object.freeze([x, finite(yValue, SIDEWALK_TOP), z]));
     }
   }
   for (const blockX of X_BLOCKS) {
@@ -2498,6 +4855,76 @@ export function buildCity(scene, {
     ...pulseTransit.waitingAnchors,
     ...pulseTransit.coveredWaitingAnchors,
   ]) addPedestrianNode(x, z);
+  for (const [x, y, z] of [
+    residentialInterior.entrance.exterior,
+    residentialInterior.entrance.threshold,
+    residentialInterior.entrance.interior,
+    ...Object.values(residentialInterior.doorways).map(doorway => doorway.position),
+    ...Object.values(residentialInterior.zones).map(zone => zone.position),
+    ...Object.values(residentialInterior.interactionAnchors),
+    ...Object.values(residentialInterior.stations).map(station => station.position),
+    residentialInterior.spawnPoints.player.position,
+    residentialInterior.spawnPoints.resident.position,
+  ]) addPedestrianNode(x, z, y);
+  for (const [x, y, z] of [
+    communityHub.entrance.exterior,
+    communityHub.entrance.threshold,
+    communityHub.entrance.interior,
+    ...Object.values(communityHub.doorways).map(doorway => doorway.position),
+    ...Object.values(communityHub.zones).map(zone => zone.position),
+    ...Object.values(communityHub.stations).map(station => station.position),
+    ...communityHub.navigationNodes,
+    ...communityHub.spawnPoints.public.map(entry => entry.position),
+    ...communityHub.spawnPoints.staff.map(entry => entry.position),
+  ]) addPedestrianNode(x, z, y);
+  for (const [x, y, z] of [
+    commonGroundCafe.entrance.exterior,
+    commonGroundCafe.entrance.threshold,
+    commonGroundCafe.entrance.interior,
+    commonGroundCafe.keeperAnchor,
+    ...Object.values(commonGroundCafe.doorways).map(doorway => doorway.position),
+    ...Object.values(commonGroundCafe.zones).map(zone => zone.position),
+    ...Object.values(commonGroundCafe.stations).map(station => station.position),
+    ...Object.values(commonGroundCafe.jobAnchors),
+    ...commonGroundCafe.customerAnchors.queue,
+    commonGroundCafe.customerAnchors.pickup,
+    ...commonGroundCafe.customerAnchors.seating,
+    commonGroundCafe.customerAnchors.story.leah,
+    commonGroundCafe.customerAnchors.story.interaction,
+    ...commonGroundCafe.navigationNodes,
+    ...commonGroundCafe.spawnPoints.customers.map(entry => entry.position),
+    ...commonGroundCafe.spawnPoints.staff.map(entry => entry.position),
+  ]) addPedestrianNode(x, z, y);
+  for (const [x, y, z] of [
+    minaMarketKitchen.entrance.street,
+    minaMarketKitchen.entrance.arcadeGap,
+    minaMarketKitchen.entrance.apron,
+    minaMarketKitchen.entrance.threshold,
+    minaMarketKitchen.entrance.interior,
+    minaMarketKitchen.keeperAnchor,
+    ...Object.values(minaMarketKitchen.doorways).map(doorway => doorway.position),
+    ...Object.values(minaMarketKitchen.zones).map(zone => zone.position),
+    ...Object.values(minaMarketKitchen.stations).map(station => station.position),
+    ...Object.values(minaMarketKitchen.staffAnchors),
+    ...minaMarketKitchen.customerAnchors.browse,
+    ...minaMarketKitchen.customerAnchors.queue,
+    minaMarketKitchen.customerAnchors.checkout,
+    minaMarketKitchen.customerAnchors.order,
+    ...minaMarketKitchen.customerAnchors.seating,
+    minaMarketKitchen.customerAnchors.exit,
+    ...minaMarketKitchen.navigationNodes,
+    ...minaMarketKitchen.spawnPoints.customers.map(entry => entry.position),
+    ...minaMarketKitchen.spawnPoints.staff.map(entry => entry.position),
+    ...minaMarketKitchen.occupancySlots.map(entry => entry.position),
+    ...minaMarketKitchen.itineraries.flatMap(itinerary => itinerary.stops.map(stop => stop.position)),
+  ]) addPedestrianNode(x, z, y);
+  for (const [x, y, z] of [
+    pulseGarageInterior.entrance.exterior,
+    pulseGarageInterior.entrance.threshold,
+    pulseGarageInterior.entrance.interior,
+    pulseGarageInterior.customerAnchor,
+    ...Object.values(pulseGarageInterior.stations).map(station => station.position),
+  ]) addPedestrianNode(x, z, y);
   const pedestrianNodes = Object.freeze([...pedestrianNodeMap.values()]);
 
   const spawnPoints = Object.freeze({
@@ -2553,7 +4980,63 @@ export function buildCity(scene, {
       Z_ROADS.some(center => Math.abs(z - center) <= ROAD_HALF_WIDTH);
   }
 
+  function residentialInteriorGroundAt(xValue, zValue) {
+    const x = finite(xValue, Infinity);
+    const z = finite(zValue, Infinity);
+    const bounds = residentialInterior.bounds;
+    if (x >= bounds.minX && x <= bounds.maxX && z >= bounds.minZ && z <= bounds.maxZ) return bounds.floorY;
+    return null;
+  }
+
+  function communityHubGroundAt(xValue, zValue) {
+    const x = finite(xValue, Infinity);
+    const z = finite(zValue, Infinity);
+    const bounds = communityHub.bounds;
+    if (x >= bounds.minX && x <= bounds.maxX && z >= bounds.minZ && z <= bounds.maxZ) return bounds.floorY;
+    return null;
+  }
+
+  function commonGroundCafeGroundAt(xValue, zValue) {
+    const x = finite(xValue, Infinity);
+    const z = finite(zValue, Infinity);
+    const bounds = commonGroundCafe.bounds;
+    if (x >= bounds.minX && x <= bounds.maxX && z >= bounds.minZ && z <= bounds.maxZ) return bounds.floorY;
+    return null;
+  }
+
+  function minaMarketGroundAt(xValue, zValue) {
+    const x = finite(xValue, Infinity);
+    const z = finite(zValue, Infinity);
+    const bounds = minaMarketKitchen.bounds;
+    if (x >= bounds.minX && x <= bounds.maxX && z >= bounds.minZ && z <= bounds.maxZ) return bounds.floorY;
+    return null;
+  }
+
+  function pulseGarageGroundAt(xValue, zValue) {
+    const x = finite(xValue, Infinity);
+    const z = finite(zValue, Infinity);
+    const ramp = pulseGarageInterior.layout.ramp;
+    const rampHalfWidth = pulseGarageInterior.entrance.clearWidth * 0.5;
+    if (Math.abs(x + 153) <= rampHalfWidth && z >= ramp.minZ && z <= ramp.maxZ) {
+      const progress = clamp((z - ramp.minZ) / Math.max(1e-6, ramp.maxZ - ramp.minZ), 0, 1);
+      return THREE.MathUtils.lerp(ramp.lowY, ramp.highY, progress);
+    }
+    const bounds = pulseGarageInterior.bounds;
+    if (x >= bounds.minX && x <= bounds.maxX && z >= bounds.minZ && z <= bounds.maxZ) return bounds.floorY;
+    return null;
+  }
+
   function terrainHeight(x, z) {
+    const homeGround = residentialInteriorGroundAt(x, z);
+    if (homeGround != null) return homeGround;
+    const hubGround = communityHubGroundAt(x, z);
+    if (hubGround != null) return hubGround;
+    const cafeGround = commonGroundCafeGroundAt(x, z);
+    if (cafeGround != null) return cafeGround;
+    const marketGround = minaMarketGroundAt(x, z);
+    if (marketGround != null) return marketGround;
+    const garageGround = pulseGarageGroundAt(x, z);
+    if (garageGround != null) return garageGround;
     if (z > CITY_BOUNDS.maxZ) return 0.12 + Math.sin(x * 0.035) * 0.18 + Math.sin(z * 0.021) * 0.12;
     if (isRoad(x, z)) return ROAD_TOP;
     const court = x >= harbourCourt.bounds.minX && x <= harbourCourt.bounds.maxX &&
@@ -2562,6 +5045,46 @@ export function buildCity(scene, {
   }
 
   function sampleGround(x, z) {
+    const homeGround = residentialInteriorGroundAt(x, z);
+    if (homeGround != null) return {
+      height: homeGround,
+      normal: new THREE.Vector3(0, 1, 0),
+      surfaceId: "southline-studio-floor",
+      districtId: residentialInterior.districtId,
+    };
+    const hubGround = communityHubGroundAt(x, z);
+    if (hubGround != null) return {
+      height: hubGround,
+      normal: new THREE.Vector3(0, 1, 0),
+      surfaceId: "harbour-skills-house-floor",
+      districtId: communityHub.districtId,
+    };
+    const cafeGround = commonGroundCafeGroundAt(x, z);
+    if (cafeGround != null) return {
+      height: cafeGround,
+      normal: new THREE.Vector3(0, 1, 0),
+      surfaceId: "common-ground-cafe-floor",
+      districtId: commonGroundCafe.districtId,
+    };
+    const marketGround = minaMarketGroundAt(x, z);
+    if (marketGround != null) return {
+      height: marketGround,
+      normal: new THREE.Vector3(0, 1, 0),
+      surfaceId: "mina-market-floor",
+      districtId: minaMarketKitchen.districtId,
+    };
+    const garageGround = pulseGarageGroundAt(x, z);
+    if (garageGround != null) {
+      const ramp = pulseGarageInterior.layout.ramp;
+      const onRamp = z >= ramp.minZ && z <= ramp.maxZ;
+      const rise = onRamp ? (ramp.highY - ramp.lowY) / Math.max(1e-6, ramp.maxZ - ramp.minZ) : 0;
+      return {
+        height: garageGround,
+        normal: new THREE.Vector3(0, 1, -rise).normalize(),
+        surfaceId: onRamp ? "pulse-garage-service-ramp" : "pulse-garage-service-floor",
+        districtId: "north-market",
+      };
+    }
     if (z > CITY_BOUNDS.maxZ) return {
       height: terrainHeight(x, z),
       normal: new THREE.Vector3(0, 1, 0),
@@ -2674,6 +5197,27 @@ export function buildCity(scene, {
     const practical = atmosphereState.streetlightFactor;
     const windows = atmosphereState.windowLightFactor;
     const daylight = atmosphereState.daylight;
+    const focusValue = focusPosition?.position ?? focusPosition;
+    const focusInsideResidential = Boolean(focusValue) &&
+      finite(focusValue.x ?? focusValue[0], Infinity) >= residentialInterior.bounds.minX - 0.2 &&
+      finite(focusValue.x ?? focusValue[0], -Infinity) <= residentialInterior.bounds.maxX + 0.2 &&
+      finite(focusValue.z ?? focusValue[2], Infinity) >= residentialInterior.bounds.minZ - 0.2 &&
+      finite(focusValue.z ?? focusValue[2], -Infinity) <= residentialInterior.bounds.maxZ + 0.2;
+    const focusInsideCommunityHub = Boolean(focusValue) &&
+      finite(focusValue.x ?? focusValue[0], Infinity) >= communityHub.bounds.minX - 0.2 &&
+      finite(focusValue.x ?? focusValue[0], -Infinity) <= communityHub.bounds.maxX + 0.2 &&
+      finite(focusValue.z ?? focusValue[2], Infinity) >= communityHub.bounds.minZ - 0.2 &&
+      finite(focusValue.z ?? focusValue[2], -Infinity) <= communityHub.bounds.maxZ + 0.2;
+    const focusInsideCommonGroundCafe = Boolean(focusValue) &&
+      finite(focusValue.x ?? focusValue[0], Infinity) >= commonGroundCafe.bounds.minX - 0.2 &&
+      finite(focusValue.x ?? focusValue[0], -Infinity) <= commonGroundCafe.bounds.maxX + 0.2 &&
+      finite(focusValue.z ?? focusValue[2], Infinity) >= commonGroundCafe.bounds.minZ - 0.2 &&
+      finite(focusValue.z ?? focusValue[2], -Infinity) <= commonGroundCafe.bounds.maxZ + 0.2;
+    const focusInsideMinaMarket = Boolean(focusValue) &&
+      finite(focusValue.x ?? focusValue[0], Infinity) >= minaMarketKitchen.bounds.minX - 0.2 &&
+      finite(focusValue.x ?? focusValue[0], -Infinity) <= minaMarketKitchen.bounds.maxX + 0.2 &&
+      finite(focusValue.z ?? focusValue[2], Infinity) >= minaMarketKitchen.bounds.minZ - 0.2 &&
+      finite(focusValue.z ?? focusValue[2], -Infinity) <= minaMarketKitchen.bounds.maxZ + 0.2;
     const pulse = (0.78 + Math.sin(elapsed * 1.7) * 0.16) * (0.16 + practical * 0.84);
     material.signs[0].opacity = clamp(pulse, 0.08, 1);
     material.signs[1].opacity = clamp((0.83 + Math.sin(elapsed * 2.15 + 1.1) * 0.12) * (0.16 + practical * 0.84), 0.06, 1);
@@ -2684,7 +5228,13 @@ export function buildCity(scene, {
       const baseIntensity = finite(staticLights[index].userData.baseIntensity, 30);
       const businessId = staticLights[index].userData.businessId;
       const openFactor = businessId ? (businessOpenStates.get(businessId) === true ? 1 : 0) : 1;
-      staticLights[index].intensity = baseIntensity * (0.97 + Math.sin(elapsed * 0.31 + index * 1.9) * 0.03) * practical * openFactor;
+      const practicalKind = staticLights[index].userData.practicalKind;
+      const practicalFactor = (practicalKind === "residential-interior" && focusInsideResidential) ||
+        (practicalKind === "community-hub-interior" && focusInsideCommunityHub) ||
+        (staticLights[index].userData.cafeId === commonGroundCafe.id && focusInsideCommonGroundCafe) ||
+        (staticLights[index].userData.marketId === minaMarketKitchen.id && focusInsideMinaMarket)
+        ? 1 : practical;
+      staticLights[index].intensity = baseIntensity * (0.97 + Math.sin(elapsed * 0.31 + index * 1.9) * 0.03) * practicalFactor * openFactor;
     }
     hemisphere.intensity = 0.55 + daylight * 1.88 + night * 0.38;
     hemisphere.color.setHex(0x365875).lerp(atmosphereDaySkyColor, daylight);
@@ -2721,6 +5271,44 @@ export function buildCity(scene, {
   const districtBuildingCounts = Object.fromEntries(DISTRICTS.map(district => [district.id, 0]));
   for (const building of buildingRecords) districtBuildingCounts[building.district] += 1;
   Object.freeze(districtBuildingCounts);
+  // One immutable, renderer-free GPS contract is shared by the HUD minimap
+  // and the phone map. It describes the authored geometry directly: roads are
+  // offset by 24 m from the world origin, so consumers must never reconstruct
+  // them from a generic `n * spacing` grid.
+  const mapFeatures = deepFreeze({
+    version: 1,
+    northAxis: "+z",
+    bounds: { ...TRAVERSABLE_BOUNDS },
+    cityBounds: { ...CITY_BOUNDS },
+    coastX: COAST_X,
+    roads: {
+      halfWidth: ROAD_HALF_WIDTH,
+      bounds: { ...CITY_BOUNDS },
+      x: [...X_ROADS],
+      z: [...Z_ROADS],
+    },
+    districts: DISTRICTS.map(district => ({
+      id: district.id,
+      kind: district.kind,
+      bounds: { ...district.bounds },
+    })),
+    areas: [
+      { id: "pulse-park", kind: "park", bounds: { minX: -66, maxX: -30, minZ: -66, maxZ: -30 } },
+      { id: "pulse-plaza", kind: "plaza", bounds: { minX: -18, maxX: 18, minZ: -18, maxZ: 18 } },
+      { id: "harbour-water", kind: "water", bounds: { minX: COAST_X, maxX: 292, minZ: CITY_BOUNDS.minZ - 24, maxZ: CITY_BOUNDS.maxZ + 24 } },
+      { id: "harbour-court", kind: "recreation", bounds: { minX: 127.8, maxX: 152.2, minZ: -112.8, maxZ: -79.2 } },
+      { id: "ashwind-desert", kind: "desert", bounds: { minX: -192, maxX: 192, minZ: 192, maxZ: 620 } },
+      { id: "ashwind-ruins", kind: "ruins", bounds: { minX: -52, maxX: 52, minZ: 456, maxZ: 548 } },
+    ],
+    buildings: buildingRecords.map(building => ({
+      id: building.id,
+      position: [building.position[0], building.position[2]],
+      size: [building.size[0], building.size[2]],
+      district: building.district,
+      storefront: building.storefront,
+      destination: Boolean(building.physicalInterior),
+    })),
+  });
   const streetDetailInstances = curbTransforms.length + stopBars.length + roadReflectors.length +
     manholeTransforms.length + puddleTransforms.length + signalPoles.length + hydrants.length +
     utilityBoxes.length + dumpsters.length + shelterFrames.length + shelterGlass.length +
@@ -2750,7 +5338,8 @@ export function buildCity(scene, {
     intersectionAsphaltCaps: intersectionCaps.length,
     junctionMarkingClearance,
     storefronts: storefrontCount,
-    storefrontPracticalLights: storefrontLightPositions.length,
+    storefrontPracticalLights: storefrontLightPositions.length - residentialInterior.stats.practicalLights -
+      communityHub.stats.practicalLights - minaMarketKitchen.stats.reallocatedPracticalLights,
     facadeMullions: facadeMullionCount,
     windowBanks: windowTransforms.reduce((sum, transforms) => sum + transforms.length, 0),
     occupiedGroundFloors: occupiedGroundFloorCount,
@@ -2792,6 +5381,38 @@ export function buildCity(scene, {
     pulseTransitPropInstances,
     pulseTransitAllocatedInstances,
     pulseTransitVehicleId: pulseTransit.vehicleId,
+    pulseGarageInterior: true,
+    pulseGarageInteriorMeshes: pulseGarageInterior.stats.renderMeshes,
+    pulseGarageInteriorCollisionVolumes: pulseGarageInterior.stats.collisionVolumes,
+    pulseGarageInteriorStations: pulseGarageInterior.stats.stations,
+    pulseGarageInteriorPracticalLights: pulseGarageInterior.stats.practicalLights,
+    residentialInterior: true,
+    residentialInteriorInstances: residentialInterior.stats.renderInstances,
+    residentialInteriorCollisionVolumes: residentialInterior.stats.collisionVolumes,
+    residentialInteriorRooms: residentialInterior.stats.rooms,
+    residentialInteriorStations: residentialInterior.stats.stations,
+    residentialInteriorPracticalLights: residentialInterior.stats.practicalLights,
+    communityHub: true,
+    communityHubInstances: communityHub.stats.renderInstances,
+    communityHubCollisionVolumes: communityHub.stats.collisionVolumes,
+    communityHubRooms: communityHub.stats.rooms,
+    communityHubStations: communityHub.stats.stations,
+    communityHubPracticalLights: communityHub.stats.practicalLights,
+    commonGroundCafe: true,
+    commonGroundCafeInstances: commonGroundCafe.stats.renderInstances,
+    commonGroundCafeFrontageInstances: commonGroundCafe.stats.frontageRenderInstances,
+    commonGroundCafeCollisionVolumes: commonGroundCafe.stats.collisionVolumes,
+    commonGroundCafeRooms: commonGroundCafe.stats.rooms,
+    commonGroundCafeStations: commonGroundCafe.stats.stations,
+    commonGroundCafePracticalLights: commonGroundCafe.stats.practicalLights,
+    minaMarketKitchen: true,
+    minaMarketKitchenInstances: minaMarketKitchen.stats.renderInstances,
+    minaMarketKitchenCollisionVolumes: minaMarketKitchen.stats.collisionVolumes,
+    minaMarketKitchenRooms: minaMarketKitchen.stats.rooms,
+    minaMarketKitchenStations: minaMarketKitchen.stats.stations,
+    minaMarketKitchenOccupancySlots: minaMarketKitchen.stats.occupancySlots,
+    minaMarketKitchenItineraries: minaMarketKitchen.stats.itineraries,
+    minaMarketKitchenPracticalLights: minaMarketKitchen.stats.practicalLights,
     chapterTwoDepot: true,
     chapterTwoEvidenceAnchors: Object.keys(chapterTwo.interactAnchors).length,
     chapterTwoGarageClues: Object.keys(chapterTwo.garageClues).length,
@@ -2842,6 +5463,8 @@ export function buildCity(scene, {
     roads,
     roadLines,
     routes: roadLines,
+    roadCenters: mapFeatures.roads,
+    mapFeatures,
     buildings: buildingRecords,
     districts: DISTRICTS,
     districtAt,
@@ -2850,6 +5473,11 @@ export function buildCity(scene, {
     missionPoints,
     businesses,
     businessFrontages,
+    residentialInterior,
+    communityHub,
+    commonGroundCafe,
+    minaMarketKitchen,
+    pulseGarageInterior,
     chapterTwo,
     pulseTransit,
     harbourCourt,

@@ -25,18 +25,43 @@ import {
 } from "./game/activities.mjs";
 import { BASKETBALL_STAGES, createBasketballActivity } from "./game/basketball.mjs";
 import {
+  ASHA_PATEL,
+  CAFE_SHIFT_STATIONS,
+  COMMON_GROUND_CAFE_STAFF,
+  COMMON_GROUND_SHIFT_ROLE,
+  createCafeShiftSystem,
+} from "./game/cafe-shift.mjs";
+import {
   CHAPTER_TWO_AFFECTED_PERSON,
   CHAPTER_TWO_CLUES,
   CHAPTER_TWO_PHASES,
   createBorrowedTimeChapter,
 } from "./game/chapter-two.mjs";
+import {
+  COMMUNITY_HUB_ROLES,
+  COMMUNITY_HUB_STAFF,
+  createCommunityHubSystem,
+} from "./game/community-hub.mjs";
 import { createCinematicDirector } from "./game/cinematics.mjs";
 import { createCityEnvironment } from "./game/environment.mjs";
 import { createGameEffects } from "./game/effects.mjs";
+import { GARAGE_FAULTS, GARAGE_SHIFT_STAGES, createGarageShiftSystem } from "./game/garage-shift.mjs";
+import { createInteriorOccupancySystem } from "./game/interior-occupancy.mjs";
 import { stageConversationSeparation } from "./game/interaction-staging.mjs";
 import { createLifeActivitySystem } from "./game/life-activities.mjs";
+import { createLifeProfile } from "./game/life-profile.mjs";
+import { createMapNavigation } from "./game/map-navigation.mjs";
+import {
+  MARKET_SURPLUS_DECISIONS,
+  MINA_MARKET_SHIFT_ROLE,
+  MINA_MARKET_STAFF,
+  MINA_MARKET_STATIONS,
+  MINA_OKAFOR,
+  createMarketShiftSystem,
+} from "./game/market-shift.mjs";
 import { MISSION_STAGES, createVehicleRecoveryMission } from "./game/mission.mjs";
 import { createNeighbourhoodRoutine } from "./game/neighbourhood-routine.mjs";
+import { createResidentialLife } from "./game/residential-life.mjs";
 import {
   NIGHT_ROUTE_CHARACTERS,
   NIGHT_ROUTE_PHASES,
@@ -291,6 +316,51 @@ async function main() {
   const taxiActivity = createTaxiActivity();
   const raceActivity = createStreetRaceActivity();
   const lifeActivity = createLifeActivitySystem();
+  const lifeProfile = createLifeProfile();
+  const residentialInterior = world.residentialInterior;
+  const residentialLife = createResidentialLife({
+    seed: world.seed,
+    initialHomeId: residentialInterior.homeId,
+    initialTenure: "rented",
+    initialMinuteOfDay: Math.trunc(environment.snapshot().timeHours * 60),
+  });
+  const pulseGarageInterior = world.pulseGarageInterior;
+  const garageShift = createGarageShiftSystem({
+    seed: world.seed,
+    anchors: {
+      clockIn: pulseGarageInterior.stations.office.position,
+      serviceDesk: pulseGarageInterior.customerAnchor,
+      inspectionBay: pulseGarageInterior.stations.diagnostics.position,
+      partsCounter: pulseGarageInterior.stations.parts.position,
+      liftBay: pulseGarageInterior.stations.lift.position,
+      safetyLane: pulseGarageInterior.entrance.interior,
+      office: pulseGarageInterior.stations.office.position,
+    },
+  });
+  const garageClockPosition = vectorFrom(garageShift.anchors.clockIn);
+  const initialGarageShiftSave = garageShift.save();
+  const communityHubWorld = world.communityHub;
+  if (!communityHubWorld) throw new Error("Harbour Skills House physical world contract is missing.");
+  const communityHubLife = createCommunityHubSystem({
+    seed: world.seed ^ 0x534b494c,
+    initialDayIndex: 0,
+    initialMinuteOfDay: Math.trunc(environment.snapshot().timeHours * 60),
+  });
+  const initialCommunityHubSave = communityHubLife.save();
+  const commonGroundCafeWorld = world.commonGroundCafe;
+  if (!commonGroundCafeWorld) throw new Error("Common Ground Cafe physical world contract is missing.");
+  const cafeShift = createCafeShiftSystem({
+    seed: world.seed ^ 0x43414645,
+    initialDayIndex: 0,
+    initialMinuteOfDay: Math.trunc(environment.snapshot().timeHours * 60),
+  });
+  const initialCafeShiftSave = cafeShift.save();
+  const minaMarketWorld = world.minaMarketKitchen;
+  if (!minaMarketWorld) throw new Error("Mina's Market Kitchen physical world contract is missing.");
+  const marketShift = createMarketShiftSystem({ seed: world.seed ^ 0x4d494e41 });
+  const initialMarketShiftSave = marketShift.save();
+  const initialLifeProfileSave = lifeProfile.save();
+  const initialResidentialLifeSave = residentialLife.save();
   const basketballActivity = createBasketballActivity({
     scene,
     hubPosition: world.missionPoints.harbourCourt.position,
@@ -298,7 +368,9 @@ async function main() {
   });
   const businessPositionOverrides = Object.fromEntries((world.businesses ?? []).map(location => [
     String(location.id),
-    location.interactionPosition ?? location.position,
+    String(location.id) === "common_ground_cafe"
+      ? commonGroundCafeWorld.customerAnchors.queue[0]
+      : location.interactionPosition ?? location.position,
   ]));
   const neighbourhoodRoutine = createNeighbourhoodRoutine({ businessPositions: businessPositionOverrides });
   const initialNeighbourhoodSave = neighbourhoodRoutine.save();
@@ -321,17 +393,121 @@ async function main() {
   const story = createStoryCampaign();
   const chapterTwo = createBorrowedTimeChapter();
   const initialChapterTwoSave = chapterTwo.save();
+  function mapPlacePosition(value) {
+    return value?.entrance?.exterior ?? value?.entrance?.threshold ?? value?.entrance ??
+      value?.hubPosition ?? value?.hub ?? value?.position;
+  }
+  function mapPlaceDirectory() {
+    const places = [];
+    const ids = new Set();
+    const add = (idValue, title, category, position, details = {}) => {
+      const id = String(idValue ?? "").trim();
+      if (!id || ids.has(id) || !position) return;
+      ids.add(id);
+      places.push(Object.freeze({
+        id,
+        title,
+        category,
+        position,
+        icon: details.icon ?? category,
+        address: details.address ?? "",
+        description: details.description ?? "",
+        open: details.open ?? true,
+        priority: details.priority ?? 0,
+      }));
+    };
+    add(residentialInterior.homeId, residentialInterior.label, "home", residentialInterior.entrance.exterior, {
+      address: residentialInterior.address,
+      description: "KAI'S CURRENT HOME",
+      priority: 80,
+    });
+    add("pulse_garage", "PULSE GARAGE", "work", pulseGarageInterior.entrance.exterior, {
+      description: "APPRENTICE MECHANIC WORK AND STORY CONTACT",
+      priority: 72,
+    });
+    add(communityHubWorld.id, communityHubWorld.label, "work", communityHubWorld.entrance.exterior, {
+      address: communityHubWorld.address,
+      description: "COMMUNITY KITCHEN, REPAIR CAFE, AND SUPPORT DESK",
+      priority: 70,
+    });
+    const availableBusinesses = neighbourhoodRoutine.available({
+      timeHours: environment.snapshot().timeHours,
+      weather: environment.snapshot().weather,
+      story: story.snapshot(),
+    });
+    const businessById = new Map(availableBusinesses.map(business => [business.id, business]));
+    add("common_ground_cafe", commonGroundCafeWorld.label, "work", commonGroundCafeWorld.entrance.exterior, {
+      address: commonGroundCafeWorld.address,
+      description: "CAFE, MEALS, AND PAID HOSPITALITY SHIFTS",
+      open: businessById.get("common_ground_cafe")?.open,
+      priority: 68,
+    });
+    add("mina_market_kitchen", minaMarketWorld.label, "work", minaMarketWorld.entrance.exterior, {
+      address: minaMarketWorld.address,
+      description: "GROCERIES, MEALS, AND PAID MARKET SHIFTS",
+      open: businessById.get("mina_market_kitchen")?.open,
+      priority: 68,
+    });
+    add(world.pulseTransit.id, world.pulseTransit.title, "transit", world.pulseTransit.entrance, {
+      description: "PULSE LINE COMMUNITY SHUTTLE",
+      priority: 66,
+    });
+    for (const business of availableBusinesses) {
+      if (business.id === "common_ground_cafe" || business.id === "mina_market_kitchen") continue;
+      add(business.id, business.name, "business", business.position, {
+        description: `${business.keeperName} / ${business.openingHours?.label ?? "LOCAL BUSINESS"}`,
+        open: business.open,
+        priority: 50,
+      });
+    }
+    for (const activity of lifeActivity.available(lifeUnlockContext())) {
+      if (activity.id === "pulse_line") continue;
+      const kind = String(activity.kind ?? "");
+      const category = ["courier", "mechanic", "taxi"].includes(kind) ? "work" : "activity";
+      add(activity.id, activity.title, category, activity.hubPosition, {
+        description: activity.description,
+        priority: category === "work" ? 58 : 42,
+      });
+    }
+    const court = basketballActivity.available();
+    add(court.id ?? "harbour_court", court.title ?? "HARBOUR COURT", "activity", court.hubPosition, {
+      description: court.description ?? "PUBLIC BASKETBALL COURT",
+      priority: 44,
+    });
+    add("ashwind_breach", "ASHWIND BREACH", "transit", [0, 0, 196], {
+      description: "THE NARROW NORTHERN ROAD INTO ASHWIND",
+      priority: 64,
+    });
+    add("ashwind_ruins", "ASHWIND RUINS", "activity", [0, 0, 505], {
+      description: "REMOTE RUINS BEYOND THE CITY",
+      priority: 60,
+    });
+    return Object.freeze(places);
+  }
+  const mapNavigation = createMapNavigation({
+    places: mapPlaceDirectory(),
+    bounds: world.mapFeatures.bounds,
+    viewport: { width: 312, height: 312 },
+    initialCenter: world.spawnPoints.player.position,
+    initialZoom: 2.4,
+    minZoom: 1,
+    maxZoom: 8,
+  });
+  const initialMapNavigationSave = mapNavigation.save();
+  mapNavigation.prewarm();
   let businessLightingMinute = -1;
   function syncBusinessLighting(timeHours, weather) {
     const wrappedHours = ((Number(timeHours) % 24) + 24) % 24;
     const minute = Math.trunc(wrappedHours * 60) % (24 * 60);
     if (minute === businessLightingMinute) return 0;
     businessLightingMinute = minute;
-    return world.setBusinessOpenStates?.(neighbourhoodRoutine.available({
+    const businessStates = neighbourhoodRoutine.available({
       timeHours: wrappedHours,
       weather,
       story: story.snapshot(),
-    })) ?? 0;
+    });
+    for (const business of businessStates) mapNavigation.setPlaceOpen(business.id, business.open);
+    return world.setBusinessOpenStates?.(businessStates) ?? 0;
   }
   const initialLightingEnvironment = environment.snapshot();
   syncBusinessLighting(initialLightingEnvironment.timeHours, initialLightingEnvironment.weather);
@@ -355,6 +531,10 @@ async function main() {
     console.warn(`[GTA Neon City] native audio unavailable; continuing silently: ${error?.message || error}`);
   }
   let elapsed = 0;
+  // Presentation time keeps native UI animations and mouse-up interactions
+  // alive while the phone intentionally pauses the world and releases pointer
+  // lock. It is independent from the saved simulation clock.
+  let presentationElapsed = 0;
   let disposed = false;
   let paused = false;
   let controlServer = null;
@@ -386,6 +566,9 @@ async function main() {
     Object.freeze({ id: "places", name: "OPEN DOORS", subtitle: "LOCAL STORES AND HOURS" }),
     Object.freeze({ id: "work", name: "CITY WORK", subtitle: "LAWFUL JOBS AND ACTIVITIES" }),
     Object.freeze({ id: "contacts", name: "CONTACTS", subtitle: "PEOPLE WHO KNOW KAI" }),
+    Object.freeze({ id: "profile", name: "LIFE PROFILE", subtitle: "SKILLS, ENERGY, AND WORK HISTORY" }),
+    Object.freeze({ id: "home", name: "MY HOME", subtitle: "ROOMS, ROUTINES, AND HOUSEHOLD" }),
+    Object.freeze({ id: "map", name: "NEON MAP", subtitle: "PLACES, ROUTES, AND LIVE NAVIGATION" }),
   ]);
   let phoneOpen = false;
   let phoneApp = null;
@@ -394,6 +577,8 @@ async function main() {
   let phoneHover = -1;
   let phonePressed = false;
   let phonePressTarget = null;
+  let phoneMapPointerX = 0;
+  let phoneMapPointerY = 0;
   let phoneOpenedAt = -Infinity;
   let phoneAppTransitionAt = -Infinity;
   const phoneRecentApps = [];
@@ -406,7 +591,60 @@ async function main() {
   let activityPresentationUntil = 0;
   let lastRaceCountdownSecond = null;
   let lastBasketballEvent = null;
+  let garageDiagnosisIndex = 0;
+  let garageConfirmedDiagnosisId = null;
+  let garageCustomerActor = null;
+  let garageCustomerReleaseAt = -Infinity;
   let lastNeighbourhoodTransactionSerial = 0;
+  let lastResidentialTransactionSerial = 0;
+  let lastResidentialInteractionSerial = 0;
+  let lastCommunityStationResultSerial = 0;
+  let lastCommunityTransactionSerial = 0;
+  let lastCommunityScheduleMinute = -1;
+  let lastCommunityPresentationEvent = null;
+  let communityRoleSelectionIndex = 0;
+  const communityRuntimeClockContext = {
+    dayIndex: 0,
+    minuteOfDay: Math.trunc(environment.snapshot().timeHours * 60),
+    captureSnapshot: false,
+  };
+  let communityRuntimeView = communityHubLife.update(0, {
+    timeHours: environment.snapshot().timeHours,
+    captureSnapshot: false,
+  });
+  let lastCafeStationResultSerial = 0;
+  let lastCafeTransactionSerial = 0;
+  let lastCafeScheduleMinute = -1;
+  let lastCafePresentationEvent = null;
+  const cafeRuntimeClockContext = {
+    dayIndex: 0,
+    minuteOfDay: Math.trunc(environment.snapshot().timeHours * 60),
+    captureSnapshot: false,
+  };
+  let cafeRuntimeView = cafeShift.update(0, {
+    timeHours: environment.snapshot().timeHours,
+    captureSnapshot: false,
+  });
+  let lastMarketStationResultSerial = 0;
+  let lastMarketTransactionSerial = 0;
+  let lastMarketScheduleMinute = -1;
+  let lastMarketPresentationEvent = null;
+  const marketRuntimeClockContext = {
+    dayIndex: 0,
+    minuteOfDay: Math.trunc(environment.snapshot().timeHours * 60),
+    captureSnapshot: false,
+  };
+  let marketRuntimeView = marketShift.update(0, {
+    timeHours: environment.snapshot().timeHours,
+    captureSnapshot: false,
+  });
+  let residentialRevision = 0;
+  let residentialRuntimeView = residentialLife.update(0, {
+    timeHours: environment.snapshot().timeHours,
+    captureSnapshot: false,
+  });
+  let residentialFullSnapshotCache = null;
+  let residentialFullSnapshotCacheKey = "";
   let pipelineWarmupState = Object.freeze({ ready: false, policy: "startup-preload-all-authored-branches", passes: [] });
   let simulationWarmupState = Object.freeze({ ready: false, policy: "startup-memory-micro-simulation", steps: 0 });
   let controlStepping = false;
@@ -426,6 +664,18 @@ async function main() {
   let taxiPassengerActor = null;
   let taxiPresentationSignature = "";
   const nightRouteParticipantActors = new Map();
+  const residentialActors = new Map();
+  const residentialActorSignatures = new Map();
+  const communityStaffActors = new Map();
+  const communityStaffSignatures = new Map();
+  const cafeStaffActors = new Map();
+  const cafeStaffSignatures = new Map();
+  const marketStaffActors = new Map();
+  const marketStaffSignatures = new Map();
+  let marketStaffStates = Object.freeze([]);
+  let interiorOccupancy = null;
+  let residentialActorStates = Object.freeze([]);
+  let lastResidentialScheduleMinute = -1;
   let nightRouteParticipantLayoutSignature = "";
   let cachedNightRouteNarrativeSource = null;
   let cachedNightRouteNarrative = null;
@@ -559,11 +809,292 @@ async function main() {
     return selectedActivity === "taxi" ? taxiActivity :
       selectedActivity === "race" ? raceActivity :
       selectedActivity === "life" ? lifeActivity :
+      selectedActivity === "garage" ? garageShift :
       selectedActivity === "basketball" ? basketballActivity :
       selectedActivity === "nightRoute" ? nightRoute : null;
   }
 
+  const cafeStationById = new Map(CAFE_SHIFT_STATIONS.map(station => [station.id, station]));
+  const cafeWorldStationById = new Map(Object.values(commonGroundCafeWorld.stations).map(station => [station.id, station]));
+  const cafeWorldStationPositions = new Map([...cafeWorldStationById].map(([id, station]) => [
+    id,
+    vectorFrom(station.position),
+  ]));
+  const cafeHandoverPosition = cafeWorldStationPositions.get("cafe-handover");
+
+  function cafeClockContext(detail = {}) {
+    const environmentState = environment.snapshot();
+    return {
+      dayIndex: neighbourhoodRoutine.snapshot().dayIndex,
+      timeHours: environmentState.timeHours,
+      ...detail,
+    };
+  }
+
+  function insideCommonGroundCafe(positionValue = controlledPosition()) {
+    const position = positionValue?.isVector3 ? positionValue : positionValue?.position ?? positionValue ?? {};
+    const x = Array.isArray(position) ? Number(position[0]) : Number(position.x);
+    const z = Array.isArray(position) ? Number(position[2]) : Number(position.z);
+    const bounds = commonGroundCafeWorld.bounds;
+    return x >= bounds.minX - 0.15 && x <= bounds.maxX + 0.15 &&
+      z >= bounds.minZ - 0.15 && z <= bounds.maxZ + 0.15;
+  }
+
+  let cafeActivityCacheKey = "";
+  let cafeActivityCache = null;
+  let cafeQuality = 0;
+  let cafeReworkCount = 0;
+  function cafeActivitySnapshot() {
+    const station = cafeStationById.get(cafeRuntimeView.stationId) ?? null;
+    const worldStation = cafeWorldStationById.get(station?.worldStationId ?? station?.id) ?? null;
+    const active = Boolean(station && ["active", "paused"].includes(cafeRuntimeView.status));
+    const working = active && cafeRuntimeView.taskActive;
+    const taskIndex = station ? Math.max(0, CAFE_SHIFT_STATIONS.findIndex(value => value.id === station.id)) : CAFE_SHIFT_STATIONS.length;
+    const key = `${station?.id}:${cafeRuntimeView.status}:${Math.round(cafeRuntimeView.taskProgress * 1000)}:` +
+      `${cafeRuntimeView.lastStationResultSerial}:${cafeRuntimeView.transactionSerial}:${cafeQuality}:${cafeReworkCount}`;
+    if (key === cafeActivityCacheKey && cafeActivityCache) return cafeActivityCache;
+    cafeActivityCacheKey = key;
+    cafeActivityCache = Object.freeze({
+      id: COMMON_GROUND_SHIFT_ROLE.id,
+      kind: "cafe",
+      title: COMMON_GROUND_SHIFT_ROLE.name,
+      status: active ? "active" : "completed",
+      stage: working ? "working" : station?.id ?? "complete",
+      objective: active
+        ? working
+          ? `${station.name}  ${Math.round(cafeRuntimeView.taskProgress * 100)}%`
+          : station.instruction
+        : "SHIFT FILED — THE NEXT CREW INHERITS AN HONEST HANDOVER",
+      targetKind: "interaction",
+      targetPosition: active && worldStation ? worldStation.position : null,
+      stationId: station?.id ?? null,
+      actionId: station?.actionId ?? null,
+      taskProgress: cafeRuntimeView.taskProgress,
+      taskIndex,
+      taskCount: CAFE_SHIFT_STATIONS.length,
+      estimatedWage: COMMON_GROUND_SHIFT_ROLE.baseWage,
+      quality: cafeQuality,
+      reworkCount: cafeReworkCount,
+      safetyRequired: Boolean(station?.safetyRequired),
+      primarySkill: station?.primarySkill ?? null,
+      paused: cafeRuntimeView.status === "paused",
+    });
+    return cafeActivityCache;
+  }
+
+  const marketStationById = new Map(MINA_MARKET_STATIONS.map(station => [station.id, station]));
+  const marketWorldStationById = new Map(Object.values(minaMarketWorld.stations).map(station => [station.id, station]));
+  const marketWorldStationPositions = new Map([...marketWorldStationById].map(([id, station]) => [
+    id,
+    vectorFrom(station.position),
+  ]));
+  const marketHandoverPosition = marketWorldStationPositions.get("mina-order-counter");
+
+  function marketClockContext(detail = {}) {
+    const environmentState = environment.snapshot();
+    return {
+      dayIndex: neighbourhoodRoutine.snapshot().dayIndex,
+      timeHours: environmentState.timeHours,
+      minuteOfDay: Math.trunc(environmentState.timeHours * 60) % 1440,
+      ...detail,
+    };
+  }
+
+  function insideMinaMarket(positionValue = controlledPosition()) {
+    const position = positionValue?.isVector3 ? positionValue : positionValue?.position ?? positionValue ?? {};
+    const x = Array.isArray(position) ? Number(position[0]) : Number(position.x);
+    const z = Array.isArray(position) ? Number(position[2]) : Number(position.z);
+    const bounds = minaMarketWorld.bounds;
+    return x >= bounds.minX - 0.15 && x <= bounds.maxX + 0.15 &&
+      z >= bounds.minZ - 0.15 && z <= bounds.maxZ + 0.15;
+  }
+
+  function marketWorldStation(logicalStationValue) {
+    const logical = typeof logicalStationValue === "string"
+      ? marketStationById.get(logicalStationValue)
+      : logicalStationValue;
+    if (!logical) return null;
+    const stationIds = [logical.worldStationId ?? logical.id, ...(logical.alternateWorldStationIds ?? [])];
+    return stationIds.map(id => marketWorldStationById.get(id)).find(Boolean) ?? null;
+  }
+
+  let marketActivityCacheKey = "";
+  let marketActivityCache = null;
+  let marketQuality = 0;
+  let marketReworkCount = 0;
+  let marketDecisionIndex = 1;
+  function marketActivitySnapshot() {
+    const decisionRequired = Boolean(marketRuntimeView.decisionRequired);
+    const logicalStation = decisionRequired
+      ? marketStationById.get("mina-pantry-shelf")
+      : marketStationById.get(marketRuntimeView.stationId);
+    const worldStation = marketWorldStation(logicalStation);
+    const active = Boolean(logicalStation && ["active", "paused"].includes(marketRuntimeView.status));
+    const working = active && marketRuntimeView.taskActive;
+    const taskIndex = logicalStation
+      ? Math.max(0, MINA_MARKET_STATIONS.findIndex(value => value.id === logicalStation.id))
+      : MINA_MARKET_STATIONS.length;
+    const key = `${logicalStation?.id}:${marketRuntimeView.status}:${Math.round(marketRuntimeView.taskProgress * 1000)}:` +
+      `${marketRuntimeView.stationResultSerial}:${marketRuntimeView.transactionSerial}:${marketQuality}:` +
+      `${marketReworkCount}:${decisionRequired}`;
+    if (key === marketActivityCacheKey && marketActivityCache) return marketActivityCache;
+    marketActivityCacheKey = key;
+    marketActivityCache = Object.freeze({
+      id: MINA_MARKET_SHIFT_ROLE.id,
+      kind: "market",
+      title: MINA_MARKET_SHIFT_ROLE.name,
+      status: active ? "active" : "completed",
+      stage: decisionRequired ? "surplus-decision" : working ? "working" : logicalStation?.id ?? "complete",
+      objective: active
+        ? decisionRequired
+          ? "DECIDE WHAT HAPPENS TO SAFE SURPLUS: MARK DOWN, DONATE, OR DISCARD"
+          : working
+            ? `${logicalStation.name}  ${Math.round(marketRuntimeView.taskProgress * 100)}%`
+            : logicalStation.instruction
+        : "SHIFT FILED — STOCK, TILL, CLEANING, AND SURPLUS RECORDS AGREE",
+      targetKind: "interaction",
+      targetPosition: active && worldStation ? worldStation.position : null,
+      stationId: logicalStation?.id ?? null,
+      worldStationId: worldStation?.id ?? null,
+      actionId: logicalStation?.actionId ?? null,
+      taskProgress: marketRuntimeView.taskProgress,
+      taskIndex,
+      taskCount: MINA_MARKET_STATIONS.length,
+      estimatedWage: MINA_MARKET_SHIFT_ROLE.baseWage,
+      quality: marketQuality,
+      reworkCount: marketReworkCount,
+      decisionRequired,
+      surplusChoices: decisionRequired ? MARKET_SURPLUS_DECISIONS : Object.freeze([]),
+      safetyRequired: Boolean(logicalStation?.safetyRequired),
+      primarySkill: logicalStation?.primarySkill ?? null,
+      paused: marketRuntimeView.status === "paused",
+    });
+    return marketActivityCache;
+  }
+
+  const communityRoleById = new Map(COMMUNITY_HUB_ROLES.map(role => [role.id, role]));
+  const communityStationById = new Map(communityHubLife.stations.map(station => [station.id, station]));
+  const communityWorldStationPositions = new Map(Object.entries(communityHubWorld.stations).map(([key, station]) => [
+    key,
+    new THREE.Vector3(...station.position),
+  ]));
+  const communityReceptionPosition = communityWorldStationPositions.get("reception");
+
+  function communityClockContext(detail = {}) {
+    const environmentState = environment.snapshot();
+    return {
+      dayIndex: neighbourhoodRoutine.snapshot().dayIndex,
+      timeHours: environmentState.timeHours,
+      ...detail,
+    };
+  }
+
+  function insideCommunityHub(positionValue = controlledPosition()) {
+    const position = positionValue?.isVector3 ? positionValue : positionValue?.position ?? positionValue ?? {};
+    const x = Array.isArray(position) ? Number(position[0]) : Number(position.x);
+    const z = Array.isArray(position) ? Number(position[2]) : Number(position.z);
+    const bounds = communityHubWorld.bounds;
+    return x >= bounds.minX - 0.15 && x <= bounds.maxX + 0.15 &&
+      z >= bounds.minZ - 0.15 && z <= bounds.maxZ + 0.15;
+  }
+
+  function communityWorldStation(logicalStationId) {
+    const definition = communityStationById.get(String(logicalStationId ?? ""));
+    return definition ? communityHubWorld.stations?.[definition.worldStationId] ?? null : null;
+  }
+
+  function communityWorldStationPosition(logicalStationId) {
+    const definition = communityStationById.get(String(logicalStationId ?? ""));
+    return definition ? communityWorldStationPositions.get(definition.worldStationId) ?? null : null;
+  }
+
+  let communityActivityCacheKey = "";
+  let communityActivityCache = null;
+  function communityActivitySnapshot() {
+    const role = communityRoleById.get(communityRuntimeView.activeRoleId) ?? null;
+    const station = communityStationById.get(communityRuntimeView.stationId) ?? null;
+    const worldStation = communityWorldStation(station?.id);
+    const active = Boolean(role && ["active", "paused"].includes(communityRuntimeView.status));
+    const working = active && communityRuntimeView.taskProgress > 0;
+    const taskIndex = role && station ? Math.max(0, role.stationIds.indexOf(station.id)) : 0;
+    const taskCount = role?.stationIds.length ?? 0;
+    const key = `${role?.id}:${station?.id}:${communityRuntimeView.status}:${communityRuntimeView.taskProgress}:` +
+      `${communityRuntimeView.lastStationResultSerial}:${communityRuntimeView.transactionSerial}`;
+    if (key === communityActivityCacheKey && communityActivityCache) return communityActivityCache;
+    communityActivityCacheKey = key;
+    communityActivityCache = Object.freeze({
+      id: role?.id ?? "harbour-skills-house",
+      kind: "community",
+      title: role?.name ?? "HARBOUR SKILLS HOUSE",
+      status: active ? "active" : "completed",
+      stage: working ? "working" : station?.id ?? "complete",
+      objective: active
+        ? working
+          ? `${station.name}  ${Math.round(communityRuntimeView.taskProgress * 100)}%`
+          : station.instruction
+        : "SHIFT FILED — THE HOUSE REMAINS OPEN TO THE NEIGHBOURHOOD",
+      targetKind: "interaction",
+      targetPosition: active && worldStation ? worldStation.position : null,
+      roleId: role?.id ?? null,
+      stationId: station?.id ?? null,
+      worldStationId: station?.worldStationId ?? null,
+      taskProgress: communityRuntimeView.taskProgress,
+      taskIndex,
+      taskCount,
+      estimatedWage: role?.baseWage ?? 0,
+      safetyRequired: Boolean(station?.safetyRequired),
+      primarySkill: station?.primarySkill ?? null,
+      paused: communityRuntimeView.status === "paused",
+    });
+    return communityActivityCache;
+  }
+
+  let communityFullSnapshotCache = communityHubLife.snapshot();
+  let communityFullSnapshotCacheKey = "";
+  let communityDirectoryCache = null;
+  let communityDirectoryCacheKey = "";
+  function communityDirectorySnapshot() {
+    const clock = communityClockContext();
+    const key = `${clock.dayIndex}:${Math.trunc(clock.timeHours * 60)}:${communityRuntimeView.commandSerial}:` +
+      `${communityRuntimeView.transactionSerial}:${communityRuntimeView.status}`;
+    if (key !== communityDirectoryCacheKey) {
+      communityDirectoryCacheKey = key;
+      communityDirectoryCache = communityHubLife.context(clock);
+    }
+    return communityDirectoryCache;
+  }
+  function communityPresentationSnapshot() {
+    const key = `${communityRuntimeView.commandSerial}:${communityRuntimeView.lastStationResultSerial}:` +
+      `${communityRuntimeView.transactionSerial}:${communityRuntimeView.activeRoleId}:${communityRuntimeView.stationId}:` +
+      `${communityRuntimeView.status}:${communityRuntimeView.dayIndex}:${communityRuntimeView.minuteOfDay}`;
+    if (key !== communityFullSnapshotCacheKey) {
+      communityFullSnapshotCacheKey = key;
+      communityFullSnapshotCache = communityHubLife.snapshot();
+    }
+    const cachedShift = communityFullSnapshotCache.activeShift;
+    const activeShift = cachedShift ? Object.freeze({
+      ...cachedShift,
+      task: cachedShift.task ? Object.freeze({
+        ...cachedShift.task,
+        elapsedSeconds: cachedShift.task.durationSeconds * communityRuntimeView.taskProgress,
+        progress: communityRuntimeView.taskProgress,
+      }) : null,
+    }) : null;
+    return Object.freeze({
+      ...communityFullSnapshotCache,
+      clock: Object.freeze({ dayIndex: communityRuntimeView.dayIndex, minuteOfDay: communityRuntimeView.minuteOfDay }),
+      activeShift,
+      runtime: Object.freeze({ ...communityRuntimeView }),
+      activity: selectedActivity === "community" ? communityActivitySnapshot() : null,
+      appliedStationResultSerial: lastCommunityStationResultSerial,
+      appliedTransactionSerial: lastCommunityTransactionSerial,
+    });
+  }
+
   function selectedActivitySnapshot() {
+    if (selectedActivity === "community") return communityActivitySnapshot();
+    if (selectedActivity === "cafe") return cafeActivitySnapshot();
+    if (selectedActivity === "market") return marketActivitySnapshot();
     return selectedActivitySystem()?.snapshot() ?? null;
   }
 
@@ -664,6 +1195,8 @@ async function main() {
   function explainBusinessRejection(result, fallback = "SHOP UNAVAILABLE") {
     const reason = String(result?.reason ?? "");
     if (reason === "insufficient_cash") return "NOT ENOUGH CASH — COME BACK WHEN IT WILL NOT HURT THE RENT";
+    if (reason === "carrying_capacity") return "YOUR SHOPPING TOTE IS FULL — TAKE IT HOME AND UNPACK IT FIRST";
+    if (reason === "no_supplies") return "THERE IS NOTHING TO BAG";
     if (reason === "still_consuming") return "FINISH WHAT YOU HAVE — THERE IS NO RUSH";
     if (reason === "closed") return "THE SHUTTERS ARE DOWN — CHECK THE OPENING HOURS";
     if (reason === "on_foot_required") return "PARK FIRST — THE COUNTER IS FOR PEOPLE, NOT CARS";
@@ -677,6 +1210,21 @@ async function main() {
       return false;
     }
     if (result.serial <= lastNeighbourhoodTransactionSerial) return false;
+    if (result.kind === "household_supplies") {
+      const sourceId = `neighbourhood:${result.businessId}:${result.serial}`;
+      const receipt = residentialLife.receiveSupplies(result.inventoryEffects, { sourceId });
+      if (!receipt.accepted) {
+        showToast(explainBusinessRejection(receipt, "THE GROCERIES COULD NOT BE BAGGED"), 3.0);
+        return false;
+      }
+      lastNeighbourhoodTransactionSerial = result.serial;
+      player.addCash(-result.cost);
+      invalidateResidentialView();
+      player.setCarriedGroceries(receipt.carriedGroceries);
+      gameAudio.play("pickup", 0.32);
+      showToast(`GROCERIES BAGGED — ${receipt.groceriesReceived} UNITS / TAKE THEM HOME`, 3.4);
+      return true;
+    }
     lastNeighbourhoodTransactionSerial = result.serial;
     player.addCash(-result.cost);
     player.heal(result.heal);
@@ -688,13 +1236,252 @@ async function main() {
     return true;
   }
 
+  function buySelectedNeighbourhoodItem() {
+    const menu = neighbourhoodRoutine.snapshot();
+    const selected = menu.menuItems?.[Math.max(0, Math.trunc(menu.selectionIndex))] ?? null;
+    if (selected?.kind === "household_supplies" || selected?.inventoryEffects) {
+      const quote = residentialLife.quoteSupplyReceipt(selected.inventoryEffects);
+      if (!quote.accepted) {
+        showToast(explainBusinessRejection(quote, "THE GROCERIES WILL NOT FIT IN YOUR TOTE"), 3.0);
+        return quote;
+      }
+    }
+    const result = neighbourhoodRoutine.purchase({
+      ...neighbourhoodContext(),
+      cash: player.snapshot().cash,
+    });
+    applyNeighbourhoodTransaction(result);
+    return result;
+  }
+
+  function residentialClockContext(detail = {}) {
+    const environmentState = environment.snapshot();
+    return {
+      dayIndex: residentialRuntimeView.dayIndex,
+      timeHours: environmentState.timeHours,
+      ...detail,
+    };
+  }
+
+  function insideResidentialHome(position = controlledPosition()) {
+    if (vehicles?.playerVehicle || !position) return false;
+    const bounds = residentialInterior.bounds;
+    return position.x >= bounds.minX - 0.2 && position.x <= bounds.maxX + 0.2 &&
+      position.z >= bounds.minZ - 0.2 && position.z <= bounds.maxZ + 0.2;
+  }
+
+  function nearbyResidentialStation(position = controlledPosition(), radius = 2.35) {
+    if (!insideResidentialHome(position)) return null;
+    let nearest = null;
+    let nearestSquared = radius * radius;
+    for (const station of Object.values(residentialInterior.stations)) {
+      if (!["sleep", "shower", "cook", "eat", "clean", "study", "relax"].includes(station.action)) continue;
+      const target = vectorFrom(station.position);
+      const squared = position.distanceToSquared(target);
+      if (squared > nearestSquared) continue;
+      nearest = station;
+      nearestSquared = squared;
+    }
+    return nearest;
+  }
+
+  function residentialFullSnapshot() {
+    const key = `${residentialRuntimeView.dayIndex}:${Number(residentialRuntimeView.visitorActive)}:${residentialRuntimeView.visitorResidentId ?? ""}:${Number(residentialRuntimeView.rentDue)}:${residentialRevision}`;
+    if (key !== residentialFullSnapshotCacheKey || !residentialFullSnapshotCache) {
+      residentialFullSnapshotCache = residentialLife.snapshot();
+      residentialFullSnapshotCacheKey = key;
+    }
+    return residentialFullSnapshotCache;
+  }
+
+  function invalidateResidentialView() {
+    residentialRevision += 1;
+    residentialFullSnapshotCache = null;
+    residentialFullSnapshotCacheKey = "";
+  }
+
+  function explainResidentialRejection(result, fallback = "HOME ACTION UNAVAILABLE") {
+    const reason = String(result?.reason ?? "");
+    if (reason === "insufficient_cash") return `NOT ENOUGH CASH — $${Math.max(0, Math.trunc(result?.cost ?? result?.amount ?? 0))} REQUIRED`;
+    if (reason === "groceries_required") return "THE PANTRY IS EMPTY — BUY GROCERIES AT MINA'S MARKET AND BRING THEM HOME";
+    if (reason === "prepared_meal_required") return "COOK FIRST — THERE IS NO PREPARED MEAL";
+    if (reason === "fixture_needs_repair") return "THIS FIXTURE NEEDS REPAIR BEFORE IT IS SAFE";
+    if (reason === "inside_home_required" || reason === "current_home_required" || reason === "home_required") return "YOU NEED TO BE INSIDE YOUR CURRENT HOME";
+    if (reason === "on_foot_required") return "PARK OUTSIDE BEFORE USING THE FLAT";
+    if (reason === "busy") return "FINISH WHAT YOU ARE DOING FIRST";
+    if (reason === "nothing_due") return "RENT IS UP TO DATE";
+    if (reason === "already_owned") return "THIS HOME IS ALREADY YOURS";
+    if (reason === "pantry_full") return "THE PANTRY IS ALREADY STOCKED";
+    if (reason === "no_carried_groceries") return "YOUR SHOPPING TOTE IS EMPTY — BUY GROCERIES AT MINA'S MARKET";
+    if (reason === "carrying_capacity") return "THE SHOPPING TOTE IS FULL — UNPACK IT AT HOME";
+    if (reason === "duplicate_source") return "THOSE SUPPLIES HAVE ALREADY BEEN PUT AWAY";
+    if (reason.startsWith("resident_")) return "THEY ARE NOT FREE TO VISIT RIGHT NOW";
+    return fallback;
+  }
+
+  function applyResidentialTransaction(result, { advanceClock = true, toastLabel = null } = {}) {
+    if (!result?.accepted) {
+      showToast(explainResidentialRejection(result), 2.8);
+      return false;
+    }
+    if (result.serial <= lastResidentialTransactionSerial) return false;
+    lastResidentialTransactionSerial = result.serial;
+    player.addCash(-Math.max(0, Number(result.cost) || 0));
+    if (result.effects) {
+      const needResult = lifeProfile.applyNeedEffects({
+        energy: Number(result.effects.energy) || 0,
+        hygiene: Number(result.effects.hygiene) || 0,
+      });
+      neighbourhoodRoutine.applyAppetiteEffect(Number(result.effects.appetite) || 0);
+      if (needResult.energy > 0) player.restoreStamina(needResult.energy * 0.72);
+      for (const award of result.effects.skills ?? []) {
+        lifeProfile.awardExperience(award.skillId, award.experience, {
+          sourceId: `residential:${result.serial}:${award.skillId}`,
+        });
+      }
+    }
+    if (advanceClock && Number(result.gameMinutes) > 0) {
+      const before = environment.snapshot().timeHours;
+      const totalHours = before + Number(result.gameMinutes) / 60;
+      const dayAdvance = Math.max(0, Math.floor(totalHours / 24));
+      environment.setTime(totalHours);
+      residentialRuntimeView = residentialLife.update(0, {
+        dayIndex: residentialRuntimeView.dayIndex + dayAdvance,
+        timeHours: totalHours,
+        captureSnapshot: false,
+      });
+    }
+    invalidateResidentialView();
+    syncResidentialActors(true);
+    const label = toastLabel ?? String(result.actionId ?? result.kind ?? "HOME UPDATED").replaceAll("_", " ").toUpperCase();
+    const money = Number(result.cost) > 0 ? `  -$${Math.trunc(result.cost)}` : "";
+    showToast(`${label}${money}`, 3.2);
+    gameAudio.play(Number(result.gameMinutes) >= 60 ? "mission" : "pickup", 0.28);
+    return true;
+  }
+
+  function performResidentialActivity(actionId, { force = false } = {}) {
+    const station = Object.values(residentialInterior.stations).find(value => value.action === actionId) ?? null;
+    if (!station) return { accepted: false, reason: "station_missing", actionId };
+    const atHome = force || insideResidentialHome();
+    if (!force && nearbyResidentialStation()?.action !== actionId) {
+      const result = { accepted: false, reason: "current_home_required", actionId };
+      showToast(explainResidentialRejection(result), 2.6);
+      return result;
+    }
+    if (!force && wanted.snapshot().stars > 0) {
+      const result = { accepted: false, reason: "busy", actionId };
+      showToast("LOSE THE POLICE BEFORE SETTLING IN AT HOME", 2.8);
+      return result;
+    }
+    const needs = lifeProfile.snapshot().needs;
+    const appetite = neighbourhoodRoutine.snapshot().appetite;
+    const studySkill = lifeProfile.snapshot().skills.reduce((selected, skill) =>
+      !selected || skill.experience < selected.experience ? skill : selected, null)?.id ?? "community";
+    const result = residentialLife.performHomeActivity(actionId, residentialClockContext({
+      atHome,
+      homeId: residentialInterior.homeId,
+      inVehicle: Boolean(vehicles?.playerVehicle),
+      busy: narrativeMissionBusy() || Boolean(selectedActivitySnapshot()?.status === "active"),
+      cash: player.cash,
+      needs: { energy: needs.energy, hygiene: needs.hygiene, appetite },
+      skillId: studySkill,
+    }));
+    applyResidentialTransaction(result, { toastLabel: station.label });
+    return result;
+  }
+
+  function carriedGroceryUnits() {
+    return Math.max(0, Math.trunc(Number(residentialFullSnapshot().player?.carriedSupplies?.groceries) || 0));
+  }
+
+  function atHomeUnpackPoint(position = controlledPosition(), radius = 2.75) {
+    if (!insideResidentialHome(position)) return false;
+    const station = residentialInterior.stations?.stove;
+    return Boolean(station && position.distanceToSquared(vectorFrom(station.position)) <= radius * radius);
+  }
+
+  function unpackResidentialSupplies({ force = false, sourceId = null } = {}) {
+    const result = residentialLife.unpackSupplies(residentialClockContext({
+      atHome: force || insideResidentialHome(),
+      homeId: residentialInterior.homeId,
+      inVehicle: Boolean(vehicles?.playerVehicle),
+      ...(sourceId == null ? {} : { sourceId }),
+    }));
+    const accepted = applyResidentialTransaction(result, {
+      advanceClock: false,
+      toastLabel: result?.groceriesAdded > 0 ? `PANTRY +${result.groceriesAdded}` : "GROCERIES UNPACKED",
+    });
+    if (accepted) player.setCarriedGroceries(result.carriedGroceries);
+    return result;
+  }
+
+  function homePhoneItems() {
+    const state = residentialFullSnapshot();
+    const home = state.homes.find(value => value.id === state.player.currentHomeId) ?? null;
+    if (!home) return [{ id: "no_home", title: "NO CURRENT HOME", detail: "VISIT AN AVAILABLE PROPERTY" }];
+    const purchaseCost = Math.max(0, home.market.purchasePrice - state.player.depositHeld);
+    const carried = Math.max(0, Math.trunc(Number(state.player.carriedSupplies?.groceries) || 0));
+    return [
+      { id: "address", title: home.name, detail: home.address },
+      { id: "tenure", title: state.player.tenure === "owned" ? "OWNED HOME" : "RENTED HOME", detail: state.player.tenure === "owned" ? "NO RENT DUE" : `DEPOSIT HELD  $${state.player.depositHeld}` },
+      { id: "rent", title: state.player.outstandingRent > 0 ? `PAY RENT  $${state.player.outstandingRent}` : "RENT UP TO DATE", detail: state.player.tenure === "rented" ? `NEXT DUE  DAY ${state.player.nextRentDueDay}` : "THE TITLE IS IN KAI'S NAME", action: state.player.outstandingRent > 0 ? "pay_rent" : null },
+      {
+        id: "pantry",
+        title: `PANTRY  ${home.groceries}/12  /  TOTE ${carried}/10`,
+        detail: carried > 0
+          ? `${home.preparedMeals} PREPARED MEALS  /  UNPACK INSIDE YOUR HOME`
+          : `${home.preparedMeals} PREPARED MEALS  /  BUY A BAG AT MINA'S MARKET`,
+        action: carried > 0 ? "unpack" : null,
+      },
+      { id: "condition", title: `HOME CONDITION  ${Math.round(home.condition)}%`, detail: `CLEANLINESS  ${Math.round(home.cleanliness)}%  /  ${home.roomCount} ROOMS` },
+      state.player.tenure === "rented"
+        ? { id: "purchase", title: `BUY THIS HOME  $${purchaseCost.toLocaleString("en-US")}`, detail: "YOUR HELD DEPOSIT COUNTS TOWARD THE PRICE", action: "purchase" }
+        : { id: "household", title: "HOUSEHOLD", detail: state.visitor ? `${state.visitor.residentName} IS VISITING` : "NO VISITOR RIGHT NOW" },
+    ];
+  }
+
+  function activateHomePhoneItem(index) {
+    const item = homePhoneItems()[Math.max(0, Math.trunc(index))];
+    if (!item?.action) {
+      showToast(item?.detail ?? "HOME DETAILS", 2.2);
+      return null;
+    }
+    let result = null;
+    if (item.action === "pay_rent") {
+      result = residentialLife.payRent(residentialClockContext({ cash: player.cash }));
+    } else if (item.action === "unpack") {
+      return unpackResidentialSupplies();
+    } else if (item.action === "purchase") {
+      const progressionTier = Math.max(0, ...lifeProfile.snapshot().skills.map(skill => skill.level - 1));
+      result = residentialLife.acquireHome(residentialInterior.homeId, residentialClockContext({
+        mode: "buy",
+        cash: player.cash,
+        progressionTier,
+      }));
+    }
+    if (result) applyResidentialTransaction(result, {
+      advanceClock: false,
+      toastLabel: item.action === "pay_rent" ? "RENT PAID" : "HOME PURCHASED",
+    });
+    return result;
+  }
+
   function openNeighbourhoodBusiness(businessId) {
     const result = neighbourhoodRoutine.openMenu(businessId, neighbourhoodContext());
     if (!result?.menuOpen) {
       showToast(explainBusinessRejection(result), 2.8);
       return result;
     }
-    const keeper = shopkeeperActors.get(result.businessId);
+    let keeper = shopkeeperActors.get(result.businessId);
+    if (result.businessId === "common_ground_cafe" && !insideCommonGroundCafe(keeper?.root?.position)) {
+      const onDuty = cafeStaffStates.find(state => state.locationId === commonGroundCafeWorld.id);
+      keeper = cafeStaffActors.get(onDuty?.id) ?? keeper;
+    }
+    if (result.businessId === "mina_market_kitchen" && !insideMinaMarket(keeper?.root?.position)) {
+      const onDuty = marketStaffStates.find(state => state.locationId === minaMarketWorld.id);
+      keeper = marketStaffActors.get(onDuty?.id) ?? keeper;
+    }
     if (keeper?.root?.position) {
       const dx = player.root.position.x - keeper.root.position.x;
       const dz = player.root.position.z - keeper.root.position.z;
@@ -703,6 +1490,24 @@ async function main() {
     }
     gameAudio.play("pickup", 0.18);
     return result;
+  }
+
+  function nearbyNeighbourhoodBusiness(position, radius = 5.5) {
+    const business = neighbourhoodRoutine.nearby(position, radius, neighbourhoodContext());
+    if (business?.id === "common_ground_cafe") {
+      const orderPoint = vectorFrom(commonGroundCafeWorld.customerAnchors.queue[0]);
+      return vectorFrom(position).distanceToSquared(orderPoint) <= 3.5 * 3.5 ? business : null;
+    }
+    if (business?.id === "mina_market_kitchen") {
+      if (!insideMinaMarket(position)) return null;
+      const point = vectorFrom(position);
+      const orderPoint = vectorFrom(minaMarketWorld.stations.orderCounter.position);
+      const checkoutPoint = vectorFrom(minaMarketWorld.stations.groceryCheckout.position);
+      return Math.min(point.distanceToSquared(orderPoint), point.distanceToSquared(checkoutPoint)) <= 3.65 * 3.65
+        ? business
+        : null;
+    }
+    return business;
   }
 
   function theftMissionBusy() {
@@ -735,6 +1540,7 @@ async function main() {
       ? gameAudio.playAt(name, volume, player.root.position)
       : gameAudio.play(name, volume),
   });
+  player.setCarriedGroceries(residentialLife.snapshot().player.carriedSupplies.groceries);
   const chaseCamera = createChaseCamera(camera, input, world);
   const cinematicDirector = createCinematicDirector(camera);
 
@@ -872,12 +1678,21 @@ async function main() {
       return player.damage(event.amount);
     },
   });
+  const minaOkaforHome = Object.freeze({
+    id: "mina-okafor-home",
+    name: "Okafor flat",
+    address: "84 Market Street, Flat 2",
+    position: Object.freeze([-103.5, 0.2, 105.5]),
+  });
   const namedCharacterHomes = Object.freeze({
     "juno-mercer": Object.freeze({ name: "Mercer apartment", address: "12 Cypress Walk", position: Object.freeze([-103.5, 0.2, 101.5]) }),
     "rin-alvarez": Object.freeze({ name: "Alvarez apartment", address: "8 Lantern Court", position: Object.freeze([101.5, 0.2, 105.5]) }),
     "leah_moreno": Object.freeze({ name: "Moreno flat", address: "31 Marisol Row", position: Object.freeze([-105.5, 0.2, -101.5]) }),
     "mara-velez": Object.freeze({ name: "Velez apartment", address: "6 Cypress Walk", position: Object.freeze([-99.5, 0.2, 107.5]) }),
     "dara-ibarra": Object.freeze({ name: "Ibarra flat", address: "19 Southline Terrace", position: Object.freeze([103.5, 0.2, -105.5]) }),
+    [ASHA_PATEL.id]: Object.freeze({ name: "Patel apartment", address: "14 Foundry Court", position: Object.freeze([-101.5, 0.2, 97.5]) }),
+    [MINA_OKAFOR.id]: minaOkaforHome,
+    "shopkeeper-mina_market_kitchen": minaOkaforHome,
   });
   const junoPosition = contactPosition.clone().add(new THREE.Vector3(2.3, 0, 0.04));
   if (world.isBlockedCircle?.(junoPosition.x, junoPosition.z, 0.36)) junoPosition.copy(contactPosition);
@@ -922,9 +1737,19 @@ async function main() {
       x: keeperPosition.x,
       z: keeperPosition.z,
       yaw: Number(location?.keeperYaw) || Math.PI,
-      stationary: true,
+      stationary: business.id !== "common_ground_cafe" && business.id !== "mina_market_kitchen",
       protected: true,
     });
+    if (business.id === "common_ground_cafe") {
+      actor.root.userData.namedResident = true;
+      actor.root.userData.cafeStaff = ASHA_PATEL.id;
+      cafeStaffActors.set(ASHA_PATEL.id, actor);
+    }
+    if (business.id === "mina_market_kitchen") {
+      actor.root.userData.namedResident = true;
+      actor.root.userData.marketStaff = MINA_OKAFOR.id;
+      marketStaffActors.set(MINA_OKAFOR.id, actor);
+    }
     shopkeeperActors.set(business.id, actor);
   }
   chapterTwoLeahPosition.y = Number(world.terrainHeight?.(chapterTwoLeahPosition.x, chapterTwoLeahPosition.z) ?? chapterTwoLeahPosition.y);
@@ -971,6 +1796,8 @@ async function main() {
     Object.freeze({ actor: leahActor, label: "LEAH" }),
     Object.freeze({ actor: maraActor, label: "MARA", existingLabel: true }),
     Object.freeze({ actor: depotClerkActor, label: "DARA" }),
+    Object.freeze({ actor: cafeStaffActors.get(ASHA_PATEL.id), label: "ASHA" }),
+    Object.freeze({ actor: marketStaffActors.get(MINA_OKAFOR.id), label: "MINA" }),
   ]);
   for (const character of mainCharacters) {
     const home = namedCharacterHomes[character.actor.id];
@@ -978,8 +1805,888 @@ async function main() {
     character.actor.root.userData.home = home;
     if (!character.existingLabel) createCharacterNameplate(character.actor.root, character.label);
   }
+
+  const residentialHomeById = new Map(residentialLife.homes.map(home => [home.id, home]));
+  function nearestResidentialNavigationAnchor(value) {
+    const requested = vectorFrom(value);
+    let selected = requested;
+    let selectedSquared = Infinity;
+    for (const candidateValue of world.pedestrianNodes) {
+      const candidate = vectorFrom(candidateValue);
+      const squared = candidate.distanceToSquared(requested);
+      if (squared >= selectedSquared || world.isBlockedCircle?.(candidate.x, candidate.z, 0.38)) continue;
+      selected = candidate;
+      selectedSquared = squared;
+    }
+    selected = selected.clone();
+    selected.y = Number(world.terrainHeight?.(selected.x, selected.z) ?? selected.y);
+    return selected;
+  }
+  const residentialLocationAnchors = new Map([
+    ["southline_studio_3b", vectorFrom(residentialInterior.stations.resident.position)],
+    ["amara_home_4d", nearestResidentialNavigationAnchor([-104, 0.2, 101])],
+    ["luis_home_2a", nearestResidentialNavigationAnchor([-104, 0.2, -101])],
+    ["nia_home_5f", nearestResidentialNavigationAnchor([104, 0.2, 101])],
+    ["mercy_clinic", nearestResidentialNavigationAnchor([-96, 0.2, -16.5])],
+    ["pulse_garage", vectorFrom(pulseGarageInterior.customerAnchor)],
+    ["city_lens_studio", nearestResidentialNavigationAnchor([150, 0.2, 100])],
+    ["cypress_night_garden", nearestResidentialNavigationAnchor([-48, 0.2, -48])],
+    ["harbour_lantern", nearestResidentialNavigationAnchor([139, 0.2, 28])],
+    ["southline_diner", vectorFrom(worldBusinessById.get("southline_diner")?.interactionPosition ?? [101, 0.2, -108])],
+    ["harbour_court", vectorFrom(world.missionPoints.harbourCourt.position)],
+    ["market_square", vectorFrom(world.northMarket.focus)],
+    ["common_ground_cafe", vectorFrom(commonGroundCafeWorld.customerAnchors.seating[0])],
+    ["river_walk", nearestResidentialNavigationAnchor([139, 0.2, 76])],
+  ]);
+
+  function residentialAnchorFor(state) {
+    if (state.activity === "visiting" && state.locationId === residentialInterior.homeId) {
+      return vectorFrom(residentialInterior.stations.visitor.position);
+    }
+    const anchor = residentialLocationAnchors.get(state.locationId);
+    if (!anchor) throw new RangeError(`No physical residential anchor for ${state.locationId}`);
+    return anchor;
+  }
+
+  for (const definition of residentialLife.residents) {
+    const state = residentialLife.residentState(definition.id, residentialClockContext());
+    const position = residentialAnchorFor(state);
+    const actor = population.spawn({
+      id: definition.id,
+      name: definition.name,
+      role: `named-resident-${definition.role.toLowerCase().replaceAll(" ", "-")}`,
+      x: position.x,
+      z: position.z,
+      yaw: 0,
+      stationary: false,
+      protected: false,
+    });
+    const home = residentialHomeById.get(definition.homeId);
+    actor.root.userData.namedResident = true;
+    actor.root.userData.home = home ? Object.freeze({
+      id: home.id,
+      name: home.name,
+      address: home.address,
+      position: Object.freeze(residentialLocationAnchors.get(home.id)?.toArray?.() ?? position.toArray()),
+    }) : null;
+    createCharacterNameplate(actor.root, definition.name.split(" ")[0]);
+    residentialActors.set(definition.id, actor);
+  }
+
+  function syncResidentialActors(force = false, rebuildRouteIds = null) {
+    if (!population) return Object.freeze([]);
+    if (force) {
+      const environmentState = environment.snapshot();
+      residentialRuntimeView = residentialLife.update(0, {
+        timeHours: environmentState.timeHours,
+        captureSnapshot: false,
+      });
+    }
+    const minute = residentialRuntimeView.dayIndex * 1440 + residentialRuntimeView.minuteOfDay;
+    if (!force && minute === lastResidentialScheduleMinute) return residentialActorStates;
+    lastResidentialScheduleMinute = minute;
+    const states = [];
+    for (const definition of residentialLife.residents) {
+      const state = residentialLife.residentState(definition.id, {
+        dayIndex: residentialRuntimeView.dayIndex,
+        minuteOfDay: residentialRuntimeView.minuteOfDay,
+      });
+      const actor = residentialActors.get(definition.id);
+      const anchor = residentialAnchorFor(state);
+      const signature = `${state.activity}:${state.locationId}:${anchor.x.toFixed(2)}:${anchor.z.toFixed(2)}`;
+      if (actor && actor.alive && (force || residentialActorSignatures.get(definition.id) !== signature)) {
+        const request = {
+          position: anchor,
+          locationId: state.locationId,
+          activity: state.activity,
+          arrivalRadius: state.activity === "sleep" ? 0.55 : 0.85,
+          speedScale: state.activity === "work" ? 1.12 : 1,
+          rebuildRoute: rebuildRouteIds instanceof Set && rebuildRouteIds.has(definition.id),
+        };
+        if (population.setRoutineDestination) population.setRoutineDestination(actor, request);
+        else population.pin(actor, { ...request, locked: true, protected: false });
+        actor.root.userData.residentialSchedule = Object.freeze({
+          activity: state.activity,
+          locationId: state.locationId,
+          dayIndex: state.dayIndex,
+          minuteOfDay: state.minuteOfDay,
+        });
+        residentialActorSignatures.set(definition.id, signature);
+      }
+      states.push(Object.freeze({
+        id: state.id,
+        name: state.name,
+        role: state.role,
+        homeId: state.homeId,
+        address: residentialHomeById.get(state.homeId)?.address ?? "NEON CITY",
+        activity: state.activity,
+        locationId: state.locationId,
+        availableForVisit: state.availableForVisit,
+        relationship: state.relationship,
+      }));
+    }
+    residentialActorStates = Object.freeze(states);
+    return residentialActorStates;
+  }
+  syncResidentialActors(true);
+
+  function residentialActorRuntimeSnapshot() {
+    return [...residentialActors].map(([residentId, actor]) => ({
+      residentId,
+      position: actor.root.position.toArray(),
+      yaw: actor.root.rotation.y,
+      destination: actor.routineDestinationActive
+        ? actor.routineDestination.toArray()
+        : null,
+      locationId: actor.routineLocation ?? null,
+      activity: actor.routineActivity ?? null,
+      arrived: Boolean(actor.routineDestinationArrived),
+    }));
+  }
+
+  function restoreResidentialActorRuntime(entries) {
+    const movementBounds = world.traversableBounds ?? world.bounds;
+    const byId = new Map((Array.isArray(entries) ? entries : []).map(entry => [String(entry?.residentId ?? ""), entry]));
+    const restoredIds = new Set();
+    for (const [residentId, actor] of residentialActors) {
+      const entry = byId.get(residentId);
+      const x = Number(entry?.position?.[0]);
+      const z = Number(entry?.position?.[2]);
+      if (!Number.isFinite(x) || !Number.isFinite(z) ||
+          x < movementBounds.minX || x > movementBounds.maxX ||
+          z < movementBounds.minZ || z > movementBounds.maxZ ||
+          // Runtime movement resolves against the actor's real body radius.
+          // Requiring extra destination clearance here rejected legitimate
+          // collision-resolved mid-route save poses beside walls and kerbs.
+          world.isBlockedCircle?.(x, z, actor.radius)) continue;
+      actor.root.position.set(x, world.terrainHeight(x, z), z);
+      if (Number.isFinite(Number(entry.yaw))) actor.root.rotation.y = Number(entry.yaw);
+      actor.velocity.set(0, 0, 0);
+      actor.steering.set(0, 0, 0);
+      actor.speed = 0;
+      restoredIds.add(residentId);
+    }
+    return restoredIds;
+  }
+
+  function restoreResidentialActorArrivalState(entries, restoredIds) {
+    if (!(restoredIds instanceof Set) || restoredIds.size === 0) return 0;
+    const byId = new Map((Array.isArray(entries) ? entries : []).map(entry => [String(entry?.residentId ?? ""), entry]));
+    let restored = 0;
+    for (const residentId of restoredIds) {
+      const entry = byId.get(residentId);
+      const actor = residentialActors.get(residentId);
+      const destination = entry?.destination;
+      if (!actor?.routineDestinationActive || !Array.isArray(destination) || destination.length < 3) continue;
+      const [x, y, z] = destination.map(Number);
+      if (![x, y, z].every(Number.isFinite)) continue;
+      const reconstructed = actor.routineDestination;
+      if (Math.abs(reconstructed.x - x) > 1e-4 || Math.abs(reconstructed.y - y) > 0.05 ||
+          Math.abs(reconstructed.z - z) > 1e-4) continue;
+      const dx = actor.root.position.x - reconstructed.x;
+      const dz = actor.root.position.z - reconstructed.z;
+      const radius = actor.routineArrivalRadius + actor.radius * 2;
+      actor.routineDestinationArrived = entry.arrived === true && dx * dx + dz * dz <= radius * radius + 1e-8;
+      if (actor.routineDestinationArrived) {
+        actor.velocity.set(0, 0, 0);
+        actor.steering.set(0, 0, 0);
+        actor.speed = 0;
+        actor.routineCrossingWaypoint = -1;
+        actor.crossing = null;
+        actor.crossingDestinationIndex = -1;
+      }
+      restored += 1;
+    }
+    return restored;
+  }
+
+  function nearbyResidentialActor(position = controlledPosition(), radius = 2.65) {
+    let nearest = null;
+    let nearestSquared = radius * radius;
+    for (const [residentId, actor] of residentialActors) {
+      if (!actor.active || !actor.alive || !actor.root.visible) continue;
+      const squared = actor.root.position.distanceToSquared(position);
+      if (squared > nearestSquared) continue;
+      nearest = { residentId, actor };
+      nearestSquared = squared;
+    }
+    return nearest;
+  }
+
+  function residentConversationLine(state, bond) {
+    if (state.activity === "work" && state.role === "PARAMEDIC") {
+      return "AMARA: A quiet shift is not an empty one. It means somebody got home before the worst minute of their life.";
+    }
+    if (state.activity === "work" && state.role === "VEHICLE TECHNICIAN") {
+      return "LUIS: A repair is a promise. If I miss one bolt, somebody else pays for my hurry.";
+    }
+    if (state.activity === "work" && state.role === "FREELANCE PHOTOGRAPHER") {
+      return "NIA: The city poses for towers. I photograph the people carrying groceries between them.";
+    }
+    if (state.activity === "sleep") return `${state.name.split(" ")[0]} IS ASLEEP — COME BACK WHEN THE LIGHTS ARE ON.`;
+    if (state.activity === "visiting") return `${state.name.split(" ")[0]}: Thanks for making room. A home feels different when nobody has to earn the chair.`;
+    if (bond >= 30) return `${state.name.split(" ")[0]}: You keep showing up when nothing is on fire. That is rarer than heroics.`;
+    return `${state.name.split(" ")[0]}: Everyone talks about surviving Neon City. I am trying to build a week worth repeating.`;
+  }
+
+  function interactResidentialActor(residentId, { force = false, kind = "talk" } = {}) {
+    const actor = residentialActors.get(String(residentId));
+    const nearby = actor && controlledPosition().distanceToSquared(actor.root.position) <= 2.65 * 2.65;
+    if (!actor || (!force && !nearby)) {
+      const result = { accepted: false, reason: "resident_too_far", residentId };
+      showToast("STEP CLOSER BEFORE STARTING A CONVERSATION", 2.4);
+      return result;
+    }
+    const result = residentialLife.recordResidentInteraction(residentId, residentialClockContext({ kind }));
+    if (!result.accepted) {
+      showToast(explainResidentialRejection(result, "THE CONVERSATION DOES NOT LAND"), 2.4);
+      return result;
+    }
+    if (result.serial > lastResidentialInteractionSerial) {
+      lastResidentialInteractionSerial = result.serial;
+      for (const award of result.skillEffects ?? []) {
+        lifeProfile.awardExperience(award.skillId, award.experience, {
+          sourceId: `resident:${result.serial}:${result.residentId}:${award.skillId}`,
+        });
+      }
+      invalidateResidentialView();
+    }
+    const state = residentialLife.residentState(residentId, residentialClockContext());
+    showToast(residentConversationLine(state, result.bond), 5.4);
+    return result;
+  }
+
+  const cafeStaffSpawnById = new Map(commonGroundCafeWorld.spawnPoints.staff.map(spawn => [spawn.id, spawn]));
+  const cafeStaffLocationAnchors = new Map([
+    ["asha-patel-home", nearestResidentialNavigationAnchor(namedCharacterHomes[ASHA_PATEL.id].position)],
+    ["dani_okoro-home", nearestResidentialNavigationAnchor([101.5, 0.2, 101.5])],
+    ["rafael_chen-home", nearestResidentialNavigationAnchor([-101.5, 0.2, -101.5])],
+    ["pulse-core-walk", vectorFrom(commonGroundCafeWorld.entrance.exterior)],
+    ["north-market", vectorFrom(world.northMarket.focus)],
+    ["river-walk", nearestResidentialNavigationAnchor([139, 0.2, 76])],
+  ]);
+
+  function cafeStaffHomeId(definition) {
+    return definition.homeLocationId ?? `${definition.id}-home`;
+  }
+
+  function cafeStaffAnchor(definition, state) {
+    if (state.locationId === commonGroundCafeWorld.id) {
+      if (state.activity === "opening_setup") return vectorFrom(commonGroundCafeWorld.jobAnchors.prep);
+      if (state.activity === "break") return vectorFrom(commonGroundCafeWorld.jobAnchors.break);
+      if (state.activity === "close_down") return vectorFrom(commonGroundCafeWorld.jobAnchors.handover);
+      const spawn = cafeStaffSpawnById.get(definition.worldAnchorId);
+      if (spawn) return vectorFrom(spawn.position);
+    }
+    return vectorFrom(cafeStaffLocationAnchors.get(state.locationId) ?? commonGroundCafeWorld.entrance.exterior);
+  }
+
+  const initialCafeStaffStates = cafeShift.context(cafeClockContext()).staff;
+  for (const definition of COMMON_GROUND_CAFE_STAFF) {
+    const state = initialCafeStaffStates.find(value => value.id === definition.id);
+    const position = cafeStaffAnchor(definition, state);
+    const workSpawn = cafeStaffSpawnById.get(definition.worldAnchorId);
+    let actor = cafeStaffActors.get(definition.id);
+    if (!actor) {
+      actor = population.spawn({
+        id: definition.id,
+        name: definition.name,
+        role: `cafe-staff-${definition.id}`,
+        x: position.x,
+        z: position.z,
+        yaw: Number(workSpawn?.heading) || 0,
+        stationary: false,
+        protected: true,
+      });
+      createCharacterNameplate(actor.root, definition.name.split(" ")[0]);
+      cafeStaffActors.set(definition.id, actor);
+    }
+    const homeId = cafeStaffHomeId(definition);
+    const homePosition = vectorFrom(cafeStaffLocationAnchors.get(homeId) ?? position);
+    actor.root.userData.namedResident = true;
+    actor.root.userData.cafeStaff = definition.id;
+    actor.root.userData.home = actor.root.userData.home ?? Object.freeze({
+      id: homeId,
+      name: `${definition.name.split(" ")[0]}'s home`,
+      address: definition.id === ASHA_PATEL.id ? namedCharacterHomes[ASHA_PATEL.id].address :
+        definition.id === "dani_okoro" ? "22 Lantern Court" : "7 Marisol Row",
+      position: Object.freeze(homePosition.toArray()),
+    });
+  }
+
+  let cafeStaffStates = Object.freeze(initialCafeStaffStates);
+  function syncCafeStaff(force = false, clockOverride = null, rebuildRouteIds = null) {
+    const clock = clockOverride ?? cafeClockContext();
+    const dayIndex = Math.max(0, Math.trunc(Number(clock.dayIndex) || 0));
+    const minuteOfDay = ((Math.trunc(Number(clock.minuteOfDay ?? Number(clock.timeHours) * 60) || 0) % 1440) + 1440) % 1440;
+    const absoluteMinute = dayIndex * 1440 + minuteOfDay;
+    if (!force && absoluteMinute === lastCafeScheduleMinute) return cafeStaffStates;
+    const state = cafeShift.context({ dayIndex, minuteOfDay });
+    lastCafeScheduleMinute = absoluteMinute;
+    for (const definition of COMMON_GROUND_CAFE_STAFF) {
+      const schedule = state.staff.find(value => value.id === definition.id);
+      const actor = cafeStaffActors.get(definition.id);
+      if (!schedule || !actor?.alive) continue;
+      const anchor = cafeStaffAnchor(definition, schedule);
+      const signature = `${schedule.activity}:${schedule.locationId}:${anchor.x.toFixed(2)}:${anchor.z.toFixed(2)}`;
+      if (force || cafeStaffSignatures.get(definition.id) !== signature) {
+        population.setRoutineDestination(actor, {
+          position: anchor,
+          locationId: schedule.locationId,
+          activity: schedule.activity,
+          arrivalRadius: ["service", "opening_setup", "close_down"].includes(schedule.activity) ? 0.66 : 0.86,
+          speedScale: schedule.activity === "commute" ? 1.18 : 1,
+          rebuildRoute: rebuildRouteIds instanceof Set && rebuildRouteIds.has(definition.id),
+        });
+        actor.root.userData.cafeSchedule = Object.freeze({
+          activity: schedule.activity,
+          locationId: schedule.locationId,
+          roomId: schedule.roomId,
+          dayIndex,
+          minuteOfDay,
+        });
+        cafeStaffSignatures.set(definition.id, signature);
+      }
+    }
+    cafeStaffStates = Object.freeze(state.staff);
+    return cafeStaffStates;
+  }
+  syncCafeStaff(true);
+
+  function cafeStaffRuntimeSnapshot() {
+    return [...cafeStaffActors].map(([staffId, actor]) => ({
+      staffId,
+      position: actor.root.position.toArray(),
+      yaw: actor.root.rotation.y,
+      destination: actor.routineDestinationActive ? actor.routineDestination.toArray() : null,
+      locationId: actor.routineLocation ?? null,
+      activity: actor.routineActivity ?? null,
+      arrived: Boolean(actor.routineDestinationArrived),
+    }));
+  }
+
+  function restoreCafeStaffRuntime(entries) {
+    const movementBounds = world.traversableBounds ?? world.bounds;
+    const byId = new Map((Array.isArray(entries) ? entries : []).map(entry => [String(entry?.staffId ?? ""), entry]));
+    const restoredIds = new Set();
+    for (const [staffId, actor] of cafeStaffActors) {
+      const entry = byId.get(staffId);
+      const x = Number(entry?.position?.[0]);
+      const z = Number(entry?.position?.[2]);
+      if (!Number.isFinite(x) || !Number.isFinite(z) ||
+          x < movementBounds.minX || x > movementBounds.maxX ||
+          z < movementBounds.minZ || z > movementBounds.maxZ ||
+          // A saved runtime pose only needs the same clearance used by normal
+          // movement; the +0.08 destination margin rejects valid wall-adjacent
+          // commute positions and prevents exact restoration.
+          world.isBlockedCircle?.(x, z, actor.radius)) continue;
+      actor.root.position.set(x, world.terrainHeight(x, z), z);
+      if (Number.isFinite(Number(entry.yaw))) actor.root.rotation.y = Number(entry.yaw);
+      actor.velocity.set(0, 0, 0);
+      actor.steering.set(0, 0, 0);
+      actor.speed = 0;
+      restoredIds.add(staffId);
+    }
+    return restoredIds;
+  }
+
+  function restoreCafeStaffArrivalState(entries, restoredIds) {
+    if (!(restoredIds instanceof Set) || restoredIds.size === 0) return 0;
+    const byId = new Map((Array.isArray(entries) ? entries : []).map(entry => [String(entry?.staffId ?? ""), entry]));
+    let restored = 0;
+    for (const staffId of restoredIds) {
+      const entry = byId.get(staffId);
+      const actor = cafeStaffActors.get(staffId);
+      const destination = entry?.destination;
+      if (!actor?.routineDestinationActive || !Array.isArray(destination) || destination.length < 3) continue;
+      const [x, y, z] = destination.map(Number);
+      if (![x, y, z].every(Number.isFinite)) continue;
+      const reconstructed = actor.routineDestination;
+      if (Math.abs(reconstructed.x - x) > 1e-4 || Math.abs(reconstructed.y - y) > 0.05 ||
+          Math.abs(reconstructed.z - z) > 1e-4) continue;
+      const dx = actor.root.position.x - reconstructed.x;
+      const dz = actor.root.position.z - reconstructed.z;
+      const radius = actor.routineArrivalRadius + actor.radius * 2;
+      actor.routineDestinationArrived = entry.arrived === true && dx * dx + dz * dz <= radius * radius + 1e-8;
+      if (actor.routineDestinationArrived) {
+        actor.velocity.set(0, 0, 0);
+        actor.steering.set(0, 0, 0);
+        actor.speed = 0;
+        actor.routineCrossingWaypoint = -1;
+        actor.crossing = null;
+        actor.crossingDestinationIndex = -1;
+      }
+      restored += 1;
+    }
+    return restored;
+  }
+
+  function nearbyCafeStaff(position = controlledPosition(), radius = 2.75) {
+    let nearest = null;
+    let nearestSquared = radius * radius;
+    for (const definition of COMMON_GROUND_CAFE_STAFF) {
+      const actor = cafeStaffActors.get(definition.id);
+      if (!actor?.active || !actor.alive || !actor.root.visible) continue;
+      const squared = actor.root.position.distanceToSquared(position);
+      if (squared > nearestSquared) continue;
+      nearest = {
+        definition,
+        actor,
+        state: cafeStaffStates.find(value => value.id === definition.id) ?? null,
+      };
+      nearestSquared = squared;
+    }
+    return nearest;
+  }
+
+  const marketStaffLocationAnchors = new Map([
+    ["mina-okafor-home", nearestResidentialNavigationAnchor(namedCharacterHomes["shopkeeper-mina_market_kitchen"].position)],
+    ["emi-sato-home", nearestResidentialNavigationAnchor([101.5, 0.2, 97.5])],
+    ["north-market-walk", vectorFrom(minaMarketWorld.entrance.street)],
+  ]);
+
+  function marketStaffAnchor(definition, state) {
+    if (state.locationId === minaMarketWorld.id) {
+      if (["meal_break", "admin_break"].includes(state.activity)) return vectorFrom(minaMarketWorld.staffAnchors.break);
+      if (state.activity === "opening_checks") return vectorFrom(minaMarketWorld.stations.coldCase.position);
+      if (state.activity === "supervise_floor") return vectorFrom(minaMarketWorld.stations.produceScale.position);
+      if (state.activity === "supervise_close") return vectorFrom(minaMarketWorld.stations.dishSink.position);
+      if (state.activity === "orders_and_packing") return vectorFrom(minaMarketWorld.stations.packingBench.position);
+      if (state.activity === "stock_and_checkout" || state.activity === "checkout_close") {
+        return vectorFrom(minaMarketWorld.staffAnchors.checkout);
+      }
+      if (state.activity === "orders_and_till") return vectorFrom(minaMarketWorld.staffAnchors.order);
+      return vectorFrom(minaMarketWorld.staffAnchors[definition.id === MINA_OKAFOR.id ? "keeper" : "checkout"]);
+    }
+    return vectorFrom(marketStaffLocationAnchors.get(state.locationId) ?? minaMarketWorld.entrance.exterior);
+  }
+
+  const initialMarketStaffStates = marketShift.context(marketClockContext()).staff;
+  for (const definition of MINA_MARKET_STAFF) {
+    const state = initialMarketStaffStates.find(value => value.id === definition.id);
+    const position = marketStaffAnchor(definition, state);
+    let actor = marketStaffActors.get(definition.id);
+    if (!actor) {
+      actor = population.spawn({
+        id: definition.id,
+        name: definition.name,
+        role: `market-staff-${definition.id}`,
+        x: position.x,
+        z: position.z,
+        yaw: Math.PI,
+        stationary: false,
+        protected: true,
+      });
+      createCharacterNameplate(actor.root, definition.name.split(" ")[0]);
+      marketStaffActors.set(definition.id, actor);
+    }
+    const homePosition = vectorFrom(marketStaffLocationAnchors.get(definition.homeLocationId) ?? position);
+    actor.root.userData.namedResident = true;
+    actor.root.userData.marketStaff = definition.id;
+    actor.root.userData.home = actor.root.userData.home ?? Object.freeze({
+      id: definition.homeLocationId,
+      name: `${definition.name.split(" ")[0]}'s home`,
+      address: definition.id === MINA_OKAFOR.id ? "84 Market Street, Flat 2" : "18 Lantern Court",
+      position: Object.freeze(homePosition.toArray()),
+    });
+  }
+
+  function syncMarketStaff(force = false, clockOverride = null, rebuildRouteIds = null) {
+    const clock = clockOverride ?? marketClockContext();
+    const dayIndex = Math.max(0, Math.trunc(Number(clock.dayIndex) || 0));
+    const minuteOfDay = ((Math.trunc(Number(clock.minuteOfDay ?? Number(clock.timeHours) * 60) || 0) % 1440) + 1440) % 1440;
+    const absoluteMinute = dayIndex * 1440 + minuteOfDay;
+    if (!force && absoluteMinute === lastMarketScheduleMinute) return marketStaffStates;
+    const state = marketShift.context({ dayIndex, minuteOfDay });
+    lastMarketScheduleMinute = absoluteMinute;
+    for (const definition of MINA_MARKET_STAFF) {
+      const schedule = state.staff.find(value => value.id === definition.id);
+      const actor = marketStaffActors.get(definition.id);
+      if (!schedule || !actor?.alive) continue;
+      const anchor = marketStaffAnchor(definition, schedule);
+      const signature = `${schedule.activity}:${schedule.locationId}:${anchor.x.toFixed(2)}:${anchor.z.toFixed(2)}`;
+      if (force || marketStaffSignatures.get(definition.id) !== signature) {
+        population.setRoutineDestination(actor, {
+          position: anchor,
+          locationId: schedule.locationId,
+          activity: schedule.activity,
+          arrivalRadius: schedule.atWork ? 0.68 : 0.86,
+          speedScale: schedule.activity === "commute" ? 1.18 : 1,
+          rebuildRoute: rebuildRouteIds instanceof Set && rebuildRouteIds.has(definition.id),
+        });
+        actor.root.userData.marketSchedule = Object.freeze({
+          activity: schedule.activity,
+          locationId: schedule.locationId,
+          roomId: schedule.roomId,
+          dayIndex,
+          minuteOfDay,
+        });
+        marketStaffSignatures.set(definition.id, signature);
+      }
+    }
+    marketStaffStates = Object.freeze(state.staff);
+    return marketStaffStates;
+  }
+  syncMarketStaff(true);
+
+  function marketStaffRuntimeSnapshot() {
+    return [...marketStaffActors].map(([staffId, actor]) => ({
+      staffId,
+      position: actor.root.position.toArray(),
+      yaw: actor.root.rotation.y,
+      destination: actor.routineDestinationActive ? actor.routineDestination.toArray() : null,
+      locationId: actor.routineLocation ?? null,
+      activity: actor.routineActivity ?? null,
+      arrived: Boolean(actor.routineDestinationArrived),
+    }));
+  }
+
+  function restoreMarketStaffRuntime(entries) {
+    const movementBounds = world.traversableBounds ?? world.bounds;
+    const byId = new Map((Array.isArray(entries) ? entries : []).map(entry => [String(entry?.staffId ?? ""), entry]));
+    const restoredIds = new Set();
+    for (const [staffId, actor] of marketStaffActors) {
+      const entry = byId.get(staffId);
+      const x = Number(entry?.position?.[0]);
+      const z = Number(entry?.position?.[2]);
+      if (!Number.isFinite(x) || !Number.isFinite(z) || x < movementBounds.minX || x > movementBounds.maxX ||
+          z < movementBounds.minZ || z > movementBounds.maxZ || world.isBlockedCircle?.(x, z, actor.radius)) continue;
+      actor.root.position.set(x, world.terrainHeight(x, z), z);
+      if (Number.isFinite(Number(entry.yaw))) actor.root.rotation.y = Number(entry.yaw);
+      actor.velocity.set(0, 0, 0);
+      actor.steering.set(0, 0, 0);
+      actor.speed = 0;
+      restoredIds.add(staffId);
+    }
+    return restoredIds;
+  }
+
+  function restoreMarketStaffArrivalState(entries, restoredIds) {
+    if (!(restoredIds instanceof Set) || restoredIds.size === 0) return 0;
+    const byId = new Map((Array.isArray(entries) ? entries : []).map(entry => [String(entry?.staffId ?? ""), entry]));
+    let restored = 0;
+    for (const staffId of restoredIds) {
+      const entry = byId.get(staffId);
+      const actor = marketStaffActors.get(staffId);
+      const destination = entry?.destination;
+      if (!actor?.routineDestinationActive || !Array.isArray(destination) || destination.length < 3) continue;
+      const [x, y, z] = destination.map(Number);
+      if (![x, y, z].every(Number.isFinite)) continue;
+      const reconstructed = actor.routineDestination;
+      if (Math.abs(reconstructed.x - x) > 1e-4 || Math.abs(reconstructed.y - y) > 0.05 ||
+          Math.abs(reconstructed.z - z) > 1e-4) continue;
+      const dx = actor.root.position.x - reconstructed.x;
+      const dz = actor.root.position.z - reconstructed.z;
+      const radius = actor.routineArrivalRadius + actor.radius * 2;
+      actor.routineDestinationArrived = entry.arrived === true && dx * dx + dz * dz <= radius * radius + 1e-8;
+      if (actor.routineDestinationArrived) {
+        actor.velocity.set(0, 0, 0);
+        actor.steering.set(0, 0, 0);
+        actor.speed = 0;
+        actor.routineCrossingWaypoint = -1;
+        actor.crossing = null;
+        actor.crossingDestinationIndex = -1;
+      }
+      restored += 1;
+    }
+    return restored;
+  }
+
+  function nearbyMarketStaff(position = controlledPosition(), radius = 2.75) {
+    let nearest = null;
+    let nearestSquared = radius * radius;
+    for (const definition of MINA_MARKET_STAFF) {
+      const actor = marketStaffActors.get(definition.id);
+      if (!actor?.active || !actor.alive || !actor.root.visible) continue;
+      const squared = actor.root.position.distanceToSquared(position);
+      if (squared > nearestSquared) continue;
+      nearest = { definition, actor, state: marketStaffStates.find(value => value.id === definition.id) ?? null };
+      nearestSquared = squared;
+    }
+    return nearest;
+  }
+
+  const communityStaffSpawnByRole = new Map([
+    ["community_kitchen", communityHubWorld.spawnPoints.staff.find(value => value.role === "kitchen")],
+    ["repair_cafe", communityHubWorld.spawnPoints.staff.find(value => value.role === "repair")],
+    ["local_archive", communityHubWorld.spawnPoints.staff.find(value => value.role === "teacher")],
+  ]);
+  const communityStaffLocationAnchors = new Map([
+    ["harbour-skills-house", vectorFrom(communityHubWorld.entrance.interior)],
+    ["harbour_walk", vectorFrom(communityHubWorld.entrance.exterior)],
+    ["foundry_lane", nearestResidentialNavigationAnchor([92, 0.2, 28])],
+    ["market_library", vectorFrom(world.northMarket.focus)],
+    ["harbour_garden", nearestResidentialNavigationAnchor([139, 0.2, 76])],
+    ["canal_bench", nearestResidentialNavigationAnchor([139, 0.2, 28])],
+    ["asha_home", nearestResidentialNavigationAnchor([-104, 0.2, 101])],
+    ["tomas_home", nearestResidentialNavigationAnchor([-104, 0.2, -101])],
+    ["priya_home", nearestResidentialNavigationAnchor([104, 0.2, 101])],
+  ]);
+
+  function communityStaffAnchor(definition, state) {
+    if (state.locationId === communityHubWorld.id) {
+      const spawn = communityStaffSpawnByRole.get(definition.roleId);
+      if (spawn) return vectorFrom(spawn.position);
+    }
+    return vectorFrom(communityStaffLocationAnchors.get(state.locationId) ?? communityHubWorld.entrance.exterior);
+  }
+
+  const initialCommunityStaffStates = communityDirectorySnapshot().staff;
+  for (const definition of COMMUNITY_HUB_STAFF) {
+    const state = initialCommunityStaffStates.find(value => value.id === definition.id);
+    const position = communityStaffAnchor(definition, state);
+    const workSpawn = communityStaffSpawnByRole.get(definition.roleId);
+    const actor = population.spawn({
+      id: definition.id,
+      name: definition.name,
+      role: `community-staff-${definition.roleId}`,
+      x: position.x,
+      z: position.z,
+      yaw: Number(workSpawn?.heading) || 0,
+      stationary: false,
+      protected: true,
+    });
+    actor.root.userData.namedResident = true;
+    actor.root.userData.communityStaff = true;
+    actor.root.userData.home = Object.freeze({
+      id: definition.homeLocationId,
+      name: `${definition.name.split(" ")[0]}'s home`,
+      address: definition.id === "asha_malik" ? "17 Cypress Walk" :
+        definition.id === "tomas_varga" ? "28 Foundry Lane" : "9 Market Library Court",
+      position: Object.freeze(vectorFrom(communityStaffLocationAnchors.get(definition.homeLocationId)).toArray()),
+    });
+    createCharacterNameplate(actor.root, definition.name.split(" ")[0]);
+    communityStaffActors.set(definition.id, actor);
+  }
+
+  function syncCommunityStaff(force = false, clockOverride = null, rebuildRouteIds = null) {
+    const clock = clockOverride ?? communityClockContext();
+    const minute = Math.max(0, Math.trunc(Number(clock.dayIndex) || 0)) * 1440 +
+      ((Math.trunc(Number(clock.minuteOfDay ?? Number(clock.timeHours) * 60) || 0) % 1440) + 1440) % 1440;
+    if (!force && minute === lastCommunityScheduleMinute) return communityDirectoryCache?.staff ?? Object.freeze([]);
+    const state = communityHubLife.context(clock);
+    lastCommunityScheduleMinute = minute;
+    for (const definition of COMMUNITY_HUB_STAFF) {
+      const schedule = state.staff.find(value => value.id === definition.id);
+      const actor = communityStaffActors.get(definition.id);
+      if (!schedule || !actor?.alive) continue;
+      const anchor = communityStaffAnchor(definition, schedule);
+      const signature = `${schedule.activity}:${schedule.locationId}:${anchor.x.toFixed(2)}:${anchor.z.toFixed(2)}`;
+      if (force || communityStaffSignatures.get(definition.id) !== signature) {
+        population.setRoutineDestination(actor, {
+          position: anchor,
+          locationId: schedule.locationId,
+          activity: schedule.activity,
+          arrivalRadius: schedule.activity === "work" ? 0.68 : 0.86,
+          speedScale: schedule.activity === "commute" ? 1.18 : 1,
+          rebuildRoute: rebuildRouteIds instanceof Set && rebuildRouteIds.has(definition.id),
+        });
+        actor.root.userData.communitySchedule = Object.freeze({
+          activity: schedule.activity,
+          locationId: schedule.locationId,
+          roomId: schedule.roomId,
+          dayIndex: state.clock.dayIndex,
+          minuteOfDay: state.clock.minuteOfDay,
+        });
+        communityStaffSignatures.set(definition.id, signature);
+      }
+    }
+    return state.staff;
+  }
+  syncCommunityStaff(true);
+
+  function communityStaffRuntimeSnapshot() {
+    return [...communityStaffActors].map(([staffId, actor]) => ({
+      staffId,
+      position: actor.root.position.toArray(),
+      yaw: actor.root.rotation.y,
+      destination: actor.routineDestinationActive ? actor.routineDestination.toArray() : null,
+      locationId: actor.routineLocation ?? null,
+      activity: actor.routineActivity ?? null,
+      arrived: Boolean(actor.routineDestinationArrived),
+    }));
+  }
+
+  function restoreCommunityStaffRuntime(entries) {
+    const movementBounds = world.traversableBounds ?? world.bounds;
+    const byId = new Map((Array.isArray(entries) ? entries : []).map(entry => [String(entry?.staffId ?? ""), entry]));
+    const restoredIds = new Set();
+    for (const [staffId, actor] of communityStaffActors) {
+      const entry = byId.get(staffId);
+      const x = Number(entry?.position?.[0]);
+      const z = Number(entry?.position?.[2]);
+      if (!Number.isFinite(x) || !Number.isFinite(z) ||
+          x < movementBounds.minX || x > movementBounds.maxX ||
+          z < movementBounds.minZ || z > movementBounds.maxZ ||
+          // Match population movement clearance so a valid collision-resolved
+          // mid-commute pose restores exactly instead of being mistaken for a
+          // blocked schedule destination.
+          world.isBlockedCircle?.(x, z, actor.radius)) continue;
+      actor.root.position.set(x, world.terrainHeight(x, z), z);
+      if (Number.isFinite(Number(entry.yaw))) actor.root.rotation.y = Number(entry.yaw);
+      actor.velocity.set(0, 0, 0);
+      actor.steering.set(0, 0, 0);
+      actor.speed = 0;
+      restoredIds.add(staffId);
+    }
+    return restoredIds;
+  }
+
+  function restoreCommunityStaffArrivalState(entries, restoredIds) {
+    if (!(restoredIds instanceof Set) || restoredIds.size === 0) return 0;
+    const byId = new Map((Array.isArray(entries) ? entries : []).map(entry => [String(entry?.staffId ?? ""), entry]));
+    let restored = 0;
+    for (const staffId of restoredIds) {
+      const entry = byId.get(staffId);
+      const actor = communityStaffActors.get(staffId);
+      const destination = entry?.destination;
+      if (!actor?.routineDestinationActive || !Array.isArray(destination) || destination.length < 3) continue;
+      const x = Number(destination[0]);
+      const y = Number(destination[1]);
+      const z = Number(destination[2]);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+      const reconstructed = actor.routineDestination;
+      const destinationMatches = Math.abs(reconstructed.x - x) <= 1e-4 &&
+        Math.abs(reconstructed.y - y) <= 0.05 && Math.abs(reconstructed.z - z) <= 1e-4;
+      if (!destinationMatches) continue;
+      const dx = actor.root.position.x - reconstructed.x;
+      const dz = actor.root.position.z - reconstructed.z;
+      // Population arrival is sticky until a genuinely new routine destination
+      // is assigned. Preserve that saved state across restore while allowing for
+      // the small collision displacement that can leave an arrived body just
+      // outside the initial approach radius. The extra allowance is deliberately
+      // capped at one body diameter so a hostile save cannot pin remote staff.
+      const stickyArrivalRadius = actor.routineArrivalRadius + actor.radius * 2;
+      const safelyArrived = entry.arrived === true &&
+        dx * dx + dz * dz <= stickyArrivalRadius * stickyArrivalRadius + 1e-8;
+      actor.routineDestinationArrived = safelyArrived;
+      if (safelyArrived) {
+        actor.velocity.set(0, 0, 0);
+        actor.steering.set(0, 0, 0);
+        actor.speed = 0;
+        actor.routineCrossingWaypoint = -1;
+        actor.crossing = null;
+        actor.crossingDestinationIndex = -1;
+      }
+      restored += 1;
+    }
+    return restored;
+  }
+
+  function nearbyCommunityStaff(position = controlledPosition(), radius = 2.8) {
+    const staffStates = communityDirectorySnapshot().staff;
+    let nearest = null;
+    let nearestSquared = radius * radius;
+    for (const definition of COMMUNITY_HUB_STAFF) {
+      const actor = communityStaffActors.get(definition.id);
+      if (!actor?.active || !actor.alive || !actor.root.visible) continue;
+      const squared = actor.root.position.distanceToSquared(position);
+      if (squared > nearestSquared) continue;
+      nearest = { definition, actor, state: staffStates.find(value => value.id === definition.id) };
+      nearestSquared = squared;
+    }
+    return nearest;
+  }
+
+  // A complete ordinary civilian rig is reserved at startup for workshop
+  // customers. It lives offscreen until borrowed, so clocking in can never
+  // depend on an ambient pedestrian happening to be idle on that exact frame.
+  const garageCustomerPresentationKey = "garage-shift:customer";
+  const garageCustomerReservePosition = Object.freeze([world.bounds.maxX + 420, 0, world.bounds.maxZ + 420]);
+  const garageCustomerReserveActor = population.spawn({
+    id: "pulse-garage-customer-reserve",
+    name: "Pulse Garage Customer",
+    x: garageCustomerReservePosition[0],
+    z: garageCustomerReservePosition[2],
+  });
+  garageCustomerReserveActor.root.visible = false;
+  const garageCustomerReserveStage = population.stage(garageCustomerReserveActor, {
+    key: garageCustomerPresentationKey,
+    kind: "garage-customer-reserve",
+    phase: "reserve",
+    position: garageCustomerReservePosition,
+    visible: false,
+    locked: true,
+    protected: true,
+  });
+  if (!garageCustomerReserveStage.accepted) throw new Error(`Pulse Garage customer reserve failed: ${garageCustomerReserveStage.reason}`);
+  const occupancyActors = Object.freeze(Array.from({ length: 13 }, (_, index) => `civilian-${index + 18}`));
+  const marketCustomerSlots = minaMarketWorld.occupancySlots
+    .filter(slot => slot.role === "shopper" || slot.role === "customer")
+    .map((slot, index) => ({
+      id: slot.id,
+      position: slot.position,
+      dwellMinutes: index < 4 ? [7, 18] : index < 7 ? [3, 9] : [8, 16],
+      activity: slot.role === "shopper" ? "shopping" : "market-meal",
+      idleMode: index % 3 === 0 ? "phone" : index >= 7 ? "coffee" : "hands",
+    }));
+  interiorOccupancy = createInteriorOccupancySystem({
+    population,
+    seed: world.seed ^ 0x4f434355,
+    bucketMinutes: 30,
+    actorIds: occupancyActors,
+    buildings: [
+      {
+        id: minaMarketWorld.id,
+        exterior: minaMarketWorld.entrance.exterior,
+        threshold: minaMarketWorld.entrance.threshold,
+        capacity: Math.min(6, marketCustomerSlots.length),
+        visitChance: 0.78,
+        openingHours: { openMinute: 7 * 60, closeMinute: 21 * 60, openDays: [0, 1, 2, 3, 4, 5, 6] },
+        arrivalRadius: 0.58,
+        speedScale: 1.02,
+        occupancySlots: marketCustomerSlots,
+      },
+      {
+        id: commonGroundCafeWorld.id,
+        exterior: commonGroundCafeWorld.entrance.exterior,
+        threshold: commonGroundCafeWorld.entrance.threshold,
+        capacity: 3,
+        visitChance: 0.56,
+        openingHours: { openMinute: 6 * 60, closeMinute: 18 * 60, openDays: [0, 1, 2, 3, 4, 5, 6] },
+        occupancySlots: commonGroundCafeWorld.customerAnchors.seating.slice(0, 3).map((position, index) => ({
+          id: `common-ground-customer-${index + 1}`,
+          position,
+          dwellMinutes: [12, 28],
+          activity: "cafe-visit",
+          idleMode: index === 1 ? "phone" : "coffee",
+        })),
+      },
+      {
+        id: communityHubWorld.id,
+        exterior: communityHubWorld.entrance.exterior,
+        threshold: communityHubWorld.entrance.threshold,
+        capacity: 2,
+        visitChance: 0.38,
+        openingHours: { openMinute: 8 * 60, closeMinute: 20 * 60, openDays: [0, 1, 2, 3, 4, 5, 6] },
+        occupancySlots: communityHubWorld.spawnPoints.public.slice(0, 2).map((entry, index) => ({
+          id: `skills-house-public-${index + 1}`,
+          position: entry.position,
+          dwellMinutes: [14, 34],
+          activity: "community-visit",
+          idleMode: index ? "hands" : "phone",
+        })),
+      },
+      {
+        id: pulseGarageInterior.id,
+        exterior: pulseGarageInterior.entrance.exterior,
+        threshold: pulseGarageInterior.entrance.threshold,
+        capacity: 1,
+        visitChance: 0.22,
+        openingHours: { openMinute: 8 * 60, closeMinute: 19 * 60, openDays: [0, 1, 2, 3, 4, 5, 6] },
+        occupancySlots: [{
+          id: "pulse-garage-waiting-customer",
+          position: pulseGarageInterior.customerAnchor,
+          dwellMinutes: [10, 24],
+          activity: "garage-visit",
+          idleMode: "phone",
+        }],
+      },
+    ],
+  });
+  const initialInteriorOccupancySave = interiorOccupancy.save();
   taxiPassengerActor = population.actors.find(actor =>
-    !actor.police && !actor.storyRole && actor.active && actor.alive) ?? null;
+    actor !== garageCustomerReserveActor && !actor.police && !actor.storyRole && actor.active && actor.alive) ?? null;
   roadsideResponse = createRoadsideResponseSystem({
     vehicles: vehicles.roadsideAdapter,
     population,
@@ -1245,6 +2952,145 @@ async function main() {
     }
     if (handedOff > 0) processChapterTwoEvents();
     return handedOff;
+  }
+
+  function garageSkillScore() {
+    const skill = lifeProfile.skill("mechanics");
+    return clamp(((skill.level - 1) + skill.levelProgress) / 5 * 100, 0, 100);
+  }
+
+  function garageShiftContext(detail = {}) {
+    const environmentState = environment.snapshot();
+    return {
+      dayIndex: neighbourhoodRoutine.snapshot().dayIndex,
+      timeHours: environmentState.timeHours,
+      mechanicSkill: garageSkillScore(),
+      position: controlledPosition(),
+      inVehicle: Boolean(vehicles?.playerVehicle),
+      ...detail,
+    };
+  }
+
+  function releaseGarageCustomerPresentation() {
+    if (!garageCustomerActor) return false;
+    population?.stage?.(garageCustomerReserveActor, {
+      key: garageCustomerPresentationKey,
+      kind: "garage-customer-reserve",
+      phase: "reserve",
+      name: "Pulse Garage Customer",
+      position: garageCustomerReservePosition,
+      visible: false,
+      locked: true,
+      protected: true,
+    });
+    garageCustomerActor = null;
+    garageCustomerReleaseAt = -Infinity;
+    return true;
+  }
+
+  function syncGarageCustomerPresentation() {
+    const state = garageShift.snapshot();
+    if (!state.active || !state.customerId) return null;
+    const key = garageCustomerPresentationKey;
+    if (!garageCustomerActor) {
+      const request = {
+        key,
+        kind: "garage-customer",
+        phase: state.stage,
+        name: state.customerName,
+        position: pulseGarageInterior.customerAnchor,
+        radius: 260,
+        idleMode: "hands",
+        locked: true,
+        protected: true,
+        visible: true,
+        yaw: Math.PI,
+      };
+      let result = population?.stage?.(garageCustomerReserveActor, request);
+      // A shift can start while every nearby civilian is walking. The public
+      // stage selector intentionally accepts only calm idle actors, so fall
+      // back to the nearest unclaimed ordinary civilian and authoritatively
+      // put that already-preloaded rig on customer duty.
+      if (!result?.accepted) {
+        let candidate = null;
+        let nearestSquared = Infinity;
+        const anchor = vectorFrom(pulseGarageInterior.customerAnchor);
+        for (const actor of population.actors) {
+          if (actor.police || actor.storyRole || actor.storyLocked || actor.storyProtected ||
+              !actor.active || !actor.alive || actor.ragdollActive || actor.socialPartner || actor.presentationKey) continue;
+          const squared = actor.root.position.distanceToSquared(anchor);
+          if (squared < nearestSquared) {
+            candidate = actor;
+            nearestSquared = squared;
+          }
+        }
+        result = candidate ? population.stage(candidate, request) : result;
+      }
+      garageCustomerActor = result?.accepted
+        ? population.actors.find(actor => actor.id === result.actorId) ?? null
+        : null;
+    } else {
+      population.stage(garageCustomerActor, {
+        key,
+        phase: state.stage,
+        position: pulseGarageInterior.customerAnchor,
+        visible: true,
+        yaw: Math.PI,
+      });
+    }
+    return garageCustomerActor;
+  }
+
+  function processGarageShiftEvents() {
+    let handled = 0;
+    for (const event of garageShift.drainEvents()) {
+      handled += 1;
+      if (event.type === "garage_shift_clocked_in") {
+        syncGarageCustomerPresentation();
+        gameAudio.play("mission", 0.42);
+        showToast("SHIFT CLOCKED IN — LISTEN BEFORE YOU TOUCH THE CAR", 3.4);
+      } else if (event.type === "garage_customer_greeted") {
+        showToast(garageShift.snapshot().request, 4.4);
+      } else if (event.type === "garage_clue_found") {
+        const clue = garageShift.snapshot().inspectionClues.at(-1);
+        gameAudio.play("pickup", 0.22);
+        showToast(clue?.observation ?? "INSPECTION CLUE RECORDED", 4);
+      } else if (event.type === "garage_inspection_completed") {
+        garageDiagnosisIndex = 0;
+        showToast("INSPECTION COMPLETE — W / S CHOOSE A DIAGNOSIS, E CONFIRM", 3.8);
+      } else if (event.type === "garage_diagnosis_rework") {
+        showToast("THAT DIAGNOSIS DOES NOT FIT ALL THE EVIDENCE — RECHECK IT", 3.5);
+      } else if (event.type === "garage_diagnosis_confirmed") {
+        garageConfirmedDiagnosisId = event.diagnosisId;
+        showToast("DIAGNOSIS LOGGED — COLLECT ONLY THE REQUIRED PARTS", 3.3);
+      } else if (event.type === "garage_parts_collected") {
+        showToast("PARTS VERIFIED — MOVE TO THE LIFT AND COMPLETE THE REPAIR", 3.3);
+      } else if (event.type === "garage_repair_completed") {
+        gameAudio.play("pickup", 0.28);
+        showToast("REPAIR COMPLETE — THREE SAFETY CHECKS BEFORE RELEASE", 3.6);
+      } else if (event.type === "garage_vehicle_safe") {
+        showToast("SAFETY CHECK PASSED — WRITE AN HONEST INVOICE", 3.2);
+      } else if (event.type === "garage_shift_completed") {
+        const profileTransaction = lifeProfile.recordShift({
+          id: event.workOrderId,
+          activityId: "garage_apprentice",
+          dayIndex: garageShift.snapshot().dayIndex,
+          durationMinutes: event.workMinutes,
+          quality: event.quality / 100,
+          baseWage: event.wage,
+          experience: event.mechanicXp,
+        });
+        if (profileTransaction.accepted) player.addCash(profileTransaction.wage);
+        gameAudio.play("mission", 0.76);
+        showToast(profileTransaction.accepted
+          ? `SAFE REPAIR FILED  +$${profileTransaction.wage}  MECHANICS XP +${event.mechanicXp}`
+          : "SHIFT ALREADY FILED — NO DUPLICATE WAGE", 5.5);
+        garageCustomerReleaseAt = elapsed + 5;
+        activityPresentationUntil = elapsed + 6;
+      }
+    }
+    syncGarageCustomerPresentation();
+    return handled;
   }
 
   function processNightRouteEvents() {
@@ -1829,6 +3675,702 @@ async function main() {
     return started;
   }
 
+  function beginGarageShift({ force = false, workOrderId = null } = {}) {
+    if (!force && !story.snapshot().chapterCompleted) {
+      showToast("FINISH HOME AGAIN BEFORE TAKING A GARAGE SHIFT", 3);
+      return null;
+    }
+    if (!force && narrativeMissionBusy()) {
+      showToast(chapterTwoMissionActive() ? "FINISH BORROWED TIME FIRST" : "FINISH MARISOL'S RECOVERY FIRST", 2.6);
+      return null;
+    }
+    if (selectedActivitySnapshot()?.status === "active" && selectedActivity !== "garage") {
+      showToast("FINISH OR CANCEL YOUR CURRENT ACTIVITY", 2.5);
+      return selectedActivitySnapshot();
+    }
+    const context = garageShiftContext({
+      workOrderId,
+      // Native development control is allowed to exercise the complete
+      // in-memory shift without first moving Kai between every authored
+      // station. Normal player interaction always supplies the live position.
+      ...(force ? { position: undefined, inVehicle: false } : {}),
+    });
+    const clock = vectorFrom(garageShift.anchors.clockIn);
+    if (!force && controlledPosition().distanceToSquared(clock) > 5.5 * 5.5) {
+      showToast("WALK INTO THE LEFT SERVICE BAY AND USE THE OFFICE CLOCK", 3);
+      return null;
+    }
+    const started = garageShift.clockIn(context);
+    if (!started.accepted) {
+      const message = started.reason === "one_shift_per_day" ? "ONE CAREFUL SHIFT IS ENOUGH FOR TODAY" :
+        started.reason === "not_open_yet" ? "PULSE OPENS AT 07:30" :
+          started.reason === "clock_in_closed" || started.reason === "closed_day" ? "THE GARAGE SHIFT BOARD IS CLOSED" :
+            started.reason === "on_foot_required" ? "PARK BEFORE CLOCKING IN" :
+              started.reason === "too_far" ? "USE THE OFFICE CLOCK INSIDE THE SERVICE BAY" : "SHIFT UNAVAILABLE";
+      showToast(message, 3);
+      return started;
+    }
+    selectedActivity = "garage";
+    lastActivityStage = garageShift.snapshot().stage;
+    activityPresentationUntil = Infinity;
+    garageDiagnosisIndex = 0;
+    garageConfirmedDiagnosisId = null;
+    processGarageShiftEvents();
+    return garageShift.snapshot();
+  }
+
+  function interactWithGarageShift() {
+    const before = garageShift.snapshot();
+    if (selectedActivity !== "garage" || before.status !== "active") return false;
+    const context = garageShiftContext();
+    let result = null;
+    if (before.stage === GARAGE_SHIFT_STAGES.CUSTOMER_GREETING) result = garageShift.greetCustomer(context);
+    else if (before.stage === GARAGE_SHIFT_STAGES.INSPECTION) result = garageShift.inspect(context);
+    else if (before.stage === GARAGE_SHIFT_STAGES.DIAGNOSIS) {
+      const choice = before.diagnosisChoices[garageDiagnosisIndex];
+      result = garageShift.diagnose(choice?.id, context);
+    } else if (before.stage === GARAGE_SHIFT_STAGES.PARTS) {
+      const fault = GARAGE_FAULTS.find(candidate => candidate.id === garageConfirmedDiagnosisId);
+      result = garageShift.collectParts(fault?.parts ?? [], context);
+    } else if (before.stage === GARAGE_SHIFT_STAGES.SAFETY_CHECK) {
+      const next = before.safetyChecks.find(check => !check.completed);
+      result = garageShift.performSafetyCheck(next?.id, context);
+    } else if (before.stage === GARAGE_SHIFT_STAGES.INVOICE) result = garageShift.submitInvoice(context);
+    else {
+      showToast(before.stage === GARAGE_SHIFT_STAGES.REPAIR
+        ? `REPAIR ${Math.round(before.repairProgress * 100)}% — STAY AT THE LIFT`
+        : before.objective, 2.2);
+      return true;
+    }
+    processGarageShiftEvents();
+    if (!result?.accepted) {
+      const message = result?.reason === "too_far" ? `GO TO ${before.targetAnchorKey?.replaceAll("_", " ")?.toUpperCase?.() ?? "THE WORK STATION"}` :
+        result?.reason === "on_foot_required" ? "LEAVE THE VEHICLE FIRST" : before.objective;
+      showToast(message, 2.6);
+    }
+    return true;
+  }
+
+  function communitySkillLevels() {
+    return Object.fromEntries(lifeProfile.snapshot().skills.map(skill => [
+      skill.id,
+      clamp(((skill.level - 1) + skill.levelProgress) / 5 * 100, 0, 100),
+    ]));
+  }
+
+  function communityWorkContext(detail = {}) {
+    const profile = lifeProfile.snapshot();
+    return communityClockContext({
+      atHouse: insideCommunityHub(),
+      inVehicle: Boolean(vehicles.playerVehicle),
+      wantedStars: wanted.snapshot().stars,
+      skillLevels: communitySkillLevels(),
+      energy: profile.needs.energy,
+      hygiene: profile.needs.hygiene,
+      ...detail,
+    });
+  }
+
+  function explainCommunityRejection(result, fallback = "THE SHIFT CANNOT START YET") {
+    const reason = String(result?.reason ?? "");
+    if (reason === "outside_start_hours") return `CHECK THE POSTED HOURS — THIS SHIFT IS NOT TAKING NEW STARTS`;
+    if (reason === "closed_day") return "THIS TEAM IS OFF TODAY — THE NEXT OPEN DAY IS POSTED";
+    if (reason === "already_completed_today") return "ONE CAREFUL SHIFT IN THIS ROLE IS ENOUGH FOR TODAY";
+    if (reason === "shift_in_progress" || reason === "paused_shift_pending") return "FINISH OR RESUME YOUR CURRENT HOUSE SHIFT";
+    if (reason === "inside_harbour_skills_house_required") return "WALK INSIDE HARBOUR SKILLS HOUSE FIRST";
+    if (reason === "wrong_station") return "GO TO THE HIGHLIGHTED WORK STATION";
+    if (reason === "task_in_progress") return "FINISH THE CURRENT TASK BEFORE STARTING ANOTHER";
+    if (reason === "shift_paused") return "RESUME THE SHIFT AT RECEPTION";
+    return fallback;
+  }
+
+  function atCommunityReception(position = controlledPosition(), radius = 3.15) {
+    const value = position?.isVector3 ? position : vectorFrom(position);
+    return insideCommunityHub(value) && value.distanceToSquared(communityReceptionPosition) <= radius * radius;
+  }
+
+  function selectedCommunityRole() {
+    return COMMUNITY_HUB_ROLES[(communityRoleSelectionIndex % COMMUNITY_HUB_ROLES.length + COMMUNITY_HUB_ROLES.length) % COMMUNITY_HUB_ROLES.length];
+  }
+
+  function advanceCommunityWorldClock(gameMinutes) {
+    const minutes = Math.max(0, Number(gameMinutes) || 0);
+    if (minutes <= 0) return environment.snapshot();
+    const beforeEnvironment = environment.snapshot();
+    const beforeDay = neighbourhoodRoutine.snapshot().dayIndex;
+    const totalHours = beforeEnvironment.timeHours + minutes / 60;
+    const dayAdvance = Math.max(0, Math.floor(totalHours / 24));
+    const nextEnvironment = environment.setTime(totalHours);
+    neighbourhoodRoutine.update(0, {
+      dayIndex: beforeDay + dayAdvance,
+      timeHours: nextEnvironment.timeHours,
+      weather: nextEnvironment.weather,
+      story: story.snapshot(),
+      paused: false,
+      captureSnapshot: false,
+    });
+    residentialRuntimeView = residentialLife.update(0, {
+      dayIndex: residentialRuntimeView.dayIndex + dayAdvance,
+      timeHours: nextEnvironment.timeHours,
+      captureSnapshot: false,
+    });
+    communityRuntimeView = communityHubLife.update(0, {
+      dayIndex: beforeDay + dayAdvance,
+      timeHours: nextEnvironment.timeHours,
+      captureSnapshot: false,
+    });
+    cafeRuntimeView = cafeShift.update(0, {
+      dayIndex: beforeDay + dayAdvance,
+      timeHours: nextEnvironment.timeHours,
+      captureSnapshot: false,
+    });
+    marketRuntimeView = marketShift.update(0, {
+      dayIndex: beforeDay + dayAdvance,
+      timeHours: nextEnvironment.timeHours,
+      captureSnapshot: false,
+    });
+    communityRuntimeClockContext.dayIndex = beforeDay + dayAdvance;
+    communityRuntimeClockContext.minuteOfDay = Math.trunc(nextEnvironment.timeHours * 60) % 1440;
+    cafeRuntimeClockContext.dayIndex = beforeDay + dayAdvance;
+    cafeRuntimeClockContext.minuteOfDay = Math.trunc(nextEnvironment.timeHours * 60) % 1440;
+    marketRuntimeClockContext.dayIndex = beforeDay + dayAdvance;
+    marketRuntimeClockContext.minuteOfDay = Math.trunc(nextEnvironment.timeHours * 60) % 1440;
+    lastResidentialScheduleMinute = -1;
+    lastCommunityScheduleMinute = -1;
+    lastCafeScheduleMinute = -1;
+    lastMarketScheduleMinute = -1;
+    // Re-evaluate the jumped clock, but preserve each actor's current route
+    // when its authored schedule signature did not change. Forcing all twelve
+    // named residents and workers through route setup in the station-complete
+    // frame produced visible CPU spikes despite identical destinations.
+    syncResidentialActors();
+    syncCommunityStaff();
+    syncCafeStaff();
+    syncMarketStaff();
+    syncBusinessLighting(nextEnvironment.timeHours, nextEnvironment.weather);
+    return nextEnvironment;
+  }
+
+  function processCommunityHubResults() {
+    const stationSerial = Math.max(0, Math.trunc(Number(communityRuntimeView.lastStationResultSerial) || 0));
+    const transactionSerial = Math.max(0, Math.trunc(Number(communityRuntimeView.transactionSerial) || 0));
+    if (stationSerial <= lastCommunityStationResultSerial && transactionSerial <= lastCommunityTransactionSerial) return false;
+    const state = communityHubLife.snapshot();
+    const stationResult = state.lastStationResult;
+    if (stationResult && stationResult.serial > lastCommunityStationResultSerial) {
+      lastCommunityStationResultSerial = stationResult.serial;
+      const needs = stationResult.needEffects ?? stationResult.effects?.needs ?? {};
+      const needResult = lifeProfile.applyNeedEffects({
+        energy: Number(needs.energy) || 0,
+        hygiene: Number(needs.hygiene) || 0,
+      });
+      neighbourhoodRoutine.applyAppetiteEffect(Number(needs.appetite) || 0);
+      if (needResult.energy > 0) player.restoreStamina(needResult.energy * 0.72);
+      advanceCommunityWorldClock(stationResult.gameMinutes);
+      gameAudio.play(stationResult.passed ? "pickup" : "impact", stationResult.passed ? 0.34 : 0.22);
+      showToast(stationResult.line, stationResult.passed ? 5.4 : 6.2);
+      lastCommunityPresentationEvent = `${stationResult.serial}:${stationResult.outcome}`;
+    }
+    const transaction = state.lastTransaction;
+    if (transaction && transaction.serial > lastCommunityTransactionSerial) {
+      lastCommunityTransactionSerial = transaction.serial;
+      const experience = transaction.skillEffects.reduce((sum, effect) => sum + Math.max(0, Number(effect.experience) || 0), 0);
+      const profileTransaction = lifeProfile.recordShift({
+        id: transaction.sourceId,
+        activityId: transaction.roleId,
+        dayIndex: transaction.dayIndex,
+        durationMinutes: transaction.gameMinutes,
+        quality: clamp(transaction.quality / 100, 0, 1),
+        baseWage: transaction.wage,
+        experience,
+      });
+      if (profileTransaction.accepted) {
+        player.addCash(profileTransaction.wage);
+        const trust = Math.max(2, 4 + Math.round(transaction.quality / 20) - transaction.reworkCount);
+        communityTrust += trust;
+        gameAudio.play("mission", 0.72);
+        showToast(`${transaction.dialogue}  +$${profileTransaction.wage}  TRUST +${trust}`, 7.2);
+      }
+      selectedActivity = null;
+      lastActivityStage = null;
+      activityPresentationUntil = elapsed + 6;
+    }
+    return true;
+  }
+
+  function beginCommunityShift(roleId, { force = false } = {}) {
+    const definition = communityRoleById.get(String(roleId ?? ""));
+    if (!definition) throw new RangeError(`Unknown Harbour Skills House role: ${roleId}`);
+    if (!force && narrativeMissionBusy()) {
+      showToast("FINISH THE CURRENT STORY WORK FIRST", 2.8);
+      return null;
+    }
+    const current = selectedActivitySnapshot();
+    if (current?.status === "active" && selectedActivity !== "community") {
+      showToast("FINISH OR CANCEL YOUR CURRENT ACTIVITY", 2.6);
+      return current;
+    }
+    if (!force && vehicles.playerVehicle) {
+      showToast("PARK OUTSIDE BEFORE CLOCKING IN", 2.5);
+      return null;
+    }
+    if (!force && (!insideCommunityHub() || wanted.snapshot().stars > 0)) {
+      showToast(wanted.snapshot().stars > 0 ? "LOSE THE POLICE BEFORE ENTERING A PUBLIC SHIFT" : "WALK INSIDE HARBOUR SKILLS HOUSE", 3);
+      return null;
+    }
+    const result = communityHubLife.begin(definition.id, communityClockContext({
+      atHouse: force || insideCommunityHub(),
+      inVehicle: force ? false : Boolean(vehicles.playerVehicle),
+    }));
+    communityRuntimeView = communityHubLife.update(0, { ...communityClockContext(), captureSnapshot: false });
+    if (!result.accepted) {
+      showToast(explainCommunityRejection(result), 3.4);
+      return result;
+    }
+    selectedActivity = "community";
+    lastActivityStage = communityRuntimeView.stationId;
+    activityPresentationUntil = Infinity;
+    gameAudio.play("mission", 0.48);
+    showToast(result.dialogue, 6.6);
+    return communityActivitySnapshot();
+  }
+
+  function interactWithCommunityShift({ force = false, quality = null, safetyConfirmed = true } = {}) {
+    if (selectedActivity !== "community" || !communityRuntimeView.activeRoleId) return false;
+    if (communityRuntimeView.taskActive) {
+      showToast(`${communityActivitySnapshot().objective} — KEEP WORKING CAREFULLY`, 1.8);
+      return true;
+    }
+    const logicalStation = communityStationById.get(communityRuntimeView.stationId);
+    const worldStation = communityWorldStation(logicalStation?.id);
+    if (!logicalStation || !worldStation) throw new Error(`No physical station for ${communityRuntimeView.stationId}`);
+    const nearby = controlledPosition().distanceToSquared(vectorFrom(worldStation.position)) <= 2.85 * 2.85;
+    if (!force && !nearby) {
+      showToast(`GO TO ${worldStation.label}`, 2.6);
+      return true;
+    }
+    const profile = lifeProfile.snapshot();
+    const primarySkill = profile.skills.find(skill => skill.id === logicalStation.primarySkill);
+    const skillScore = primarySkill ? clamp(((primarySkill.level - 1) + primarySkill.levelProgress) / 5 * 100, 0, 100) : 0;
+    const workQuality = quality == null
+      ? clamp(72 + skillScore * 0.18 + profile.needs.energy * 0.05, 0, 100)
+      : clamp(quality, 0, 100);
+    const result = communityHubLife.performStation(logicalStation.id, communityWorkContext({
+      atHouse: force || insideCommunityHub(),
+      inVehicle: false,
+      quality: workQuality,
+      safetyConfirmed: Boolean(safetyConfirmed),
+    }));
+    communityRuntimeView = communityHubLife.update(0, { ...communityClockContext(), captureSnapshot: false });
+    if (!result.accepted) showToast(explainCommunityRejection(result), 2.8);
+    else {
+      gameAudio.play("pickup", 0.26);
+      showToast(`${result.instruction}  ${result.honestLine}`, 6.4);
+    }
+    return result;
+  }
+
+  function updateCommunityActivity(delta) {
+    const position = controlledPosition();
+    const stationPosition = communityWorldStationPosition(communityRuntimeView.stationId);
+    const atActiveStation = Boolean(stationPosition && insideCommunityHub(position) &&
+      position.distanceToSquared(stationPosition) <= 3.15 * 3.15);
+    const workingDelta = communityRuntimeView.taskActive && atActiveStation ? delta : 0;
+    communityRuntimeView = communityHubLife.update(workingDelta, communityRuntimeClockContext);
+    processCommunityHubResults();
+    if (selectedActivity !== "community") return null;
+    const after = communityActivitySnapshot();
+    if (after.stage !== lastActivityStage) lastActivityStage = after.stage;
+    return after;
+  }
+
+  function explainCafeRejection(result, fallback = "THE CAFE SHIFT CANNOT START YET") {
+    const reason = String(result?.reason ?? "");
+    if (reason === "cafe_closed") return `COMMON GROUND IS CLOSED — ${cafeShift.cafe.openingHours.label}`;
+    if (reason === "outside_clock_in_hours") return `THE CAFE IS OPEN, BUT TODAY'S SHIFT CLOCK-IN HAS CLOSED`;
+    if (reason === "supervisor_off_day") return "ASHA IS OFF TODAY — THE NEXT SUPERVISED TRAINING SHIFT IS POSTED";
+    if (reason === "supervisor_unavailable") return "ASHA IS NOT AT THE CAFE — RESUME WHEN THE SHIFT LEAD RETURNS";
+    if (reason === "already_completed_today") return "ONE COMPLETE CAFE SHIFT IS ENOUGH FOR TODAY";
+    if (reason === "already_active") return "YOUR COMMON GROUND SHIFT IS ALREADY ACTIVE";
+    if (reason === "inside_common_ground_cafe_required") return "WALK INSIDE COMMON GROUND CAFE FIRST";
+    if (reason === "wrong_station") return "GO TO THE HIGHLIGHTED CAFE WORK STATION";
+    if (reason === "task_in_progress") return "FINISH THE CURRENT CAFE TASK FIRST";
+    if (reason === "shift_paused") return "RESUME WITH ASHA AT THE HANDOVER POINT";
+    return fallback;
+  }
+
+  function atCafeHandover(position = controlledPosition(), radius = 1.75) {
+    const value = position?.isVector3 ? position : vectorFrom(position);
+    return insideCommonGroundCafe(value) && value.distanceToSquared(cafeHandoverPosition) <= radius * radius;
+  }
+
+  function processCafeShiftResults() {
+    const stationSerial = Math.max(0, Math.trunc(Number(cafeRuntimeView.lastStationResultSerial) || 0));
+    const transactionSerial = Math.max(0, Math.trunc(Number(cafeRuntimeView.transactionSerial) || 0));
+    if (stationSerial <= lastCafeStationResultSerial && transactionSerial <= lastCafeTransactionSerial) return false;
+    const state = cafeShift.snapshot();
+    const stationResult = state.lastStationResult;
+    if (stationResult && stationResult.serial > lastCafeStationResultSerial) {
+      lastCafeStationResultSerial = stationResult.serial;
+      cafeQuality = Math.max(0, Math.round(Number(stationResult.score) || 0));
+      cafeReworkCount = Math.max(0, Math.trunc(Number(stationResult.reworkCount) || 0));
+      const needs = stationResult.needEffects ?? stationResult.effects?.needs ?? {};
+      const needResult = lifeProfile.applyNeedEffects({
+        energy: Number(needs.energy) || 0,
+        hygiene: Number(needs.hygiene) || 0,
+      });
+      neighbourhoodRoutine.applyAppetiteEffect(Number(needs.appetite) || 0);
+      if (needResult.energy > 0) player.restoreStamina(needResult.energy * 0.72);
+      advanceCommunityWorldClock(stationResult.gameMinutes);
+      gameAudio.play(stationResult.passed ? "pickup" : "impact", stationResult.passed ? 0.32 : 0.22);
+      showToast(stationResult.line, stationResult.passed ? 5.5 : 6.4);
+      lastCafePresentationEvent = `${stationResult.serial}:${stationResult.outcome}`;
+    }
+    const transaction = state.lastTransaction;
+    if (transaction && transaction.serial > lastCafeTransactionSerial) {
+      lastCafeTransactionSerial = transaction.serial;
+      const experience = transaction.skillEffects.reduce((sum, effect) =>
+        sum + Math.max(0, Number(effect.experience) || 0), 0);
+      const profileTransaction = lifeProfile.recordShift({
+        id: transaction.sourceId,
+        activityId: transaction.activityId,
+        dayIndex: transaction.dayIndex,
+        durationMinutes: transaction.gameMinutes,
+        quality: clamp(transaction.quality / 100, 0, 1),
+        baseWage: transaction.wage,
+        experience,
+      });
+      if (profileTransaction.accepted) {
+        player.addCash(profileTransaction.wage);
+        communityTrust += Math.max(0, Math.trunc(Number(transaction.trustReward) || 0));
+        gameAudio.play("mission", 0.68);
+        showToast(`${transaction.dialogue}  +$${profileTransaction.wage}  TRUST +${transaction.trustReward}`, 7.4);
+      }
+      selectedActivity = null;
+      lastActivityStage = null;
+      activityPresentationUntil = elapsed + 6;
+    }
+    cafeActivityCacheKey = "";
+    return true;
+  }
+
+  function beginCafeShift({ force = false } = {}) {
+    if (!force && narrativeMissionBusy()) {
+      showToast("FINISH THE CURRENT STORY WORK FIRST", 2.8);
+      return null;
+    }
+    const current = selectedActivitySnapshot();
+    if (current?.status === "active" && selectedActivity !== "cafe") {
+      showToast("FINISH OR CANCEL YOUR CURRENT ACTIVITY", 2.6);
+      return current;
+    }
+    if (!force && vehicles.playerVehicle) {
+      showToast("PARK OUTSIDE BEFORE CLOCKING IN", 2.5);
+      return null;
+    }
+    const supervisor = cafeShift.staffState(ASHA_PATEL.id, cafeClockContext());
+    const supervisorActor = cafeStaffActors.get(ASHA_PATEL.id);
+    const supervisorPresent = supervisor?.workingDay && supervisor?.locationId === commonGroundCafeWorld.id &&
+      supervisorActor?.alive && insideCommonGroundCafe(supervisorActor.root.position);
+    if (!force && !supervisorPresent) {
+      showToast(supervisor?.workingDay
+        ? "ASHA IS STILL ON HER WAY — THE HANDOVER STARTS WHEN THE SHIFT LEAD ARRIVES"
+        : "ASHA IS OFF TODAY — THE NEXT SUPERVISED TRAINING SHIFT IS POSTED", 4.2);
+      return null;
+    }
+    if (!force && (!insideCommonGroundCafe() || !atCafeHandover() || wanted.snapshot().stars > 0)) {
+      showToast(wanted.snapshot().stars > 0
+        ? "LOSE THE POLICE BEFORE STARTING A PUBLIC SHIFT"
+        : "GO TO THE SHIFT HANDOVER INSIDE COMMON GROUND", 3);
+      return null;
+    }
+    const result = cafeShift.begin(cafeClockContext());
+    cafeRuntimeView = cafeShift.update(0, { ...cafeClockContext(), captureSnapshot: false });
+    if (!result.accepted) {
+      showToast(explainCafeRejection(result), 3.4);
+      return result;
+    }
+    selectedActivity = "cafe";
+    lastActivityStage = cafeRuntimeView.stationId;
+    activityPresentationUntil = Infinity;
+    const shiftState = cafeShift.snapshot().activeShift;
+    cafeQuality = Math.max(0, Math.round(Number(shiftState?.quality) || 0));
+    cafeReworkCount = Math.max(0, Math.trunc(Number(shiftState?.reworkCount) || 0));
+    cafeActivityCacheKey = "";
+    gameAudio.play("mission", 0.46);
+    showToast(result.dialogue, 6.8);
+    return cafeActivitySnapshot();
+  }
+
+  function interactWithCafeShift({ force = false, quality = null, safetyConfirmed = true } = {}) {
+    if (selectedActivity !== "cafe" || !cafeRuntimeView.stationId) return false;
+    if (cafeRuntimeView.taskActive) {
+      showToast(`${cafeActivitySnapshot().objective} — STAY AT THE WORK STATION`, 1.8);
+      return true;
+    }
+    const station = cafeStationById.get(cafeRuntimeView.stationId);
+    const worldStation = cafeWorldStationById.get(station?.worldStationId ?? station?.id);
+    if (!station || !worldStation) throw new Error(`No physical cafe station for ${cafeRuntimeView.stationId}`);
+    const nearby = controlledPosition().distanceToSquared(vectorFrom(worldStation.position)) <= 2.85 * 2.85;
+    if (!force && !nearby) {
+      showToast(`GO TO ${worldStation.label}`, 2.6);
+      return true;
+    }
+    const profile = lifeProfile.snapshot();
+    const primarySkill = profile.skills.find(skill => skill.id === station.primarySkill);
+    const skillScore = primarySkill ? clamp(((primarySkill.level - 1) + primarySkill.levelProgress) / 5 * 100, 0, 100) : 0;
+    const workQuality = quality == null
+      ? clamp(70 + skillScore * 0.2 + profile.needs.energy * 0.06 + profile.needs.hygiene * 0.04, 0, 100)
+      : clamp(quality, 0, 100);
+    const result = cafeShift.performStation(station.id, cafeClockContext({
+      insideCafe: force || insideCommonGroundCafe(),
+      quality: workQuality,
+      skillLevels: { [station.primarySkill]: skillScore },
+      safetyConfirmed: Boolean(safetyConfirmed),
+    }));
+    cafeRuntimeView = cafeShift.update(0, { ...cafeClockContext(), captureSnapshot: false });
+    cafeActivityCacheKey = "";
+    if (!result.accepted) showToast(explainCafeRejection(result), 2.8);
+    else {
+      gameAudio.play("pickup", 0.25);
+      showToast(`${result.instruction}  ${result.honestLine}`, 6.6);
+    }
+    return result;
+  }
+
+  function updateCafeActivity(delta) {
+    const position = controlledPosition();
+    const stationPosition = cafeWorldStationPositions.get(cafeRuntimeView.stationId);
+    const atActiveStation = Boolean(stationPosition && insideCommonGroundCafe(position) &&
+      position.distanceToSquared(stationPosition) <= 3.15 * 3.15);
+    const workingDelta = cafeRuntimeView.taskActive && atActiveStation ? delta : 0;
+    cafeRuntimeView = cafeShift.update(workingDelta, cafeRuntimeClockContext);
+    processCafeShiftResults();
+    if (selectedActivity !== "cafe") return null;
+    const after = cafeActivitySnapshot();
+    if (after.stage !== lastActivityStage) lastActivityStage = after.stage;
+    return after;
+  }
+
+  function explainMarketRejection(result, fallback = "MINA'S MARKET SHIFT CANNOT START YET") {
+    const reason = String(result?.reason ?? "");
+    if (reason === "market_closed") return `MINA'S MARKET IS CLOSED — ${marketShift.postedHours.label}`;
+    if (reason === "outside_clock_in_hours") return "THE MARKET IS OPEN, BUT TODAY'S SHIFT CLOCK-IN HAS CLOSED";
+    if (reason === "already_completed_today") return "ONE COMPLETE MARKET SHIFT IS ENOUGH FOR TODAY";
+    if (reason === "already_active") return "YOUR MARKET SHIFT IS ALREADY ACTIVE";
+    if (reason === "on_foot_required") return "PARK OUTSIDE BEFORE STARTING MARKET WORK";
+    if (reason === "wrong_station" || reason === "station_too_far") return "GO TO THE HIGHLIGHTED MARKET WORK STATION";
+    if (reason === "task_in_progress") return "FINISH THE CURRENT MARKET TASK FIRST";
+    if (reason === "surplus_decision_required") return "RETURN TO THE PANTRY SHELF AND RECORD A SURPLUS DECISION";
+    if (reason === "shift_paused") return "RESUME WITH MINA AT THE HANDOVER COUNTER";
+    if (reason === "duplicate_source") return "THAT MARKET ACTION HAS ALREADY BEEN RECORDED";
+    return fallback;
+  }
+
+  function atMarketHandover(position = controlledPosition(), radius = 2.05) {
+    const value = position?.isVector3 ? position : vectorFrom(position);
+    return insideMinaMarket(value) && value.distanceToSquared(marketHandoverPosition) <= radius * radius;
+  }
+
+  function marketCommandSource(kind, stationId = "") {
+    const serial = Math.max(0, Math.trunc(Number(marketShift.snapshot().serials.command) || 0)) + 1;
+    return `market:${kind}:${marketClockContext().dayIndex}:${stationId}:${serial}`;
+  }
+
+  function processMarketShiftResults() {
+    const stationSerial = Math.max(0, Math.trunc(Number(marketRuntimeView.stationResultSerial) || 0));
+    const transactionSerial = Math.max(0, Math.trunc(Number(marketRuntimeView.transactionSerial) || 0));
+    if (stationSerial <= lastMarketStationResultSerial && transactionSerial <= lastMarketTransactionSerial) return false;
+    const state = marketShift.snapshot();
+    const stationResult = state.lastStationResult;
+    if (stationResult && stationResult.serial > lastMarketStationResultSerial) {
+      lastMarketStationResultSerial = stationResult.serial;
+      const needs = stationResult.effects?.needs ?? {};
+      const needResult = lifeProfile.applyNeedEffects({
+        energy: Number(needs.energy) || 0,
+        hygiene: Number(needs.hygiene) || 0,
+      });
+      neighbourhoodRoutine.applyAppetiteEffect(Number(needs.appetite) || 0);
+      if (needResult.energy > 0) player.restoreStamina(needResult.energy * 0.72);
+      advanceCommunityWorldClock(stationResult.effects?.gameMinutes ?? 0);
+      const active = state.activeShift;
+      marketQuality = active?.passedStations
+        ? Math.round(active.qualityTotal / Math.max(1, active.passedStations))
+        : Math.max(0, Math.round(Number(stationResult.quality) || 0));
+      marketReworkCount = Math.max(0, Math.trunc(Number(active?.reworkCount) || 0));
+      gameAudio.play(stationResult.passed ? "pickup" : "impact", stationResult.passed ? 0.32 : 0.22);
+      showToast(stationResult.line, stationResult.passed ? 5.8 : 6.6);
+      lastMarketPresentationEvent = `${stationResult.serial}:${stationResult.outcome}`;
+    }
+    const transaction = state.lastTransaction;
+    if (transaction && transactionSerial > lastMarketTransactionSerial) {
+      lastMarketTransactionSerial = transactionSerial;
+      const experience = transaction.skillEffects.reduce((sum, effect) =>
+        sum + Math.max(0, Number(effect.experience) || 0), 0);
+      const profileTransaction = lifeProfile.recordShift({
+        id: transaction.idempotencySourceId,
+        activityId: transaction.activityId,
+        dayIndex: transaction.dayIndex,
+        durationMinutes: transaction.gameMinutes,
+        quality: clamp(transaction.quality / 100, 0, 1),
+        baseWage: transaction.wage,
+        exactWage: transaction.cashEffect,
+        experience,
+      });
+      if (profileTransaction.accepted) {
+        player.addCash(transaction.cashEffect);
+        communityTrust = Math.max(0, communityTrust + Math.trunc(Number(transaction.communityTrust) || 0));
+        gameAudio.play("mission", 0.7);
+        showToast(`${transaction.completionLine}  +$${transaction.cashEffect}  TRUST ${transaction.communityTrust >= 0 ? "+" : ""}${transaction.communityTrust}`, 8);
+      }
+      selectedActivity = null;
+      lastActivityStage = null;
+      activityPresentationUntil = elapsed + 6;
+    }
+    marketActivityCacheKey = "";
+    return true;
+  }
+
+  function beginMarketShift({ force = false } = {}) {
+    if (!force && narrativeMissionBusy()) {
+      showToast("FINISH THE CURRENT STORY WORK FIRST", 2.8);
+      return null;
+    }
+    const current = selectedActivitySnapshot();
+    if (current?.status === "active" && selectedActivity !== "market") {
+      showToast("FINISH OR CANCEL YOUR CURRENT ACTIVITY", 2.6);
+      return current;
+    }
+    if (!force && vehicles.playerVehicle) {
+      showToast("PARK OUTSIDE BEFORE CLOCKING IN", 2.5);
+      return null;
+    }
+    const supervisor = marketShift.staffState(MINA_OKAFOR.id, marketClockContext());
+    const supervisorActor = marketStaffActors.get(MINA_OKAFOR.id);
+    const supervisorPresent = supervisor?.atWork && supervisorActor?.alive && insideMinaMarket(supervisorActor.root.position);
+    if (!force && !supervisorPresent) {
+      showToast("MINA IS NOT ON THE FLOOR — RETURN DURING THE POSTED SUPERVISED HOURS", 4.2);
+      return null;
+    }
+    if (!force && (!atMarketHandover() || wanted.snapshot().stars > 0)) {
+      showToast(wanted.snapshot().stars > 0
+        ? "LOSE THE POLICE BEFORE STARTING PUBLIC-FACING WORK"
+        : "GO TO MINA'S HANDOVER COUNTER INSIDE THE MARKET", 3.2);
+      return null;
+    }
+    const pausedShift = marketShift.snapshot().activeShift?.status === "paused";
+    const resumeStation = pausedShift
+      ? marketWorldStation(marketShift.snapshot().activeShift?.nextStationId)
+      : null;
+    const startContext = marketClockContext({
+      onFoot: true,
+      nearbyStationId: resumeStation?.id ?? "mina-order-counter",
+      sourceId: marketCommandSource(pausedShift ? "resume" : "begin", "mina-order-counter"),
+    });
+    const result = pausedShift ? marketShift.resume(startContext) : marketShift.begin(startContext);
+    marketRuntimeView = marketShift.update(0, { ...marketClockContext(), captureSnapshot: false });
+    if (!result.accepted) {
+      showToast(explainMarketRejection(result), 3.5);
+      return result;
+    }
+    selectedActivity = "market";
+    lastActivityStage = marketRuntimeView.stationId;
+    activityPresentationUntil = Infinity;
+    marketQuality = 0;
+    marketReworkCount = 0;
+    marketDecisionIndex = 1;
+    marketActivityCacheKey = "";
+    gameAudio.play("mission", 0.48);
+    showToast(result.briefing ?? "MINA: Your task record is preserved. Continue from the highlighted station and leave the handover honest.", 8);
+    return marketActivitySnapshot();
+  }
+
+  function chooseMarketSurplus({ force = false, decisionId = null } = {}) {
+    if (selectedActivity !== "market" || !marketRuntimeView.decisionRequired) return false;
+    const pantry = marketWorldStationById.get("mina-pantry-shelf");
+    const nearby = pantry && controlledPosition().distanceToSquared(vectorFrom(pantry.position)) <= 2.85 * 2.85;
+    if (!force && !nearby) {
+      showToast("RETURN TO THE PANTRY SHELF TO RECORD THE SURPLUS DECISION", 3);
+      return true;
+    }
+    const decision = MARKET_SURPLUS_DECISIONS.find(value => value.id === decisionId) ??
+      MARKET_SURPLUS_DECISIONS[marketDecisionIndex] ?? MARKET_SURPLUS_DECISIONS[0];
+    const result = marketShift.chooseSurplus(decision.id, marketClockContext({
+      onFoot: true,
+      nearbyStationId: "mina-pantry-shelf",
+      sourceId: marketCommandSource("surplus", decision.id),
+    }));
+    marketRuntimeView = marketShift.update(0, { ...marketClockContext(), captureSnapshot: false });
+    marketActivityCacheKey = "";
+    if (!result.accepted) {
+      showToast(explainMarketRejection(result), 3);
+      return result;
+    }
+    const needs = result.result?.needEffects ?? {};
+    lifeProfile.applyNeedEffects({ energy: Number(needs.energy) || 0, hygiene: Number(needs.hygiene) || 0 });
+    neighbourhoodRoutine.applyAppetiteEffect(Number(needs.appetite) || 0);
+    advanceCommunityWorldClock(result.result?.gameMinutes ?? 0);
+    showToast(`${result.result.line}  ${result.result.tradeoff}`, 9);
+    return result;
+  }
+
+  function interactWithMarketShift({ force = false, quality = null, safetyConfirmed = true, decisionId = null } = {}) {
+    if (selectedActivity !== "market") return false;
+    if (marketRuntimeView.decisionRequired) return chooseMarketSurplus({ force, decisionId });
+    if (!marketRuntimeView.stationId) return false;
+    if (marketRuntimeView.taskActive) {
+      showToast(`${marketActivitySnapshot().objective} — STAY AT THE WORK STATION`, 1.8);
+      return true;
+    }
+    const station = marketStationById.get(marketRuntimeView.stationId);
+    const worldStation = marketWorldStation(station);
+    if (!station || !worldStation) throw new Error(`No physical market station for ${marketRuntimeView.stationId}`);
+    const nearby = controlledPosition().distanceToSquared(vectorFrom(worldStation.position)) <= 2.85 * 2.85;
+    if (!force && !nearby) {
+      showToast(`GO TO ${worldStation.label}`, 2.6);
+      return true;
+    }
+    const profile = lifeProfile.snapshot();
+    const primarySkill = profile.skills.find(skill => skill.id === station.primarySkill);
+    const skillScore = primarySkill ? clamp(((primarySkill.level - 1) + primarySkill.levelProgress) / 5 * 100, 0, 100) : 0;
+    const workQuality = quality == null
+      ? clamp(72 + skillScore * 0.18 + profile.needs.energy * 0.05 + profile.needs.hygiene * 0.03, 0, 100)
+      : clamp(quality, 0, 100);
+    const result = marketShift.performStation(station.id, marketClockContext({
+      onFoot: true,
+      nearbyStationId: worldStation.id,
+      quality: workQuality,
+      skillLevels: { [station.primarySkill]: skillScore },
+      safetyConfirmed: Boolean(safetyConfirmed),
+      sourceId: marketCommandSource("station", station.id),
+    }));
+    marketRuntimeView = marketShift.update(0, { ...marketClockContext(), captureSnapshot: false });
+    marketActivityCacheKey = "";
+    if (!result.accepted) showToast(explainMarketRejection(result), 2.9);
+    else {
+      gameAudio.play("pickup", 0.25);
+      showToast(`${result.instruction}  ${result.supervisorLine}`, 7.2);
+    }
+    return result;
+  }
+
+  function updateMarketActivity(delta) {
+    const logical = marketRuntimeView.decisionRequired
+      ? marketStationById.get("mina-pantry-shelf")
+      : marketStationById.get(marketRuntimeView.stationId);
+    const station = marketWorldStation(logical);
+    const position = controlledPosition();
+    const atActiveStation = Boolean(station && insideMinaMarket(position) &&
+      position.distanceToSquared(vectorFrom(station.position)) <= 3.15 * 3.15);
+    const workingDelta = marketRuntimeView.taskActive && atActiveStation ? delta : 0;
+    marketRuntimeView = marketShift.update(workingDelta, marketRuntimeClockContext);
+    processMarketShiftResults();
+    if (selectedActivity !== "market") return null;
+    const after = marketActivitySnapshot();
+    if (after.stage !== lastActivityStage) lastActivityStage = after.stage;
+    return after;
+  }
+
   function beginBasketballActivity({ force = false } = {}) {
     if (narrativeMissionBusy()) {
       showToast(chapterTwoMissionActive() ? "FINISH BORROWED TIME FIRST" : "FINISH MARISOL'S RECOVERY FIRST", 2.4);
@@ -1859,9 +4401,32 @@ async function main() {
   }
 
   function updateSideActivity(delta) {
+    if (selectedActivity === "community") return updateCommunityActivity(delta);
+    if (selectedActivity === "cafe") return updateCafeActivity(delta);
+    if (selectedActivity === "market") return updateMarketActivity(delta);
     const system = selectedActivitySystem();
     if (!system) return null;
     const before = system.snapshot();
+
+    if (selectedActivity === "garage") {
+      const target = before.targetPosition ? vectorFrom(before.targetPosition) : null;
+      const working = before.stage !== GARAGE_SHIFT_STAGES.REPAIR ||
+        Boolean(target && controlledPosition().distanceToSquared(target) <= 5.5 * 5.5);
+      const after = garageShift.update(delta, { working, captureSnapshot: true });
+      processGarageShiftEvents();
+      const activityStage = after.stage;
+      if (activityStage !== lastActivityStage) lastActivityStage = activityStage;
+      if (after.status === "completed" && elapsed >= activityPresentationUntil) {
+        releaseGarageCustomerPresentation();
+        garageShift.reset();
+        selectedActivity = null;
+        lastActivityStage = null;
+        garageDiagnosisIndex = 0;
+        garageConfirmedDiagnosisId = null;
+      }
+      return after;
+    }
+
     const vehicle = vehicles.playerVehicle;
     const assigned = before.assignedVehicleId ? vehicles.get(before.assignedVehicleId) : vehicle;
     const position = vehicle?.root?.position ?? controlledPosition();
@@ -1916,6 +4481,17 @@ async function main() {
         player.addCash(after.payout);
         const earnsTrust = selectedActivity === "life" || selectedActivity === "basketball";
         if (earnsTrust) communityTrust += Math.max(0, Number(after.trustReward) || 0);
+        const profileActivityId = selectedActivity === "life" ? after.id :
+          selectedActivity === "basketball" ? "harbour_court" :
+            selectedActivity === "taxi" ? "taxi" :
+              selectedActivity === "race" ? "harbour_loop" : null;
+        if (profileActivityId) {
+          lifeProfile.awardActivityExperience(
+            profileActivityId,
+            selectedActivity === "life" ? 52 : selectedActivity === "basketball" ? 42 : 48,
+            { sourceId: `${profileActivityId}:completion:${Math.max(1, Math.trunc(Number(after.completedCount) || 1))}` },
+          );
+        }
         gameAudio.play("mission", 0.72);
         showToast(`${after.title} COMPLETE +$${after.payout}${earnsTrust ? `  TRUST +${after.trustReward}` : ""}`, 5);
         activityPresentationUntil = elapsed + 6;
@@ -1945,6 +4521,24 @@ async function main() {
       ? typeof value === "string" ? vehicles.get(value) : value
       : vehicles.nearestEnterable(player.root.position, 3.6);
     if (!vehicle) return null;
+    if (selectedActivity === "cafe" && cafeRuntimeView.status === "active") {
+      cafeShift.pause(cafeClockContext());
+      cafeRuntimeView = cafeShift.update(0, { ...cafeClockContext(), captureSnapshot: false });
+      selectedActivity = null;
+      lastActivityStage = null;
+      activityPresentationUntil = 0;
+      cafeActivityCacheKey = "";
+      showToast("COMMON GROUND SHIFT PAUSED — RESUME AT THE HANDOVER POINT", 3.6);
+    }
+    if (selectedActivity === "market" && marketRuntimeView.status === "active") {
+      marketShift.pause(marketClockContext({ sourceId: marketCommandSource("pause", "vehicle") }));
+      marketRuntimeView = marketShift.update(0, { ...marketClockContext(), captureSnapshot: false });
+      selectedActivity = null;
+      lastActivityStage = null;
+      activityPresentationUntil = 0;
+      marketActivityCacheKey = "";
+      showToast("MINA'S MARKET SHIFT PAUSED — RESUME AT THE HANDOVER COUNTER", 3.8);
+    }
     const entered = vehicles.enter(vehicle, { authorized: vehicle.authorized && !vehicle.missionTarget });
     if (!entered) return null;
     player.enterVehicle(entered);
@@ -1981,6 +4575,37 @@ async function main() {
 
   function respawnPlayer() {
     if (vehicles.playerVehicle) vehicles.exit();
+    if (selectedActivity === "garage") {
+      releaseGarageCustomerPresentation();
+      garageShift.restore(initialGarageShiftSave);
+      selectedActivity = null;
+      lastActivityStage = null;
+      garageDiagnosisIndex = 0;
+      garageConfirmedDiagnosisId = null;
+      activityPresentationUntil = 0;
+    }
+    if (selectedActivity === "community") {
+      communityHubLife.cancel(communityClockContext());
+      communityRuntimeView = communityHubLife.update(0, { ...communityClockContext(), captureSnapshot: false });
+      selectedActivity = null;
+      lastActivityStage = null;
+      activityPresentationUntil = 0;
+    }
+    if (selectedActivity === "cafe") {
+      cafeShift.pause(cafeClockContext());
+      cafeRuntimeView = cafeShift.update(0, { ...cafeClockContext(), captureSnapshot: false });
+      selectedActivity = null;
+      lastActivityStage = null;
+      activityPresentationUntil = 0;
+    }
+    if (selectedActivity === "market") {
+      marketShift.pause(marketClockContext({ sourceId: marketCommandSource("pause", "respawn") }));
+      marketRuntimeView = marketShift.update(0, { ...marketClockContext(), captureSnapshot: false });
+      selectedActivity = null;
+      lastActivityStage = null;
+      activityPresentationUntil = 0;
+      marketActivityCacheKey = "";
+    }
     player.exitVehicle(hospitalPosition);
     player.respawn(hospitalPosition);
     player.addCash(-500);
@@ -1990,9 +4615,51 @@ async function main() {
     showToast("WASTED — HOSPITAL FEE $500", 3.5);
   }
 
+  function persistentWorldClock(environmentValue = environment.snapshot(), neighbourhoodValue = neighbourhoodRoutine.snapshot(), explicit = null) {
+    const rawHours = Number(environmentValue?.timeHours);
+    const hours = Number.isFinite(rawHours) ? ((rawHours % 24) + 24) % 24 : 0;
+    const environmentMinute = Math.trunc(hours * 60) % 1440;
+    const explicitMinute = Number(explicit?.minuteOfDay);
+    const minuteOfDay = Number.isFinite(explicitMinute)
+      ? ((Math.trunc(explicitMinute) % 1440) + 1440) % 1440
+      : environmentMinute;
+    const explicitDay = Number(explicit?.dayIndex);
+    let dayIndex = Number.isFinite(explicitDay)
+      ? Math.max(0, Math.trunc(explicitDay))
+      : Math.max(0, Math.trunc(Number(neighbourhoodValue?.dayIndex) || 0));
+    if (!Number.isFinite(explicitDay)) {
+      const routineMinute = ((Math.trunc(Number(neighbourhoodValue?.minuteOfDay) || 0) % 1440) + 1440) % 1440;
+      // The environment advances after the daily systems in fixedUpdate. On
+      // the single frame that crosses midnight it is already on minute zero
+      // while the routine clock still reports 23:59; attribute that frame to
+      // the new day so a save can never contain split calendar identities.
+      if (minuteOfDay < routineMinute - 720) dayIndex += 1;
+    }
+    return Object.freeze({ dayIndex, minuteOfDay, timeHours: hours });
+  }
+
   function persistentSnapshot() {
+    const environmentSave = environment.snapshot();
+    const neighbourhoodSave = neighbourhoodRoutine.save();
+    const clock = persistentWorldClock(environmentSave, neighbourhoodSave);
+    neighbourhoodSave.dayIndex = clock.dayIndex;
+    neighbourhoodSave.minuteOfDay = clock.minuteOfDay;
+    neighbourhoodSave.previousMinuteOfDay = clock.minuteOfDay;
+    const residentialSave = residentialLife.save();
+    residentialSave.clock = {
+      ...residentialSave.clock,
+      dayIndex: clock.dayIndex,
+      minuteOfDay: clock.minuteOfDay,
+      previousMinuteOfDay: clock.minuteOfDay,
+    };
+    const communitySave = communityHubLife.save();
+    communitySave.clock = { dayIndex: clock.dayIndex, minuteOfDay: clock.minuteOfDay };
+    const cafeSave = cafeShift.save();
+    cafeSave.clock = { dayIndex: clock.dayIndex, minuteOfDay: clock.minuteOfDay };
+    const marketSave = marketShift.save();
     return {
-      version: 7,
+      version: 14,
+      clock,
       elapsed,
       player: player.snapshot(),
       wanted: wanted.snapshot(),
@@ -2001,9 +4668,18 @@ async function main() {
       chapterTwo: chapterTwo.save(),
       communityTrust,
       vehicles: vehicles.snapshot(),
-      environment: environment.snapshot(),
-      neighbourhood: neighbourhoodRoutine.save(),
+      environment: environmentSave,
+      neighbourhood: neighbourhoodSave,
       neighbourhoodAppliedSerial: lastNeighbourhoodTransactionSerial,
+      lifeProfile: lifeProfile.save(),
+      residential: residentialSave,
+      residentialApplied: {
+        transactionSerial: lastResidentialTransactionSerial,
+        interactionSerial: lastResidentialInteractionSerial,
+      },
+      residentialActors: residentialActorRuntimeSnapshot(),
+      interiorOccupancy: interiorOccupancy.save(),
+      mapNavigation: mapNavigation.save(),
       roadside: roadsideResponse?.save() ?? null,
       activities: {
         selected: selectedActivity,
@@ -2011,6 +4687,30 @@ async function main() {
         race: raceActivity.save(),
         life: lifeActivity.save(),
         basketball: basketballActivity.save(),
+        garage: garageShift.save(),
+        garageRuntime: {
+          confirmedDiagnosisId: garageConfirmedDiagnosisId,
+        },
+        community: communitySave,
+        communityRuntime: {
+          appliedStationResultSerial: lastCommunityStationResultSerial,
+          appliedTransactionSerial: lastCommunityTransactionSerial,
+          selectedRoleIndex: communityRoleSelectionIndex,
+          staffActors: communityStaffRuntimeSnapshot(),
+        },
+        cafe: cafeSave,
+        cafeRuntime: {
+          appliedStationResultSerial: lastCafeStationResultSerial,
+          appliedTransactionSerial: lastCafeTransactionSerial,
+          staffActors: cafeStaffRuntimeSnapshot(),
+        },
+        market: marketSave,
+        marketRuntime: {
+          appliedStationResultSerial: lastMarketStationResultSerial,
+          appliedTransactionSerial: lastMarketTransactionSerial,
+          decisionIndex: marketDecisionIndex,
+          staffActors: marketStaffRuntimeSnapshot(),
+        },
         nightRoute: nightRoute.save(),
         nightRouteRuntime: {
           participantActorIds: savedNightRouteParticipantIds(),
@@ -2025,12 +4725,42 @@ async function main() {
 
   function restorePersistent(value = {}) {
     const saveVersion = Math.trunc(Number(value.version ?? 1));
-    if (!Number.isInteger(saveVersion) || saveVersion < 1 || saveVersion > 7) {
+    if (!Number.isInteger(saveVersion) || saveVersion < 1 || saveVersion > 14) {
       throw new RangeError(`Unsupported GTA Neon City save version: ${value.version}`);
     }
+    const savedEnvironment = value.environment ?? environment.snapshot();
+    const savedNeighbourhood = value.neighbourhood ?? initialNeighbourhoodSave;
+    const restoredClock = persistentWorldClock(savedEnvironment, savedNeighbourhood, value.clock ?? null);
+    environment.setTime(restoredClock.timeHours);
+    if (value.environment) environment.setRain(value.environment.targetRain ?? value.environment.rain, true);
+    neighbourhoodRoutine.restore(savedNeighbourhood);
+    neighbourhoodRoutine.update(0, {
+      dayIndex: restoredClock.dayIndex,
+      minuteOfDay: restoredClock.minuteOfDay,
+      captureSnapshot: false,
+    });
+    lastNeighbourhoodTransactionSerial = Math.max(
+      0,
+      Math.trunc(Number(value.neighbourhoodAppliedSerial ?? neighbourhoodRoutine.snapshot().transactionSerial) || 0),
+    );
+    communityRuntimeClockContext.dayIndex = restoredClock.dayIndex;
+    communityRuntimeClockContext.minuteOfDay = restoredClock.minuteOfDay;
+    cafeRuntimeClockContext.dayIndex = restoredClock.dayIndex;
+    cafeRuntimeClockContext.minuteOfDay = restoredClock.minuteOfDay;
+    marketRuntimeClockContext.dayIndex = restoredClock.dayIndex;
+    marketRuntimeClockContext.minuteOfDay = restoredClock.minuteOfDay;
+    communityFullSnapshotCacheKey = "";
+    communityDirectoryCacheKey = "";
+    communityActivityCacheKey = "";
+    communityActivityCache = null;
+    cafeActivityCacheKey = "";
+    cafeActivityCache = null;
+    marketActivityCacheKey = "";
+    marketActivityCache = null;
     if (vehicles.playerVehicle) vehicles.exit();
     player.exitVehicle(player.root.position);
     clearTaxiPassengerPresentation();
+    releaseGarageCustomerPresentation();
     roadsideResponse?.reset();
     releaseNightRouteParticipants();
     for (const savedVehicle of value.vehicles ?? []) {
@@ -2044,6 +4774,22 @@ async function main() {
     wanted.restore(value.wanted);
     mission.restore(value.mission);
     communityTrust = Math.max(0, Math.trunc(Number(value.communityTrust) || 0));
+    lifeProfile.restore(saveVersion >= 8 && value.lifeProfile ? value.lifeProfile : initialLifeProfileSave);
+    residentialLife.restore(saveVersion >= 9 && value.residential ? value.residential : initialResidentialLifeSave);
+    residentialRuntimeView = residentialLife.update(0, {
+      dayIndex: restoredClock.dayIndex,
+      minuteOfDay: restoredClock.minuteOfDay,
+      captureSnapshot: false,
+    });
+    player.setCarriedGroceries(residentialLife.snapshot().player.carriedSupplies.groceries);
+    const restoredResidentialSave = residentialLife.save();
+    lastResidentialTransactionSerial = saveVersion >= 9
+      ? Math.max(0, Math.trunc(Number(restoredResidentialSave.transactionSerial) || 0))
+      : 0;
+    lastResidentialInteractionSerial = saveVersion >= 9
+      ? Math.max(0, Math.trunc(Number(restoredResidentialSave.interactionSerial) || 0))
+      : 0;
+    invalidateResidentialView();
     if (value.story) story.restore(value.story);
     else if (mission.snapshot().stage !== MISSION_STAGES.AVAILABLE) story.notify({ type: "force_recovery" });
     story.drainEvents();
@@ -2054,6 +4800,59 @@ async function main() {
       raceActivity.restore(value.activities.race);
       lifeActivity.restore(value.activities.life);
       basketballActivity.restore(value.activities.basketball);
+      garageShift.restore(saveVersion >= 8 && value.activities.garage
+        ? value.activities.garage
+        : initialGarageShiftSave);
+      communityHubLife.restore(saveVersion >= 10 && value.activities.community
+        ? value.activities.community
+        : initialCommunityHubSave);
+      const communityRuntime = saveVersion >= 10 ? value.activities.communityRuntime ?? {} : {};
+      const communitySavedSnapshot = communityHubLife.snapshot();
+      lastCommunityStationResultSerial = Math.min(
+        Math.max(0, Math.trunc(Number(communityRuntime.appliedStationResultSerial) || 0)),
+        Math.max(0, Math.trunc(Number(communitySavedSnapshot.lastStationResult?.serial) || 0)),
+      );
+      lastCommunityTransactionSerial = Math.min(
+        Math.max(0, Math.trunc(Number(communityRuntime.appliedTransactionSerial) || 0)),
+        Math.max(0, Math.trunc(Number(communitySavedSnapshot.serials.transaction) || 0)),
+      );
+      communityRoleSelectionIndex = Math.max(0, Math.trunc(Number(communityRuntime.selectedRoleIndex) || 0)) % COMMUNITY_HUB_ROLES.length;
+      communityRuntimeView = communityHubLife.update(0, communityRuntimeClockContext);
+      cafeShift.restore(saveVersion >= 11 && value.activities.cafe
+        ? value.activities.cafe
+        : initialCafeShiftSave);
+      const cafeRuntime = saveVersion >= 11 ? value.activities.cafeRuntime ?? {} : {};
+      const cafeSavedSnapshot = cafeShift.snapshot();
+      lastCafeStationResultSerial = Math.min(
+        Math.max(0, Math.trunc(Number(cafeRuntime.appliedStationResultSerial) || 0)),
+        Math.max(0, Math.trunc(Number(cafeSavedSnapshot.lastStationResult?.serial) || 0)),
+      );
+      lastCafeTransactionSerial = Math.min(
+        Math.max(0, Math.trunc(Number(cafeRuntime.appliedTransactionSerial) || 0)),
+        Math.max(0, Math.trunc(Number(cafeSavedSnapshot.serials.transaction) || 0)),
+      );
+      cafeRuntimeView = cafeShift.update(0, cafeRuntimeClockContext);
+      cafeQuality = Math.max(0, Math.round(Number(cafeSavedSnapshot.activeShift?.quality ?? cafeSavedSnapshot.lastStationResult?.score) || 0));
+      cafeReworkCount = Math.max(0, Math.trunc(Number(cafeSavedSnapshot.activeShift?.reworkCount ?? cafeSavedSnapshot.lastStationResult?.reworkCount) || 0));
+      marketShift.restore(saveVersion >= 13 && value.activities.market
+        ? value.activities.market
+        : initialMarketShiftSave);
+      const marketRuntime = saveVersion >= 13 ? value.activities.marketRuntime ?? {} : {};
+      const marketSavedSnapshot = marketShift.snapshot();
+      lastMarketStationResultSerial = Math.min(
+        Math.max(0, Math.trunc(Number(marketRuntime.appliedStationResultSerial) || 0)),
+        Math.max(0, Math.trunc(Number(marketSavedSnapshot.lastStationResult?.serial) || 0)),
+      );
+      lastMarketTransactionSerial = Math.min(
+        Math.max(0, Math.trunc(Number(marketRuntime.appliedTransactionSerial) || 0)),
+        Math.max(0, Math.trunc(Number(marketSavedSnapshot.serials.transaction) || 0)),
+      );
+      marketDecisionIndex = Math.max(0, Math.trunc(Number(marketRuntime.decisionIndex) || 0)) % MARKET_SURPLUS_DECISIONS.length;
+      marketRuntimeView = marketShift.update(0, marketRuntimeClockContext);
+      marketQuality = marketSavedSnapshot.activeShift?.passedStations
+        ? Math.round(marketSavedSnapshot.activeShift.qualityTotal / Math.max(1, marketSavedSnapshot.activeShift.passedStations))
+        : Math.max(0, Math.round(Number(marketSavedSnapshot.lastStationResult?.quality) || 0));
+      marketReworkCount = Math.max(0, Math.trunc(Number(marketSavedSnapshot.activeShift?.reworkCount) || 0));
       nightRoute.restore(value.activities.nightRoute ?? initialNightRouteSave);
       const nightRouteRuntime = value.activities.nightRouteRuntime ?? {};
       lastNightRouteHandledEventSerial = Math.max(0, Math.trunc(Number(nightRouteRuntime.handledEventSerial) || 0));
@@ -2061,10 +4860,22 @@ async function main() {
       lastNightRouteHandledEvent = nightRouteRuntime.lastHandledEvent === null || nightRouteRuntime.lastHandledEvent === undefined
         ? null
         : String(nightRouteRuntime.lastHandledEvent);
-      selectedActivity = ["taxi", "race", "life", "basketball", "nightRoute"].includes(value.activities.selected)
+      selectedActivity = ["taxi", "race", "life", "garage", "community", "cafe", "market", "basketball", "nightRoute"].includes(value.activities.selected)
         ? value.activities.selected
         : null;
       if (selectedActivity === "nightRoute" && !nightRoute.snapshot().started) selectedActivity = null;
+      if (selectedActivity === "garage" && garageShift.snapshot().stage === GARAGE_SHIFT_STAGES.CLOCK_IN) {
+        selectedActivity = null;
+      }
+      if (selectedActivity === "community" &&
+          (!communityRuntimeView.activeRoleId || communityRuntimeView.status === "paused")) selectedActivity = null;
+      if (selectedActivity === "cafe" && cafeRuntimeView.status !== "active") selectedActivity = null;
+      if (selectedActivity === "market" && marketRuntimeView.status !== "active") selectedActivity = null;
+      const savedDiagnosisId = value.activities.garageRuntime?.confirmedDiagnosisId;
+      garageConfirmedDiagnosisId = GARAGE_FAULTS.some(fault => fault.id === savedDiagnosisId)
+        ? savedDiagnosisId
+        : null;
+      garageDiagnosisIndex = 0;
       lastActivityStage = selectedActivitySnapshot()?.stage ?? selectedActivitySnapshot()?.phase ?? null;
       lastTaxiDialogueSerial = selectedActivity === "taxi"
         ? selectedActivitySnapshot()?.dialogueSerial ?? 0
@@ -2073,16 +4884,38 @@ async function main() {
       activityPresentationUntil = Math.max(0, Number(value.activities.presentationUntil) || 0);
       lastRaceCountdownSecond = null;
       processLifeActivityEvents();
+      processGarageShiftEvents();
     } else {
       taxiActivity.reset();
       raceActivity.reset();
       lifeActivity.reset();
       basketballActivity.reset();
+      garageShift.restore(initialGarageShiftSave);
+      communityHubLife.restore(initialCommunityHubSave);
+      communityRuntimeView = communityHubLife.update(0, communityRuntimeClockContext);
+      cafeShift.restore(initialCafeShiftSave);
+      cafeRuntimeView = cafeShift.update(0, cafeRuntimeClockContext);
+      marketShift.restore(initialMarketShiftSave);
+      marketRuntimeView = marketShift.update(0, marketRuntimeClockContext);
       nightRoute.restore(initialNightRouteSave);
       selectedActivity = null;
       lastActivityStage = null;
       lastTaxiDialogueSerial = 0;
       lastBasketballEvent = null;
+      garageDiagnosisIndex = 0;
+      garageConfirmedDiagnosisId = null;
+      lastCommunityStationResultSerial = 0;
+      lastCommunityTransactionSerial = 0;
+      communityRoleSelectionIndex = 0;
+      lastCafeStationResultSerial = 0;
+      lastCafeTransactionSerial = 0;
+      cafeQuality = 0;
+      cafeReworkCount = 0;
+      lastMarketStationResultSerial = 0;
+      lastMarketTransactionSerial = 0;
+      marketQuality = 0;
+      marketReworkCount = 0;
+      marketDecisionIndex = 1;
       lastNightRouteHandledEventSerial = 0;
       nightRouteCompletionEventsHandled = 0;
       lastNightRouteHandledEvent = null;
@@ -2095,22 +4928,27 @@ async function main() {
         nightRouteCompletionEventsHandled = 0;
         lastNightRouteHandledEvent = null;
       }
-      selectedActivitySystem()?.reset?.();
+      if (selectedActivity === "garage") {
+        releaseGarageCustomerPresentation();
+        garageShift.restore(initialGarageShiftSave);
+      } else if (selectedActivity === "community") {
+        communityHubLife.restore(initialCommunityHubSave);
+        communityRuntimeView = communityHubLife.update(0, { ...communityClockContext(), captureSnapshot: false });
+        lastCommunityStationResultSerial = 0;
+        lastCommunityTransactionSerial = 0;
+      } else if (selectedActivity === "cafe") {
+        cafeShift.pause(cafeClockContext());
+        cafeRuntimeView = cafeShift.update(0, { ...cafeClockContext(), captureSnapshot: false });
+      } else if (selectedActivity === "market") {
+        marketShift.pause(marketClockContext({ sourceId: marketCommandSource("pause", "narrative") }));
+        marketRuntimeView = marketShift.update(0, { ...marketClockContext(), captureSnapshot: false });
+      } else selectedActivitySystem()?.reset?.();
       selectedActivity = null;
       lastActivityStage = null;
       lastTaxiDialogueSerial = 0;
       lastBasketballEvent = null;
       activityPresentationUntil = 0;
     }
-    if (value.environment) {
-      environment.setTime(value.environment.timeHours);
-      environment.setRain(value.environment.targetRain ?? value.environment.rain, true);
-    }
-    neighbourhoodRoutine.restore(value.neighbourhood ?? initialNeighbourhoodSave);
-    lastNeighbourhoodTransactionSerial = Math.max(
-      0,
-      Math.trunc(Number(value.neighbourhoodAppliedSerial ?? neighbourhoodRoutine.snapshot().transactionSerial) || 0),
-    );
     if (nightRoute.snapshot().started && !nightRoute.snapshot().completed) {
       const restoredPresentation = stageNightRouteParticipants(value.activities?.nightRouteRuntime?.participantActorIds ?? null);
       if (!restoredPresentation.accepted) {
@@ -2130,6 +4968,47 @@ async function main() {
       player.enterVehicle(savedVehicle);
     }
     syncTaxiPassengerPresentation(selectedActivity === "taxi" ? taxiActivity.snapshot() : null);
+    const savedResidentialActorRuntime = saveVersion >= 9 ? value.residentialActors : null;
+    const restoredResidentialActorIds = restoreResidentialActorRuntime(savedResidentialActorRuntime);
+    const savedCommunityStaffRuntime = saveVersion >= 10 ? value.activities?.communityRuntime?.staffActors : null;
+    const restoredCommunityStaffIds = restoreCommunityStaffRuntime(savedCommunityStaffRuntime);
+    const savedCafeStaffRuntime = saveVersion >= 11 ? value.activities?.cafeRuntime?.staffActors : null;
+    const restoredCafeStaffIds = restoreCafeStaffRuntime(savedCafeStaffRuntime);
+    const savedMarketStaffRuntime = saveVersion >= 13 ? value.activities?.marketRuntime?.staffActors : null;
+    const restoredMarketStaffIds = restoreMarketStaffRuntime(savedMarketStaffRuntime);
+    lastResidentialScheduleMinute = -1;
+    lastCommunityScheduleMinute = -1;
+    lastCafeScheduleMinute = -1;
+    lastMarketScheduleMinute = -1;
+    syncResidentialActors(true, restoredResidentialActorIds);
+    communityRuntimeView = communityHubLife.update(0, communityRuntimeClockContext);
+    syncCommunityStaff(true, communityRuntimeClockContext, restoredCommunityStaffIds);
+    cafeRuntimeView = cafeShift.update(0, cafeRuntimeClockContext);
+    syncCafeStaff(true, cafeRuntimeClockContext, restoredCafeStaffIds);
+    marketRuntimeView = marketShift.update(0, marketRuntimeClockContext);
+    syncMarketStaff(true, marketRuntimeClockContext, restoredMarketStaffIds);
+    restoreResidentialActorArrivalState(savedResidentialActorRuntime, restoredResidentialActorIds);
+    restoreCommunityStaffArrivalState(savedCommunityStaffRuntime, restoredCommunityStaffIds);
+    restoreCafeStaffArrivalState(savedCafeStaffRuntime, restoredCafeStaffIds);
+    restoreMarketStaffArrivalState(savedMarketStaffRuntime, restoredMarketStaffIds);
+    if (saveVersion >= 13 && value.interiorOccupancy) interiorOccupancy.restore(value.interiorOccupancy);
+    else interiorOccupancy.restore(initialInteriorOccupancySave);
+    interiorOccupancy.update(0, {
+      dayIndex: restoredClock.dayIndex,
+      minuteOfDay: restoredClock.minuteOfDay,
+      captureSnapshot: false,
+    });
+    mapNavigation.refreshPlaces(mapPlaceDirectory());
+    mapNavigation.restore(saveVersion >= 14 && value.mapNavigation
+      ? value.mapNavigation
+      : initialMapNavigationSave);
+    // Phone UI itself is modal/transient; the pan, zoom, selection and route
+    // persist, while loading always returns control to the game world.
+    mapNavigation.setOpen(false);
+    phoneOpen = false;
+    phoneApp = null;
+    phonePressTarget = null;
+    input.setUiPointerMode?.(false);
     showToast("QUICKSAVE LOADED", 2.5);
     return persistentSnapshot();
   }
@@ -2162,68 +5041,153 @@ async function main() {
     }
     if (narrativePresentation().controlsLocked) return;
     const neighbourhoodBeforeInput = neighbourhoodRoutine.snapshot();
+    const garageBeforeInput = selectedActivity === "garage" ? garageShift.snapshot() : null;
+    if (!phoneOpen && !neighbourhoodBeforeInput.menuOpen &&
+        garageBeforeInput?.status === "active" && garageBeforeInput.stage === GARAGE_SHIFT_STAGES.DIAGNOSIS) {
+      const choiceCount = Math.max(1, garageBeforeInput.diagnosisChoices.length);
+      if (input.actionPressed("forward")) garageDiagnosisIndex = (garageDiagnosisIndex - 1 + choiceCount) % choiceCount;
+      if (input.actionPressed("backward")) garageDiagnosisIndex = (garageDiagnosisIndex + 1) % choiceCount;
+    }
+    if (!phoneOpen && !neighbourhoodBeforeInput.menuOpen && selectedActivity === "market" && marketRuntimeView.decisionRequired) {
+      const choiceCount = Math.max(1, MARKET_SURPLUS_DECISIONS.length);
+      if (input.actionPressed("forward")) marketDecisionIndex = (marketDecisionIndex - 1 + choiceCount) % choiceCount;
+      if (input.actionPressed("backward")) marketDecisionIndex = (marketDecisionIndex + 1) % choiceCount;
+    }
+    if (!phoneOpen && !neighbourhoodBeforeInput.menuOpen && !selectedActivity && atCommunityReception()) {
+      if (input.actionPressed("left")) communityRoleSelectionIndex =
+        (communityRoleSelectionIndex - 1 + COMMUNITY_HUB_ROLES.length) % COMMUNITY_HUB_ROLES.length;
+      if (input.actionPressed("right")) communityRoleSelectionIndex =
+        (communityRoleSelectionIndex + 1) % COMMUNITY_HUB_ROLES.length;
+    }
     if (phoneOpen) {
       if (input.actionPressed("phone") || input.actionPressed("melee") || input.actionPressed("enterExit")) {
-        if (phoneApp) phoneApp = null;
+        if (phoneApp) {
+          mapNavigation.cancelPointer();
+          mapNavigation.setOpen(false);
+          phoneApp = null;
+        }
         else {
           phoneOpen = false;
+          mapNavigation.setOpen(false);
           input.setUiPointerMode?.(false);
         }
         return;
       }
       const phoneItems = phoneApp === "places"
-        ? neighbourhoodRoutine.available(neighbourhoodContext())
-        : phoneApp === "work" ? lifeActivity.available(lifeUnlockContext())
+        ? [{ id: communityHubWorld.id }, ...neighbourhoodRoutine.available(neighbourhoodContext())]
+          : phoneApp === "work" ? [
+            garageShift.availability(garageShiftContext()),
+            cafeShift.availability(cafeClockContext()),
+            marketShift.availability(marketClockContext()),
+            { id: communityHubWorld.id },
+            ...lifeActivity.available(lifeUnlockContext()),
+            basketballActivity.available(),
+          ]
+          : phoneApp === "profile" ? [lifeProfile.snapshot().needs, ...lifeProfile.snapshot().skills, ...lifeProfile.snapshot().shiftHistory.slice(-1)]
+          : phoneApp === "home" ? homePhoneItems()
+          : phoneApp === "contacts" ? [
+              ...mainCharacters.filter(character => character.actor !== cafeStaffActors.get(ASHA_PATEL.id) &&
+                character.actor !== marketStaffActors.get(MINA_OKAFOR.id)),
+              ...residentialActorStates,
+              ...cafeStaffStates,
+              ...marketStaffStates,
+              ...COMMUNITY_HUB_STAFF,
+            ]
+          : phoneApp === "map" ? mapNavigation.snapshot().places
           : phoneApp === "recents" ? phoneRecentApps : phoneApps;
+      const phoneHit = hud?.phoneHitTest?.(input.pointer.x, input.pointer.y) ?? null;
       const wheel = input.consumeWheel?.() ?? 0;
       if (phoneApp && wheel) {
-        phoneScroll = Math.max(0, Math.min(Math.max(0, phoneItems.length - 5), phoneScroll + Math.sign(wheel)));
-        phoneSelection = Math.max(phoneScroll, Math.min(phoneItems.length - 1, phoneSelection));
+        if (phoneApp === "map") {
+          const anchor = phoneHit?.type === "map" ? { x: phoneHit.x, y: phoneHit.y } : null;
+          mapNavigation.zoomWheel(wheel * 120, anchor);
+        } else {
+          phoneScroll = Math.max(0, Math.min(Math.max(0, phoneItems.length - 5), phoneScroll + Math.sign(wheel)));
+          phoneSelection = Math.max(phoneScroll, Math.min(phoneItems.length - 1, phoneSelection));
+        }
       }
-      const phoneHit = hud?.phoneHitTest?.(input.pointer.x, input.pointer.y) ?? null;
       phoneHover = phoneHit?.type === "item" ? phoneHit.index : -1;
-      if (input.actionPressed("fire")) phonePressTarget = phoneHit ? { ...phoneHit } : null;
+      if (input.actionPressed("fire")) {
+        phonePressTarget = phoneHit ? { ...phoneHit } : null;
+        if (phoneHit?.type === "map") {
+          phoneMapPointerX = phoneHit.x;
+          phoneMapPointerY = phoneHit.y;
+          mapNavigation.pointerDown({ x: phoneMapPointerX, y: phoneMapPointerY, pointerId: 0 });
+        }
+      }
       phonePressed = Boolean(phonePressTarget && input.actionDown("fire") &&
         phonePressTarget.type === phoneHit?.type && phonePressTarget.index === phoneHit?.index);
-      if (phoneApp === "recents" && input.actionDown("fire")) {
+      if (phoneApp === "map" && phonePressTarget?.type === "map" && input.actionDown("fire")) {
+        const drag = input.consumeLookDelta?.() ?? { x: 0, y: 0 };
+        if (phoneHit?.type === "map") {
+          phoneMapPointerX = phoneHit.x;
+          phoneMapPointerY = phoneHit.y;
+        } else {
+          phoneMapPointerX += Number(drag.x) || 0;
+          phoneMapPointerY += Number(drag.y) || 0;
+        }
+        mapNavigation.pointerMove({ x: phoneMapPointerX, y: phoneMapPointerY, pointerId: 0 });
+      } else if (phoneApp === "recents" && input.actionDown("fire")) {
         const swipe = input.consumeLookDelta?.() ?? { x: 0 };
         if (Math.abs(swipe.x) > 18) {
           phoneScroll = Math.max(0, Math.min(Math.max(0, phoneItems.length - 1), phoneScroll - Math.sign(swipe.x)));
         }
       }
       if (input.actionReleased?.("fire")) {
+        if (phonePressTarget?.type === "map") {
+          if (phoneHit?.type === "map") {
+            phoneMapPointerX = phoneHit.x;
+            phoneMapPointerY = phoneHit.y;
+          }
+          const result = mapNavigation.pointerUp({ x: phoneMapPointerX, y: phoneMapPointerY, pointerId: 0 });
+          phonePressTarget = null;
+          phonePressed = false;
+          if (result.kind === "navigate") showToast(`ROUTE SET — ${result.place.title}`, 2.4);
+          else if (result.kind === "drop_pin") showToast("WAYPOINT DROPPED", 2);
+          return;
+        }
         const activation = phonePressTarget && phonePressTarget.type === phoneHit?.type &&
           phonePressTarget.index === phoneHit?.index ? phoneHit : null;
         phonePressTarget = null;
         phonePressed = false;
         if (activation?.type === "back") {
           if (phoneApp) {
+            mapNavigation.cancelPointer();
+            mapNavigation.setOpen(false);
             phoneApp = null;
             phoneSelection = 0;
             phoneScroll = 0;
           } else {
             phoneOpen = false;
+            mapNavigation.setOpen(false);
             input.setUiPointerMode?.(false);
           }
           phoneScroll = 0;
         } else if (activation?.type === "home") {
+          mapNavigation.cancelPointer();
+          mapNavigation.setOpen(false);
           phoneApp = null;
           phoneSelection = 0;
           phoneScroll = 0;
         } else if (activation?.type === "recent") {
+          mapNavigation.cancelPointer();
+          mapNavigation.setOpen(false);
           phoneApp = "recents";
-          phoneAppTransitionAt = elapsed;
+          phoneAppTransitionAt = presentationElapsed;
           phoneSelection = 0;
           phoneScroll = 0;
         } else if (activation?.type === "closeAll") {
           phoneRecentApps.length = 0;
+          mapNavigation.cancelPointer();
+          mapNavigation.setOpen(false);
           phoneApp = null;
           phoneSelection = 0;
           phoneScroll = 0;
         } else if (activation?.type === "item" && !phoneApp) {
           phoneApp = phoneApps[activation.index]?.id ?? null;
+          mapNavigation.setOpen(phoneApp === "map");
           if (phoneApp) {
-            phoneAppTransitionAt = elapsed;
+            phoneAppTransitionAt = presentationElapsed;
             const existing = phoneRecentApps.indexOf(phoneApp);
             if (existing >= 0) phoneRecentApps.splice(existing, 1);
             phoneRecentApps.unshift(phoneApp);
@@ -2232,17 +5196,30 @@ async function main() {
           phoneScroll = 0;
         } else if (activation?.type === "item" && phoneApp === "recents") {
           phoneApp = phoneRecentApps[phoneScroll + activation.index] ?? null;
-          phoneAppTransitionAt = elapsed;
+          mapNavigation.setOpen(phoneApp === "map");
+          phoneAppTransitionAt = presentationElapsed;
           phoneSelection = 0;
           phoneScroll = 0;
+        } else if (activation?.type === "item" && phoneApp === "home") {
+          activateHomePhoneItem(phoneScroll + activation.index);
+        } else if (activation?.type === "mapRoute" && phoneApp === "map") {
+          const mapState = mapNavigation.snapshot();
+          if (mapState.navigation) {
+            mapNavigation.clearNavigation();
+            showToast("GPS ROUTE CLEARED", 1.8);
+          } else if (mapState.selectedPlaceId) {
+            const route = mapNavigation.setNavigation(mapState.selectedPlaceId);
+            if (route) showToast(`ROUTE SET — ${route.title}`, 2.4);
+          }
         }
         return;
       }
-      if (input.actionPressed("forward")) phoneSelection = (phoneSelection - 1 + Math.max(1, phoneItems.length)) % Math.max(1, phoneItems.length);
-      if (input.actionPressed("backward")) phoneSelection = (phoneSelection + 1) % Math.max(1, phoneItems.length);
+      if (phoneApp !== "map" && input.actionPressed("forward")) phoneSelection = (phoneSelection - 1 + Math.max(1, phoneItems.length)) % Math.max(1, phoneItems.length);
+      if (phoneApp !== "map" && input.actionPressed("backward")) phoneSelection = (phoneSelection + 1) % Math.max(1, phoneItems.length);
       if (!phoneApp && (advanceDialogue || input.actionPressed("interact"))) {
         phoneApp = phoneApps[phoneSelection]?.id ?? null;
-        if (phoneApp) phoneAppTransitionAt = elapsed;
+        mapNavigation.setOpen(phoneApp === "map");
+        if (phoneApp) phoneAppTransitionAt = presentationElapsed;
         if (phoneApp && !phoneRecentApps.includes(phoneApp)) phoneRecentApps.unshift(phoneApp);
         phoneSelection = 0;
         phoneScroll = 0;
@@ -2258,10 +5235,7 @@ async function main() {
       if (input.actionPressed("forward")) neighbourhoodRoutine.moveSelection(-1);
       if (input.actionPressed("backward")) neighbourhoodRoutine.moveSelection(1);
       if (advanceDialogue || input.actionPressed("interact")) {
-        applyNeighbourhoodTransaction(neighbourhoodRoutine.purchase({
-          ...neighbourhoodContext(),
-          cash: player.snapshot().cash,
-        }));
+        buySelectedNeighbourhoodItem();
       }
       if (input.actionPressed("quickSave")) {
         void saveService.save("quicksave", persistentSnapshot())
@@ -2280,12 +5254,14 @@ async function main() {
       else {
         phoneOpen = true;
         phoneApp = null;
+        mapNavigation.cancelPointer();
+        mapNavigation.setOpen(false);
         phoneSelection = 0;
         phoneScroll = 0;
         phoneHover = -1;
         phonePressed = false;
         phonePressTarget = null;
-        phoneOpenedAt = elapsed;
+        phoneOpenedAt = presentationElapsed;
         input.setUiPointerMode?.(true);
       }
       return;
@@ -2310,6 +5286,22 @@ async function main() {
       }
       if (interactWithChapterTwo()) return;
       const side = selectedActivitySnapshot();
+      if (side?.status === "active" && selectedActivity === "community") {
+        interactWithCommunityShift();
+        return;
+      }
+      if (side?.status === "active" && selectedActivity === "cafe") {
+        interactWithCafeShift();
+        return;
+      }
+      if (side?.status === "active" && selectedActivity === "market") {
+        interactWithMarketShift();
+        return;
+      }
+      if (side?.status === "active" && selectedActivity === "garage") {
+        interactWithGarageShift();
+        return;
+      }
       if (side?.status === "active" && selectedActivity === "nightRoute") {
         const vehicle = vehicles.playerVehicle;
         const result = nightRoute.interact({
@@ -2366,18 +5358,46 @@ async function main() {
       else if (vehicles.playerVehicle?.kind === "taxi") beginSideActivity("taxi");
       else if (vehicles.playerVehicle?.kind === "sports") beginSideActivity("race");
       else {
+        const homeStation = nearbyResidentialStation();
+        const nearbyResident = nearbyResidentialActor();
+        const nearbyHubStaff = nearbyCommunityStaff();
+        const nearbyCafeTeamMember = nearbyCafeStaff();
+        const nearbyMarketTeamMember = nearbyMarketStaff();
+        const atHubReception = atCommunityReception();
+        const atCafeClock = atCafeHandover();
+        const atMarketClock = atMarketHandover();
         const basketballHub = vectorFrom(world.missionPoints.harbourCourt);
         const nearbyLife = lifeActivity.nearby(controlledPosition(), vehicles.playerVehicle ? 10 : 7, lifeUnlockContext());
         const nightRouteAccess = nightRoute.availability(nightRouteUnlockContext());
         const atNightRouteHub = !nightRoute.snapshot().started && nightRouteAccess.unlocked &&
           controlledPosition().distanceToSquared(vectorFrom(nightRouteAccess.hubPosition)) <= 7 * 7;
-        const nearbyBusiness = neighbourhoodRoutine.nearby(controlledPosition(), 5.5, neighbourhoodContext());
-        if (atNightRouteHub) beginNightRoute({ force: false });
+        const nearbyBusiness = nearbyNeighbourhoodBusiness(controlledPosition());
+        const atGarageClock = controlledPosition().distanceToSquared(garageClockPosition) <= 5.5 * 5.5;
+        if (atCafeClock) beginCafeShift();
+        else if (nearbyBusiness?.id === "common_ground_cafe" && nearbyBusiness.open) openNeighbourhoodBusiness(nearbyBusiness.id);
+        else if (nearbyBusiness?.id === "common_ground_cafe") showToast(
+          `${nearbyBusiness.name} CLOSED  ${nearbyBusiness.openingHours.label}`, 3);
+        else if (nearbyCafeTeamMember) showToast(nearbyCafeTeamMember.state?.dialogue ??
+          `${nearbyCafeTeamMember.definition.name}: The shift notes are posted by the handover point.`, 5.2);
+        else if (atMarketClock) beginMarketShift();
+        else if (nearbyBusiness?.id === "mina_market_kitchen" && nearbyBusiness.open) openNeighbourhoodBusiness(nearbyBusiness.id);
+        else if (nearbyBusiness?.id === "mina_market_kitchen") showToast(
+          `${nearbyBusiness.name} CLOSED  ${nearbyBusiness.openingHours.label}`, 3);
+        else if (nearbyMarketTeamMember) showToast(nearbyMarketTeamMember.state?.dialogue ??
+          `${nearbyMarketTeamMember.definition.name}: The stock and till roster is posted at the handover counter.`, 5.4);
+        else if (nearbyHubStaff?.state?.activity === "work") beginCommunityShift(nearbyHubStaff.definition.roleId);
+        else if (atHubReception) beginCommunityShift(selectedCommunityRole().id);
+        else if (nearbyHubStaff) showToast(nearbyHubStaff.state?.dialogue ?? "THE NEXT SHIFT HOURS ARE POSTED AT THE HOUSE", 4.5);
+        else if (homeStation?.action === "cook" && carriedGroceryUnits() > 0 && atHomeUnpackPoint()) unpackResidentialSupplies();
+        else if (homeStation) performResidentialActivity(homeStation.action);
+        else if (nearbyResident) interactResidentialActor(nearbyResident.residentId);
+        else if (atGarageClock) beginGarageShift();
+        else if (atNightRouteHub) beginNightRoute({ force: false });
         else if (nearbyBusiness?.open) openNeighbourhoodBusiness(nearbyBusiness.id);
         else if (nearbyBusiness) showToast(`${nearbyBusiness.name} CLOSED  ${nearbyBusiness.openingHours.label}`, 3);
         else if (controlledPosition().distanceToSquared(basketballHub) <= 7 * 7) beginBasketballActivity();
         else if (nearbyLife) beginLifeActivity(nearbyLife.id);
-        else showToast("VISIT A SHOP, CITY-LIFE HUB, TAXI, OR MOTOR CLUB", 2.8);
+        else showToast("VISIT A SHOP, WORKPLACE, CITY-LIFE HUB, TAXI, OR MOTOR CLUB", 2.8);
       }
     }
     if (input.actionPressed("mission")) {
@@ -2556,40 +5576,48 @@ async function main() {
     const activity = selectedActivitySnapshot();
     if (activity?.status === "active" && activity.targetPosition) {
       const target = vectorFrom(activity.targetPosition);
-      const kind = activity.targetKind === "pickup" || activity.targetKind === "start" || activity.targetKind === "interaction" ? "contact" :
+      const kind = activity.kind === "mechanic" ? "interior" :
+        activity.targetKind === "pickup" || activity.targetKind === "start" || activity.targetKind === "interaction" ? "contact" :
         activity.targetKind === "checkpoint" ? "vehicle" : "dropoff";
       effects.setMissionTarget(kind, target, null);
       return;
     }
-    if (activity) {
-      effects.setMissionTarget(null, null);
-      return;
-    }
-    const chapterTarget = chapterTwoTargetPosition();
-    if (chapterTarget && (chapterTwo.snapshot().chapterStarted || chapterTwoUnlocked())) {
+    const chapterState = chapterTwo.snapshot();
+    const chapterTarget = chapterTwoTargetPosition(chapterState);
+    if (chapterTarget && chapterState.chapterStarted && !chapterState.chapterCompleted) {
       effects.setMissionTarget("contact", chapterTarget);
       return;
     }
     const current = mission.snapshot();
-    if (current.stage === MISSION_STAGES.AVAILABLE || current.stage === MISSION_STAGES.COMPLETE) {
-      effects.setMissionTarget("contact", contactPosition);
-    } else if (current.stage === MISSION_STAGES.STEAL) {
+    if (current.stage === MISSION_STAGES.STEAL) {
       effects.setMissionTarget("vehicle", vehicles.targetVehicle?.root?.position ?? targetSpawn, vehicles.targetVehicle);
     } else if (current.stage === MISSION_STAGES.DELIVER) {
       effects.setMissionTarget("dropoff", dropoffPosition);
-    } else effects.setMissionTarget(null, null);
+    } else {
+      const manualTarget = mapNavigation.snapshot().routeTarget;
+      if (manualTarget) effects.setMissionTarget("dropoff", vectorFrom(manualTarget));
+      else if (activity) effects.setMissionTarget(null, null);
+      else if (chapterTarget && chapterTwoUnlocked()) effects.setMissionTarget("contact", chapterTarget);
+      else if (current.stage === MISSION_STAGES.AVAILABLE || current.stage === MISSION_STAGES.COMPLETE) {
+        effects.setMissionTarget("contact", contactPosition);
+      } else effects.setMissionTarget(null, null);
+    }
   }
 
   function targetForHud() {
     const activity = selectedActivitySnapshot();
     if (activity?.status === "active" && activity.targetPosition) return vectorFrom(activity.targetPosition);
-    if (activity) return null;
-    const chapterTarget = chapterTwoTargetPosition();
-    if (chapterTarget && (chapterTwo.snapshot().chapterStarted || chapterTwoUnlocked())) return chapterTarget;
+    const chapterState = chapterTwo.snapshot();
+    const chapterTarget = chapterTwoTargetPosition(chapterState);
+    if (chapterTarget && chapterState.chapterStarted && !chapterState.chapterCompleted) return chapterTarget;
     const current = mission.snapshot();
-    if (current.stage === MISSION_STAGES.AVAILABLE || current.stage === MISSION_STAGES.COMPLETE) return contactPosition;
     if (current.stage === MISSION_STAGES.STEAL) return vehicles.targetVehicle?.root?.position ?? targetSpawn;
     if (current.stage === MISSION_STAGES.DELIVER) return dropoffPosition;
+    const manualTarget = mapNavigation.snapshot().routeTarget;
+    if (manualTarget) return vectorFrom(manualTarget);
+    if (activity) return null;
+    if (chapterTarget && chapterTwoUnlocked()) return chapterTarget;
+    if (current.stage === MISSION_STAGES.AVAILABLE || current.stage === MISSION_STAGES.COMPLETE) return contactPosition;
     return null;
   }
 
@@ -2627,6 +5655,46 @@ async function main() {
     }
     const activeLife = selectedActivity === "life" ? selectedActivitySnapshot() : null;
     if (activeLife?.status === "active") return `E  ${activeLife.objective}`;
+    const activeCommunity = selectedActivity === "community" ? selectedActivitySnapshot() : null;
+    if (activeCommunity?.status === "active") {
+      if (communityRuntimeView.taskActive) return `${activeCommunity.objective} — STAY AT THE WORK STATION`;
+      const station = communityWorldStation(activeCommunity.stationId);
+      const nearStation = station && controlledPosition().distanceToSquared(vectorFrom(station.position)) <= 2.85 * 2.85;
+      return nearStation ? `E  ${station.label} — WORK CAREFULLY` : `GO TO ${station?.label ?? "THE NEXT HOUSE STATION"}`;
+    }
+    const activeCafe = selectedActivity === "cafe" ? selectedActivitySnapshot() : null;
+    if (activeCafe?.status === "active") {
+      if (cafeRuntimeView.taskActive) return `${activeCafe.objective} — STAY AT THE CAFE WORK STATION`;
+      const station = cafeWorldStationById.get(activeCafe.stationId);
+      const nearStation = station && controlledPosition().distanceToSquared(vectorFrom(station.position)) <= 2.85 * 2.85;
+      return nearStation ? `E  ${station.label} — WORK CAREFULLY` : `GO TO ${station?.label ?? "THE NEXT CAFE STATION"}`;
+    }
+    const activeMarket = selectedActivity === "market" ? selectedActivitySnapshot() : null;
+    if (activeMarket?.status === "active") {
+      if (activeMarket.decisionRequired) {
+        const choice = MARKET_SURPLUS_DECISIONS[marketDecisionIndex] ?? MARKET_SURPLUS_DECISIONS[0];
+        const pantry = marketWorldStationById.get("mina-pantry-shelf");
+        const nearPantry = pantry && controlledPosition().distanceToSquared(vectorFrom(pantry.position)) <= 2.85 * 2.85;
+        return nearPantry
+          ? `W / S  CHOOSE     E  ${choice.label} — ${choice.tradeoff}`
+          : "RETURN TO THE PANTRY SHELF — THE SURPLUS DECISION MUST BE RECORDED BESIDE THE STOCK";
+      }
+      if (marketRuntimeView.taskActive) return `${activeMarket.objective} — STAY AT THE MARKET WORK STATION`;
+      const station = marketWorldStation(activeMarket.stationId);
+      const nearStation = station && controlledPosition().distanceToSquared(vectorFrom(station.position)) <= 2.85 * 2.85;
+      return nearStation ? `E  ${station.label} — WORK CAREFULLY` : `GO TO ${station?.label ?? "THE NEXT MARKET STATION"}`;
+    }
+    const activeGarage = selectedActivity === "garage" ? garageShift.snapshot() : null;
+    if (activeGarage?.status === "active") {
+      if (activeGarage.stage === GARAGE_SHIFT_STAGES.DIAGNOSIS) {
+        const choice = activeGarage.diagnosisChoices[garageDiagnosisIndex] ?? activeGarage.diagnosisChoices[0];
+        return `W / S  CHOOSE     E  CONFIRM ${choice?.label ?? "DIAGNOSIS"}`;
+      }
+      if (activeGarage.stage === GARAGE_SHIFT_STAGES.REPAIR) {
+        return `REPAIR ${Math.round(activeGarage.repairProgress * 100)}% — STAY AT THE LIFT`;
+      }
+      return `E  ${activeGarage.objective}`;
+    }
     const activeNightRoute = selectedActivity === "nightRoute" ? selectedActivitySnapshot() : null;
     if (activeNightRoute?.status === "active") return `E  ${activeNightRoute.objective}`;
     const activeBasketball = selectedActivity === "basketball" ? selectedActivitySnapshot() : null;
@@ -2652,6 +5720,63 @@ async function main() {
         player.root.position.distanceToSquared(contactPosition) < 7 * 7) {
       return "E  START CHAPTER TWO — BORROWED TIME";
     }
+    if (atCafeHandover()) {
+      const access = cafeShift.availability(cafeClockContext());
+      const supervisor = cafeShift.staffState(ASHA_PATEL.id, cafeClockContext());
+      const supervisorActor = cafeStaffActors.get(ASHA_PATEL.id);
+      const supervisorPresent = supervisor?.workingDay && supervisor?.locationId === commonGroundCafeWorld.id &&
+        supervisorActor?.alive && insideCommonGroundCafe(supervisorActor.root.position);
+      return access.canBegin && supervisorPresent
+        ? "E  CLOCK IN — COMMON GROUND CAFE SHIFT"
+        : access.reason === "already_completed_today"
+          ? "COMMON GROUND — TODAY'S SHIFT IS FILED"
+          : !supervisorPresent
+            ? "COMMON GROUND — SHIFT LEAD NOT YET AT HANDOVER"
+            : `COMMON GROUND  ${access.postedHours.label}`;
+    }
+    const cafeOrderBusiness = nearbyNeighbourhoodBusiness(player.root.position);
+    if (cafeOrderBusiness?.id === "common_ground_cafe") return cafeOrderBusiness.open
+      ? "E  ORDER AT COMMON GROUND COUNTER"
+      : `${cafeOrderBusiness.name} CLOSED  ${cafeOrderBusiness.openingHours.label}`;
+    const nearbyCafeTeamMember = nearbyCafeStaff();
+    if (nearbyCafeTeamMember) return `E  TALK TO ${nearbyCafeTeamMember.definition.name}`;
+    if (atMarketHandover()) {
+      const access = marketShift.availability(marketClockContext());
+      const supervisor = marketShift.staffState(MINA_OKAFOR.id, marketClockContext());
+      const supervisorActor = marketStaffActors.get(MINA_OKAFOR.id);
+      const supervisorPresent = supervisor?.atWork && supervisorActor?.alive && insideMinaMarket(supervisorActor.root.position);
+      return (access.canBegin || access.paused) && supervisorPresent
+        ? `E  ${access.paused ? "RESUME" : "CLOCK IN"} — MINA'S MARKET STOCK AND TILL SHIFT`
+        : access.reason === "already_completed_today"
+          ? "MINA'S MARKET — TODAY'S SHIFT IS FILED"
+          : !supervisorPresent
+            ? "MINA'S MARKET — SUPERVISOR NOT YET ON THE FLOOR"
+            : `MINA'S MARKET  ${marketShift.postedHours.label}`;
+    }
+    const marketOrderBusiness = nearbyNeighbourhoodBusiness(player.root.position);
+    if (marketOrderBusiness?.id === "mina_market_kitchen") return marketOrderBusiness.open
+      ? "E  SHOP OR ORDER AT MINA'S MARKET COUNTER"
+      : `${marketOrderBusiness.name} CLOSED  ${marketOrderBusiness.openingHours.label}`;
+    const nearbyMarketTeamMember = nearbyMarketStaff();
+    if (nearbyMarketTeamMember) return `E  TALK TO ${nearbyMarketTeamMember.definition.name}`;
+    const homeStation = nearbyResidentialStation();
+    if (homeStation?.action === "cook" && carriedGroceryUnits() > 0 && atHomeUnpackPoint()) {
+      return `E  UNPACK ${carriedGroceryUnits()} GROCERIES INTO THE PANTRY`;
+    }
+    if (homeStation) return `E  ${homeStation.label} — ${residentialInterior.label}`;
+    const nearbyResident = nearbyResidentialActor();
+    if (nearbyResident) return `E  TALK TO ${nearbyResident.actor.displayName}`;
+    const nearbyHubStaff = nearbyCommunityStaff();
+    if (nearbyHubStaff) return nearbyHubStaff.state?.activity === "work"
+      ? `E  ASK ${nearbyHubStaff.definition.name} ABOUT ${communityRoleById.get(nearbyHubStaff.definition.roleId)?.name ?? "A SHIFT"}`
+      : `E  TALK TO ${nearbyHubStaff.definition.name}`;
+    if (atCommunityReception()) {
+      const role = selectedCommunityRole();
+      const access = communityHubLife.availability(role.id, communityClockContext());
+      return access.canBegin
+        ? `A / D  CHOOSE ROLE     E  CLOCK IN — ${role.name}`
+        : `A / D  CHOOSE ROLE     ${role.name} — ${access.postedHours?.label ?? "HOURS POSTED"}`;
+    }
     const near = vehicles.nearestEnterable(player.root.position, 3.6);
     if (near) return near.authorized
       ? `F  DRIVE ${near.displayName ?? near.kind.toUpperCase()}`
@@ -2659,16 +5784,24 @@ async function main() {
     const nightRouteAccess = nightRoute.availability(nightRouteUnlockContext());
     const atNightRouteHub = !nightRoute.snapshot().started && nightRouteAccess.unlocked &&
       player.root.position.distanceToSquared(vectorFrom(nightRouteAccess.hubPosition)) <= 7 * 7;
-    const nearbyBusiness = neighbourhoodRoutine.nearby(player.root.position, 5.5, neighbourhoodContext());
+    const nearbyBusiness = cafeOrderBusiness ?? marketOrderBusiness ?? nearbyNeighbourhoodBusiness(player.root.position);
     if (atNightRouteHub) return "M / E  START THE NIGHT COUNT WITH ROSA";
     if (nearbyBusiness) return nearbyBusiness.open
-      ? `E  ENTER ${nearbyBusiness.name}`
+      ? `E  ${nearbyBusiness.id === "common_ground_cafe" ? "ORDER AT" : nearbyBusiness.id === "mina_market_kitchen" ? "SHOP AT" : "ENTER"} ${nearbyBusiness.name}`
       : `${nearbyBusiness.name} CLOSED  ${nearbyBusiness.openingHours.label}`;
     const stage = mission.snapshot().stage;
     if (!story.snapshot().chapterCompleted &&
         (stage === MISSION_STAGES.AVAILABLE || stage === MISSION_STAGES.COMPLETE) &&
         player.root.position.distanceToSquared(contactPosition) < 7 * 7) {
       return story.snapshot().briefingCompleted ? "E  CONTINUE HOME AGAIN" : "E  TALK TO JUNO";
+    }
+    if (player.root.position.distanceToSquared(garageClockPosition) <= 5.5 * 5.5) {
+      const access = garageShift.availability(garageShiftContext());
+      return access.canClockIn
+        ? "E  CLOCK IN — PULSE GARAGE APPRENTICE"
+        : access.reason === "one_shift_per_day"
+          ? "PULSE GARAGE — TODAY'S SHIFT IS COMPLETE"
+          : `PULSE GARAGE  ${access.postedHours?.label ?? garageShift.postedHours.label}`;
     }
     const nearbyLife = !narrativeMissionBusy()
       ? lifeActivity.nearby(player.root.position, 7, lifeUnlockContext())
@@ -2703,33 +5836,131 @@ async function main() {
       items = [
         { title: "CASH", detail: `$${Math.max(0, Math.trunc(playerState.cash)).toLocaleString("en-US")} AVAILABLE` },
         { title: "COMMUNITY TRUST", detail: `${Math.max(0, Math.trunc(communityTrust))} / EARNED BY HELPING` },
+        { title: "HOUSEHOLD", detail: `${carriedGroceryUnits()} GROCERIES IN TOTE / RENT $${Math.max(0, Math.trunc(residentialRuntimeView.rentDue))} DUE` },
         { title: "SPENDING", detail: "FOOD, LOCAL STORES, AND ORDINARY LIFE" },
       ];
     } else if (phoneApp === "places") {
       title = "OPEN DOORS";
       subtitle = "NEIGHBOURHOOD DIRECTORY";
-      items = neighbourhoodRoutine.available({
+      const neighbourhoodPlaces = neighbourhoodRoutine.available({
         timeHours: environmentState.timeHours,
         weather: environmentState.weather,
         story: story.snapshot(),
       }).map(place => ({
         title: place.name,
-        detail: `${place.open ? "OPEN" : "CLOSED"}  ${place.openingHours?.label ?? "HOURS POSTED"}`,
+        detail: place.id === "common_ground_cafe"
+          ? `${place.open ? "OPEN" : "CLOSED"} / WALK THROUGH THE STREET DOOR · COUNTER, TABLES, KITCHEN, STAFF ROOMS`
+          : place.id === "mina_market_kitchen"
+            ? `${place.open ? "OPEN" : "CLOSED"} / WALK-IN PRODUCE · GROCERIES · DELI · KITCHEN · STOCKROOMS`
+            : `${place.open ? "OPEN" : "CLOSED"}  ${place.openingHours?.label ?? "HOURS POSTED"}`,
       }));
+      items = [{
+        title: communityHubWorld.label,
+        detail: `${communityHubWorld.address} / WALK-IN ROOMS AND POSTED SHIFT HOURS`,
+      }, ...neighbourhoodPlaces];
     } else if (phoneApp === "work") {
       title = "CITY WORK";
       subtitle = "JOBS, SPORT, AND COMMUNITY LIFE";
-      items = [...lifeActivity.available(lifeUnlockContext()), basketballActivity.available()].map(activity => ({
+      const garageAccess = garageShift.availability(garageShiftContext());
+      const garageListing = {
+        title: "PULSE GARAGE APPRENTICE",
+        detail: garageAccess.canClockIn
+          ? `SHIFT OPEN / ${garageAccess.workOrders.length} CUSTOMER JOBS POSTED`
+          : garageAccess.reason === "one_shift_per_day"
+            ? "TODAY'S CAREFUL SHIFT IS COMPLETE"
+            : `HOURS  ${garageAccess.postedHours.label}`,
+      };
+      const cafeAccess = cafeShift.availability(cafeClockContext());
+      const cafeListing = {
+        title: "COMMON GROUND CAFE — PAID SHIFT",
+        detail: cafeAccess.canBegin
+          ? "OPEN NOW / HANDOVER · TILL · PREP · SERVICE · DISHES · STOCK"
+          : cafeAccess.reason === "already_completed_today"
+            ? "TODAY'S SHIFT IS FILED / COME BACK TOMORROW"
+            : cafeAccess.reason === "supervisor_off_day"
+              ? "ASHA'S TRAINING ROSTER IS OFF TODAY / CAFE SERVICE CONTINUES"
+            : `${cafeAccess.postedHours.label} / CLOCK IN AT THE INSIDE HANDOVER POINT`,
+      };
+      const marketAccess = marketShift.availability(marketClockContext());
+      const marketListing = {
+        title: "MINA'S MARKET — PAID STOCK + TILL SHIFT",
+        detail: marketAccess.canBegin
+          ? "OPEN NOW / COLD CHAIN · PRODUCE · STOCK · PACKING · TILL · WASH-UP"
+          : marketAccess.reason === "already_completed_today"
+            ? "TODAY'S SHIFT IS FILED / COME BACK TOMORROW"
+            : `${marketShift.postedHours.label} / CLOCK IN AT THE INSIDE HANDOVER COUNTER`,
+      };
+      const communityContext = communityDirectorySnapshot();
+      const openCommunityRoles = communityContext.roles.filter(role => role.canBegin).length;
+      const communityListing = {
+        title: "HARBOUR SKILLS HOUSE — 3 SHIFTS",
+        detail: openCommunityRoles > 0
+          ? `${openCommunityRoles} OPEN NOW / KITCHEN · REPAIR · LOCAL ARCHIVE`
+          : "KITCHEN · REPAIR · LOCAL ARCHIVE / POSTED HOURS AT 42 MARINER WALK",
+      };
+      items = [garageListing, cafeListing, marketListing, communityListing, ...[...lifeActivity.available(lifeUnlockContext()), basketballActivity.available()].map(activity => ({
         title: activity.title,
         detail: activity.locked ? "LOCKED / KEEP LIVING THE STORY" : activity.description ?? activity.objective ?? "AVAILABLE IN THE CITY",
-      }));
+      }))];
     } else if (phoneApp === "contacts") {
       title = "CONTACTS";
       subtitle = "PEOPLE, NOT QUEST MARKERS";
-      items = mainCharacters.map(character => ({
+      const communityStaff = communityDirectorySnapshot().staff;
+      items = [...mainCharacters.filter(character => character.actor !== cafeStaffActors.get(ASHA_PATEL.id) &&
+        character.actor !== marketStaffActors.get(MINA_OKAFOR.id)).map(character => ({
         title: character.actor.displayName,
         detail: character.actor.root.userData.home?.address ?? character.actor.storyRole?.replaceAll("-", " ") ?? "NEON CITY",
-      }));
+      })), ...residentialActorStates.map(resident => ({
+        title: resident.name,
+        detail: `${resident.activity.toUpperCase()} / ${resident.address}`,
+      })), ...cafeStaffStates.map(staff => ({
+        title: staff.name,
+        detail: `${staff.jobTitle} / ${staff.activity.toUpperCase()} / ${staff.locationId === commonGroundCafeWorld.id ? commonGroundCafeWorld.address : cafeStaffActors.get(staff.id)?.root.userData.home?.address ?? "NEON CITY"}`,
+      })), ...marketStaffStates.map(staff => ({
+        title: staff.name,
+        detail: `${staff.jobTitle} / ${staff.activity.toUpperCase()} / ${staff.locationId === minaMarketWorld.id ? minaMarketWorld.address : marketStaffActors.get(staff.id)?.root.userData.home?.address ?? "NEON CITY"}`,
+      })), ...communityStaff.map(staff => ({
+        title: staff.name,
+        detail: `${staff.jobTitle} / ${staff.activity.toUpperCase()} / ${communityHubWorld.address}`,
+      }))];
+    } else if (phoneApp === "profile") {
+      const profile = lifeProfile.snapshot();
+      const latestShift = profile.shiftHistory.at(-1) ?? null;
+      title = "LIFE PROFILE";
+      const appetiteState = neighbourhoodRoutine.snapshot();
+      subtitle = `${profile.needs.energyStatus} / ${profile.needs.hygieneStatus} / ${appetiteState.appetiteStatus}`;
+      items = [
+        {
+          title: `ENERGY ${Math.round(profile.needs.energy)}% / HYGIENE ${Math.round(profile.needs.hygiene)}% / APPETITE ${Math.round(appetiteState.appetite)}%`,
+          detail: "REST, WASH, SHOP, COOK, AND EAT — ORDINARY ROUTINES MATTER",
+        },
+        ...profile.skills.map(skill => ({
+          title: `${skill.name}  LV ${skill.level} ${skill.levelName}`,
+          detail: skill.experienceToNextLevel > 0
+            ? `${skill.experience} XP / ${skill.experienceToNextLevel} TO NEXT LEVEL`
+            : `${skill.experience} XP / EXPERT`,
+        })),
+        {
+          title: latestShift ? "LATEST SHIFT" : "WORK HISTORY",
+          detail: latestShift
+            ? `${latestShift.activityId.replaceAll("_", " ").toUpperCase()}  $${latestShift.wage}  QUALITY ${Math.round(latestShift.quality * 100)}%`
+            : "NO SHIFTS FILED YET — ORDINARY WORK BUILDS A LIFE",
+        },
+      ];
+    } else if (phoneApp === "home") {
+      const home = residentialFullSnapshot().homes.find(value => value.id === residentialRuntimeView.currentHomeId);
+      title = "MY HOME";
+      subtitle = home ? `${home.name} / ${home.address}` : "NO CURRENT HOME";
+      items = homePhoneItems();
+    } else if (phoneApp === "map") {
+      const navigation = mapNavigation.snapshot();
+      title = "NEON MAP";
+      subtitle = navigation.navigation
+        ? `NAVIGATING TO ${navigation.navigation.title}`
+        : "TAP A PLACE OR DROP A WAYPOINT";
+      // The map viewport and bottom sheet are fixed GPU meshes; listing rows
+      // would obscure the shared retained GPS texture.
+      items = [];
     } else if (phoneApp === "recents") {
       title = "RECENT APPS";
       subtitle = "TAP AN APP TO RETURN";
@@ -2747,9 +5978,10 @@ async function main() {
       scroll: phoneScroll,
       hover: phoneHover,
       pressed: phonePressed,
-      openProgress: Math.max(0, Math.min(1, (elapsed - phoneOpenedAt) / 0.28)),
-      appProgress: phoneApp ? Math.max(0, Math.min(1, (elapsed - phoneAppTransitionAt) / 0.24)) : 1,
+      openProgress: Math.max(0, Math.min(1, (presentationElapsed - phoneOpenedAt) / 0.28)),
+      appProgress: phoneApp ? Math.max(0, Math.min(1, (presentationElapsed - phoneAppTransitionAt) / 0.24)) : 1,
       time: environmentState.timeLabel,
+      mapNavigation: mapNavigation.snapshot(),
       items: Object.freeze(items.map(item => Object.freeze(item))),
     });
   }
@@ -2796,8 +6028,53 @@ async function main() {
       }),
       selectedActivity,
       activity: selectedActivitySnapshot(),
+      garageShift: garageShift.snapshot(),
+      garageShiftAvailability: garageShift.availability(garageShiftContext()),
+      communityHub: communityPresentationSnapshot(),
+      cafeShift: cafeShift.snapshot(),
+      cafeShiftAvailability: cafeShift.availability(cafeClockContext()),
+      marketShift: marketShift.snapshot(),
+      marketShiftAvailability: marketShift.availability(marketClockContext()),
+      interiorOccupancy: interiorOccupancy.snapshot(),
+      lifeProfile: lifeProfile.snapshot(),
+      residential: Object.freeze({
+        dayIndex: residentialRuntimeView.dayIndex,
+        minuteOfDay: residentialRuntimeView.minuteOfDay,
+        currentHomeId: residentialRuntimeView.currentHomeId,
+        inside: insideResidentialHome(position),
+        visitorActive: residentialRuntimeView.visitorActive,
+        visitorResidentId: residentialRuntimeView.visitorResidentId,
+        rentDue: residentialRuntimeView.rentDue,
+        carriedSupplies: residentialFullSnapshot().player.carriedSupplies,
+        residents: residentialActorStates,
+      }),
       roadside: roadsideState,
-      lifeActivities: [...lifeActivity.available(lifeUnlockContext()), basketballActivity.available()],
+      lifeActivities: [
+        Object.freeze({
+          ...garageShift.snapshot(),
+          availability: garageShift.availability(garageShiftContext()),
+        }),
+        Object.freeze({
+          id: communityHubWorld.id,
+          title: communityHubWorld.label,
+          description: "THREE STAFFED LAWFUL SHIFTS INSIDE A REAL WALK-IN PUBLIC BUILDING",
+          roles: communityDirectorySnapshot().roles,
+        }),
+        Object.freeze({
+          id: COMMON_GROUND_SHIFT_ROLE.id,
+          title: COMMON_GROUND_SHIFT_ROLE.name,
+          description: "PAID HOSPITALITY WORK INSIDE A REAL WALK-IN CAFE",
+          availability: cafeShift.availability(cafeClockContext()),
+        }),
+        Object.freeze({
+          id: MINA_MARKET_SHIFT_ROLE.id,
+          title: MINA_MARKET_SHIFT_ROLE.name,
+          description: "PAID STOCK, COLD-CHAIN, PACKING, TILL, CLEANING, AND SURPLUS WORK INSIDE A WALK-IN MARKET",
+          availability: marketShift.availability(marketClockContext()),
+        }),
+        ...lifeActivity.available(lifeUnlockContext()),
+        basketballActivity.available(),
+      ],
       vehicles: entities.vehicles,
       population: entities.population,
       phone: phoneSnapshot(),
@@ -2807,6 +6084,33 @@ async function main() {
         home: character.actor.root.userData.home,
         position: Object.freeze(character.actor.root.position.toArray()),
       })),
+      communityStaff: communityDirectorySnapshot().staff.map(state => {
+        const actor = communityStaffActors.get(state.id);
+        return Object.freeze({
+          ...state,
+          position: Object.freeze(actor?.root.position.toArray() ?? []),
+          destination: actor?.routineDestinationActive ? Object.freeze(actor.routineDestination.toArray()) : null,
+          arrived: Boolean(actor?.routineDestinationActive && actor.routineDestinationArrived),
+        });
+      }),
+      cafeStaff: cafeStaffStates.map(state => {
+        const actor = cafeStaffActors.get(state.id);
+        return Object.freeze({
+          ...state,
+          position: Object.freeze(actor?.root.position.toArray() ?? []),
+          destination: actor?.routineDestinationActive ? Object.freeze(actor.routineDestination.toArray()) : null,
+          arrived: Boolean(actor?.routineDestinationActive && actor.routineDestinationArrived),
+        });
+      }),
+      marketStaff: marketStaffStates.map(state => {
+        const actor = marketStaffActors.get(state.id);
+        return Object.freeze({
+          ...state,
+          position: Object.freeze(actor?.root.position.toArray() ?? []),
+          destination: actor?.routineDestinationActive ? Object.freeze(actor.routineDestination.toArray()) : null,
+          arrived: Boolean(actor?.routineDestinationActive && actor.routineDestinationArrived),
+        });
+      }),
       desertOutskirts: desertOutskirts.snapshot(),
       pickups: effectsState,
       prompt: contextPrompt(),
@@ -2818,7 +6122,77 @@ async function main() {
         bounds: world.bounds,
         stats: world.stats,
         pulseTransit: world.pulseTransit,
+        pulseGarageInterior: Object.freeze({
+          id: pulseGarageInterior.id,
+          seed: pulseGarageInterior.seed,
+          bounds: pulseGarageInterior.bounds,
+          entrance: pulseGarageInterior.entrance,
+          stations: pulseGarageInterior.stations,
+          stats: pulseGarageInterior.stats,
+        }),
+        residentialInterior: Object.freeze({
+          id: residentialInterior.id,
+          homeId: residentialInterior.homeId,
+          label: residentialInterior.label,
+          address: residentialInterior.address,
+          buildingId: residentialInterior.buildingId,
+          bounds: residentialInterior.bounds,
+          entrance: residentialInterior.entrance,
+          zones: residentialInterior.zones,
+          stations: residentialInterior.stations,
+          spawnPoints: residentialInterior.spawnPoints,
+          stats: residentialInterior.stats,
+        }),
+        communityHub: Object.freeze({
+          id: communityHubWorld.id,
+          label: communityHubWorld.label,
+          address: communityHubWorld.address,
+          buildingId: communityHubWorld.buildingId,
+          hostBuildingRecordId: communityHubWorld.hostBuildingRecordId,
+          bounds: communityHubWorld.bounds,
+          entrance: communityHubWorld.entrance,
+          zones: communityHubWorld.zones,
+          doorways: communityHubWorld.doorways,
+          stations: communityHubWorld.stations,
+          spawnPoints: communityHubWorld.spawnPoints,
+          stats: communityHubWorld.stats,
+        }),
+        commonGroundCafe: Object.freeze({
+          id: commonGroundCafeWorld.id,
+          label: commonGroundCafeWorld.label,
+          address: commonGroundCafeWorld.address,
+          buildingId: commonGroundCafeWorld.buildingId,
+          hostBuildingRecordId: commonGroundCafeWorld.hostBuildingRecordId,
+          bounds: commonGroundCafeWorld.bounds,
+          entrance: commonGroundCafeWorld.entrance,
+          zones: commonGroundCafeWorld.zones,
+          doorways: commonGroundCafeWorld.doorways,
+          stations: commonGroundCafeWorld.stations,
+          customerAnchors: commonGroundCafeWorld.customerAnchors,
+          spawnPoints: commonGroundCafeWorld.spawnPoints,
+          stats: commonGroundCafeWorld.stats,
+        }),
+        minaMarketKitchen: Object.freeze({
+          id: minaMarketWorld.id,
+          label: minaMarketWorld.label,
+          address: minaMarketWorld.address,
+          buildingId: minaMarketWorld.buildingId,
+          hostBuildingRecordId: minaMarketWorld.hostBuildingRecordId,
+          bounds: minaMarketWorld.bounds,
+          entrance: minaMarketWorld.entrance,
+          zones: minaMarketWorld.zones,
+          doorways: minaMarketWorld.doorways,
+          stations: minaMarketWorld.stations,
+          staffAnchors: minaMarketWorld.staffAnchors,
+          customerAnchors: minaMarketWorld.customerAnchors,
+          spawnPoints: minaMarketWorld.spawnPoints,
+          occupancySlots: minaMarketWorld.occupancySlots,
+          itineraries: minaMarketWorld.itineraries,
+          stats: minaMarketWorld.stats,
+        }),
         roadSpacing: 48,
+        roadCenters: world.roadCenters,
+        mapFeatures: world.mapFeatures,
         minimapRadius: 104,
         district,
       },
@@ -2887,6 +6261,13 @@ async function main() {
           maximumRefreshHz: 30,
           entityRefreshHz: 20,
         },
+        minimap: Object.freeze({
+          rasterWidth: Number(hud?.minimapTexture?.image?.width) || 0,
+          rasterHeight: Number(hud?.minimapTexture?.image?.height) || 0,
+          rasterScale: Number(hud?.minimapTexture?.userData?.minimapRasterScale) || 1,
+          placeIconPolicy: String(hud?.minimapTexture?.userData?.placeIconPolicy ?? ""),
+          placeIconStats: hud?.minimapPlaceIconStats ?? Object.freeze({}),
+        }),
         lighting: {
           phase: environmentState.phase,
           daylight: environmentState.daylight,
@@ -2909,15 +6290,19 @@ async function main() {
   }
 
   function fixedUpdate(delta, { captureSnapshot = true } = {}) {
+    presentationElapsed += Math.max(0, Number(delta) || 0);
     const physicalCapture = Boolean(input.pointer.locked);
-    const captured = physicalCapture || developmentCaptured || controlStepping;
+    const gameplayCaptured = physicalCapture || developmentCaptured || controlStepping;
+    const interactive = gameplayCaptured || Boolean(input.uiPointerMode);
     if (physicalCapture && !lastCaptureLocked) {
       story.notify({ type: "capture_started" });
       processStoryEvents();
     }
     lastCaptureLocked = physicalCapture;
-    if (captured) handleActions();
-    const dt = paused || !captured ? 0 : delta;
+    if (interactive) handleActions();
+    // Opening the phone is a deliberate soft pause: cursor-driven UI keeps
+    // ticking at 60 Hz while traffic, combat, needs and story time stand still.
+    const dt = paused || !gameplayCaptured || input.uiPointerMode ? 0 : delta;
     if (dt > 0) {
       story.update(dt);
       processStoryEvents();
@@ -2944,6 +6329,40 @@ async function main() {
         captureSnapshot: false,
       });
       const activeSideActivity = selectedActivitySnapshot();
+      lifeProfile.update(dt, {
+        paused: false,
+        working: activeSideActivity?.status === "active",
+        sprinting: input.actionDown("sprint"),
+        captureSnapshot: false,
+      });
+      residentialRuntimeView = residentialLife.update(dt, {
+        timeHours: lightingBeforeUpdate.timeHours,
+        captureSnapshot: false,
+      });
+      syncResidentialActors(false);
+      communityRuntimeClockContext.dayIndex = residentialRuntimeView.dayIndex;
+      communityRuntimeClockContext.minuteOfDay = residentialRuntimeView.minuteOfDay;
+      const communityMinuteStamp = communityRuntimeClockContext.dayIndex * 1440 + communityRuntimeClockContext.minuteOfDay;
+      if (selectedActivity !== "community" && communityMinuteStamp !== lastCommunityScheduleMinute) {
+        communityRuntimeView = communityHubLife.update(0, communityRuntimeClockContext);
+      }
+      if (communityMinuteStamp !== lastCommunityScheduleMinute) {
+        syncCommunityStaff(false, communityRuntimeClockContext);
+      }
+      cafeRuntimeClockContext.dayIndex = residentialRuntimeView.dayIndex;
+      cafeRuntimeClockContext.minuteOfDay = residentialRuntimeView.minuteOfDay;
+      const cafeMinuteStamp = cafeRuntimeClockContext.dayIndex * 1440 + cafeRuntimeClockContext.minuteOfDay;
+      if (selectedActivity !== "cafe" && cafeMinuteStamp !== lastCafeScheduleMinute) {
+        cafeRuntimeView = cafeShift.update(0, cafeRuntimeClockContext);
+      }
+      if (cafeMinuteStamp !== lastCafeScheduleMinute) syncCafeStaff(false, cafeRuntimeClockContext);
+      marketRuntimeClockContext.dayIndex = residentialRuntimeView.dayIndex;
+      marketRuntimeClockContext.minuteOfDay = residentialRuntimeView.minuteOfDay;
+      const marketMinuteStamp = marketRuntimeClockContext.dayIndex * 1440 + marketRuntimeClockContext.minuteOfDay;
+      if (selectedActivity !== "market" && marketMinuteStamp !== lastMarketScheduleMinute) {
+        marketRuntimeView = marketShift.update(0, marketRuntimeClockContext);
+      }
+      if (marketMinuteStamp !== lastMarketScheduleMinute) syncMarketStaff(false, marketRuntimeClockContext);
       const roadsideState = roadsideResponse?.update(dt, {
         playerX: positionBefore.x,
         playerZ: positionBefore.z,
@@ -3014,7 +6433,7 @@ async function main() {
         // geometry or discover a new material/pipeline on a gameplay frame.
         phoneCall: Boolean(storyState.line?.radio),
         disabled: storyState.controlsLocked || basketballLocksPlayer || businessLocksPlayer,
-        staminaRecoveryMultiplier: neighbourhoodState.recoveryMultiplier,
+        staminaRecoveryMultiplier: neighbourhoodState.recoveryMultiplier * lifeProfile.staminaRecoveryMultiplier(),
         groundHeight: playerGroundHeight,
         constrainMotion: constrainPlayerAgainstVehicleBoxes,
         captureSnapshot: false,
@@ -3024,6 +6443,15 @@ async function main() {
       gameplayFill.position.x += 2.5;
       gameplayFill.position.y += 5.5;
       gameplayFill.position.z += 3.5;
+      interiorOccupancy.update(dt, {
+        dayIndex: residentialRuntimeView.dayIndex,
+        minuteOfDay: residentialRuntimeView.minuteOfDay,
+        captureSnapshot: false,
+      });
+      // Stuck named-resident repairs are queued by the population hot loop and
+      // drained one at a time here, before the next actor update. This keeps a
+      // full navigation search out of population.update and bounds frame cost.
+      population.flushRoutineRouteSearches?.(1);
       population.update(dt, {
         targetPosition: focus,
         wantedStars: wantedState.stars,
@@ -3083,6 +6511,7 @@ async function main() {
       }
       applyPickups(focus);
       const activityAfterUpdate = updateSideActivity(dt);
+      if (garageCustomerActor && elapsed >= garageCustomerReleaseAt) releaseGarageCustomerPresentation();
       syncTaxiPassengerPresentation(selectedActivity === "taxi" ? activityAfterUpdate : null);
       updateMission(dt);
       updateMissionMarker();
@@ -3306,8 +6735,10 @@ async function main() {
     desertOutskirts.dispose();
     environment.dispose();
     clearTaxiPassengerPresentation();
+    releaseGarageCustomerPresentation();
     releaseNightRouteParticipants();
     roadsideResponse?.reset();
+    interiorOccupancy?.dispose?.();
     population.dispose();
     vehicles.dispose();
     player.dispose();
@@ -3327,6 +6758,45 @@ async function main() {
     switch (request.op) {
       case "ping": return { pong: true, elapsed };
       case "snapshot": return serializableSnapshot();
+      case "mapNavigation": {
+        const action = String(request.action ?? "snapshot");
+        if (action === "open") {
+          phoneOpen = true;
+          phoneApp = "map";
+          phoneOpenedAt = presentationElapsed - 0.28;
+          phoneAppTransitionAt = presentationElapsed - 0.24;
+          mapNavigation.setOpen(true);
+          input.setUiPointerMode?.(true);
+        } else if (action === "close") {
+          mapNavigation.cancelPointer();
+          mapNavigation.setOpen(false);
+          if (phoneApp === "map") phoneApp = null;
+        } else if (action === "select") {
+          mapNavigation.selectPlace(request.id ?? request.placeId ?? null);
+        } else if (action === "setRoute" || action === "route") {
+          const placeId = request.id ?? request.placeId;
+          if (placeId != null) mapNavigation.setNavigation(placeId);
+          else mapNavigation.setRouteTarget(
+            request.position ?? [request.x, request.y ?? 0, request.z],
+            { title: request.title, category: request.category, source: request.source },
+          );
+        } else if (action === "clear") {
+          mapNavigation.clearNavigation();
+        } else if (action === "pan") {
+          mapNavigation.panBy(request.x ?? request.deltaX ?? 0, request.y ?? request.deltaY ?? 0);
+        } else if (action === "zoom") {
+          if (request.wheel != null) mapNavigation.zoomWheel(request.wheel, request.anchor ?? null);
+          else mapNavigation.setZoom(request.value ?? request.zoom, request.anchor ?? null);
+        } else if (action !== "snapshot") {
+          throw new RangeError(`Unknown map navigation action: ${action}`);
+        }
+        updateMissionMarker();
+        return {
+          mapNavigation: mapNavigation.snapshot(),
+          phone: phoneSnapshot(),
+          targetPosition: targetForHud()?.toArray?.() ?? null,
+        };
+      }
       case "action": input.injectAction(request.action); return { action: request.action };
       case "key": input.injectKey(request.code, request.down !== false); return { code: request.code, down: request.down !== false };
       case "aim": {
@@ -3386,8 +6856,447 @@ async function main() {
       case "startTaxi": return beginSideActivity("taxi", { fareId: request.fareId });
       case "startRace": return beginSideActivity("race");
       case "startLife": return beginLifeActivity(request.activityId ?? request.id, { force: true });
+      case "startGarageShift": return beginGarageShift({ force: true, workOrderId: request.workOrderId ?? null });
+      case "startCommunityShift": return beginCommunityShift(request.roleId ?? request.id ?? "community_kitchen", { force: true });
+      case "startCafeShift": return beginCafeShift({ force: true });
+      case "startMarketShift": return beginMarketShift({ force: true });
       case "startBasketball": return beginBasketballActivity({ force: true });
       case "startNightRoute": return beginNightRoute({ force: Boolean(request.force ?? true) });
+      case "garageShift": {
+        const action = String(request.action ?? "snapshot");
+        if (action === "availability") return garageShift.availability(garageShiftContext({ position: undefined, inVehicle: false }));
+        if (action === "begin" || action === "clockIn") {
+          return beginGarageShift({ force: true, workOrderId: request.workOrderId ?? null });
+        }
+        const context = garageShiftContext({ position: undefined, inVehicle: false });
+        let result = null;
+        if (action === "greet") result = garageShift.greetCustomer(context);
+        else if (action === "inspect") result = garageShift.inspect(context);
+        else if (action === "diagnose") result = garageShift.diagnose(request.diagnosisId ?? request.id, context);
+        else if (action === "parts") result = garageShift.collectParts(request.partIds ?? request.parts ?? [], context);
+        else if (action === "repair" || action === "advance") {
+          let remaining = clamp(request.seconds ?? request.delta ?? 1, 0, 120);
+          while (remaining > 0) {
+            const step = Math.min(1, remaining);
+            garageShift.update(step, { working: true, captureSnapshot: false });
+            remaining -= step;
+          }
+          result = garageShift.snapshot();
+        } else if (action === "safety") result = garageShift.performSafetyCheck(request.checkId ?? request.id, context);
+        else if (action === "invoice") result = garageShift.submitInvoice(context);
+        else if (action === "reset") {
+          releaseGarageCustomerPresentation();
+          garageShift.restore(initialGarageShiftSave);
+          if (selectedActivity === "garage") selectedActivity = null;
+          garageDiagnosisIndex = 0;
+          garageConfirmedDiagnosisId = null;
+          lastActivityStage = null;
+          activityPresentationUntil = 0;
+          result = garageShift.snapshot();
+        } else if (action !== "snapshot") throw new RangeError(`Unknown Garage shift action: ${action}`);
+        processGarageShiftEvents();
+        return {
+          result,
+          garageShift: garageShift.snapshot(),
+          lifeProfile: lifeProfile.snapshot(),
+          player: player.snapshot(),
+        };
+      }
+      case "communityHub": {
+        const position = controlledPosition();
+        let nearestStation = null;
+        let nearestDistance = Infinity;
+        for (const [key, station] of Object.entries(communityHubWorld.stations)) {
+          const distance = position.distanceTo(vectorFrom(station.position));
+          if (distance >= nearestDistance) continue;
+          nearestDistance = distance;
+          nearestStation = { key, ...station, distance };
+        }
+        return {
+          inside: insideCommunityHub(position),
+          nearestStation,
+          worldContract: communityHubWorld,
+          staff: communityPresentationSnapshot().staff,
+          staffActors: communityStaffRuntimeSnapshot(),
+          activity: selectedActivity === "community" ? communityActivitySnapshot() : null,
+        };
+      }
+      case "communityStaffSchedule": {
+        const staffId = String(request.staffId ?? request.id ?? "");
+        const state = communityDirectorySnapshot().staff.find(value => value.id === staffId);
+        const actor = communityStaffActors.get(staffId);
+        if (!state || !actor) throw new RangeError(`Unknown Harbour Skills House staff member: ${staffId}`);
+        return {
+          ...state,
+          actorPosition: actor.root.position.toArray(),
+          routineDestination: actor.routineDestinationActive ? actor.routineDestination.toArray() : null,
+          routineArrived: actor.routineDestinationActive ? Boolean(actor.routineDestinationArrived) : null,
+        };
+      }
+      case "communityShift": {
+        const action = String(request.action ?? "snapshot");
+        let result = null;
+        if (action === "availability") {
+          const roleId = request.roleId ?? request.id;
+          result = roleId
+            ? communityHubLife.availability(roleId, communityClockContext())
+            : communityDirectorySnapshot().roles;
+        } else if (action === "begin") {
+          result = beginCommunityShift(request.roleId ?? request.id ?? "community_kitchen", { force: true });
+        } else if (action === "perform" || action === "interact") {
+          result = interactWithCommunityShift({
+            force: true,
+            quality: request.quality ?? 88,
+            safetyConfirmed: request.safetyConfirmed !== false,
+          });
+        } else if (action === "advance") {
+          let remaining = clamp(request.seconds ?? request.delta ?? 1, 0, 180);
+          while (remaining > 0 && selectedActivity === "community") {
+            const step = Math.min(1, remaining);
+            communityRuntimeView = communityHubLife.update(step, {
+              ...communityClockContext({ atHouse: true, inVehicle: false }),
+              captureSnapshot: false,
+            });
+            remaining -= step;
+            if (communityRuntimeView.lastStationResultSerial > lastCommunityStationResultSerial) processCommunityHubResults();
+          }
+          result = selectedActivity === "community" ? communityActivitySnapshot() : null;
+        } else if (action === "complete") {
+          let guard = 0;
+          while (selectedActivity === "community" && guard++ < 40) {
+            if (!communityRuntimeView.taskActive) interactWithCommunityShift({ force: true, quality: 96, safetyConfirmed: true });
+            communityRuntimeView = communityHubLife.update(180, {
+              ...communityClockContext({ atHouse: true, inVehicle: false }),
+              captureSnapshot: false,
+            });
+            processCommunityHubResults();
+          }
+          result = selectedActivity === "community" ? communityActivitySnapshot() : null;
+        } else if (action === "cancel") {
+          result = communityHubLife.cancel(communityClockContext());
+          communityRuntimeView = communityHubLife.update(0, { ...communityClockContext(), captureSnapshot: false });
+          selectedActivity = null;
+          lastActivityStage = null;
+        } else if (action === "reset") {
+          communityHubLife.restore(initialCommunityHubSave);
+          communityRuntimeView = communityHubLife.update(0, { ...communityClockContext(), captureSnapshot: false });
+          lastCommunityStationResultSerial = 0;
+          lastCommunityTransactionSerial = 0;
+          lastCommunityPresentationEvent = null;
+          communityRoleSelectionIndex = 0;
+          selectedActivity = null;
+          lastActivityStage = null;
+          activityPresentationUntil = 0;
+          communityFullSnapshotCacheKey = "";
+          communityDirectoryCacheKey = "";
+          communityActivityCacheKey = "";
+          communityActivityCache = null;
+          result = communityPresentationSnapshot();
+        } else if (action !== "snapshot") {
+          throw new RangeError(`Unknown Harbour Skills House action: ${action}`);
+        }
+        return {
+          result,
+          communityHub: communityPresentationSnapshot(),
+          lifeProfile: lifeProfile.snapshot(),
+          player: player.snapshot(),
+          communityTrust,
+        };
+      }
+      case "commonGroundCafe": {
+        const position = controlledPosition();
+        let nearestStation = null;
+        let nearestDistance = Infinity;
+        for (const [key, station] of Object.entries(commonGroundCafeWorld.stations)) {
+          const distance = position.distanceTo(vectorFrom(station.position));
+          if (distance >= nearestDistance) continue;
+          nearestDistance = distance;
+          nearestStation = { key, ...station, distance };
+        }
+        return {
+          inside: insideCommonGroundCafe(position),
+          nearestStation,
+          worldContract: commonGroundCafeWorld,
+          staff: cafeStaffStates,
+          staffActors: cafeStaffRuntimeSnapshot(),
+          activity: selectedActivity === "cafe" ? cafeActivitySnapshot() : null,
+        };
+      }
+      case "cafeStaffSchedule": {
+        const staffId = String(request.staffId ?? request.id ?? ASHA_PATEL.id);
+        const state = cafeShift.staffState(staffId, cafeClockContext());
+        const actor = cafeStaffActors.get(staffId);
+        if (!state || !actor) throw new RangeError(`Unknown Common Ground Cafe staff member: ${staffId}`);
+        return {
+          ...state,
+          actorId: actor.id,
+          actorPosition: actor.root.position.toArray(),
+          routineDestination: actor.routineDestinationActive ? actor.routineDestination.toArray() : null,
+          routineArrived: actor.routineDestinationActive ? Boolean(actor.routineDestinationArrived) : null,
+        };
+      }
+      case "cafeShift": {
+        const action = String(request.action ?? "snapshot");
+        let result = null;
+        if (action === "availability") {
+          result = cafeShift.availability(cafeClockContext());
+        } else if (action === "begin" || action === "resume") {
+          result = beginCafeShift({ force: true });
+        } else if (action === "perform" || action === "interact") {
+          result = interactWithCafeShift({
+            force: true,
+            quality: request.quality ?? 90,
+            safetyConfirmed: request.safetyConfirmed !== false,
+          });
+        } else if (action === "advance") {
+          let remaining = clamp(request.seconds ?? request.delta ?? 1, 0, 180);
+          while (remaining > 0 && selectedActivity === "cafe") {
+            const step = Math.min(1, remaining);
+            cafeRuntimeView = cafeShift.update(step, {
+              ...cafeClockContext({ insideCafe: true }),
+              captureSnapshot: false,
+            });
+            remaining -= step;
+            if (cafeRuntimeView.lastStationResultSerial > lastCafeStationResultSerial) processCafeShiftResults();
+          }
+          result = selectedActivity === "cafe" ? cafeActivitySnapshot() : null;
+        } else if (action === "complete") {
+          let guard = 0;
+          while (selectedActivity === "cafe" && guard++ < 30) {
+            if (!cafeRuntimeView.taskActive) interactWithCafeShift({ force: true, quality: 96, safetyConfirmed: true });
+            cafeRuntimeView = cafeShift.update(180, {
+              ...cafeClockContext({ insideCafe: true }),
+              captureSnapshot: false,
+            });
+            processCafeShiftResults();
+          }
+          result = selectedActivity === "cafe" ? cafeActivitySnapshot() : null;
+        } else if (action === "pause" || action === "cancel") {
+          result = cafeShift.pause(cafeClockContext());
+          cafeRuntimeView = cafeShift.update(0, { ...cafeClockContext(), captureSnapshot: false });
+          selectedActivity = null;
+          lastActivityStage = null;
+          cafeActivityCacheKey = "";
+        } else if (action === "reset") {
+          cafeShift.restore(initialCafeShiftSave);
+          cafeRuntimeView = cafeShift.update(0, { ...cafeClockContext(), captureSnapshot: false });
+          lastCafeStationResultSerial = 0;
+          lastCafeTransactionSerial = 0;
+          lastCafePresentationEvent = null;
+          cafeQuality = 0;
+          cafeReworkCount = 0;
+          selectedActivity = null;
+          lastActivityStage = null;
+          activityPresentationUntil = 0;
+          cafeActivityCacheKey = "";
+          cafeActivityCache = null;
+          result = cafeShift.snapshot();
+        } else if (action !== "snapshot") {
+          throw new RangeError(`Unknown Common Ground Cafe shift action: ${action}`);
+        }
+        return {
+          result,
+          cafeShift: cafeShift.snapshot(),
+          lifeProfile: lifeProfile.snapshot(),
+          player: player.snapshot(),
+          communityTrust,
+        };
+      }
+      case "minaMarket": {
+        const position = controlledPosition();
+        let nearestStation = null;
+        let nearestDistance = Infinity;
+        for (const [key, station] of Object.entries(minaMarketWorld.stations)) {
+          const distance = position.distanceTo(vectorFrom(station.position));
+          if (distance >= nearestDistance) continue;
+          nearestDistance = distance;
+          nearestStation = { key, ...station, distance };
+        }
+        return {
+          inside: insideMinaMarket(position),
+          nearestStation,
+          worldContract: minaMarketWorld,
+          staff: marketStaffStates,
+          staffActors: marketStaffRuntimeSnapshot(),
+          occupants: interiorOccupancy.snapshot(),
+          activity: selectedActivity === "market" ? marketActivitySnapshot() : null,
+        };
+      }
+      case "marketStaffSchedule": {
+        const staffId = String(request.staffId ?? request.id ?? MINA_OKAFOR.id);
+        const state = marketShift.staffState(staffId, marketClockContext());
+        const actor = marketStaffActors.get(staffId);
+        if (!state || !actor) throw new RangeError(`Unknown Mina's Market staff member: ${staffId}`);
+        return {
+          ...state,
+          actorId: actor.id,
+          actorPosition: actor.root.position.toArray(),
+          routineDestination: actor.routineDestinationActive ? actor.routineDestination.toArray() : null,
+          routineArrived: actor.routineDestinationActive ? Boolean(actor.routineDestinationArrived) : null,
+          home: actor.root.userData.home,
+        };
+      }
+      case "marketShift": {
+        const action = String(request.action ?? "snapshot");
+        let result = null;
+        if (action === "availability") {
+          result = marketShift.availability(marketClockContext());
+        } else if (action === "begin" || action === "resume") {
+          result = beginMarketShift({ force: true });
+        } else if (action === "perform" || action === "interact") {
+          result = interactWithMarketShift({
+            force: true,
+            quality: request.quality ?? 92,
+            safetyConfirmed: request.safetyConfirmed !== false,
+            decisionId: request.decisionId,
+          });
+        } else if (action === "chooseSurplus" || action === "decision") {
+          result = chooseMarketSurplus({ force: true, decisionId: request.decisionId ?? request.id ?? "donate" });
+        } else if (action === "advance") {
+          let remaining = clamp(request.seconds ?? request.delta ?? 1, 0, 180);
+          while (remaining > 0 && selectedActivity === "market") {
+            const step = Math.min(1, remaining);
+            marketRuntimeView = marketShift.update(step, {
+              ...marketClockContext(),
+              captureSnapshot: false,
+            });
+            remaining -= step;
+            if (marketRuntimeView.stationResultSerial > lastMarketStationResultSerial) processMarketShiftResults();
+          }
+          result = selectedActivity === "market" ? marketActivitySnapshot() : null;
+        } else if (action === "complete") {
+          let guard = 0;
+          while (selectedActivity === "market" && guard++ < 40) {
+            if (marketRuntimeView.decisionRequired) {
+              chooseMarketSurplus({ force: true, decisionId: request.decisionId ?? "donate" });
+            } else if (!marketRuntimeView.taskActive) {
+              interactWithMarketShift({ force: true, quality: request.quality ?? 96, safetyConfirmed: true });
+            }
+            marketRuntimeView = marketShift.update(180, {
+              ...marketClockContext(),
+              captureSnapshot: false,
+            });
+            processMarketShiftResults();
+          }
+          result = selectedActivity === "market" ? marketActivitySnapshot() : null;
+        } else if (action === "pause" || action === "cancel") {
+          result = marketShift.pause(marketClockContext({ sourceId: marketCommandSource("pause", "control") }));
+          marketRuntimeView = marketShift.update(0, { ...marketClockContext(), captureSnapshot: false });
+          selectedActivity = null;
+          lastActivityStage = null;
+          marketActivityCacheKey = "";
+        } else if (action === "reset") {
+          marketShift.restore(initialMarketShiftSave);
+          marketRuntimeView = marketShift.update(0, { ...marketClockContext(), captureSnapshot: false });
+          lastMarketStationResultSerial = 0;
+          lastMarketTransactionSerial = 0;
+          lastMarketPresentationEvent = null;
+          marketQuality = 0;
+          marketReworkCount = 0;
+          marketDecisionIndex = 1;
+          selectedActivity = null;
+          lastActivityStage = null;
+          activityPresentationUntil = 0;
+          marketActivityCacheKey = "";
+          marketActivityCache = null;
+          result = marketShift.snapshot();
+        } else if (action !== "snapshot") {
+          throw new RangeError(`Unknown Mina's Market shift action: ${action}`);
+        }
+        return {
+          result,
+          marketShift: marketShift.snapshot(),
+          lifeProfile: lifeProfile.snapshot(),
+          player: player.snapshot(),
+          communityTrust,
+        };
+      }
+      case "interiorOccupancy": return interiorOccupancy.snapshot();
+      case "lifeProfile": return lifeProfile.snapshot();
+      case "home": {
+        const station = nearbyResidentialStation(undefined, request.radius ?? 2.35);
+        return {
+          inside: insideResidentialHome(),
+          homeId: residentialRuntimeView.currentHomeId,
+          logicalCurrentHomeId: residentialRuntimeView.currentHomeId,
+          physicalHomeId: residentialInterior.homeId,
+          nearestStation: station,
+          worldContract: residentialInterior,
+        };
+      }
+      case "residentSchedule": {
+        const residentId = String(request.residentId ?? request.id ?? "");
+        const state = residentialLife.residentState(residentId, residentialClockContext());
+        const actor = residentialActors.get(residentId);
+        if (!state || !actor) throw new RangeError(`Unknown residential resident: ${residentId}`);
+        return {
+          ...state,
+          actorPosition: actor.root.position.toArray(),
+          routineDestination: actor.routineDestination?.toArray?.() ?? null,
+          routineArrived: actor.routineDestinationActive
+            ? Boolean(actor.routineDestinationArrived)
+            : null,
+        };
+      }
+      case "residential": {
+        const action = String(request.action ?? "snapshot");
+        let result = null;
+        if (action === "perform") {
+          result = performResidentialActivity(request.activityId ?? request.id, { force: Boolean(request.force) });
+        } else if (action === "restock") {
+          result = residentialLife.restockHome(residentialClockContext({
+            atHome: Boolean(request.force) || insideResidentialHome(),
+            homeId: request.homeId ?? residentialInterior.homeId,
+            inVehicle: Boolean(vehicles.playerVehicle),
+            cash: player.cash,
+          }));
+          applyResidentialTransaction(result, { advanceClock: false, toastLabel: "GROCERIES RESTOCKED" });
+        } else if (action === "payRent") {
+          result = residentialLife.payRent(residentialClockContext({ cash: player.cash }));
+          applyResidentialTransaction(result, { advanceClock: false, toastLabel: "RENT PAID" });
+        } else if (action === "acquire") {
+          const requestedHomeId = String(request.homeId ?? residentialInterior.homeId);
+          if (requestedHomeId !== residentialInterior.homeId) {
+            result = Object.freeze({
+              accepted: false,
+              reason: "physical_interior_required",
+              homeId: requestedHomeId,
+              physicalHomeId: residentialInterior.homeId,
+            });
+          } else {
+            result = residentialLife.acquireHome(requestedHomeId, residentialClockContext({
+              mode: request.mode ?? "rent",
+              cash: player.cash,
+              progressionTier: 20,
+            }));
+            applyResidentialTransaction(result, { advanceClock: false, toastLabel: request.mode === "buy" ? "HOME PURCHASED" : "TENANCY STARTED" });
+          }
+        } else if (action === "invite") {
+          result = residentialLife.inviteVisitor(request.residentId ?? request.id, residentialClockContext({
+            atHome: Boolean(request.force) || insideResidentialHome(),
+            durationMinutes: request.durationMinutes ?? 90,
+          }));
+          if (result.accepted) {
+            lastResidentialInteractionSerial = Math.max(lastResidentialInteractionSerial, result.serial);
+            invalidateResidentialView();
+            syncResidentialActors(true);
+          } else showToast(explainResidentialRejection(result), 2.6);
+        } else if (action === "interactResident") {
+          result = interactResidentialActor(request.residentId ?? request.id, {
+            force: Boolean(request.force),
+            kind: request.kind ?? "talk",
+          });
+        } else if (action !== "snapshot") {
+          throw new RangeError(`Unknown residential action: ${action}`);
+        }
+        return {
+          result,
+          residential: residentialLife.snapshot(),
+          lifeProfile: lifeProfile.snapshot(),
+          player: player.snapshot(),
+          environment: environment.snapshot(),
+        };
+      }
       case "roadside": {
         const action = String(request.action ?? "snapshot");
         if (action === "force") roadsideResponse?.force(request.vehicleId ?? request.target ?? null, request.kind);
@@ -3487,15 +7396,50 @@ async function main() {
       }
       case "shopSelect": return neighbourhoodRoutine.moveSelection(request.direction ?? request.delta ?? 1);
       case "shopBuy": {
-        const result = neighbourhoodRoutine.purchase({ ...neighbourhoodContext(), cash: player.snapshot().cash });
-        applyNeighbourhoodTransaction(result);
+        const result = buySelectedNeighbourhoodItem();
         return { transaction: result, neighbourhood: neighbourhoodRoutine.snapshot(), player: player.snapshot() };
+      }
+      case "unpackGroceries": {
+        const result = unpackResidentialSupplies({
+          force: Boolean(request.force),
+          sourceId: request.sourceId ?? null,
+        });
+        return { transaction: result, residential: residentialLife.snapshot(), player: player.snapshot() };
       }
       case "closeBusiness": return neighbourhoodRoutine.close("player_closed");
       case "activity": return selectedActivitySnapshot();
       case "cancelActivity": {
+        if (selectedActivity === "community") {
+          const result = communityHubLife.cancel(communityClockContext());
+          communityRuntimeView = communityHubLife.update(0, { ...communityClockContext(), captureSnapshot: false });
+          selectedActivity = null;
+          lastActivityStage = null;
+          activityPresentationUntil = 0;
+          return result;
+        }
+        if (selectedActivity === "cafe") {
+          const result = cafeShift.pause(cafeClockContext());
+          cafeRuntimeView = cafeShift.update(0, { ...cafeClockContext(), captureSnapshot: false });
+          selectedActivity = null;
+          lastActivityStage = null;
+          activityPresentationUntil = 0;
+          cafeActivityCacheKey = "";
+          return result;
+        }
+        if (selectedActivity === "market") {
+          const result = marketShift.pause(marketClockContext({ sourceId: marketCommandSource("pause", "cancel") }));
+          marketRuntimeView = marketShift.update(0, { ...marketClockContext(), captureSnapshot: false });
+          selectedActivity = null;
+          lastActivityStage = null;
+          activityPresentationUntil = 0;
+          marketActivityCacheKey = "";
+          return result;
+        }
         const system = selectedActivitySystem();
         if (!system) return null;
+        if (selectedActivity === "garage") {
+          return { accepted: false, reason: "finish_shift", garageShift: garageShift.snapshot() };
+        }
         if (selectedActivity === "nightRoute") {
           releaseNightRouteParticipants();
           const result = nightRoute.reset();
@@ -3519,7 +7463,68 @@ async function main() {
       }
       case "clearWanted": return wanted.clear();
       case "setWeather": return environment.setRain(request.rain ?? request.amount, request.immediate !== false);
-      case "setTime": return environment.setTime(request.hours ?? request.time);
+      case "setTime": {
+        const result = environment.setTime(request.hours ?? request.time);
+        const requestedDayIndex = request.dayIndex === undefined
+          ? null
+          : Math.max(0, Math.trunc(Number(request.dayIndex) || 0));
+        const neighbourhoodClock = {
+          timeHours: result.timeHours,
+          weather: result.weather,
+          story: story.snapshot(),
+          paused: false,
+          captureSnapshot: false,
+        };
+        if (requestedDayIndex != null) neighbourhoodClock.dayIndex = requestedDayIndex;
+        neighbourhoodRoutine.update(0, neighbourhoodClock);
+        // The capture-free neighbourhood view intentionally contains only
+        // menu and recovery hot-path fields. Read the authoritative clock from
+        // its cached public snapshot so an explicit control day propagates to
+        // housing, community work, and cafe saves instead of becoming
+        // undefined and silently leaving those systems on day zero.
+        const dayIndex = neighbourhoodRoutine.snapshot().dayIndex;
+        residentialRuntimeView = residentialLife.update(0, {
+          dayIndex,
+          timeHours: result.timeHours,
+          captureSnapshot: false,
+        });
+        lastResidentialScheduleMinute = -1;
+        syncResidentialActors(true);
+        communityRuntimeView = communityHubLife.update(0, {
+          dayIndex,
+          timeHours: result.timeHours,
+          captureSnapshot: false,
+        });
+        communityRuntimeClockContext.dayIndex = dayIndex;
+        communityRuntimeClockContext.minuteOfDay = Math.trunc(result.timeHours * 60) % 1440;
+        lastCommunityScheduleMinute = -1;
+        communityDirectoryCacheKey = "";
+        syncCommunityStaff(true, communityRuntimeClockContext);
+        cafeRuntimeView = cafeShift.update(0, {
+          dayIndex,
+          timeHours: result.timeHours,
+          captureSnapshot: false,
+        });
+        cafeRuntimeClockContext.dayIndex = dayIndex;
+        cafeRuntimeClockContext.minuteOfDay = Math.trunc(result.timeHours * 60) % 1440;
+        lastCafeScheduleMinute = -1;
+        syncCafeStaff(true, cafeRuntimeClockContext);
+        marketRuntimeView = marketShift.update(0, {
+          dayIndex,
+          timeHours: result.timeHours,
+          captureSnapshot: false,
+        });
+        marketRuntimeClockContext.dayIndex = dayIndex;
+        marketRuntimeClockContext.minuteOfDay = Math.trunc(result.timeHours * 60) % 1440;
+        lastMarketScheduleMinute = -1;
+        syncMarketStaff(true, marketRuntimeClockContext);
+        interiorOccupancy.update(0, {
+          dayIndex,
+          minuteOfDay: marketRuntimeClockContext.minuteOfDay,
+          captureSnapshot: false,
+        });
+        return Object.freeze({ ...result, dayIndex });
+      }
       case "resetFrameTiming": resetFrameTiming(); return frameTimingSnapshot();
       case "fire": {
         input.injectHeldAction("aim", true);
@@ -3656,6 +7661,13 @@ async function main() {
     const neighbourhoodPrepared = neighbourhoodRoutine.prewarm();
     const chapterTwoPrepared = chapterTwo.prewarm();
     const aftermathPrepared = lifeActivity.prewarm();
+    const lifeProfilePrepared = lifeProfile.prewarm();
+    const residentialPrepared = residentialLife.prewarm();
+    const garageShiftPrepared = garageShift.prewarm();
+    const communityHubPrepared = communityHubLife.prewarm();
+    const cafeShiftPrepared = cafeShift.prewarm();
+    const marketShiftPrepared = marketShift.prewarm();
+    const interiorOccupancyPrepared = interiorOccupancy.prewarm();
     const nightRoutePrepared = nightRoute.prewarm();
     const roadsidePrepared = roadsideResponse.prewarm();
     const warmTaxi = createTaxiActivity({ seed: 0x4e534e54 });
@@ -3797,6 +7809,13 @@ async function main() {
         "basketball-made-and-miss-flight", "neighbourhood-business-meal-and-menu",
         "borrowed-time-investigation-and-both-costly-decisions",
         "borrowed-time-both-aftermath-routes",
+        "persistent-life-skills-needs-wages-and-home-care",
+        "physical-home-tenancy-rent-fixtures-meals-visitors-and-resident-schedules",
+        "pulse-garage-customer-inspection-diagnosis-repair-safety-and-invoice",
+        "harbour-skills-house-kitchen-repair-archive-safety-rework-and-wage-ledgers",
+        "common-ground-cafe-handover-till-prep-service-dishes-stock-and-wage-ledger",
+        "minas-market-cold-chain-produce-stock-packing-till-wash-up-and-surplus-ledger",
+        "ambient-civilians-enter-dwell-in-and-leave-four-walk-in-buildings",
         "pulse-line-authorized-shuttle-route",
         "night-shift-named-passengers-dialogue-and-cabin-occupancy",
         "the-night-count-both-moral-ledgers-and-four-borrowed-participants",
@@ -3807,6 +7826,13 @@ async function main() {
       neighbourhoodPrepared,
       chapterTwoPrepared,
       aftermathPrepared,
+      lifeProfilePrepared,
+      residentialPrepared,
+      garageShiftPrepared,
+      communityHubPrepared,
+      cafeShiftPrepared,
+      marketShiftPrepared,
+      interiorOccupancyPrepared,
       nightRoutePrepared,
       roadsidePrepared,
       taxiPrepared: Object.freeze({

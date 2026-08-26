@@ -38,6 +38,24 @@ function item(id, name, cost, heal, stamina, appetite, consumeSeconds, purchaseL
   });
 }
 
+function householdItem(id, name, cost, inventoryEffects, purchaseLine) {
+  return Object.freeze({
+    id,
+    name,
+    cost,
+    heal: 0,
+    stamina: 0,
+    appetite: 0,
+    consumeSeconds: 0,
+    purchaseLine,
+    payForward: false,
+    kind: "household_supplies",
+    inventoryEffects: Object.freeze({
+      groceries: Math.max(0, integer(inventoryEffects?.groceries)),
+    }),
+  });
+}
+
 function hours(open, close) {
   const overnight = close <= open;
   return Object.freeze({
@@ -50,7 +68,7 @@ function hours(open, close) {
   });
 }
 
-function business(id, name, keeperName, position, openingHours, items, welcome) {
+function business(id, name, keeperName, position, openingHours, items, welcome, householdItems = []) {
   return Object.freeze({
     id,
     name,
@@ -58,9 +76,18 @@ function business(id, name, keeperName, position, openingHours, items, welcome) 
     position: point(position),
     openingHours,
     items: Object.freeze(items),
+    householdItems: Object.freeze(householdItems),
     welcome,
   });
 }
+
+export const WEEKLY_GROCERY_BAG = householdItem(
+  "weekly_grocery_bag",
+  "WEEKLY GROCERY BAG",
+  18,
+  { groceries: 5 },
+  "Five pantry staples, packed to carry home. Keep the bag with you until you unpack it there.",
+);
 
 /**
  * Authored businesses deliberately cover both daytime and overnight schedules.
@@ -93,6 +120,7 @@ export const DEFAULT_NEIGHBOURHOOD_BUSINESSES = Object.freeze([
       item("hibiscus_tea", "CHILLED HIBISCUS TEA", 8, 1, 19, 7, 1.3, "Tart enough to wake you up, kind enough not to shout."),
     ],
     "A market remembers who shows up when the shutters are heavy.",
+    [WEEKLY_GROCERY_BAG],
   ),
   business(
     "harbour_lantern",
@@ -194,11 +222,22 @@ function configuredBusinesses(definitions, positions) {
       purchaseLine: String(sourceItem?.purchaseLine ?? "Take a breath while it is warm."),
       payForward: false,
     }));
+    const suppliedHouseholdItems = Array.from(definition?.householdItems ?? []).slice(0, 1);
+    const normalizedHouseholdItems = suppliedHouseholdItems.map((sourceItem, itemIndex) => householdItem(
+      String(sourceItem?.id ?? `${id}_household_${itemIndex}`),
+      String(sourceItem?.name ?? sourceItem?.label ?? `HOUSEHOLD ITEM ${itemIndex + 1}`),
+      Math.max(0, integer(sourceItem?.cost)),
+      sourceItem?.inventoryEffects,
+      String(sourceItem?.purchaseLine ?? "Take it home before you put it away."),
+    ));
     const suppliedHours = definition?.openingHours ?? definition?.hours ?? hours(7, 21);
     const open = clamp(suppliedHours.open ?? finite(suppliedHours.openMinute) / 60, 0, 24);
     const close = clamp(suppliedHours.close ?? finite(suppliedHours.closeMinute, 24 * 60) / 60, 0, 24);
     const openingHours = hours(open, close);
-    const menu = Object.freeze([...normalizedItems, PAY_FORWARD_ITEM]);
+    // Pay Forward deliberately remains index three for every business. Mina's
+    // take-home groceries append after it so existing mid-menu saves and the
+    // established social transaction keep their authored meaning.
+    const menu = Object.freeze([...normalizedItems, PAY_FORWARD_ITEM, ...normalizedHouseholdItems]);
     return Object.freeze({
       id,
       name: String(definition?.name ?? id).toUpperCase(),
@@ -206,6 +245,7 @@ function configuredBusinesses(definitions, positions) {
       position: point(readPositionOverride(positions, id) ?? definition?.position),
       openingHours,
       items: Object.freeze(normalizedItems),
+      householdItems: Object.freeze(normalizedHouseholdItems),
       menu,
       welcome: String(definition?.welcome ?? "Come in. There is time to eat."),
     });
@@ -471,14 +511,21 @@ export function createNeighbourhoodRoutine({
     if (cash + 1e-9 < selected.cost) return rejected("insufficient_cash", definition.id, selected.id);
 
     transactionSerial += 1;
-    appetite = clamp(appetite + selected.appetite, 0, 100);
     if (selected.payForward) {
       if (pendingPayForwardCount[activeBusinessIndex] === 0) pendingPayForwardDay[activeBusinessIndex] = dayIndex;
       pendingPayForwardCount[activeBusinessIndex] += 1;
       keeperLine = `${definition.keeperName}: ${selected.purchaseLine}`;
       lineReason = "pay_forward_purchase";
       lastEvent = "meal_paid_forward";
+    } else if (selected.kind === "household_supplies") {
+      // Household stock belongs to the residential simulation. This routine
+      // publishes a caller-applied inventory effect and intentionally leaves
+      // appetite and every in-progress/completed consume field untouched.
+      keeperLine = `${definition.keeperName}: ${selected.purchaseLine}`;
+      lineReason = "household_purchase";
+      lastEvent = "household_supplies_purchased";
     } else {
+      appetite = clamp(appetite + selected.appetite, 0, 100);
       consumeBusinessIndex = activeBusinessIndex;
       consumeItemIndex = selectionIndex;
       consumeElapsed = 0;
@@ -492,6 +539,10 @@ export function createNeighbourhoodRoutine({
       serial: transactionSerial,
       businessId: definition.id,
       itemId: selected.id,
+      ...(selected.kind === "household_supplies" ? {
+        kind: selected.kind,
+        inventoryEffects: selected.inventoryEffects,
+      } : {}),
       cost: selected.cost,
       heal: selected.heal,
       stamina: selected.stamina,
@@ -508,6 +559,24 @@ export function createNeighbourhoodRoutine({
     lineReason = "none";
     lastEvent = String(reason || "player_closed");
     return snapshot();
+  }
+
+  // Food prepared in a physical home is transacted by the residential
+  // simulation, but appetite remains this system's single authoritative
+  // value. Accept only the resolved delta so home meals and shop meals feed
+  // the same gentle, non-lethal need without duplicating either transaction.
+  function applyAppetiteEffect(amountValue = 0) {
+    const previous = appetite;
+    appetite = clamp(appetite + finite(amountValue), 0, 100);
+    lastEvent = "appetite_adjusted";
+    const [statusLabel, recoveryMultiplier] = appetiteState(appetite);
+    return Object.freeze({
+      accepted: true,
+      appetite: appetite - previous,
+      value: appetite,
+      appetiteStatus: statusLabel,
+      recoveryMultiplier,
+    });
   }
 
   function update(deltaValue, context = {}) {
@@ -666,12 +735,41 @@ export function createNeighbourhoodRoutine({
     close();
     openMenu(definition.id, { dayIndex: sampleDay + 1, timeHours: definition.openingHours.open + 0.5, position: samplePosition });
     const acknowledgementPrepared = lineReason === "pay_forward_acknowledgement";
+    close();
+    const market = businesses.find(candidate => candidate.id === "mina_market_kitchen");
+    let householdPurchasePrepared = false;
+    if (market) {
+      openMenu(market.id, {
+        dayIndex: sampleDay + 1,
+        timeHours: market.openingHours.open + 0.5,
+        position: market.position,
+      });
+      moveSelection(4);
+      const appetiteBeforeHouseholdPurchase = appetite;
+      const consumeBeforeHouseholdPurchase = JSON.stringify({
+        consumeBusinessIndex,
+        consumeItemIndex,
+        consumeElapsed,
+        consumeDuration,
+      });
+      const householdPurchase = purchase({
+        cash: 9999,
+        dayIndex: sampleDay + 1,
+        timeHours: market.openingHours.open + 0.5,
+      });
+      householdPurchasePrepared = householdPurchase.accepted
+        && householdPurchase.kind === "household_supplies"
+        && householdPurchase.inventoryEffects?.groceries === 5
+        && appetite === appetiteBeforeHouseholdPurchase
+        && JSON.stringify({ consumeBusinessIndex, consumeItemIndex, consumeElapsed, consumeDuration }) === consumeBeforeHouseholdPurchase;
+    }
     restore(previous);
     return Object.freeze({
       menusPrepared: businesses.length,
       purchasePrepared: true,
       consumePrepared: true,
       acknowledgementPrepared,
+      householdPurchasePrepared,
       storage: "memory-only",
     });
   }
@@ -697,6 +795,7 @@ export function createNeighbourhoodRoutine({
     openMenu,
     moveSelection,
     purchase,
+    applyAppetiteEffect,
     close,
     update,
     save,

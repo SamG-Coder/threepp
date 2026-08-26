@@ -83,7 +83,17 @@ function createPlayerVisual() {
     phoneScreen: new THREE.BoxGeometry(0.084, 0.164, 0.006),
     phoneSpeaker: new THREE.BoxGeometry(0.036, 0.008, 0.005),
     phoneLens: new THREE.CylinderGeometry(0.009, 0.009, 0.006, 8),
+    groceryBag: new THREE.BoxGeometry(0.34, 0.38, 0.18),
+    groceryBagPanel: new THREE.BoxGeometry(0.285, 0.24, 0.012),
+    groceryHandle: new THREE.TorusGeometry(0.115, 0.016, 7, 18),
+    groceryCarton: new THREE.BoxGeometry(0.1, 0.2, 0.075),
+    groceryGreens: new THREE.ConeGeometry(0.055, 0.24, 7),
   };
+
+  materials.groceryCanvas = new THREE.MeshStandardMaterial({ color: 0x17342d, roughness: 0.96, metalness: 0 });
+  materials.groceryTrim = new THREE.MeshStandardMaterial({ color: 0xb98b54, roughness: 0.88, metalness: 0 });
+  materials.groceryPaper = new THREE.MeshStandardMaterial({ color: 0xdfcfaa, roughness: 0.94, metalness: 0 });
+  materials.groceryProduce = new THREE.MeshStandardMaterial({ color: 0x4d8a4d, roughness: 0.91, metalness: 0 });
 
   const hips = new THREE.Group();
   hips.name = "hips rig";
@@ -257,8 +267,35 @@ function createPlayerVisual() {
   phoneLens.rotation.x = Math.PI * 0.5;
   phone.visible = false;
 
+  // A reusable shopping tote is part of the authored player rig. Buying food
+  // only changes its visibility and carry pose: the first purchase cannot
+  // compile a material, create geometry, or attach a new scene node mid-play.
+  const groceryTote = new THREE.Group();
+  groceryTote.name = "precreated household grocery tote";
+  groceryTote.position.set(0.015, -0.075, 0.015);
+  groceryTote.rotation.set(0.03, 0.08, -0.025);
+  leftArm.hand.add(groceryTote);
+  const groceryBag = mesh(geometries.groceryBag, materials.groceryCanvas,
+    "dark reusable grocery bag", [0, -0.31, 0.035], groceryTote);
+  groceryBag.scale.set(1, 1, 0.92);
+  for (const side of [-1, 1]) {
+    const handle = mesh(geometries.groceryHandle, materials.groceryTrim,
+      `${side < 0 ? "street" : "body"} grocery tote handle`, [0, -0.105, side * 0.075 + 0.035], groceryTote, { castShadow: false });
+    handle.scale.set(1, 1.28, 1);
+  }
+  mesh(geometries.groceryBagPanel, materials.groceryTrim,
+    "stitched grocery tote badge", [0, -0.305, -0.061], groceryTote, { castShadow: false });
+  const carton = mesh(geometries.groceryCarton, materials.groceryPaper,
+    "paper pantry carton", [-0.085, -0.065, 0.03], groceryTote);
+  carton.rotation.z = -0.07;
+  const greens = mesh(geometries.groceryGreens, materials.groceryProduce,
+    "fresh market greens", [0.075, -0.035, 0.045], groceryTote);
+  greens.rotation.z = 0.18;
+  groceryTote.visible = false;
+  groceryTote.userData.precreatedCarryProp = true;
+
   const minigunParts = gun.children.filter(child => child !== pistolModel && child !== muzzleAnchor);
-  const rig = { hips, spine, head, leftArm, rightArm, leftLeg, rightLeg, gun, grip, phone, pistolModel, minigunParts };
+  const rig = { hips, spine, head, leftArm, rightArm, leftLeg, rightLeg, gun, grip, phone, groceryTote, pistolModel, minigunParts };
   root.userData.rig = rig;
   root.userData.pivots = {
     leftArm: leftArm.shoulder,
@@ -280,6 +317,7 @@ function createPlayerVisual() {
     meleePhase: 0,
     arrested: 0,
     phoneCall: 0,
+    groceryCarry: 0,
   };
   root.userData.materials = Object.values(materials);
   root.userData.geometries = Object.values(geometries);
@@ -354,6 +392,8 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
   let phoneCallRequested = false;
   let phoneCallActive = false;
   let phoneCallBlend = 0;
+  let carriedGroceryUnits = 0;
+  let groceryCarryBlend = 0;
   let firstPerson = false;
   let activeGroundHeight = null;
   let activeMotionConstraint = null;
@@ -425,6 +465,7 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
     phoneCallRequested = false;
     phoneCallActive = false;
     phoneCallBlend = 0;
+    groceryCarryBlend = 0;
     visual.position.set(0, 0, 0);
     visual.rotation.set(0, 0, 0);
     const rig = visual.userData.rig;
@@ -446,6 +487,7 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
     rig.gun.rotation.set(0, 0, 0);
     rig.gun.visible = true;
     rig.phone.visible = false;
+    rig.groceryTote.visible = false;
     rig.grip.position.set(0, -0.13, 0.015);
     visual.userData.muzzleFlash.visible = false;
     Object.assign(visual.userData.poseState, {
@@ -460,7 +502,29 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
       meleePhase: 0,
       arrested: 0,
       phoneCall: 0,
+      groceryCarry: 0,
     });
+  }
+
+  function clampGroceryUnits(value) {
+    return Math.max(0, Math.min(10, Math.trunc(Number(value) || 0)));
+  }
+
+  function groceryToteCanShow({ dead = !alive, arrested = false } = {}) {
+    return carriedGroceryUnits > 0 && !dead && !arrested && !inVehicle && !firstPerson &&
+      !aiming && reload <= 0 && meleeTimer <= 0;
+  }
+
+  function syncGroceryToteVisibility(context = {}) {
+    const tote = visual.userData.rig?.groceryTote;
+    if (tote) tote.visible = groceryToteCanShow(context);
+    return Boolean(tote?.visible);
+  }
+
+  function setCarriedGroceries(value) {
+    carriedGroceryUnits = clampGroceryUnits(value);
+    syncGroceryToteVisibility();
+    return carriedGroceryUnits;
   }
 
   function updatePose(delta, elapsed, speed, { sprinting = false, dead = false, arrested = false, phoneCall = false } = {}) {
@@ -477,6 +541,10 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
     if (!Number.isFinite(phoneCallBlend)) phoneCallBlend = 0;
     const phonePoseWeight = !dead && !arrested && !aiming ? phoneCallBlend : 0;
     rig.phone.visible = !dead && !arrested && !aiming && (phoneCallActive || phoneCallBlend > 0.025);
+    const carryTarget = groceryToteCanShow({ dead, arrested }) ? 1 : 0;
+    groceryCarryBlend = damp(groceryCarryBlend, carryTarget, carryTarget ? 9 : 15, delta);
+    if (!Number.isFinite(groceryCarryBlend)) groceryCarryBlend = 0;
+    syncGroceryToteVisibility({ dead, arrested });
 
     const moveTarget = grounded && !dead && !arrested ? Math.max(0, Math.min(1, speed / 5.15)) : 0;
     locomotionBlend = damp(locomotionBlend, moveTarget, moveTarget > locomotionBlend ? 10 : 7, delta);
@@ -583,6 +651,18 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
     let rightElbowZ = 0;
     let leftHandX = 0;
     let rightHandX = 0;
+
+    // A weighted reusable bag quiets the carrying arm instead of swinging
+    // through Kai's leg. Combat poses still have precedence below, while the
+    // actual precreated prop hides immediately on the first combat frame.
+    const carryPoseWeight = groceryCarryBlend * (1 - aimBlend) * (1 - reloadBlend) *
+      (1 - meleeBlend) * (1 - arrestedBlend) * (1 - deathBlend);
+    leftShoulderX = mix(leftShoulderX, 0.035, carryPoseWeight);
+    leftShoulderY = mix(leftShoulderY, -0.035, carryPoseWeight);
+    leftShoulderZ = mix(leftShoulderZ, -0.055, carryPoseWeight);
+    leftElbowX = mix(leftElbowX, -0.12, carryPoseWeight);
+    leftElbowZ = mix(leftElbowZ, -0.025, carryPoseWeight);
+    leftHandX = mix(leftHandX, 0.055, carryPoseWeight);
 
     const weaponAim = aimBlend * (1 - reloadBlend);
     leftShoulderX = mix(leftShoulderX, 1.02, weaponAim);
@@ -692,6 +772,7 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
       meleePhase,
       arrested: arrestedBlend,
       phoneCall: phoneCallBlend,
+      groceryCarry: groceryCarryBlend,
       forward: forwardAmount,
       strafe: sideAmount,
       phase: locomotionPhase,
@@ -778,6 +859,7 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
       phoneCallActive = false;
       phoneCallBlend = damp(phoneCallBlend, 0, 11, dt);
       visual.userData.rig.phone.visible = false;
+      visual.userData.rig.groceryTote.visible = false;
       visual.userData.poseState.phoneCall = phoneCallBlend;
       const vehicle = context.vehicle ?? inVehicle;
       if (vehicle?.root?.position) root.position.copy(vehicle.root.position);
@@ -916,6 +998,7 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
     phoneCallRequested = false;
     phoneCallBlend = 0;
     visual.userData.rig.phone.visible = false;
+    visual.userData.rig.groceryTote.visible = false;
     visual.userData.poseState.phoneCall = 0;
     firstPerson = false;
     visual.visible = true;
@@ -932,6 +1015,7 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
     firstPerson = false;
     visual.visible = true;
     root.visible = true;
+    syncGroceryToteVisibility();
     if (exitPosition?.isVector3) root.position.copy(exitPosition);
     velocity.set(0, 0, 0);
     meleeTimer = 0;
@@ -955,6 +1039,7 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
       alive = false;
       phoneCallActive = false;
       visual.userData.rig.phone.visible = false;
+      visual.userData.rig.groceryTote.visible = false;
     }
     return { accepted: true, damage: remaining, health, armor, alive };
   }
@@ -1056,6 +1141,16 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
         geometryCount: 4,
         runtimeAllocations: 0,
       }),
+      groceryCarry: Object.freeze({
+        units: carriedGroceryUnits,
+        capacity: 10,
+        visible: Boolean(visual.userData.rig.groceryTote.visible && visual.visible && root.visible),
+        blend: Number.isFinite(groceryCarryBlend) ? groceryCarryBlend : 0,
+        precreated: true,
+        storage: "memory-only",
+        geometryCount: 6,
+        runtimeAllocations: 0,
+      }),
       melee: Object.freeze({
         active: meleeTimer > 0,
         timer: meleeTimer,
@@ -1088,12 +1183,14 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
     verticalVelocity = 0;
     grounded = true;
     alive = value.alive !== false && health > 0;
+    carriedGroceryUnits = clampGroceryUnits(value.groceryCarry?.units ?? value.carriedGroceries ?? 0);
     meleeTimer = 0;
     meleeCooldown = 0;
     meleeHitPending = false;
     root.rotation.z = alive ? 0 : -1.38;
     resetPose();
     root.visible = alive && !inVehicle;
+    syncGroceryToteVisibility();
     return snapshot();
   }
 
@@ -1131,6 +1228,7 @@ export function createPlayer({ scene, world, input, position = null, onShoot = n
     addCash,
     setCash,
     setAmmo,
+    setCarriedGroceries,
     selectWeapon,
     startReload,
     teleport,

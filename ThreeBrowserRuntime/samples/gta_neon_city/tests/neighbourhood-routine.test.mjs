@@ -4,6 +4,7 @@ import {
   DEFAULT_NEIGHBOURHOOD_BUSINESSES,
   NEIGHBOURHOOD_ROUTINE_SAVE_VERSION,
   PAY_FORWARD_ITEM,
+  WEEKLY_GROCERY_BAG,
   createNeighbourhoodRoutine,
   createNeighbourhoodRoutineSystem,
   isBusinessOpen,
@@ -21,6 +22,11 @@ test("four authored businesses have distinct people, fixed menus, and both kinds
     assert.ok(definition.items.every(value => value.payForward === false));
     assert.ok(definition.position.every(Number.isFinite));
   }
+  const market = DEFAULT_NEIGHBOURHOOD_BUSINESSES.find(value => value.id === "mina_market_kitchen");
+  assert.deepEqual(market.householdItems, [WEEKLY_GROCERY_BAG]);
+  assert.ok(DEFAULT_NEIGHBOURHOOD_BUSINESSES
+    .filter(value => value !== market)
+    .every(value => value.householdItems.length === 0));
 
   const daytime = DEFAULT_NEIGHBOURHOOD_BUSINESSES[0];
   const overnight = DEFAULT_NEIGHBOURHOOD_BUSINESSES.find(value => value.id === "harbour_lantern");
@@ -175,6 +181,63 @@ test("closed and distant businesses reject entry without corrupting an existing 
   assert.equal(routine.snapshot().menuOpen, false);
 });
 
+test("Mina keeps Pay Forward at index 3 and sells one non-consuming take-home grocery bag at index 4", () => {
+  const routine = createNeighbourhoodRoutine({ initialAppetite: 35 });
+  const market = routine.businesses.find(value => value.id === "mina_market_kitchen");
+  let state = routine.openMenu(market.id, {
+    position: market.position,
+    dayIndex: 4,
+    timeHours: 12,
+  });
+  assert.equal(state.menuItems.length, 5);
+  assert.equal(state.menuItems[3], PAY_FORWARD_ITEM);
+  assert.equal(state.menuItems[4].id, WEEKLY_GROCERY_BAG.id);
+  assert.equal(state.menuItems[4].kind, "household_supplies");
+  assert.deepEqual(state.menuItems[4].inventoryEffects, { groceries: 5 });
+
+  // Leave a completed meal's consume record in place so the household sale
+  // proves it does not rewrite either active or historical consumption state.
+  assert.equal(routine.purchase({ cash: 100, dayIndex: 4, timeHours: 12 }).accepted, true);
+  routine.update(10, { dayIndex: 4, timeHours: 12 });
+  routine.moveSelection(4);
+  const before = routine.snapshot();
+  const consumeBefore = {
+    consuming: before.consuming,
+    consumeItemId: before.consumeItemId,
+    consumeBusinessId: before.consumeBusinessId,
+    consumeElapsed: before.consumeElapsed,
+    consumeDuration: before.consumeDuration,
+    consumeProgress: before.consumeProgress,
+  };
+  const transaction = routine.purchase({ cash: 100, dayIndex: 4, timeHours: 12 });
+  const after = routine.snapshot();
+  assert.deepEqual(transaction, {
+    accepted: true,
+    serial: 2,
+    businessId: market.id,
+    itemId: WEEKLY_GROCERY_BAG.id,
+    kind: "household_supplies",
+    inventoryEffects: { groceries: 5 },
+    cost: 18,
+    heal: 0,
+    stamina: 0,
+    appetite: 0,
+    line: `${market.keeperName}: ${WEEKLY_GROCERY_BAG.purchaseLine}`,
+  });
+  assert.equal(after.appetite, before.appetite);
+  assert.deepEqual({
+    consuming: after.consuming,
+    consumeItemId: after.consumeItemId,
+    consumeBusinessId: after.consumeBusinessId,
+    consumeElapsed: after.consumeElapsed,
+    consumeDuration: after.consumeDuration,
+    consumeProgress: after.consumeProgress,
+  }, consumeBefore);
+  assert.equal(after.lineReason, "household_purchase");
+  assert.equal(after.lastEvent, "household_supplies_purchased");
+  assert.equal(Object.isFrozen(transaction.inventoryEffects), true);
+});
+
 test("appetite decays gently, changes recovery rather than health, and food replenishes it", () => {
   const routine = createNeighbourhoodRoutine({ initialAppetite: 80, appetiteDecayPerSecond: 0.02 });
   const player = Object.freeze({ health: 37, stamina: 12 });
@@ -202,6 +265,14 @@ test("appetite decays gently, changes recovery rather than health, and food repl
   assert.equal(bought.accepted, true);
   assert.ok(routine.snapshot().appetite > appetiteBeforeFood);
   assert.ok(routine.snapshot().appetite <= 100);
+
+  const beforeHomeMeal = routine.snapshot().appetite;
+  const homeMeal = routine.applyAppetiteEffect(24);
+  assert.equal(homeMeal.accepted, true);
+  assert.equal(routine.snapshot().appetite, Math.min(100, beforeHomeMeal + 24));
+  assert.equal(Object.isFrozen(homeMeal), true);
+  const clamped = routine.applyAppetiteEffect(-500);
+  assert.equal(clamped.value, 0, "household appetite effects remain bounded and non-lethal");
 });
 
 test("familiarity advances once per game day and keeper writing reacts deterministically", () => {
@@ -304,6 +375,7 @@ test("RAM prewarm exercises menus, consumption and social acknowledgement bit-fo
     purchasePrepared: true,
     consumePrepared: true,
     acknowledgementPrepared: true,
+    householdPurchasePrepared: true,
     storage: "memory-only",
   });
   assert.equal(JSON.stringify(routine.save()), beforeBits);

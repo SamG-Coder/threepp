@@ -2,21 +2,43 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as THREE from "three/webgpu";
 
-import { createGtaHud, isAuthoredNarrativePresentation, phoneCanvasTransform, phoneRasterSignature, planGridRoute } from "../src/ui/hud.mjs";
+import {
+  createGtaHud,
+  isAuthoredNarrativePresentation,
+  MINIMAP_PLACE_ICON_MASKS,
+  MINIMAP_PLACE_ICON_PALETTE,
+  MINIMAP_RASTER_SCALE,
+  MINIMAP_RASTER_SIZE,
+  PHONE_MAP_VIEWPORT,
+  phoneCanvasTransform,
+  phoneRasterSignature,
+  planGridRoute,
+  projectWorldToMinimap,
+} from "../src/ui/hud.mjs";
 
-test("phone clock hover press and scroll never invalidate the resident app canvas", () => {
+test("seven-app phone launcher stays resident across clock hover press and scroll changes", () => {
   const base = {
     open: true,
-    app: "work",
-    title: "CITY WORK",
-    subtitle: "JOBS AND ACTIVITIES",
+    app: null,
+    title: "NEON LIFE",
+    subtitle: "YOUR CITY IN YOUR POCKET",
     time: "07:12",
     scroll: 0,
     hover: -1,
     pressed: false,
-    items: [{ title: "ROADSIDE HELP", detail: "AVAILABLE" }],
+    items: [
+      { title: "PULSE PAY", detail: "MONEY AND COMMUNITY TRUST" },
+      { title: "OPEN DOORS", detail: "LOCAL STORES AND HOURS" },
+      { title: "CITY WORK", detail: "LAWFUL JOBS AND ACTIVITIES" },
+      { title: "CONTACTS", detail: "PEOPLE WHO KNOW KAI" },
+      { title: "LIFE PROFILE", detail: "SKILLS, ENERGY, AND WORK HISTORY" },
+      { title: "MY HOME", detail: "ROOMS, ROUTINES, AND HOUSEHOLD" },
+      { title: "NEON MAP", detail: "PLACES, ROUTES, AND LIVE NAVIGATION" },
+    ],
   };
   const signature = phoneRasterSignature(base);
+  assert.notEqual(phoneRasterSignature({ ...base, items: base.items.slice(0, 6) }), signature,
+    "the complete seven-app launcher must be part of the resident raster identity");
   assert.equal(phoneRasterSignature({ ...base, time: "07:13" }), signature);
   assert.equal(phoneRasterSignature({ ...base, hover: 0, pressed: true }), signature);
   assert.equal(phoneRasterSignature({ ...base, scroll: 3 }), signature);
@@ -33,6 +55,258 @@ test("phone app animation preserves the full cached canvas dimensions", () => {
   assert.ok(entering.scaleX > 300, "the cached canvas must never collapse to unit width");
   assert.ok(entering.scaleY > 0 && entering.scaleY < opened.scaleY);
   assert.ok(entering.centerY > opened.centerY, "the app should reveal upward from the bottom");
+});
+
+test("phone retains a dedicated launcher layer behind the animated app canvas", () => {
+  const renderer = {
+    getSize: vector => vector.set(1280, 720),
+    getDrawingBufferSize: vector => vector.set(1280, 720),
+  };
+  const hud = createGtaHud({ renderer });
+  try {
+    const launcher = hud.scene.getObjectByName("Neon Life retained launcher behind app transitions");
+    const app = hud.scene.getObjectByName("Neon Life canvas-generated app grid and high-resolution text");
+    assert.ok(launcher?.isMesh && app?.isMesh);
+    assert.notStrictEqual(launcher.material.map, app.material.map,
+      "the app reveal must not overwrite the launcher texture it animates over");
+    assert.equal(launcher.material.map.userData.phoneRasterPolicy, "immutable-startup-data",
+      "the six launcher icons must be detached from the native canvas and uploaded during startup");
+    assert.equal(app.material.map.userData.phoneRasterPolicy, "immutable-app-cache",
+      "app chrome must select an immutable startup texture rather than a live CanvasTexture");
+    const appCanvases = [];
+    hud.scene.traverse(object => {
+      if (object.isMesh && object.userData?.phoneAppId) appCanvases.push(object);
+    });
+    assert.equal(appCanvases.length, 8,
+      "the seven launcher apps and Android-style recents screen must all be resident before play");
+    assert.ok(appCanvases.every(canvas => canvas.material.map.userData.phoneAppId === canvas.userData.phoneAppId));
+    assert.equal(new Set(appCanvases.map(canvas => canvas.material)).size, 8,
+      "every cached texture/material pairing must exist before reveal-all warmup");
+    assert.ok(launcher.renderOrder < app.renderOrder,
+      "the retained launcher belongs immediately behind the rising app canvas");
+  } finally {
+    hud.dispose();
+  }
+});
+
+test("first app open switching scrolling and live values never dirty the resident phone texture cache", () => {
+  const renderer = {
+    getSize: vector => vector.set(1280, 720),
+    getDrawingBufferSize: vector => vector.set(1280, 720),
+  };
+  const hud = createGtaHud({ renderer });
+  try {
+    const appCanvases = [];
+    hud.scene.traverse(object => {
+      if (object.isMesh && object.userData?.phoneAppId) appCanvases.push(object);
+    });
+    const appCanvas = appCanvases.find(canvas => canvas.userData.phoneAppId === "wallet");
+    const glyphLayer = hud.scene.getObjectByName("Neon Life fixed live app glyph layer");
+    const textures = appCanvases.map(canvas => canvas.material.map);
+    const ids = appCanvases.map(canvas => canvas.userData.phoneAppId);
+    assert.deepEqual(ids, ["wallet", "places", "work", "contacts", "profile", "home", "map", "recents"]);
+    assert.ok(textures.every(texture => texture.userData.phoneRasterPolicy === "immutable-app-cache"));
+    assert.ok(textures.every(texture => texture.flipY === false), "all cached app rasters must share native WebGPU orientation");
+    const versions = textures.map(texture => texture.version);
+    const launcherRedraws = hud.phoneCanvasRedrawCount;
+    const appCacheRedraws = hud.phoneAppCacheRedrawCount;
+    const geometry = appCanvas.geometry;
+
+    const snapshot = (app, overrides = {}) => ({
+      elapsed: 8,
+      capture: { locked: true },
+      player: { position: [0, 0.34, 0], health: 100, stamina: 100, armor: 0, alive: true },
+      phone: {
+        open: true,
+        app,
+        title: app === "wallet" ? "PULSE PAY" : app.toUpperCase(),
+        subtitle: "LIVE CITY DATA",
+        time: "07:53",
+        selection: 0,
+        scroll: 0,
+        hover: -1,
+        pressed: false,
+        openProgress: 1,
+        appProgress: 1,
+        items: [
+          { title: "LIVE BALANCE", detail: "$1,250 AVAILABLE" },
+          { title: "SECOND ROW", detail: "CURRENT WORLD STATE" },
+          { title: "THIRD ROW", detail: "NO STALE PLACEHOLDER" },
+          { title: "FOURTH ROW", detail: "STILL RESIDENT" },
+          { title: "FIFTH ROW", detail: "SCROLL TARGET" },
+          { title: "SIXTH ROW", detail: "GLYPH DATA ONLY" },
+        ],
+        ...overrides,
+      },
+    });
+
+    hud.update(snapshot("wallet", { appProgress: 0 }));
+    assert.equal(appCanvases.find(canvas => canvas.userData.phoneSelected)?.userData.phoneAppId, "wallet");
+    assert.ok(glyphLayer.children.filter(child => child.material).every(child => child.material.opacity === 0),
+      "live rows should remain transparent until the cached chrome has covered the launcher");
+    assert.equal(glyphLayer.position.y, 32);
+    hud.update(snapshot("wallet", { appProgress: 0.5, time: "07:54", hover: 1, pressed: true }));
+    assert.ok(glyphLayer.children.filter(child => child.material).every(child => child.material.opacity === 0));
+    hud.update(snapshot("wallet", { appProgress: 0.75, time: "07:54" }));
+    assert.ok(glyphLayer.children.some(child => child.material?.opacity > 0));
+    assert.ok(glyphLayer.position.y > 0 && glyphLayer.position.y < 32);
+    hud.update(snapshot("wallet", { appProgress: 1, scroll: 1 }));
+    assert.equal(glyphLayer.position.y, 0);
+    const visibleText = [];
+    glyphLayer.traverse(object => {
+      if (object.visible && typeof object.userData?.text === "string") visibleText.push(object.userData.text);
+    });
+    assert.ok(visibleText.some(value => value.includes("SECOND ROW")), "scrolling should refresh only the fixed glyph buffers");
+
+    for (const id of ["places", "work", "contacts", "profile", "home", "map", "recents", "wallet"]) {
+      hud.update(snapshot(id, { appProgress: id === "wallet" ? 0.35 : 1 }));
+      assert.equal(appCanvases.find(canvas => canvas.userData.phoneSelected)?.userData.phoneAppId, id);
+      assert.equal(appCanvas.material.map.userData.phoneAppId, "wallet",
+        "switching apps must never swap an existing material's texture binding");
+    }
+    hud.update(snapshot("wallet", {
+      title: "PULSE PAY",
+      items: [{ title: "LIVE BALANCE", detail: "$1,375 AVAILABLE" }],
+    }));
+    const changedLiveText = [];
+    glyphLayer.traverse(object => {
+      if (object.visible && typeof object.userData?.text === "string") changedLiveText.push(object.userData.text);
+    });
+    assert.ok(changedLiveText.some(value => value.includes("$1,375 AVAILABLE")),
+      "actual changed values must update through the small glyph layer");
+    assert.deepEqual(textures.map(texture => texture.version), versions,
+      "opening, switching, scrolling, clock ticks and actual data changes must not request any texture upload");
+    assert.equal(hud.phoneCanvasRedrawCount, launcherRedraws);
+    assert.equal(hud.phoneAppCacheRedrawCount, appCacheRedraws);
+    assert.equal(hud.phoneAppCacheTextureCount, 8);
+    assert.strictEqual(appCanvas.geometry, geometry);
+  } finally {
+    hud.dispose();
+  }
+});
+
+test("phone Map app shares the retained GPS texture and reserves route controls ahead of map taps", () => {
+  const renderer = {
+    getSize: vector => vector.set(1280, 720),
+    getDrawingBufferSize: vector => vector.set(1280, 720),
+  };
+  const hud = createGtaHud({ renderer });
+  try {
+    const phone = hud.scene.getObjectByName("Neon Life preloaded interactive phone");
+    const mapViewport = hud.scene.getObjectByName("Neon Life phone GPS shares HUD minimap texture");
+    assert.ok(phone?.isGroup && mapViewport?.isMesh);
+    assert.strictEqual(mapViewport.material.map, hud.minimapTexture,
+      "the phone must not create a duplicate map texture");
+    assert.deepEqual(PHONE_MAP_VIEWPORT, { left: 39, top: 151, width: 312, height: 312 });
+
+    const mapNavigation = {
+      revision: 4,
+      bounds: { minX: -192, maxX: 192, minZ: -192, maxZ: 620 },
+      viewport: PHONE_MAP_VIEWPORT,
+      center: { x: 0, y: 0, z: 0 },
+      zoom: 2.4,
+      navigation: {
+        title: "ASHWIND RUINS",
+        category: "activity",
+        source: "user_place",
+        target: { x: 0, y: 0, z: 505 },
+      },
+      selectedDestination: null,
+      places: [],
+    };
+    const snapshot = {
+      elapsed: 7,
+      capture: { locked: true },
+      player: { position: [0, 0.34, 0], yaw: 0, health: 100, stamina: 100, armor: 0, alive: true },
+      phone: {
+        open: true,
+        app: "map",
+        title: "NEON MAP",
+        subtitle: "NAVIGATING TO ASHWIND RUINS",
+        time: "09:14",
+        selection: 0,
+        scroll: 0,
+        hover: -1,
+        pressed: false,
+        openProgress: 1,
+        appProgress: 1,
+        items: [],
+        mapNavigation,
+      },
+      world: {
+        bounds: { minX: -192, maxX: 155, minZ: -192, maxZ: 192 },
+        mapFeatures: {
+          bounds: mapNavigation.bounds,
+          cityBounds: { minX: -192, maxX: 155, minZ: -192, maxZ: 192 },
+          roads: {
+            halfWidth: 6,
+            bounds: { minX: -192, maxX: 155, minZ: -192, maxZ: 192 },
+            x: [-168, -120, -72, -24, 24, 72, 120],
+            z: [-168, -120, -72, -24, 24, 72, 120, 168],
+          },
+          areas: [],
+          buildings: [],
+        },
+      },
+      vehicles: [],
+      population: [],
+      targetPosition: [0, 0, 505],
+      mission: { stage: "complete" },
+    };
+    const cachedTextures = [];
+    hud.scene.traverse(object => {
+      if (object.isMesh && object.userData?.phoneAppId) cachedTextures.push(object.material.map);
+    });
+    const cacheVersions = cachedTextures.map(texture => texture.version);
+    hud.update(snapshot);
+    assert.equal(mapViewport.visible, true);
+
+    const clientPoint = (x, y) => ({
+      x: phone.position.x + x * phone.scale.x,
+      y: phone.position.y + y * phone.scale.y,
+    });
+    const mapHitPoint = clientPoint(PHONE_MAP_VIEWPORT.left + 100, PHONE_MAP_VIEWPORT.top + 100);
+    assert.deepEqual(hud.phoneHitTest(mapHitPoint.x, mapHitPoint.y), { type: "map", x: 100, y: 100 });
+    const clearPoint = clientPoint(298, 498);
+    assert.deepEqual(hud.phoneHitTest(clearPoint.x, clearPoint.y), { type: "mapRoute" });
+
+    hud.update({
+      ...snapshot,
+      phone: {
+        ...snapshot.phone,
+        mapNavigation: { ...mapNavigation, revision: 5, center: { x: 24, y: 0, z: 72 }, zoom: 3.1 },
+      },
+    });
+    assert.deepEqual(cachedTextures.map(texture => texture.version), cacheVersions,
+      "panning and zooming may update the one retained GPS texture but never app canvas caches");
+    assert.strictEqual(mapViewport.material.map, hud.minimapTexture);
+  } finally {
+    hud.dispose();
+  }
+});
+
+test("phone construction falls back without recursion when a 2D canvas context is unavailable", () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = {
+    createElement() {
+      return { width: 0, height: 0, getContext: () => null };
+    },
+  };
+  const renderer = {
+    getSize: vector => vector.set(1280, 720),
+    getDrawingBufferSize: vector => vector.set(1280, 720),
+  };
+  let hud = null;
+  try {
+    hud = createGtaHud({ renderer });
+    assert.equal(hud.phoneAppCacheTextureCount, 8);
+    const launcher = hud.scene.getObjectByName("Neon Life retained launcher behind app transitions");
+    assert.equal(launcher.material.map.userData.phoneRasterPolicy, "immutable-startup-data");
+  } finally {
+    hud?.dispose();
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+  }
 });
 
 test("minimap navigation plans a deterministic axis-aligned road route", () => {
@@ -67,6 +341,36 @@ test("minimap navigation plans a deterministic axis-aligned road route", () => {
   assert.ok(first.slice(1, -1).some(point => point.x % 48 === 0 || point.z % 48 === 0));
 });
 
+test("GPS route snapping and cardinal projection use the exact authored north-up city contract", () => {
+  const roadCenters = {
+    halfWidth: 6,
+    x: [-168, -120, -72, -24, 24, 72, 120],
+    z: [-168, -120, -72, -24, 24, 72, 120, 168],
+  };
+  const route = planGridRoute(
+    [0, 0, 0],
+    [100, 0, 100],
+    48,
+    { minX: -192, maxX: 192, minZ: -192, maxZ: 620 },
+    roadCenters,
+  );
+  assert.deepEqual(route, [
+    { x: 0, y: 0, z: 0 },
+    { x: 0, y: 0, z: -24 },
+    { x: 120, y: 0, z: -24 },
+    { x: 120, y: 0, z: 100 },
+    { x: 100, y: 0, z: 100 },
+  ], "the route must use z=-24/x=120 roads, never inferred z=0/x=96 block centres");
+  assert.ok(route.slice(1, -1).every(point =>
+    roadCenters.x.includes(point.x) || roadCenters.z.includes(point.z)));
+
+  const center = projectWorldToMinimap([0, 0, 0], [0, 0, 0], 104);
+  const east = projectWorldToMinimap([24, 0, 0], [0, 0, 0], 104);
+  const north = projectWorldToMinimap([0, 0, 24], [0, 0, 0], 104);
+  assert.ok(east.x > center.x && east.y === center.y, "+X must project right");
+  assert.ok(north.y < center.y && north.x === center.x, "+Z/north must project up");
+});
+
 test("minimap navigation clamps endpoints to the authored city bounds", () => {
   const route = planGridRoute([500, 0, -500], [-500, 0, 500], 48, {
     minX: -192,
@@ -99,8 +403,8 @@ test("minimap raster contains visible roads, route, people and a centered player
       vehicles: [{ id: "commuter", position: [14, 0, 10] }],
       population: [{ id: "neighbour", position: [-9, 0, 8] }],
       lifeActivities: [
-        { kind: "volunteer", hubPosition: [32, 0, 28] },
-        { kind: "basketball", hubPosition: [-32, 0, 28] },
+        { kind: "volunteer", hubPosition: [68, 0, 60] },
+        { kind: "basketball", hubPosition: [-68, 0, 60] },
       ],
       neighbourhood: {
         appetiteStatus: "STEADY",
@@ -135,6 +439,104 @@ test("minimap raster contains visible roads, route, people and a centered player
   }
 });
 
+test("2x retained minimap renders distinct cached place symbols with deterministic priority culling", () => {
+  assert.equal(MINIMAP_RASTER_SCALE, 2);
+  assert.equal(MINIMAP_RASTER_SIZE, 392);
+  const maskSignatures = Object.values(MINIMAP_PLACE_ICON_MASKS).map(mask => mask.join("/"));
+  assert.equal(new Set(maskSignatures).size, 7, "every destination category needs its own silhouette");
+  assert.ok(Object.values(MINIMAP_PLACE_ICON_MASKS).every(mask => Object.isFrozen(mask)));
+
+  const renderer = {
+    getSize: vector => vector.set(1280, 720),
+    getDrawingBufferSize: vector => vector.set(1280, 720),
+  };
+  const hud = createGtaHud({ renderer });
+  try {
+    const placeSnapshot = {
+      elapsed: 1,
+      capture: { locked: true },
+      player: { position: [0, 0, 0], yaw: 0, health: 100, stamina: 100, armor: 0, alive: true },
+      world: {
+        bounds: { minX: -192, maxX: 192, minZ: -192, maxZ: 192 },
+        roadSpacing: 48,
+        minimapRadius: 104,
+        district: { name: "Pulse Core" },
+        residentialInterior: { entrance: { exterior: [-72, 0.2, -68] } },
+        pulseTransit: { entrance: [72, 0.2, -68] },
+        pulseGarageInterior: { entrance: { exterior: [-72, 0.2, 68] } },
+      },
+      vehicles: [],
+      population: [],
+      lifeActivities: [{ id: "photo-walk", kind: "photography", hubPosition: [0, 0.2, 70] }],
+      neighbourhood: {
+        businesses: [{ id: "corner-shop", position: [72, 0.2, 68], open: true }],
+      },
+      mission: { stage: "available", startPosition: [0, 0.2, -72] },
+    };
+    const retainedTexture = hud.minimapTexture;
+    hud.update(placeSnapshot);
+    assert.strictEqual(hud.minimapTexture, retainedTexture, "map updates must reuse one startup texture");
+    assert.equal(retainedTexture.image.width, MINIMAP_RASTER_SIZE);
+    assert.equal(retainedTexture.image.height, MINIMAP_RASTER_SIZE);
+    assert.equal(retainedTexture.userData.minimapRasterScale, 2);
+    assert.equal(retainedTexture.userData.placeIconPolicy, "immutable-mask-cache/single-pooled-texture");
+    assert.deepEqual(hud.minimapPlaceIconStats, {
+      business: 1,
+      home: 1,
+      work: 1,
+      activity: 1,
+      transit: 1,
+      story: 1,
+      waypoint: 0,
+      culled: 0,
+      placed: 6,
+    });
+
+    const colorCounts = new Map();
+    const bytes = retainedTexture.image.data;
+    for (let offset = 0; offset < bytes.length; offset += 4) {
+      const signature = `${bytes[offset]},${bytes[offset + 1]},${bytes[offset + 2]},${bytes[offset + 3]}`;
+      colorCounts.set(signature, (colorCounts.get(signature) ?? 0) + 1);
+    }
+    for (const category of ["business", "home", "work", "activity", "transit", "story"]) {
+      const signature = MINIMAP_PLACE_ICON_PALETTE[category].join(",");
+      assert.ok((colorCounts.get(signature) ?? 0) >= 20, `${category} needs a visible high-resolution pixel signature`);
+    }
+
+    // All landmarks deliberately overlap here. The plain {x,y,z} story target
+    // must render and reserve the location before homes, work, transit, shops
+    // or activities can obscure it.
+    const shared = [36, 0.2, 36];
+    hud.update({
+      ...placeSnapshot,
+      elapsed: 1.1,
+      world: {
+        ...placeSnapshot.world,
+        residentialInterior: { entrance: { exterior: shared } },
+        pulseTransit: { entrance: shared },
+        pulseGarageInterior: { entrance: { exterior: shared } },
+      },
+      lifeActivities: [{ id: "photo-walk", kind: "photography", hubPosition: shared }],
+      neighbourhood: { businesses: [{ id: "corner-shop", position: shared, open: true }] },
+      mission: { stage: "available", startPosition: shared },
+    });
+    assert.deepEqual(hud.minimapPlaceIconStats, {
+      business: 0,
+      home: 0,
+      work: 0,
+      activity: 0,
+      transit: 0,
+      story: 1,
+      waypoint: 0,
+      culled: 5,
+      placed: 1,
+    });
+    assert.strictEqual(hud.minimapTexture, retainedTexture);
+  } finally {
+    hud.dispose();
+  }
+});
+
 test("Open Doors uses one fixed GPU menu pool with readable affordability and appetite state", () => {
   const renderer = {
     getSize: vector => vector.set(1280, 720),
@@ -147,6 +549,7 @@ test("Open Doors uses one fixed GPU menu pool with readable affordability and ap
       { id: "wrap", name: "PLANTAIN AND BEAN WRAP", cost: 17, heal: 4, stamina: 15, appetite: 25 },
       { id: "tea", name: "CHILLED HIBISCUS TEA", cost: 80, heal: 1, stamina: 19, appetite: 7 },
       { id: "pay_a_meal_forward", name: "PAY A MEAL FORWARD", cost: 18, payForward: true },
+      { id: "weekly_grocery_bag", name: "WEEKLY GROCERY BAG", cost: 18, kind: "household_supplies", inventoryEffects: { groceries: 5 } },
     ];
     const base = {
       elapsed: 12,
@@ -180,7 +583,7 @@ test("Open Doors uses one fixed GPU menu pool with readable affordability and ap
       .map(name => hud.scene.getObjectByName(`Open Doors modal ${name}`));
     assert.ok(modalText.every(mesh => mesh?.renderOrder > backdrop.renderOrder),
       "transparent shop text must render after the opaque-black modal backdrop");
-    const rows = Array.from({ length: 4 }, (_, index) => hud.scene.getObjectByName(`Open Doors fixed menu row ${index + 1}`));
+    const rows = Array.from({ length: 5 }, (_, index) => hud.scene.getObjectByName(`Open Doors fixed menu row ${index + 1}`));
     assert.ok(rows.every(row => row?.visible));
     const rowGeometries = rows.map(row => row.geometry);
     const rowPositionBuffers = rows.map(row => row.geometry.getAttribute("position").array);
@@ -196,6 +599,7 @@ test("Open Doors uses one fixed GPU menu pool with readable affordability and ap
     assert.match(rows[0].userData.text, /MARKET JOLLOF BOX.*HEALTH \+8.*FED \+34/);
     assert.equal(rows[2].material.color.getHex(), 0x7c8795, "unaffordable food should be visibly muted");
     assert.match(rows[3].userData.text, /NO BUFF.*SOMEONE EATS LATER/);
+    assert.match(rows[4].userData.text, /WEEKLY GROCERY BAG.*TAKE HOME.*PANTRY \+5/);
     hud.update({ ...base, neighbourhood: { ...base.neighbourhood, selectionIndex: 3, consuming: true, consumeProgress: 0.5 } });
     assert.equal(meshCount(), before, "menu navigation must reuse its fixed mesh pool");
     for (let index = 0; index < rows.length; ++index) {
@@ -254,6 +658,134 @@ test("Harbour Court renders its live release track through the proven text atlas
     assert.match(meter.userData.text, /^POWER [-=I#]{26}$/);
     assert.ok(meter.userData.text.includes("="), "expected a readable sweet-release band");
     assert.ok(meter.userData.text.includes("#"), "expected a readable live release marker");
+  } finally {
+    hud.dispose();
+  }
+});
+
+test("Pulse Garage uses mechanic progress instead of generic undefined task counters", () => {
+  const renderer = {
+    getSize: vector => vector.set(1280, 720),
+    getDrawingBufferSize: vector => vector.set(1280, 720),
+  };
+  const hud = createGtaHud({ renderer });
+  try {
+    hud.update({
+      elapsed: 3,
+      capture: { locked: true },
+      player: { position: [-153, 0.34, 84], health: 100, stamina: 100, armor: 0, alive: true },
+      activity: {
+        kind: "mechanic",
+        title: "PULSE GARAGE APPRENTICE",
+        stage: "inspection",
+        status: "active",
+        objective: "INSPECT THE VEHICLE METHODICALLY",
+        quality: 100,
+        workMinutes: 8,
+        inspectionClues: [{ id: "slow_crank" }],
+        targetPosition: [-154, 0.34, 89],
+      },
+    });
+    const detail = hud.scene.getObjectByName("Mission activity detail line")?.userData?.text;
+    assert.equal(detail, "QUALITY 100% CLUES 1/3");
+    assert.doesNotMatch(detail, /NAN|UNDEFINED/);
+  } finally {
+    hud.dispose();
+  }
+});
+
+test("Harbour Skills House shows finite physical-step progress instead of a generic payout", () => {
+  const renderer = {
+    getSize: vector => vector.set(1280, 720),
+    getDrawingBufferSize: vector => vector.set(1280, 720),
+  };
+  const hud = createGtaHud({ renderer });
+  try {
+    hud.update({
+      elapsed: 3,
+      capture: { locked: true },
+      player: { position: [96.7, 0.34, 44], health: 100, stamina: 100, armor: 0, alive: true },
+      activity: {
+        kind: "community",
+        title: "COMMUNITY KITCHEN SHIFT",
+        stage: "working",
+        status: "active",
+        objective: "RANGE AND TEMPERATURE PROBE  47%",
+        taskIndex: 2,
+        taskCount: 4,
+        taskProgress: 0.47,
+        safetyRequired: true,
+        estimatedWage: 54,
+        targetPosition: [91, 0.2, 45],
+      },
+    });
+    const detail = hud.scene.getObjectByName("Mission activity detail line")?.userData?.text;
+    assert.equal(detail, "STEP 3/4 WORK 47% SAFETY CHECK");
+    assert.doesNotMatch(detail, /NAN|UNDEFINED|TRUST \+0|PAY \$0/);
+  } finally {
+    hud.dispose();
+  }
+});
+
+test("Common Ground cafe shows finite hospitality progress without generic activity fields", () => {
+  const renderer = {
+    getSize: vector => vector.set(1280, 720),
+    getDrawingBufferSize: vector => vector.set(1280, 720),
+  };
+  const hud = createGtaHud({ renderer });
+  try {
+    const base = {
+      elapsed: 3,
+      capture: { locked: true },
+      player: { position: [-40, 0.34, -12], health: 100, stamina: 100, armor: 0, alive: true },
+      activity: {
+        kind: "cafe",
+        title: "COMMON GROUND CAFE SHIFT",
+        stage: "working",
+        status: "active",
+        objective: "PREPARE THE ACCESSIBLE ORDER CAREFULLY",
+        taskIndex: 2,
+        taskCount: 6,
+        taskProgress: 0.47,
+        estimatedWage: 58,
+        quality: 92,
+        reworkCount: 1,
+        safetyRequired: true,
+        targetPosition: [-40, 0.2, -9],
+      },
+    };
+    const detail = hud.scene.getObjectByName("Mission activity detail line");
+    const geometry = detail.geometry;
+    const positions = geometry.getAttribute("position").array;
+    const uvs = geometry.getAttribute("uv").array;
+    hud.update(base);
+    assert.equal(detail.userData.text, "STEP 3/6 WORK 47% Q92 SAFE R1");
+    assert.doesNotMatch(detail.userData.text, /NAN|UNDEFINED|PAYOUT|TRUST \+0|PAY \$0/);
+    const title = [];
+    hud.scene.traverse(object => {
+      if (object.userData?.text === "COMMON GROUND CAFE SHIFT") title.push(object);
+    });
+    assert.equal(title.length, 1);
+    assert.equal(title[0].material.color.getHex(), 0xffd17a,
+      "the cafe should use the warm hospitality accent instead of a generic activity color");
+
+    hud.update({
+      ...base,
+      activity: {
+        ...base.activity,
+        stage: "cafe-till",
+        taskProgress: Number.NaN,
+        estimatedWage: Number.NaN,
+        quality: undefined,
+        reworkCount: Number.NaN,
+      },
+    });
+    assert.equal(detail.userData.text, "STEP 3/6 TILL WAGE $0 Q0 SAFE");
+    assert.doesNotMatch(detail.userData.text, /NAN|UNDEFINED|PAYOUT|TRUST/);
+    assert.strictEqual(detail.geometry, geometry);
+    assert.strictEqual(detail.geometry.getAttribute("position").array, positions);
+    assert.strictEqual(detail.geometry.getAttribute("uv").array, uvs);
+    assert.equal(detail.geometry.getAttribute("position").usage, THREE.StaticDrawUsage);
   } finally {
     hud.dispose();
   }

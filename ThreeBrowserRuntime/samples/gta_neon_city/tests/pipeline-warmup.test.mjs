@@ -197,17 +197,26 @@ test("reveal-all HUD warmup uploads the font, panel skins and pooled minimap", a
       revealAll: true,
       compileMode: "render",
     }]);
-    assert.equal(result.textures, 5);
-    assert.equal(result.explicitTextureUploads, 5);
+    assert.equal(result.textures, 13,
+      "font, panels, minimap, retained launcher, and all seven immutable app/system caches must be resident");
+    assert.equal(result.explicitTextureUploads, 13);
     assert.equal(result.allTextureSourcesReady, true);
     assert.deepEqual(result.passes[0].textureNames, [
       "Neon City GPU bitmap font",
       "Neon City baked-alpha black HUD backdrop",
       "Neon City pooled raster navigation map",
-      "Neon Life phone canvas fallback",
+      "Neon Life resident app cache contacts",
+      "Neon Life resident app cache home",
+      "Neon Life resident app cache map",
+      "Neon Life resident app cache places",
+      "Neon Life resident app cache profile",
+      "Neon Life resident app cache recents",
+      "Neon Life resident app cache wallet",
+      "Neon Life resident app cache work",
+      "Neon Life resident launcher canvas",
       "Neon Life tintable rounded panel texture",
     ]);
-    assert.equal(new Set(uploads).size, 5);
+    assert.equal(new Set(uploads).size, 13);
     assert.ok(uploads.includes(hud.minimapTexture));
   } finally {
     hud.dispose();

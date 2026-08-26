@@ -227,6 +227,415 @@ test("named story actors receive distinct close-up facial and role details", () 
   population.dispose();
 });
 
+test("named residents walk continuously through the authored graph and expose routine progress", () => {
+  const { world, state } = createTestWorld({ emptySpawns: true });
+  world.pedestrianNodes = [
+    [0, 0, 0], [4, 0, 0], [8, 0, 0], [12, 0, 0],
+  ];
+  const scene = new THREE.Scene();
+  const population = createPopulationSystem({ scene, world, civilianCount: 0, policeCount: 0 });
+  const resident = population.spawn({
+    id: "juno-resident",
+    name: "Juno Vale",
+    role: "sister-and-mechanic",
+    x: 0,
+    z: 0,
+  });
+  const routeBuffer = resident.routineRoute;
+  const destinationVector = resident.routineDestination;
+  const crossingBuffer = resident.routineCrossing;
+  const sceneObjects = countSceneObjects(scene);
+  const before = resident.root.position.clone();
+
+  const assigned = population.setRoutineDestination(resident.id, {
+    position: [12, 0, 0],
+    locationId: "pulse-garage",
+    activity: "opening-shift",
+    speedScale: 9,
+  });
+  assert.deepEqual(assigned, {
+    accepted: true,
+    reason: null,
+    actorId: "juno-resident",
+    destination: [12, 0, 0],
+    location: "pulse-garage",
+    locationId: "pulse-garage",
+    activity: "opening-shift",
+    speedScale: 1.65,
+    arrived: false,
+  });
+  assert.ok(Object.isFrozen(assigned) && Object.isFrozen(assigned.destination));
+  assert.deepEqual(resident.root.position.toArray(), before.toArray(),
+    "assigning a schedule destination must never teleport the resident");
+
+  for (let step = 0; step < 18; ++step) {
+    population.update(0.1, { timeHours: 9, captureSnapshot: false });
+  }
+  const intermediate = population.snapshot().find(actor => actor.id === resident.id);
+  assert.ok(intermediate.position[0] > 0.6 && intermediate.position[0] < 11.3,
+    `the resident should visibly occupy an intermediate route position (${intermediate.position[0]})`);
+  assert.deepEqual(intermediate.destination, [12, 0, 0]);
+  assert.equal(intermediate.location, "pulse-garage");
+  assert.equal(intermediate.locationId, "pulse-garage");
+  assert.equal(intermediate.activity, "opening-shift");
+  assert.equal(intermediate.speedScale, 1.65, "routine speedScale should be safely bounded");
+  assert.equal(intermediate.arrived, false);
+  assert.ok(Object.isFrozen(intermediate.destination));
+
+  for (let step = 0; step < 180 && !resident.routineDestinationArrived; ++step) {
+    population.update(0.1, { timeHours: 9, captureSnapshot: false });
+  }
+  const arrived = population.snapshot().find(actor => actor.id === resident.id);
+  assert.equal(arrived.arrived, true);
+  assert.equal(arrived.state, "routine_arrived");
+  assert.ok(Math.hypot(arrived.position[0] - 12, arrived.position[2]) <= 0.73);
+  const repeated = population.setRoutineDestination(resident, {
+    position: [12, 0, 0], locationId: "pulse-garage", activity: "opening-shift", speedScale: 9,
+  });
+  assert.equal(repeated.arrived, true,
+    "a repeated schedule assignment must not restart an already-arrived resident");
+  assert.strictEqual(resident.routineRoute, routeBuffer);
+  assert.strictEqual(resident.routineDestination, destinationVector);
+  assert.strictEqual(resident.routineCrossing, crossingBuffer);
+  assert.equal(countSceneObjects(scene), sceneObjects,
+    "resident route updates must reuse the existing actor and renderer graph");
+
+  state.wall = true;
+  const blocked = population.setRoutineDestination(resident, [0, 0, 5], {
+    location: "inside-wall",
+    activity: "invalid",
+  });
+  assert.equal(blocked.accepted, false);
+  assert.equal(blocked.reason, "destination_blocked");
+  assert.deepEqual(population.snapshot().find(actor => actor.id === resident.id).destination, [12, 0, 0],
+    "a rejected target must preserve the current routine contract");
+  state.wall = false;
+  population.dispose();
+});
+
+test("same-endpoint restore rebuilds a route from the restored feet instead of retaining a future cursor", () => {
+  const { world } = createTestWorld({ emptySpawns: true });
+  world.pedestrianNodes = [[0, 0, 0], [10, 0, 0], [20, 0, 0], [30, 0, 0]];
+  const population = createPopulationSystem({
+    scene: new THREE.Scene(), world, civilianCount: 0, policeCount: 0,
+  });
+  const resident = population.spawn({ id: "asha-route", name: "Asha Patel", x: 0, z: 0 });
+  const request = {
+    position: [30, 0, 0], locationId: "common_ground_cafe", activity: "commute", speedScale: 1.18,
+  };
+  assert.equal(population.setRoutineDestination(resident, request).accepted, true);
+  for (let step = 0; step < 8; ++step) population.update(0.1, { captureSnapshot: false });
+  const savedPosition = resident.root.position.clone();
+  const savedCursor = resident.routineRouteCursor;
+  for (let step = 0; step < 90 && resident.routineRouteCursor <= savedCursor; ++step) {
+    population.update(0.1, { captureSnapshot: false });
+  }
+  assert.ok(resident.routineRouteCursor > savedCursor, "the repro did not advance beyond the saved route cursor");
+
+  resident.root.position.copy(savedPosition);
+  resident.velocity.set(0, 0, 0);
+  resident.steering.set(0, 0, 0);
+  resident.speed = 0;
+  const rebuilt = population.setRoutineDestination(resident, { ...request, rebuildRoute: true });
+  assert.equal(rebuilt.accepted, true);
+  assert.equal(resident.routineRouteCursor, 0,
+    "a same-endpoint restore must discard the later live cursor and rebuild from the restored pose");
+
+  const control = createPopulationSystem({
+    scene: new THREE.Scene(), world, civilianCount: 0, policeCount: 0,
+  });
+  const controlResident = control.spawn({
+    id: "asha-route-control", name: "Asha Patel", x: savedPosition.x, z: savedPosition.z,
+  });
+  assert.equal(control.setRoutineDestination(controlResident, request).accepted, true);
+  assert.deepEqual(
+    [...resident.routineRoute.slice(0, resident.routineRouteLength)],
+    [...controlResident.routineRoute.slice(0, controlResident.routineRouteLength)],
+    "restoring the same endpoint must produce the same route as a clean assignment from that pose",
+  );
+  for (let step = 0; step < 12; ++step) {
+    population.update(0.1, { captureSnapshot: false });
+    control.update(0.1, { captureSnapshot: false });
+  }
+  assert.ok(resident.root.position.distanceToSquared(controlResident.root.position) <= 1e-10,
+    "the rebuilt resident diverged from a clean deterministic route started at the restored pose");
+  control.dispose();
+  population.dispose();
+});
+
+test("stuck routine repairs are queued and a deterministic external budget owns every full route search", () => {
+  const { world } = createTestWorld({ emptySpawns: true });
+  world.pedestrianNodes = [[0, 0, 0], [10, 0, 0], [20, 0, 0], [30, 0, 0]];
+  const population = createPopulationSystem({
+    scene: new THREE.Scene(), world, civilianCount: 0, policeCount: 0,
+  });
+  const first = population.spawn({ id: "repair-first", name: "First Resident", x: 0, z: 0 });
+  const second = population.spawn({ id: "repair-second", name: "Second Resident", x: 0, z: 2 });
+  for (const resident of [first, second]) {
+    assert.equal(population.setRoutineDestination(resident, [30, 0, 0], {
+      locationId: "work", activity: "commute",
+    }).accepted, true);
+    resident.stuckFor = 0.85;
+  }
+  world.resolveCircleMotion = position => position.clone();
+  const searchesBeforeUpdate = population.routineRouteSearches;
+  population.update(0.1, { captureSnapshot: false });
+  assert.equal(population.routineRouteSearches, searchesBeforeUpdate,
+    "population.update must never run the full routine graph search");
+  assert.equal(population.pendingRoutineRouteRepairs, 2);
+  assert.equal(population.flushRoutineRouteRepairs(1), 1);
+  assert.equal(population.routineRouteSearches, searchesBeforeUpdate + 1);
+  assert.equal(population.pendingRoutineRouteRepairs, 1);
+  assert.equal(first.routineRouteRepairPending, false, "the stable actor-order budget must repair the first actor first");
+  assert.equal(second.routineRouteRepairPending, true);
+  assert.equal(population.flushRoutineRouteRepairs(1), 1);
+  assert.equal(population.routineRouteSearches, searchesBeforeUpdate + 2);
+  assert.equal(population.pendingRoutineRouteRepairs, 0);
+  population.dispose();
+});
+
+test("managed routines lease only explicit eligible civilians and share one external assignment-repair budget", () => {
+  const { world } = createTestWorld({ emptySpawns: true });
+  world.pedestrianNodes = [[0, 0, 0], [5, 0, 0], [10, 0, 0], [15, 0, 0], [20, 0, 0]];
+  const population = createPopulationSystem({
+    scene: new THREE.Scene(), world, civilianCount: 2, policeCount: 1,
+  });
+  const ambient = population.actors.find(actor => !actor.police && actor.id === "civilian-1");
+  const staged = population.actors.find(actor => !actor.police && actor.id === "civilian-2");
+  const police = population.spawn({ police: true, x: 0, z: 0 });
+  const protectedActor = population.spawn({
+    id: "protected-civilian", name: "Protected Civilian", protected: true, x: 0, z: 0,
+  });
+  const lockedActor = population.spawn({
+    id: "locked-civilian", name: "Locked Civilian", stationary: true, x: 0, z: 0,
+  });
+  assert.equal(population.stage(staged, { key: "managed-eligibility", position: [0, 0, 0] }).accepted, true);
+
+  assert.equal(population.leaseManagedRoutineActor(police, "occupancy").reason, "actor_police");
+  assert.equal(population.leaseManagedRoutineActor(protectedActor, "occupancy").reason, "actor_protected");
+  assert.equal(population.leaseManagedRoutineActor(lockedActor, "occupancy").reason, "actor_story_locked");
+  assert.equal(population.leaseManagedRoutineActor(staged, "occupancy").reason, "actor_staged");
+  assert.equal(population.leaseManagedRoutineActor(ambient, "").reason, "owner_required");
+  assert.equal(population.release(staged).accepted, true);
+
+  const lease = population.leaseManagedRoutineActor(ambient.id, "occupancy");
+  assert.equal(lease.accepted, true);
+  assert.equal(lease.ownerId, "occupancy");
+  assert.equal(population.leaseManagedRoutineActor(ambient, "another-owner").reason, "actor_managed");
+  assert.equal(population.stage(ambient, { key: "must-not-borrow" }).reason, "actor_managed");
+  const before = ambient.root.position.clone();
+  const searchesBeforeRequest = population.routineRouteSearches;
+  const queued = population.queueManagedRoutineDestination(ambient, "occupancy", [20, 0, 0], {
+    locationId: "test-interior",
+    activity: "occupancy:test:to_exterior",
+    requestKey: "visit-1:exterior",
+    speedScale: 1.2,
+  });
+  assert.equal(queued.accepted, true);
+  assert.equal(queued.queued, true);
+  assert.equal(population.routineRouteSearches, searchesBeforeRequest,
+    "queueing a managed destination must not search the graph");
+  assert.deepEqual(ambient.root.position.toArray(), before.toArray(),
+    "queueing a managed destination must not teleport its civilian");
+  population.update(0.1, { captureSnapshot: false });
+  assert.equal(population.routineRouteSearches, searchesBeforeRequest,
+    "population.update must leave managed route searches to the external drain");
+  assert.deepEqual(ambient.root.position.toArray(), before.toArray(),
+    "an actor must wait in place while its route is pending");
+
+  const resident = population.spawn({ id: "repair-resident", name: "Repair Resident", x: 0, z: 0 });
+  assert.equal(population.setRoutineDestination(resident, [20, 0, 0], {
+    locationId: "work", activity: "commute",
+  }).accepted, true);
+  resident.stuckFor = 0.85;
+  world.resolveCircleMotion = position => position.clone();
+  population.update(0.1, { captureSnapshot: false });
+  assert.equal(population.pendingRoutineRouteRequests, 1);
+  assert.equal(population.pendingRoutineRouteRepairs, 1);
+  const searchesBeforeDrain = population.routineRouteSearches;
+  assert.equal(population.flushRoutineRouteSearches(1), 1);
+  assert.equal(population.routineRouteSearches, searchesBeforeDrain + 1);
+  assert.equal(population.pendingRoutineRouteRequests, 0,
+    "stable actor order should accept the earlier ambient assignment first");
+  assert.equal(population.pendingRoutineRouteRepairs, 1,
+    "the repair must remain queued after the shared one-search budget is spent");
+  assert.equal(population.flushRoutineRouteRepairs(1), 1,
+    "the compatibility drain must own the same shared search queue");
+  assert.equal(population.pendingRoutineRouteRepairs, 0);
+
+  world.resolveCircleMotion = (position, displacement) => position.clone().add(displacement);
+  for (let step = 0; step < 240 && !ambient.routineDestinationArrived; ++step) {
+    population.update(0.1, { captureSnapshot: false });
+  }
+  assert.equal(ambient.routineDestinationArrived, true);
+  assert.ok(ambient.root.position.x > before.x + 1,
+    "the accepted actor must visibly traverse the managed route");
+  assert.equal(population.setManagedRoutineDwell(ambient, "another-owner", {}).reason, "owner_mismatch");
+  assert.equal(population.setManagedRoutineDwell(ambient, "occupancy", {
+    locationId: "test-interior", activity: "occupancy:test:dwell", idleMode: "coffee",
+  }).accepted, true);
+  assert.equal(ambient.idleMode, "coffee");
+  assert.equal(population.releaseManagedRoutineActor(ambient, "another-owner").reason, "owner_mismatch");
+  assert.equal(population.releaseManagedRoutineActor(ambient, "occupancy").accepted, true);
+  assert.equal(ambient.managedRoutineOwner, null);
+  assert.equal(ambient.routineDestinationActive, false);
+  population.dispose();
+});
+
+test("managed routine restore preserves pose and destination metadata while rebuilding externally from saved feet", () => {
+  const { world } = createTestWorld({ emptySpawns: true });
+  world.pedestrianNodes = [[0, 0, 0], [5, 0, 0], [10, 0, 0], [15, 0, 0], [20, 0, 0]];
+  const source = createPopulationSystem({
+    scene: new THREE.Scene(), world, civilianCount: 1, policeCount: 0,
+  });
+  const sourceActor = source.actors[0];
+  assert.equal(source.leaseManagedRoutineActor(sourceActor, "occupancy").accepted, true);
+  assert.equal(source.queueManagedRoutineDestination(sourceActor, "occupancy", [20, 0, 0], {
+    locationId: "cafe", activity: "occupancy:cafe:to_interior", requestKey: "restore:interior",
+    arrivalRadius: 0.55, speedScale: 1.25,
+  }).accepted, true);
+  source.flushRoutineRouteSearches(1);
+  for (let step = 0; step < 14; ++step) source.update(0.1, { captureSnapshot: false });
+  sourceActor.root.rotation.y = 0.73;
+  const saved = {
+    position: sourceActor.root.position.toArray(),
+    yaw: sourceActor.root.rotation.y,
+    state: sourceActor.state,
+    idleMode: sourceActor.idleMode,
+    destination: sourceActor.routineDestination.toArray(),
+    locationId: sourceActor.routineLocation,
+    activity: sourceActor.routineActivity,
+    arrivalRadius: sourceActor.routineArrivalRadius,
+    speedScale: sourceActor.routineTravelSpeedScale,
+    arrived: sourceActor.routineDestinationArrived,
+    requestKey: sourceActor.managedRoutineAppliedRequestKey,
+  };
+
+  const restored = createPopulationSystem({
+    scene: new THREE.Scene(), world, civilianCount: 1, policeCount: 0,
+  });
+  const restoredActor = restored.actors[0];
+  assert.equal(restored.leaseManagedRoutineActor(restoredActor, "occupancy").accepted, true);
+  const searchesBeforeRestore = restored.routineRouteSearches;
+  const result = restored.restoreManagedRoutineActor(restoredActor, "occupancy", saved);
+  assert.equal(result.accepted, true);
+  assert.equal(result.queued, true);
+  assert.equal(restored.routineRouteSearches, searchesBeforeRestore,
+    "restore must not run a graph search");
+  assert.deepEqual(restoredActor.root.position.toArray(), saved.position);
+  assert.equal(restoredActor.root.rotation.y, saved.yaw);
+  assert.deepEqual(restoredActor.routineDestination.toArray(), saved.destination);
+  assert.equal(restoredActor.routineLocation, saved.locationId);
+  assert.equal(restoredActor.routineActivity, saved.activity);
+  assert.equal(restoredActor.routineArrivalRadius, saved.arrivalRadius);
+  assert.equal(restoredActor.routineTravelSpeedScale, saved.speedScale);
+  assert.equal(restored.flushRoutineRouteSearches(1), 1);
+  assert.equal(restored.routineRouteSearches, searchesBeforeRestore + 1);
+  assert.equal(restoredActor.managedRoutineRequestPending, false);
+  assert.equal(restoredActor.managedRoutineAppliedRequestKey, saved.requestKey);
+  source.dispose();
+  restored.dispose();
+});
+
+test("routine destination changes remain continuous and story locks freeze travel in place", () => {
+  const { world } = createTestWorld({ emptySpawns: true });
+  world.pedestrianNodes = [[0, 0, 0], [4, 0, 0], [8, 0, 0], [12, 0, 0]];
+  const population = createPopulationSystem({
+    scene: new THREE.Scene(), world, civilianCount: 0, policeCount: 0,
+  });
+  const resident = population.spawn({
+    id: "rin-resident", name: "Rin Mercer", role: "friend-and-data-analyst", x: 0, z: 0,
+  });
+
+  assert.equal(population.setRoutineDestination(resident, {
+    destination: [12, 0, 0], location: "Civic Lab", activity: "analysis",
+  }).accepted, true);
+  for (let step = 0; step < 16; ++step) population.update(0.1, { captureSnapshot: false });
+  const beforeChange = resident.root.position.clone();
+  assert.equal(population.setRoutineDestination(resident.id, [0, 0, 0], {
+    location: "Apartment 3B", activity: "make-dinner",
+  }).accepted, true);
+  assert.deepEqual(resident.root.position.toArray(), beforeChange.toArray(),
+    "changing a schedule leg must continue from the resident's feet");
+  for (let step = 0; step < 12; ++step) population.update(0.1, { captureSnapshot: false });
+  assert.ok(resident.root.position.x < beforeChange.x,
+    "the changed route should move toward its new destination");
+
+  assert.equal(population.setRoutineDestination(resident, [12, 0, 0], {
+    location: "Night Market", activity: "meet-friend",
+  }).accepted, true);
+  for (let step = 0; step < 10; ++step) population.update(0.1, { captureSnapshot: false });
+  const lockedPosition = resident.root.position.clone();
+  resident.storyLocked = true;
+  for (let step = 0; step < 30; ++step) population.update(0.1, { captureSnapshot: false });
+  assert.deepEqual(resident.root.position.toArray(), lockedPosition.toArray(),
+    "storyLocked must take precedence without snapping a travelling resident home");
+  const locked = population.snapshot().find(actor => actor.id === resident.id);
+  assert.equal(locked.storyLocked, true);
+  assert.equal(locked.arrived, false);
+  assert.deepEqual(locked.destination, [12, 0, 0]);
+
+  resident.storyLocked = false;
+  for (let step = 0; step < 200 && !resident.routineDestinationArrived; ++step) {
+    population.update(0.1, { captureSnapshot: false });
+  }
+  assert.equal(population.snapshot().find(actor => actor.id === resident.id).arrived, true,
+    "unlocking story control should resume the same preallocated route");
+
+  const cleared = population.clearRoutineDestination(resident.id);
+  assert.equal(cleared.accepted, true);
+  assert.deepEqual(cleared, {
+    accepted: true,
+    reason: null,
+    actorId: resident.id,
+    destination: null,
+    location: null,
+    locationId: null,
+    activity: null,
+    speedScale: 1,
+    arrived: false,
+  });
+  const ambient = population.snapshot().find(actor => actor.id === resident.id);
+  assert.equal(ambient.destination, null);
+  assert.equal(ambient.location, null);
+  assert.equal(ambient.activity, null);
+  assert.equal(ambient.arrived, false);
+  population.dispose();
+});
+
+test("presentation staging restores a named resident's in-progress routine route", () => {
+  const { world } = createTestWorld({ emptySpawns: true });
+  world.pedestrianNodes = [[0, 0, 0], [4, 0, 0], [8, 0, 0], [12, 0, 0]];
+  const population = createPopulationSystem({
+    scene: new THREE.Scene(), world, civilianCount: 0, policeCount: 0,
+  });
+  const resident = population.spawn({ id: "named-neighbour", name: "Tess Bell", x: 0, z: 0 });
+  assert.equal(population.setRoutineDestination(resident, [12, 0, 0], {
+    location: "Community Kitchen", activity: "volunteer-shift",
+  }).accepted, true);
+  for (let step = 0; step < 10; ++step) population.update(0.1, { captureSnapshot: false });
+  const routePosition = resident.root.position.clone();
+  const routeCursor = resident.routineRouteCursor;
+
+  const staged = population.stage(resident, {
+    key: "routine-presentation", kind: "conversation", position: [24, 0, 0], locked: true,
+  });
+  assert.equal(staged.accepted, true);
+  assert.equal(resident.presentationStaged, true);
+  for (let step = 0; step < 10; ++step) population.update(0.1, { captureSnapshot: false });
+  assert.deepEqual(resident.root.position.toArray(), [24, 0, 0]);
+
+  assert.equal(population.release(resident).accepted, true);
+  assert.deepEqual(resident.root.position.toArray(), routePosition.toArray());
+  assert.equal(resident.routineRouteCursor, routeCursor);
+  assert.deepEqual(population.snapshot().find(actor => actor.id === resident.id).destination, [12, 0, 0]);
+  for (let step = 0; step < 180 && !resident.routineDestinationArrived; ++step) {
+    population.update(0.1, { captureSnapshot: false });
+  }
+  assert.equal(resident.routineDestinationArrived, true);
+  population.dispose();
+});
+
 test("ambient civilians stage through a taxi ride without changing population or renderer allocation", () => {
   const { world } = createTestWorld();
   const scene = new THREE.Scene();

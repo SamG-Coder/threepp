@@ -420,6 +420,86 @@ export function createPopulationSystem({ scene, world, onCrime = null, onPlayerD
   }
   const navigationLinkCount = Math.trunc(nodeLinks.reduce((sum, links) => sum + links.length, 0) / 2);
   root.userData.navigation = Object.freeze({ nodes: nodes.length, links: navigationLinkCount });
+  // Routine routes are authored at schedule changes or by the explicitly
+  // budgeted repair drain. One shared search workspace and one fixed route
+  // buffer per actor keep resident travel deterministic and allocation-stable.
+  const routineSearchDistance = new Float64Array(nodes.length);
+  const routineSearchPrevious = new Int32Array(nodes.length);
+  const routineSearchVisited = new Uint8Array(nodes.length);
+  const routineSearchRoute = new Int32Array(Math.max(1, nodes.length));
+  // Schedule boundaries can move several named residents in one frame. The
+  // old Dijkstra implementation found the next node by scanning the complete
+  // graph for every visit, turning that frame into O(V²) work per resident.
+  // This fixed-capacity binary heap keeps the same deterministic distance /
+  // node-index ordering at O((V + E) log V), with no runtime allocations.
+  const routineSearchHeapCapacity = Math.max(2, navigationLinkCount * 2 + nodes.length + 2);
+  const routineSearchHeapNodes = new Int32Array(routineSearchHeapCapacity);
+  const routineSearchHeapDistances = new Float64Array(routineSearchHeapCapacity);
+  let routineSearchHeapLength = 0;
+  let routineSearchPoppedNode = -1;
+  let routineSearchPoppedDistance = Infinity;
+  let routineRouteSearches = 0;
+
+  function routineHeapBefore(distance, node, otherDistance, otherNode) {
+    return distance < otherDistance - 1e-12 ||
+      (Math.abs(distance - otherDistance) <= 1e-12 && node < otherNode);
+  }
+
+  function pushRoutineSearchNode(node, distance) {
+    if (routineSearchHeapLength >= routineSearchHeapCapacity) return false;
+    let index = routineSearchHeapLength++;
+    while (index > 0) {
+      const parent = (index - 1) >> 1;
+      const parentNode = routineSearchHeapNodes[parent];
+      const parentDistance = routineSearchHeapDistances[parent];
+      if (!routineHeapBefore(distance, node, parentDistance, parentNode)) break;
+      routineSearchHeapNodes[index] = parentNode;
+      routineSearchHeapDistances[index] = parentDistance;
+      index = parent;
+    }
+    routineSearchHeapNodes[index] = node;
+    routineSearchHeapDistances[index] = distance;
+    return true;
+  }
+
+  function popRoutineSearchNode() {
+    if (routineSearchHeapLength <= 0) {
+      routineSearchPoppedNode = -1;
+      routineSearchPoppedDistance = Infinity;
+      return false;
+    }
+    routineSearchPoppedNode = routineSearchHeapNodes[0];
+    routineSearchPoppedDistance = routineSearchHeapDistances[0];
+    routineSearchHeapLength -= 1;
+    if (routineSearchHeapLength <= 0) return true;
+    const tailNode = routineSearchHeapNodes[routineSearchHeapLength];
+    const tailDistance = routineSearchHeapDistances[routineSearchHeapLength];
+    let index = 0;
+    for (;;) {
+      const left = index * 2 + 1;
+      if (left >= routineSearchHeapLength) break;
+      const right = left + 1;
+      let child = left;
+      if (right < routineSearchHeapLength && routineHeapBefore(
+        routineSearchHeapDistances[right],
+        routineSearchHeapNodes[right],
+        routineSearchHeapDistances[left],
+        routineSearchHeapNodes[left],
+      )) child = right;
+      if (!routineHeapBefore(
+        routineSearchHeapDistances[child],
+        routineSearchHeapNodes[child],
+        tailDistance,
+        tailNode,
+      )) break;
+      routineSearchHeapNodes[index] = routineSearchHeapNodes[child];
+      routineSearchHeapDistances[index] = routineSearchHeapDistances[child];
+      index = child;
+    }
+    routineSearchHeapNodes[index] = tailNode;
+    routineSearchHeapDistances[index] = tailDistance;
+    return true;
+  }
 
   function invoke(callback, detail) {
     if (typeof callback !== "function") return undefined;
@@ -478,6 +558,28 @@ export function createPopulationSystem({ scene, world, onCrime = null, onPlayerD
     actor.pendingAlert = null;
     actor.crossing = null;
     actor.crossingDestinationIndex = -1;
+    if (actor.routineDestination) {
+      actor.routineDestination.set(0, 0, 0);
+      actor.routineDestinationActive = false;
+      actor.routineDestinationArrived = false;
+      actor.routineDestinationNodeIndex = -1;
+      actor.routineRouteLength = 0;
+      actor.routineRouteCursor = 0;
+      actor.routineRouteRepairPending = false;
+      actor.routineCrossingWaypoint = -1;
+      actor.routineArrivalRadius = 0.72;
+      actor.routineTravelSpeedScale = 1;
+      actor.routineLocation = null;
+      actor.routineActivity = null;
+      actor.managedRoutineOwner = null;
+      actor.managedRoutineRequestPending = false;
+      actor.managedRoutineRequestKey = null;
+      actor.managedRoutineAppliedRequestKey = null;
+      actor.managedRoutineRequestStatus = "idle";
+      actor.managedRoutineLastRequestReason = null;
+      actor.managedRoutineDwelling = false;
+      actor.managedRoutineOriginalIdleMode = null;
+    }
     actor.yieldDirection.set(0, 0, 0);
     actor.yieldSpeed = 0;
     actor.stuckFor = 0;
@@ -737,6 +839,36 @@ export function createPopulationSystem({ scene, world, onCrime = null, onPlayerD
       homePosition: policeOfficer ? spawn.clone() : homeNodeFor(index).clone(),
       crossing: null,
       crossingDestinationIndex: -1,
+      routineDestination: new THREE.Vector3(),
+      routineDestinationActive: false,
+      routineDestinationArrived: false,
+      routineDestinationNodeIndex: -1,
+      routineRoute: new Int32Array(Math.max(1, nodes.length)),
+      routineRouteLength: 0,
+      routineRouteCursor: 0,
+      routineRouteRepairPending: false,
+      routineCrossingWaypoint: -1,
+      routineArrivalRadius: 0.72,
+      routineTravelSpeedScale: 1,
+      routineLocation: null,
+      routineActivity: null,
+      managedRoutineOwner: null,
+      managedRoutineRequestPending: false,
+      managedRoutineRequestKey: null,
+      managedRoutineAppliedRequestKey: null,
+      managedRoutineRequestStatus: "idle",
+      managedRoutineLastRequestReason: null,
+      managedRoutineDwelling: false,
+      managedRoutineOriginalIdleMode: null,
+      routineCrossing: {
+        roadAxis: null,
+        roadCenter: 0,
+        center: null,
+        entry: null,
+        exit: null,
+        stage: "approach",
+        waitUntil: 0,
+      },
       displayName: actorRoot.name,
       storyRole: null,
       storyLocked: false,
@@ -875,6 +1007,481 @@ export function createPopulationSystem({ scene, world, onCrime = null, onPlayerD
     return nearest;
   }
 
+  function namedRoutineResident(actor) {
+    if (!actor || !actors.includes(actor) || actor.police) return false;
+    if (actor.storyRole) return true;
+    return Boolean(actor.displayName && !/^Civilian \d+$/.test(actor.displayName));
+  }
+
+  function nearestVisibleNodeIndex(position) {
+    // Authored residents and work anchors normally sit beside a navigation
+    // node. Prove that closest node first; when it is visible this is exactly
+    // the result the exhaustive scan below would choose, while avoiding up to
+    // a thousand blocker line tests for every schedule-boundary route.
+    const nearestCandidate = nearestNodeIndex(position);
+    if (nodes[nearestCandidate] && clearLineOfSight(position, nodes[nearestCandidate])) return nearestCandidate;
+    let nearest = -1;
+    let distance = Infinity;
+    for (let index = 0; index < nodes.length; ++index) {
+      const candidate = nodes[index].distanceToSquared(position);
+      if (candidate >= distance || !clearLineOfSight(position, nodes[index])) continue;
+      nearest = index;
+      distance = candidate;
+    }
+    return nearest;
+  }
+
+  function buildRoutineRoute(actor, destination) {
+    routineRouteSearches += 1;
+    const direct = clearLineOfSight(actor.root.position, destination);
+    const start = nearestVisibleNodeIndex(actor.root.position);
+    const end = nearestVisibleNodeIndex(destination);
+    if (start < 0 || end < 0) {
+      if (!direct) return false;
+      actor.routineRouteLength = 0;
+      actor.routineRouteCursor = 0;
+      actor.routineDestinationNodeIndex = -1;
+      return true;
+    }
+
+    routineSearchDistance.fill(Infinity);
+    routineSearchPrevious.fill(-1);
+    routineSearchVisited.fill(0);
+    routineSearchDistance[start] = 0;
+    routineSearchHeapLength = 0;
+    pushRoutineSearchNode(start, 0);
+    while (popRoutineSearchNode()) {
+      const current = routineSearchPoppedNode;
+      const best = routineSearchPoppedDistance;
+      if (current < 0) break;
+      if (routineSearchVisited[current] || best > routineSearchDistance[current] + 1e-9) continue;
+      routineSearchVisited[current] = 1;
+      if (current === end) break;
+      const links = nodeLinks[current];
+      for (let link = 0; link < links.length; ++link) {
+        const next = links[link];
+        if (routineSearchVisited[next]) continue;
+        const dx = nodes[next].x - nodes[current].x;
+        const dz = nodes[next].z - nodes[current].z;
+        const distance = best + Math.hypot(dx, dz);
+        if (distance + 1e-9 >= routineSearchDistance[next]) continue;
+        routineSearchDistance[next] = distance;
+        routineSearchPrevious[next] = current;
+        if (!pushRoutineSearchNode(next, distance)) return false;
+      }
+    }
+
+    if (!Number.isFinite(routineSearchDistance[end])) {
+      if (!direct) return false;
+      actor.routineRouteLength = 0;
+      actor.routineRouteCursor = 0;
+      actor.routineDestinationNodeIndex = -1;
+      return true;
+    }
+
+    let length = 0;
+    let current = end;
+    while (current >= 0 && length < routineSearchRoute.length) {
+      routineSearchRoute[length++] = current;
+      if (current === start) break;
+      current = routineSearchPrevious[current];
+    }
+    if (length <= 0 || routineSearchRoute[length - 1] !== start) return false;
+    for (let left = 0, right = length - 1; left < right; ++left, --right) {
+      const swap = routineSearchRoute[left];
+      routineSearchRoute[left] = routineSearchRoute[right];
+      routineSearchRoute[right] = swap;
+    }
+    for (let index = 0; index < length; ++index) actor.routineRoute[index] = routineSearchRoute[index];
+    actor.routineRouteLength = length;
+    actor.routineRouteCursor = 0;
+    actor.routineDestinationNodeIndex = end;
+    return true;
+  }
+
+  function routineDestinationResult(actor, accepted, reason = null) {
+    return Object.freeze({
+      accepted: Boolean(accepted),
+      reason,
+      actorId: actor?.id ?? null,
+      destination: actor?.routineDestinationActive
+        ? Object.freeze(actor.routineDestination.toArray())
+        : null,
+      location: actor?.routineLocation ?? null,
+      locationId: actor?.routineLocation ?? null,
+      activity: actor?.routineActivity ?? null,
+      speedScale: finite(actor?.routineTravelSpeedScale, 1),
+      arrived: Boolean(actor?.routineDestinationActive && actor.routineDestinationArrived),
+    });
+  }
+
+  function managedRoutineResult(actor, accepted, reason = null) {
+    return Object.freeze({
+      accepted: Boolean(accepted),
+      reason,
+      actorId: actor?.id ?? null,
+      ownerId: actor?.managedRoutineOwner ?? null,
+      queued: Boolean(actor?.managedRoutineRequestPending),
+      requestKey: actor?.managedRoutineRequestKey ?? actor?.managedRoutineAppliedRequestKey ?? null,
+      status: actor?.managedRoutineRequestStatus ?? "idle",
+      destination: actor?.routineDestinationActive
+        ? Object.freeze(actor.routineDestination.toArray())
+        : null,
+      locationId: actor?.routineLocation ?? null,
+      activity: actor?.routineActivity ?? null,
+      arrived: Boolean(actor?.routineDestinationActive && actor.routineDestinationArrived),
+    });
+  }
+
+  function managedRoutineOwnerId(value) {
+    const source = value && typeof value === "object" ? value.ownerId ?? value.owner : value;
+    const ownerId = String(source ?? "").trim();
+    return ownerId ? ownerId.slice(0, 128) : null;
+  }
+
+  function managedRoutineEligibilityReason(actor) {
+    if (!actor || !actors.includes(actor)) return "actor_not_found";
+    if (actor.police) return "actor_police";
+    if (actor.presentationStaged || stagedOriginals.has(actor)) return "actor_staged";
+    if (actor.storyProtected) return "actor_protected";
+    if (actor.storyLocked) return "actor_story_locked";
+    if (!actor.active || !actor.alive || actor.ragdollActive) return "actor_unavailable";
+    return null;
+  }
+
+  function clearRoutineContract(actor, nextState = "wander") {
+    actor.routineDestinationActive = false;
+    actor.routineDestinationArrived = false;
+    actor.routineDestinationNodeIndex = -1;
+    actor.routineRouteLength = 0;
+    actor.routineRouteCursor = 0;
+    actor.routineRouteRepairPending = false;
+    actor.routineCrossingWaypoint = -1;
+    actor.routineLocation = null;
+    actor.routineActivity = null;
+    actor.routineTravelSpeedScale = 1;
+    actor.managedRoutineDwelling = false;
+    actor.crossing = null;
+    actor.crossingDestinationIndex = -1;
+    actor.nodeIndex = nearestNodeIndex(actor.root.position);
+    actor.previousNodeIndex = -1;
+    actor.idleUntil = 0;
+    setState(actor, nextState);
+  }
+
+  /**
+   * Lease a caller-selected civilian to one deterministic routine owner.
+   * Population never searches for a candidate: an actor id must be supplied
+   * explicitly by the higher-level occupancy system.
+   */
+  function leaseManagedRoutineActor(target, ownerValue) {
+    const actor = resolveActor(target);
+    if (!actor) return managedRoutineResult(null, false, "actor_not_found");
+    const ownerId = managedRoutineOwnerId(ownerValue);
+    if (!ownerId) return managedRoutineResult(actor, false, "owner_required");
+    if (actor.managedRoutineOwner && actor.managedRoutineOwner !== ownerId) {
+      return managedRoutineResult(actor, false, "actor_managed");
+    }
+    const eligibilityReason = managedRoutineEligibilityReason(actor);
+    if (eligibilityReason) return managedRoutineResult(actor, false, eligibilityReason);
+    if (!actor.managedRoutineOwner) actor.managedRoutineOriginalIdleMode = actor.idleMode;
+    actor.managedRoutineOwner = ownerId;
+    actor.managedRoutineLastRequestReason = null;
+    return managedRoutineResult(actor, true);
+  }
+
+  /**
+   * Queue, but never search, a managed graph destination. The actor remains
+   * stationary in routine_route_pending until the external route-search drain
+   * accepts this request. Request and stuck repair work therefore share the
+   * same caller-owned frame budget.
+   */
+  function queueManagedRoutineDestination(target, ownerValue, destination, options = {}) {
+    const actor = resolveActor(target);
+    if (!actor) return managedRoutineResult(null, false, "actor_not_found");
+    const ownerId = managedRoutineOwnerId(ownerValue);
+    if (!ownerId) return managedRoutineResult(actor, false, "owner_required");
+    if (!actor.managedRoutineOwner) return managedRoutineResult(actor, false, "actor_not_leased");
+    if (actor.managedRoutineOwner !== ownerId) return managedRoutineResult(actor, false, "owner_mismatch");
+    const eligibilityReason = managedRoutineEligibilityReason(actor);
+    if (eligibilityReason) return managedRoutineResult(actor, false, eligibilityReason);
+
+    let request = options && typeof options === "object" ? options : {};
+    let requestedPosition = destination;
+    if (destination && typeof destination === "object" &&
+        (destination.destination !== undefined || destination.position !== undefined)) {
+      request = destination;
+      requestedPosition = destination.destination ?? destination.position;
+    }
+    const position = positionVector(requestedPosition);
+    if (!position) return managedRoutineResult(actor, false, "invalid_destination");
+    position.y = groundHeight(position.x, position.z, position.y);
+    let blocked = false;
+    try { blocked = Boolean(world.isBlockedCircle?.(position.x, position.z, actor.radius + 0.08)); } catch {}
+    if (blocked) return managedRoutineResult(actor, false, "destination_blocked");
+
+    const arrivalRadius = clamp(request.arrivalRadius ?? 0.72, 0.35, 1.8);
+    const speedScale = clamp(request.speedScale ?? 1, 0.55, 1.65);
+    const location = request.locationId ?? request.location;
+    const locationId = location === undefined || location === null ? null : String(location);
+    const activity = request.activity === undefined || request.activity === null
+      ? "managed_travel"
+      : String(request.activity);
+    const requestKeySource = request.requestKey ?? request.key;
+    const requestKey = requestKeySource === undefined || requestKeySource === null
+      ? null
+      : String(requestKeySource).slice(0, 160);
+    const rebuildRoute = request.rebuildRoute === true || request.forceRouteRebuild === true;
+
+    if (!rebuildRoute && actor.routineDestinationActive &&
+        actor.routineDestination.distanceToSquared(position) <= 1e-8) {
+      actor.routineArrivalRadius = arrivalRadius;
+      actor.routineTravelSpeedScale = speedScale;
+      actor.routineLocation = locationId;
+      actor.routineActivity = activity;
+      actor.managedRoutineRequestKey = requestKey;
+      if (!actor.managedRoutineRequestPending) actor.managedRoutineAppliedRequestKey = requestKey;
+      actor.managedRoutineRequestStatus = actor.managedRoutineRequestPending ? "queued" : "accepted";
+      actor.managedRoutineLastRequestReason = null;
+      actor.managedRoutineDwelling = false;
+      if (actor.routineDestinationArrived) setState(actor, "routine_arrived");
+      return managedRoutineResult(actor, true);
+    }
+
+    clearSocial(actor);
+    actor.routineDestination.copy(position);
+    actor.routineDestinationActive = true;
+    actor.routineDestinationArrived = false;
+    actor.routineDestinationNodeIndex = -1;
+    actor.routineRouteLength = 0;
+    actor.routineRouteCursor = 0;
+    actor.routineRouteRepairPending = false;
+    actor.routineCrossingWaypoint = -1;
+    actor.routineArrivalRadius = arrivalRadius;
+    actor.routineTravelSpeedScale = speedScale;
+    actor.routineLocation = locationId;
+    actor.routineActivity = activity;
+    actor.crossing = null;
+    actor.crossingDestinationIndex = -1;
+    actor.idleUntil = 0;
+    actor.stuckFor = 0;
+    actor.managedRoutineRequestPending = true;
+    actor.managedRoutineRequestKey = requestKey;
+    actor.managedRoutineRequestStatus = "queued";
+    actor.managedRoutineLastRequestReason = null;
+    actor.managedRoutineDwelling = false;
+    setState(actor, "routine_route_pending");
+    return managedRoutineResult(actor, true);
+  }
+
+  function setManagedRoutineDwell(target, ownerValue, options = {}) {
+    const actor = resolveActor(target);
+    if (!actor) return managedRoutineResult(null, false, "actor_not_found");
+    const ownerId = managedRoutineOwnerId(ownerValue);
+    if (!ownerId) return managedRoutineResult(actor, false, "owner_required");
+    if (!actor.managedRoutineOwner) return managedRoutineResult(actor, false, "actor_not_leased");
+    if (actor.managedRoutineOwner !== ownerId) return managedRoutineResult(actor, false, "owner_mismatch");
+    const eligibilityReason = managedRoutineEligibilityReason(actor);
+    if (eligibilityReason) return managedRoutineResult(actor, false, eligibilityReason);
+    if (actor.managedRoutineRequestPending) return managedRoutineResult(actor, false, "route_pending");
+    if (!actor.routineDestinationActive || !actor.routineDestinationArrived) {
+      return managedRoutineResult(actor, false, "actor_not_arrived");
+    }
+    const location = options.locationId ?? options.location;
+    if (location !== undefined) actor.routineLocation = location === null ? null : String(location);
+    if (options.activity !== undefined) {
+      actor.routineActivity = options.activity === null ? null : String(options.activity);
+    }
+    if (options.idleMode !== undefined && options.idleMode !== null) {
+      actor.idleMode = String(options.idleMode);
+    }
+    actor.managedRoutineRequestStatus = "accepted";
+    actor.managedRoutineLastRequestReason = null;
+    actor.managedRoutineDwelling = true;
+    setState(actor, "routine_dwell");
+    return managedRoutineResult(actor, true);
+  }
+
+  function restoreManagedRoutineActor(target, ownerValue, value = {}) {
+    const actor = resolveActor(target);
+    if (!actor) return managedRoutineResult(null, false, "actor_not_found");
+    const ownerId = managedRoutineOwnerId(ownerValue);
+    if (!ownerId) return managedRoutineResult(actor, false, "owner_required");
+    if (!actor.managedRoutineOwner) return managedRoutineResult(actor, false, "actor_not_leased");
+    if (actor.managedRoutineOwner !== ownerId) return managedRoutineResult(actor, false, "owner_mismatch");
+    const eligibilityReason = managedRoutineEligibilityReason(actor);
+    if (eligibilityReason) return managedRoutineResult(actor, false, eligibilityReason);
+
+    const restoredPosition = positionVector(value.position);
+    if (!restoredPosition) return managedRoutineResult(actor, false, "invalid_position");
+    let blocked = false;
+    try {
+      blocked = Boolean(world.isBlockedCircle?.(
+        restoredPosition.x,
+        restoredPosition.z,
+        actor.radius + 0.08,
+      ));
+    } catch {}
+    if (blocked) return managedRoutineResult(actor, false, "position_blocked");
+
+    actor.root.position.copy(restoredPosition);
+    actor.root.rotation.y = finite(value.yaw, actor.root.rotation.y);
+    actor.velocity.set(0, 0, 0);
+    actor.steering.set(0, 0, 0);
+    actor.speed = 0;
+    actor.stuckFor = 0;
+    actor.nodeIndex = nearestNodeIndex(actor.root.position);
+    actor.previousNodeIndex = -1;
+    actor.crossing = null;
+    actor.crossingDestinationIndex = -1;
+    if (value.idleMode !== undefined && value.idleMode !== null) actor.idleMode = String(value.idleMode);
+
+    const restoredDestination = positionVector(value.destination);
+    if (!restoredDestination) {
+      clearRoutineContract(actor, String(value.state ?? "wander"));
+      actor.managedRoutineRequestPending = false;
+      actor.managedRoutineRequestStatus = "accepted";
+      actor.managedRoutineLastRequestReason = null;
+      return managedRoutineResult(actor, true);
+    }
+
+    const request = {
+      position: restoredDestination,
+      locationId: value.locationId ?? value.location,
+      activity: value.activity,
+      arrivalRadius: value.arrivalRadius,
+      speedScale: value.speedScale,
+      requestKey: value.requestKey,
+      rebuildRoute: true,
+    };
+    if (value.arrived === true) {
+      actor.routineDestination.copy(restoredDestination);
+      actor.routineDestinationActive = true;
+      actor.routineDestinationArrived = true;
+      actor.routineDestinationNodeIndex = nearestNodeIndex(restoredDestination);
+      actor.routineRouteLength = 0;
+      actor.routineRouteCursor = 0;
+      actor.routineRouteRepairPending = false;
+      actor.routineCrossingWaypoint = -1;
+      actor.routineArrivalRadius = clamp(value.arrivalRadius ?? 0.72, 0.35, 1.8);
+      actor.routineTravelSpeedScale = clamp(value.speedScale ?? 1, 0.55, 1.65);
+      const location = value.locationId ?? value.location;
+      actor.routineLocation = location === undefined || location === null ? null : String(location);
+      actor.routineActivity = value.activity === undefined || value.activity === null
+        ? "managed_dwell"
+        : String(value.activity);
+      actor.managedRoutineRequestPending = false;
+      actor.managedRoutineRequestKey = request.requestKey ?? null;
+      actor.managedRoutineAppliedRequestKey = request.requestKey ?? null;
+      actor.managedRoutineRequestStatus = "accepted";
+      actor.managedRoutineLastRequestReason = null;
+      actor.managedRoutineDwelling = value.dwelling === true || value.state === "routine_dwell";
+      setState(actor, String(value.state ?? (actor.managedRoutineDwelling ? "routine_dwell" : "routine_arrived")));
+      return managedRoutineResult(actor, true);
+    }
+
+    const queued = queueManagedRoutineDestination(actor, ownerId, request);
+    if (queued.accepted && value.state !== undefined && value.state !== null) {
+      actor.state = String(value.state);
+      actor.stateTime = 0;
+    }
+    return managedRoutineResult(actor, queued.accepted, queued.reason);
+  }
+
+  function releaseManagedRoutineActor(target, ownerValue) {
+    const actor = resolveActor(target);
+    if (!actor) return managedRoutineResult(null, false, "actor_not_found");
+    const ownerId = managedRoutineOwnerId(ownerValue);
+    if (!ownerId) return managedRoutineResult(actor, false, "owner_required");
+    if (!actor.managedRoutineOwner) return managedRoutineResult(actor, false, "actor_not_leased");
+    if (actor.managedRoutineOwner !== ownerId) return managedRoutineResult(actor, false, "owner_mismatch");
+    clearSocial(actor);
+    actor.managedRoutineOwner = null;
+    actor.managedRoutineRequestPending = false;
+    actor.managedRoutineRequestKey = null;
+    actor.managedRoutineAppliedRequestKey = null;
+    actor.managedRoutineRequestStatus = "idle";
+    actor.managedRoutineLastRequestReason = null;
+    actor.managedRoutineDwelling = false;
+    if (actor.managedRoutineOriginalIdleMode !== null) actor.idleMode = actor.managedRoutineOriginalIdleMode;
+    actor.managedRoutineOriginalIdleMode = null;
+    clearRoutineContract(actor);
+    return managedRoutineResult(actor, true);
+  }
+
+  function setRoutineDestination(target, destination, options = {}) {
+    const actor = resolveActor(target);
+    if (!actor) return routineDestinationResult(null, false, "actor_not_found");
+    if (!namedRoutineResident(actor)) return routineDestinationResult(actor, false, "resident_identity_required");
+    if (actor.managedRoutineOwner) return routineDestinationResult(actor, false, "actor_managed");
+    if (actor.presentationStaged) return routineDestinationResult(actor, false, "actor_staged");
+    if (!actor.active || !actor.alive || actor.ragdollActive) {
+      return routineDestinationResult(actor, false, "actor_unavailable");
+    }
+
+    let request = options && typeof options === "object" ? options : {};
+    let requestedPosition = destination;
+    if (destination && typeof destination === "object" &&
+        (destination.destination !== undefined || destination.position !== undefined)) {
+      request = destination;
+      requestedPosition = destination.destination ?? destination.position;
+    }
+    const position = positionVector(requestedPosition);
+    if (!position) return routineDestinationResult(actor, false, "invalid_destination");
+    position.y = groundHeight(position.x, position.z, position.y);
+    let blocked = false;
+    try { blocked = Boolean(world.isBlockedCircle?.(position.x, position.z, actor.radius + 0.08)); } catch {}
+    if (blocked) return routineDestinationResult(actor, false, "destination_blocked");
+    const arrivalRadius = clamp(request.arrivalRadius ?? 0.72, 0.35, 1.8);
+    const speedScale = clamp(request.speedScale ?? 1, 0.55, 1.65);
+    const location = request.locationId ?? request.location;
+    const locationId = location === undefined || location === null ? null : String(location);
+    const activity = request.activity === undefined || request.activity === null
+      ? "travel"
+      : String(request.activity);
+    const rebuildRoute = request.rebuildRoute === true || request.forceRouteRebuild === true;
+    if (!rebuildRoute && actor.routineDestinationActive && actor.routineDestination.distanceToSquared(position) <= 1e-8) {
+      // Schedule evaluators may repeat the same assignment every tick. Treat
+      // that as an in-place metadata refresh so an arrived resident never
+      // restarts a route and no graph search enters the frame loop.
+      actor.routineArrivalRadius = arrivalRadius;
+      actor.routineTravelSpeedScale = speedScale;
+      actor.routineLocation = locationId;
+      actor.routineActivity = activity;
+      return routineDestinationResult(actor, true);
+    }
+    if (!buildRoutineRoute(actor, position)) {
+      return routineDestinationResult(actor, false, "destination_unreachable");
+    }
+
+    clearSocial(actor);
+    actor.routineDestination.copy(position);
+    actor.routineDestinationActive = true;
+    actor.routineDestinationArrived = false;
+    actor.routineArrivalRadius = arrivalRadius;
+    actor.routineLocation = locationId;
+    actor.routineActivity = activity;
+    actor.routineTravelSpeedScale = speedScale;
+    actor.routineRouteRepairPending = false;
+    actor.routineCrossingWaypoint = -1;
+    actor.crossing = null;
+    actor.crossingDestinationIndex = -1;
+    actor.idleUntil = 0;
+    actor.stuckFor = 0;
+    setState(actor, "routine_travel");
+    return routineDestinationResult(actor, true);
+  }
+
+  function clearRoutineDestination(target) {
+    const actor = resolveActor(target);
+    if (!actor) return routineDestinationResult(null, false, "actor_not_found");
+    if (!namedRoutineResident(actor)) return routineDestinationResult(actor, false, "resident_identity_required");
+    if (actor.managedRoutineOwner) return routineDestinationResult(actor, false, "actor_managed");
+    if (actor.presentationStaged) return routineDestinationResult(actor, false, "actor_staged");
+    clearRoutineContract(actor);
+    return routineDestinationResult(actor, true);
+  }
+
   function clearSocial(actor) {
     if (!actor) return;
     const partner = actor.socialPartner;
@@ -922,9 +1529,11 @@ export function createPopulationSystem({ scene, world, onCrime = null, onPlayerD
     setState(actor, "idle");
   }
 
-  function planCrossing(actor, destination) {
+  function planCrossing(actor, destination, reuse = null) {
     if (!crossings.length) return null;
-    let choice = null;
+    let choiceCrossing = null;
+    let choiceEntry = null;
+    let choiceExit = null;
     let bestScore = Infinity;
     for (const crossing of crossings) {
       const actorSide = crossing.roadAxis === "z"
@@ -937,17 +1546,23 @@ export function createPopulationSystem({ scene, world, onCrime = null, onPlayerD
       const entry = actorSide < 0 ? crossing.a : crossing.b;
       const exit = actorSide < 0 ? crossing.b : crossing.a;
       const score = actor.root.position.distanceTo(entry) + exit.distanceTo(destination);
-      if (score < bestScore) { bestScore = score; choice = { crossing, entry, exit }; }
+      if (score < bestScore) {
+        bestScore = score;
+        choiceCrossing = crossing;
+        choiceEntry = entry;
+        choiceExit = exit;
+      }
     }
-    if (!choice) return null;
-    return {
-      roadAxis: choice.crossing.roadAxis,
-      center: choice.crossing.center,
-      entry: choice.entry,
-      exit: choice.exit,
-      stage: "approach",
-      waitUntil: 0,
-    };
+    if (!choiceCrossing) return null;
+    const result = reuse ?? {};
+    result.roadAxis = choiceCrossing.roadAxis;
+    result.roadCenter = choiceCrossing.roadCenter;
+    result.center = choiceCrossing.center;
+    result.entry = choiceEntry;
+    result.exit = choiceExit;
+    result.stage = "approach";
+    result.waitUntil = 0;
+    return result;
   }
 
   function crossingHasTraffic(crossing) {
@@ -1186,6 +1801,136 @@ export function createPopulationSystem({ scene, world, onCrime = null, onPlayerD
     return true;
   }
 
+  function updateRoutineDestination(actor, delta) {
+    if (!actor.routineDestinationActive) return false;
+    clearSocial(actor);
+    actor.idleUntil = 0;
+    if (actor.managedRoutineRequestPending) {
+      setState(actor, "routine_route_pending");
+      stopActor(actor, delta, 11);
+      return true;
+    }
+    if (actor.routineDestinationArrived) {
+      setState(actor, actor.managedRoutineDwelling ? "routine_dwell" : "routine_arrived");
+      stopActor(actor, delta, 11);
+      return true;
+    }
+
+    let target = actor.routineDestination;
+    let waypointKey = actor.routineRouteLength;
+    while (actor.routineRouteCursor < actor.routineRouteLength) {
+      const routeIndex = actor.routineRoute[actor.routineRouteCursor];
+      const waypoint = nodes[routeIndex];
+      if (!waypoint || actor.root.position.distanceToSquared(waypoint) <= 1.18 * 1.18) {
+        actor.routineRouteCursor += 1;
+        actor.routineCrossingWaypoint = -1;
+        actor.crossing = null;
+        continue;
+      }
+      target = waypoint;
+      waypointKey = actor.routineRouteCursor;
+      break;
+    }
+
+    const onFinalLeg = actor.routineRouteCursor >= actor.routineRouteLength;
+    tempDirection.copy(target).sub(actor.root.position).setY(0);
+    if (onFinalLeg && tempDirection.lengthSq() <= actor.routineArrivalRadius * actor.routineArrivalRadius) {
+      actor.routineDestinationArrived = true;
+      actor.routineCrossingWaypoint = -1;
+      actor.crossing = null;
+      actor.crossingDestinationIndex = -1;
+      actor.velocity.set(0, 0, 0);
+      actor.speed = 0;
+      actor.idleMode = "hands";
+      setState(actor, "routine_arrived");
+      return true;
+    }
+
+    if (actor.routineCrossingWaypoint !== waypointKey) {
+      actor.crossing = planCrossing(actor, target, actor.routineCrossing);
+      actor.routineCrossingWaypoint = waypointKey;
+    }
+    if (updateCrossing(actor, delta)) return true;
+
+    setState(actor, "routine_travel");
+    tempDirection.copy(target).sub(actor.root.position).setY(0);
+    moveActor(actor, tempDirection,
+      actor.preferredSpeed * actor.routineTravelSpeedScale * (1 + rainAmount * 0.08), delta, 6.5);
+    if (actor.stuckFor > 0.9) {
+      // A full graph search here used to put every simultaneously blocked
+      // resident's Dijkstra pass inside the actor hot loop. Queue the repair;
+      // the caller drains a deterministic fixed budget before the next update.
+      actor.routineRouteRepairPending = true;
+      actor.stuckFor = 0;
+    }
+    return true;
+  }
+
+  function flushRoutineRouteSearches(maxSearches = 1) {
+    const budget = Math.max(0, Math.min(actors.length, Math.trunc(finite(maxSearches, 1))));
+    let searched = 0;
+    for (const actor of actors) {
+      if (searched >= budget) break;
+      if (actor.managedRoutineRequestPending) {
+        const eligibilityReason = managedRoutineEligibilityReason(actor);
+        if (eligibilityReason || !actor.managedRoutineOwner || !actor.routineDestinationActive) {
+          actor.managedRoutineRequestPending = false;
+          actor.managedRoutineRequestStatus = "rejected";
+          actor.managedRoutineLastRequestReason = eligibilityReason ?? "actor_not_leased";
+          actor.routineDestinationActive = false;
+          actor.routineDestinationArrived = false;
+          actor.routineRouteLength = 0;
+          actor.routineRouteCursor = 0;
+          actor.routineRouteRepairPending = false;
+          continue;
+        }
+        actor.managedRoutineRequestPending = false;
+        searched += 1;
+        if (buildRoutineRoute(actor, actor.routineDestination)) {
+          actor.managedRoutineAppliedRequestKey = actor.managedRoutineRequestKey;
+          actor.managedRoutineRequestStatus = "accepted";
+          actor.managedRoutineLastRequestReason = null;
+          actor.routineCrossingWaypoint = -1;
+          actor.crossing = null;
+          actor.crossingDestinationIndex = -1;
+          setState(actor, "routine_travel");
+        } else {
+          actor.managedRoutineRequestStatus = "rejected";
+          actor.managedRoutineLastRequestReason = "destination_unreachable";
+          actor.routineDestinationActive = false;
+          actor.routineDestinationArrived = false;
+          actor.routineDestinationNodeIndex = -1;
+          actor.routineRouteLength = 0;
+          actor.routineRouteCursor = 0;
+          setState(actor, "wander");
+        }
+        continue;
+      }
+      if (!actor.routineRouteRepairPending) continue;
+      if (!actor.active || !actor.alive || actor.ragdollActive ||
+          !actor.routineDestinationActive || actor.routineDestinationArrived) {
+        actor.routineRouteRepairPending = false;
+        continue;
+      }
+      if (actor.storyLocked || actor.presentationStaged) continue;
+      actor.routineRouteRepairPending = false;
+      searched += 1;
+      if (buildRoutineRoute(actor, actor.routineDestination)) {
+        actor.routineCrossingWaypoint = -1;
+        actor.crossing = null;
+        actor.crossingDestinationIndex = -1;
+      }
+    }
+    return searched;
+  }
+
+  // Historical callers already drain this hook once per frame. Keep the name
+  // as a compatibility alias while including both managed assignments and
+  // stuck-route repairs in its single deterministic search budget.
+  function flushRoutineRouteRepairs(maxSearches = 1) {
+    return flushRoutineRouteSearches(maxSearches);
+  }
+
   function updateCivilian(actor, delta, targetPosition, wantedStars) {
     if (lastAlert && elapsed - lastAlert.time <= ALERT_LIFETIME) queueAlertReaction(actor);
     if (wantedStars > 0 && targetPosition) {
@@ -1239,6 +1984,7 @@ export function createPopulationSystem({ scene, world, onCrime = null, onPlayerD
       }
       clearSocial(actor);
     }
+    if (updateRoutineDestination(actor, delta)) return;
     if (updateTransitRoutine(actor, delta)) return;
     if (elapsed < actor.idleUntil) {
       setState(actor, "idle");
@@ -1447,8 +2193,11 @@ export function createPopulationSystem({ scene, world, onCrime = null, onPlayerD
         ? Math.sin(actor.animationTime * 0.38 + actor.index) * (0.018 + rainAmount * 0.022)
         : 0;
     }
-    if (props.phone) props.phone.visible = actor.alive && !umbrellaVisible && actor.state === "idle" && actor.idleMode === "phone";
-    if (props.coffee) props.coffee.visible = actor.alive && !umbrellaVisible && actor.state === "idle" && actor.idleMode === "coffee";
+    const dwelling = actor.state === "routine_dwell";
+    if (props.phone) props.phone.visible = actor.alive && !umbrellaVisible &&
+      (actor.state === "idle" || dwelling) && actor.idleMode === "phone";
+    if (props.coffee) props.coffee.visible = actor.alive && !umbrellaVisible &&
+      (actor.state === "idle" || dwelling) && actor.idleMode === "coffee";
     if (actor.ragdollActive) {
       // A bounded articulated ragdoll: the root follows a ballistic capsule,
       // while every major limb settles toward a deterministic impact pose.
@@ -1523,7 +2272,7 @@ export function createPopulationSystem({ scene, world, onCrime = null, onPlayerD
       pivots.rightArm.rotation.x = cowering ? -1.08 : -0.42;
       torso.rotation.x = cowering ? 0.19 : 0.08;
       head.rotation.x = cowering ? 0.16 : -0.04;
-    } else if (actor.state === "idle") {
+    } else if (actor.state === "idle" || dwelling) {
       if (actor.idleMode === "phone") {
         pivots.rightArm.rotation.x = -1.08;
         pivots.leftArm.rotation.x = -0.16;
@@ -1547,7 +2296,7 @@ export function createPopulationSystem({ scene, world, onCrime = null, onPlayerD
       pivots.rightArm.rotation.z = props.umbrella.position.x < 0 ? -0.24 : 0.24;
       head.rotation.x = -0.025;
     } else pivots.rightArm.rotation.z *= Math.exp(-delta * 9);
-    const headTurn = actor.state === "idle" || actor.state === "search" || actor.state === "crosswalk_wait"
+    const headTurn = actor.state === "idle" || dwelling || actor.state === "search" || actor.state === "crosswalk_wait"
       ? Math.sin(elapsed * (actor.state === "crosswalk_wait" ? 2.1 : 0.75) + actor.index * 1.7) *
         (actor.state === "crosswalk_wait" ? 0.58 : 0.34)
       : 0;
@@ -1725,8 +2474,11 @@ export function createPopulationSystem({ scene, world, onCrime = null, onPlayerD
       }
       if (!actor.active) continue;
       if (actor.storyLocked) {
-        actor.root.position.copy(actor.homePosition);
-        actor.root.position.y = groundHeight(actor.homePosition.x, actor.homePosition.z, actor.homePosition.y);
+        // A resident routine lock freezes the actor exactly where the story
+        // took control; ordinary stationary/story presentation keeps its
+        // historical authored home anchor behaviour.
+        if (!actor.routineDestinationActive) actor.root.position.copy(actor.homePosition);
+        actor.root.position.y = groundHeight(actor.root.position.x, actor.root.position.z, actor.root.position.y);
         // A taxi passenger remains part of the public population while riding,
         // but its already-created root must stay explicitly hidden. Authored
         // story actors keep the historical always-visible locked behaviour.
@@ -1762,7 +2514,7 @@ export function createPopulationSystem({ scene, world, onCrime = null, onPlayerD
   function ordinaryPresentationActor(actor) {
     return Boolean(actor && actors.includes(actor) && !actor.police && !actor.storyRole &&
       !actor.storyLocked && !actor.storyProtected && actor.active && actor.alive &&
-      !actor.ragdollActive && !actor.socialPartner && !stagedOriginals.has(actor));
+      !actor.ragdollActive && !actor.socialPartner && !actor.managedRoutineOwner && !stagedOriginals.has(actor));
   }
 
   function calmPresentationActor(actor) {
@@ -1823,6 +2575,21 @@ export function createPopulationSystem({ scene, world, onCrime = null, onPlayerD
       previousNodeIndex: actor.previousNodeIndex,
       crossing: actor.crossing,
       crossingDestinationIndex: actor.crossingDestinationIndex,
+      routineDestinationX: actor.routineDestination.x,
+      routineDestinationY: actor.routineDestination.y,
+      routineDestinationZ: actor.routineDestination.z,
+      routineDestinationActive: actor.routineDestinationActive,
+      routineDestinationArrived: actor.routineDestinationArrived,
+      routineDestinationNodeIndex: actor.routineDestinationNodeIndex,
+      routineRoute: actor.routineRoute.slice(0, actor.routineRouteLength),
+      routineRouteLength: actor.routineRouteLength,
+      routineRouteCursor: actor.routineRouteCursor,
+      routineRouteRepairPending: actor.routineRouteRepairPending,
+      routineCrossingWaypoint: actor.routineCrossingWaypoint,
+      routineArrivalRadius: actor.routineArrivalRadius,
+      routineTravelSpeedScale: actor.routineTravelSpeedScale,
+      routineLocation: actor.routineLocation,
+      routineActivity: actor.routineActivity,
       speed: actor.speed,
       velocityX: actor.velocity.x,
       velocityY: actor.velocity.y,
@@ -1876,6 +2643,7 @@ export function createPopulationSystem({ scene, world, onCrime = null, onPlayerD
 
     const original = stagedOriginals.get(actor);
     if (!original) {
+      if (actor.managedRoutineOwner) return presentationResult(actor, false, "actor_managed");
       if (actor.police || actor.storyRole || actor.storyLocked || actor.storyProtected) {
         return presentationResult(actor, false, "actor_reserved");
       }
@@ -1967,6 +2735,24 @@ export function createPopulationSystem({ scene, world, onCrime = null, onPlayerD
     actor.previousNodeIndex = original.previousNodeIndex;
     actor.crossing = original.crossing;
     actor.crossingDestinationIndex = original.crossingDestinationIndex;
+    actor.routineDestination.set(
+      original.routineDestinationX,
+      original.routineDestinationY,
+      original.routineDestinationZ,
+    );
+    actor.routineDestinationActive = original.routineDestinationActive;
+    actor.routineDestinationArrived = original.routineDestinationArrived;
+    actor.routineDestinationNodeIndex = original.routineDestinationNodeIndex;
+    actor.routineRoute.fill(0);
+    actor.routineRoute.set(original.routineRoute);
+    actor.routineRouteLength = original.routineRouteLength;
+    actor.routineRouteCursor = original.routineRouteCursor;
+    actor.routineRouteRepairPending = original.routineRouteRepairPending;
+    actor.routineCrossingWaypoint = original.routineCrossingWaypoint;
+    actor.routineArrivalRadius = original.routineArrivalRadius;
+    actor.routineTravelSpeedScale = original.routineTravelSpeedScale;
+    actor.routineLocation = original.routineLocation;
+    actor.routineActivity = original.routineActivity;
     actor.speed = original.speed;
     actor.velocity.set(original.velocityX, original.velocityY, original.velocityZ);
     actor.steering.set(original.steeringX, original.steeringY, original.steeringZ);
@@ -2265,6 +3051,21 @@ export function createPopulationSystem({ scene, world, onCrime = null, onPlayerD
         speed: finite(actor.speed),
         routine: actor.routine,
         schedule,
+        destination: actor.routineDestinationActive
+          ? Object.freeze(actor.routineDestination.toArray())
+          : null,
+        location: actor.routineLocation,
+        locationId: actor.routineLocation,
+        activity: actor.routineActivity,
+        speedScale: actor.routineTravelSpeedScale,
+        arrived: Boolean(actor.routineDestinationActive && actor.routineDestinationArrived),
+        routeRepairPending: Boolean(actor.routineRouteRepairPending),
+        managedRoutineOwner: actor.managedRoutineOwner,
+        managedRoutineRequestPending: Boolean(actor.managedRoutineRequestPending),
+        managedRoutineRequestKey: actor.managedRoutineRequestKey,
+        managedRoutineRequestStatus: actor.managedRoutineRequestStatus,
+        managedRoutineLastRequestReason: actor.managedRoutineLastRequestReason,
+        managedRoutineDwelling: Boolean(actor.managedRoutineDwelling),
         transitPhase: actor.police ? null : transitPhaseFor(actor, schedule),
         transitAnchor: transitAnchorSnapshot(transitAnchor),
         transitCovered: transitAnchorIsCovered(transitAnchor),
@@ -2335,6 +3136,15 @@ export function createPopulationSystem({ scene, world, onCrime = null, onPlayerD
     spawnReserveSnapshot,
     spawn,
     pin,
+    setRoutineDestination,
+    clearRoutineDestination,
+    leaseManagedRoutineActor,
+    queueManagedRoutineDestination,
+    setManagedRoutineDwell,
+    restoreManagedRoutineActor,
+    releaseManagedRoutineActor,
+    flushRoutineRouteSearches,
+    flushRoutineRouteRepairs,
     stage,
     release,
     observe,
@@ -2344,6 +3154,24 @@ export function createPopulationSystem({ scene, world, onCrime = null, onPlayerD
     get crimesWitnessed() { return crimesWitnessed; },
     get navigationNodes() { return nodes.length; },
     get navigationLinks() { return navigationLinkCount; },
+    get routineRouteSearches() { return routineRouteSearches; },
+    get pendingRoutineRouteRepairs() {
+      let pending = 0;
+      for (const actor of actors) pending += Number(actor.routineRouteRepairPending);
+      return pending;
+    },
+    get pendingRoutineRouteRequests() {
+      let pending = 0;
+      for (const actor of actors) pending += Number(actor.managedRoutineRequestPending);
+      return pending;
+    },
+    get pendingRoutineRouteSearches() {
+      let pending = 0;
+      for (const actor of actors) {
+        pending += Number(actor.managedRoutineRequestPending || actor.routineRouteRepairPending);
+      }
+      return pending;
+    },
     get pulseTransit() { return root.userData.pulseTransit; },
   };
 }
