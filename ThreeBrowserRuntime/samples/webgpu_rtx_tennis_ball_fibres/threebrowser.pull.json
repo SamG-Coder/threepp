@@ -1,0 +1,52 @@
+{
+  "format": 2,
+  "projectId": "b8f71a26de094c53",
+  "virtualURL": "https://b8f71a26de094c53.runtime.threebrowser.local/",
+  "source": "https://webgpu-rtx-tennis-ball-fibres.runtime.threebrowser.local/",
+  "pulledAt": "2026-08-26T00:00:00.000Z",
+  "entry": "site-entry.mjs",
+  "requiresWebGPU": true,
+  "html": "index.html",
+  "files": [
+    { "url": "https://webgpu-rtx-tennis-ball-fibres.runtime.threebrowser.local/", "path": "index.html", "type": "html", "bytes": 0 },
+    { "url": "https://webgpu-rtx-tennis-ball-fibres.runtime.threebrowser.local/site-entry.mjs", "path": "site-entry.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-tennis-ball-fibres.runtime.threebrowser.local/src/main.mjs", "path": "src/main.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-tennis-ball-fibres.runtime.threebrowser.local/src/fibre-model.mjs", "path": "src/fibre-model.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-tennis-ball-fibres.runtime.threebrowser.local/src/fibre-gpu.mjs", "path": "src/fibre-gpu.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-tennis-ball-fibres.runtime.threebrowser.local/src/tennis-ball.mjs", "path": "src/tennis-ball.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-tennis-ball-fibres.runtime.threebrowser.local/src/kitchen-colliders.mjs", "path": "src/kitchen-colliders.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-tennis-ball-fibres.runtime.threebrowser.local/src/native-ray-renderer.mjs", "path": "src/native-ray-renderer.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-tennis-ball-fibres.runtime.threebrowser.local/src/hud.mjs", "path": "src/hud.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-tennis-ball-fibres.runtime.threebrowser.local/shaders/fibre_physics.wgsl", "path": "shaders/fibre_physics.wgsl", "type": "shader", "bytes": 0 },
+    { "url": "https://webgpu-rtx-tennis-ball-fibres.runtime.threebrowser.local/shaders/fibre_raster.wgsl", "path": "shaders/fibre_raster.wgsl", "type": "shader", "bytes": 0 },
+    { "url": "https://webgpu-rtx-tennis-ball-fibres.runtime.threebrowser.local/shaders/macro_dof.wgsl", "path": "shaders/macro_dof.wgsl", "type": "shader", "bytes": 0 },
+    { "url": "https://webgpu-rtx-tennis-ball-fibres.runtime.threebrowser.local/shaders/fibre_transport.comp", "path": "shaders/fibre_transport.comp", "type": "shader", "bytes": 0 },
+    { "url": "https://webgpu-rtx-tennis-ball-fibres.runtime.threebrowser.local/assets/tennis-table-impact.wav", "path": "assets/tennis-table-impact.wav", "type": "audio", "bytes": 32684 },
+    { "url": "https://webgpu-rtx-tennis-ball-fibres.runtime.threebrowser.local/tools/generate-impact-audio.mjs", "path": "tools/generate-impact-audio.mjs", "type": "module", "bytes": 0 }
+  ],
+  "compatibility": {
+    "threeImportable": true,
+    "bundledThree": false,
+    "rendererCandidates": ["webgpu"],
+    "canvasOnly": true,
+    "htmlOverlay": false,
+    "domRequired": false,
+    "notes": [
+      "Hybrid WebGPU/RTX frame, not a general path tracer: rasterized primary geometry is augmented by triangle ray-query fibre transport and a 16-tap macro DOF pass.",
+      "All 24,576 dynamically simulated fibre roots cover the whole ball and stay resident at every distance with no LOD pop-in; visible topology is excluded from the recessed seam.",
+      "The 1,179,648-vertex rgba32float atlas feeds 2,162,688 visible tube triangles and a 540,672-triangle dynamic RTX proxy that refits every frame without CPU position readback.",
+      "A separate always-resident undercoat uses 420,000 curved five-vertex microfibres and 1,260,000 raster triangles; it moves and squashes with the ball but is not part of the dynamic RTX BLAS.",
+      "Only the 24,576 live tubes use the refitted dynamic RTX BLAS; the native static ray-query scene contains the fixed kitchen shell and floor, cabinetry, appliances, island body and finite 38 by 20 polished bench.",
+      "The project-owned lighting-v1 shader traces six soft-key visibility paths plus four short ambient/inter-fibre paths only on fluorescent felt pixels; its early chroma gate prevents low-sample hatching or wasted room rays on tiles, walls and quartz.",
+      "The 16-tap depth-of-field kernel is strictly macro-only and becomes an exact copy pass before the room view; one immutable presentation material per render-target texture prevents stale WebGPU bindings after native resize.",
+      "The complete room uses a black-and-ivory checkerboard floor, smoky blue procedural plaster, enlarged aligned kitchen fixtures, a true left-wall window aperture with layered 3D exterior, and an L-shaped counter with recessed steel basin and correctly oriented tap.",
+      "A deterministic sphere-versus-AABB collision world covers the room shell, island, cabinetry, counters, refrigerator, hood, chopping board, tap and the individual walls and bottom of the recessed sink; the split counter volumes keep the basin physically enterable.",
+      "A tracked focused tungsten spotlight has a feathered cone, inverse-square falloff, shadows, visible emitter and physical housing; recessed downlights, under-cabinet practicals, indirect fill and floor bounce complete the procedural kitchen lighting, while an environment-lit physical clearcoat gives the quartz bench stable gloss without a recursive planar reflection target.",
+      "L lights the complete kitchen and enables free-play: camera-relative WASD uses 8.5-unit ground acceleration and a 12-unit planar speed cap, the ball can roll off the finite island onto the kitchen floor, and momentum continues into the room walls.",
+      "The shell, seam and undercoat roll below a world-axis squash node while the same quaternion, scale and translation are applied to the GPU fibre atlas and refitted RTX proxy.",
+      "Left-drag orbits, right-drag or Shift-left-drag brushes the nap, the wheel dollies continuously from 1.12 to 32 world units, the play camera follows the full jump height, and held Space supplies variable jump lift in free-play.",
+      "Space stages a cinematic high bounce with shared shell/fibre/RTX squash, diminishing rebounds and velocity-scaled native playback, capped at five-percent element volume, of an in-repo procedurally generated softened rubber-shell-felt WAV.",
+      "No C++ or Runtime-native shader changes are required; no model, downloaded texture, image, font, style sheet or painted HTML UI is used."
+    ]
+  }
+}
