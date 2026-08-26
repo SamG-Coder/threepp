@@ -1,0 +1,49 @@
+{
+  "format": 2,
+  "projectId": "a7cf4b2e93d86150",
+  "virtualURL": "https://webgpu-rtx-black-hole-sun.runtime.threebrowser.local/",
+  "source": "https://webgpu-rtx-black-hole-sun.runtime.threebrowser.local/",
+  "pulledAt": "2026-08-26T00:00:00.000Z",
+  "entry": "site-entry.mjs",
+  "requiresWebGPU": true,
+  "html": "index.html",
+  "files": [
+    { "url": "https://webgpu-rtx-black-hole-sun.runtime.threebrowser.local/", "path": "index.html", "type": "html", "bytes": 0 },
+    { "url": "https://webgpu-rtx-black-hole-sun.runtime.threebrowser.local/README.md", "path": "README.md", "type": "text", "bytes": 0 },
+    { "url": "https://webgpu-rtx-black-hole-sun.runtime.threebrowser.local/site-entry.mjs", "path": "site-entry.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-black-hole-sun.runtime.threebrowser.local/src/main.mjs", "path": "src/main.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-black-hole-sun.runtime.threebrowser.local/src/relativity-model.mjs", "path": "src/relativity-model.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-black-hole-sun.runtime.threebrowser.local/src/celestial-materials.mjs", "path": "src/celestial-materials.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-black-hole-sun.runtime.threebrowser.local/src/cosmic-scene.mjs", "path": "src/cosmic-scene.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-black-hole-sun.runtime.threebrowser.local/src/lensing.mjs", "path": "src/lensing.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-black-hole-sun.runtime.threebrowser.local/src/hud.mjs", "path": "src/hud.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-black-hole-sun.runtime.threebrowser.local/src/tidal-audio.mjs", "path": "src/tidal-audio.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-black-hole-sun.runtime.threebrowser.local/scripts/generate-tidal-score.mjs", "path": "scripts/generate-tidal-score.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-black-hole-sun.runtime.threebrowser.local/assets/tidal-rupture-score.wav", "path": "assets/tidal-rupture-score.wav", "type": "audio", "bytes": 13824044 },
+    { "url": "https://webgpu-rtx-black-hole-sun.runtime.threebrowser.local/tests/relativity-model.test.mjs", "path": "tests/relativity-model.test.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-black-hole-sun.runtime.threebrowser.local/tests/sample-contract.test.mjs", "path": "tests/sample-contract.test.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-black-hole-sun.runtime.threebrowser.local/tests/tidal-audio.test.mjs", "path": "tests/tidal-audio.test.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://webgpu-rtx-black-hole-sun.runtime.threebrowser.local/threebrowser.pull.json", "path": "threebrowser.pull.json", "type": "json", "bytes": 0 }
+  ],
+  "compatibility": {
+    "threeImportable": true,
+    "bundledThree": false,
+    "rendererCandidates": ["webgpu"],
+    "canvasOnly": true,
+    "htmlOverlay": false,
+    "domRequired": false,
+    "notes": [
+      "A procedural solar tidal-disruption event around a 300,000-solar-mass non-spinning Schwarzschild black hole.",
+      "The solar center follows a fixed-step RK4 timelike Schwarzschild geodesic with E=1 and L=3.98M, producing a physical near-critical zoom-whirl capture without fictitious drag.",
+      "Horizon, photon sphere, ISCO, critical shadow impact, tidal radius, redshift, Doppler beaming and local speed all share one GM/c^2 unit system.",
+      "A TSL post compositor captures subcritical rays and blends strong- and weak-deflection Schwarzschild bending around the exact 3sqrt(3)M shadow boundary.",
+      "Procedural HDR photosphere, corona, prominences, dual tidal streams, debris knots, relativistic disk, polar outflow, stars and galactic dust require no downloaded assets.",
+      "The stellar envelope and debris field are deterministic real-time Roche/frozen-in approximations rather than a general-relativistic magnetohydrodynamics solve.",
+      "The world, camera-attached GPU HUD, lensing and bloom resolve through exactly one final render call and one swap-chain presentation per animation tick.",
+      "A committed 72-second stereo PCM score is deterministically generated from the same geodesic, gravitational-redshift and Roche-stress timeline and stays muted until M enables it.",
+      "ACES tone mapping and emissive bloom retain a construction-time direct HDR fallback; an in-flight post failure stops the renderer rather than reusing an acquired swap-chain texture.",
+      "Reflex Boost is requested only when supported, while DLSS SR, Frame Generation and Ray Reconstruction remain disabled.",
+      "A toggles the cinematic camera; 1-3 select shots; drag orbits; the wheel dollies; Space pauses; T changes speed; X compares lensing; M toggles sonification; R restarts; H toggles the in-canvas HUD."
+    ]
+  }
+}
