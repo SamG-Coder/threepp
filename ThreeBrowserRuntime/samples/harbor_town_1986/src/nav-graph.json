@@ -1,0 +1,26 @@
+{
+  "id": "minamihama-1986",
+  "units": "metres",
+  "nodes": [
+    { "id": "hill", "x": -22, "z": -32, "edges": ["house", "stairs"] },
+    { "id": "house", "x": -16, "z": -20, "edges": ["hill", "stairs"] },
+    { "id": "stairs", "x": -18, "z": -14, "edges": ["hill", "house"] },
+    { "id": "route16", "x": -40, "z": -7.6, "edges": ["tobacco"] },
+    { "id": "tobacco", "x": -26, "z": -7.6, "edges": ["route16", "soba"] },
+    { "id": "soba", "x": -17, "z": -7.6, "edges": ["tobacco", "produce"] },
+    { "id": "produce", "x": -9, "z": -7.6, "edges": ["soba", "pharmacy"] },
+    { "id": "pharmacy", "x": 0, "z": -7.6, "edges": ["produce", "arcade", "sakae"] },
+    { "id": "arcade", "x": 10, "z": -7.6, "edges": ["pharmacy", "records"] },
+    { "id": "records", "x": 18, "z": -7.6, "edges": ["arcade", "east-crosswalk"] },
+    { "id": "flower", "x": -10, "z": 7.6, "edges": ["sakae"] },
+    { "id": "sakae", "x": 0, "z": 7.6, "edges": ["flower", "barber", "pharmacy", "harbor-gate"] },
+    { "id": "barber", "x": 6, "z": 7.6, "edges": ["sakae", "east-crosswalk"] },
+    { "id": "east-crosswalk", "x": 18, "z": 7.6, "edges": ["barber", "records", "yokobori"] },
+    { "id": "yokobori", "x": 20.2, "z": 10.4, "edges": ["east-crosswalk"] },
+    { "id": "harbor-gate", "x": 0, "z": 48, "edges": ["sakae", "harbor", "quay"] },
+    { "id": "harbor", "x": -8, "z": 58, "edges": ["harbor-gate", "warehouse", "quay"] },
+    { "id": "warehouse", "x": -12, "z": 52, "edges": ["harbor", "quay"] },
+    { "id": "quay", "x": 0, "z": 82, "edges": ["harbor-gate", "harbor", "seawall"] },
+    { "id": "seawall", "x": -38.5, "z": 86.6, "edges": ["quay"] }
+  ]
+}

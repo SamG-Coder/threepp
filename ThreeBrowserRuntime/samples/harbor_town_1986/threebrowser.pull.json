@@ -1,0 +1,30 @@
+{
+  "format": 2,
+  "projectId": "hbr1986k00000001",
+  "virtualURL": "https://hbr1986k00000001.runtime.threebrowser.local/",
+  "source": "https://harbor-town-1986.runtime.threebrowser.local/",
+  "pulledAt": "2026-08-27T00:00:00.000Z",
+  "entry": "site-entry.mjs",
+  "requiresWebGPU": true,
+  "html": "index.html",
+  "displayName": "Minamihama 1986",
+  "files": [
+    { "url": "https://harbor-town-1986.runtime.threebrowser.local/", "path": "index.html", "type": "html", "bytes": 0 },
+    { "url": "https://harbor-town-1986.runtime.threebrowser.local/site-entry.mjs", "path": "site-entry.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://harbor-town-1986.runtime.threebrowser.local/src/main.mjs", "path": "src/main.mjs", "type": "module", "bytes": 0 }
+  ],
+  "compatibility": {
+    "threeImportable": true,
+    "bundledThree": false,
+    "threeMode": "importable",
+    "rendererCandidates": ["webgpu"],
+    "canvasOnly": true,
+    "uiMode": "canvas-only",
+    "htmlOverlay": false,
+    "domRequired": false,
+    "notes": [
+      "1986 Kanagawa harbor town reconstructed from magenta-studio orbit stills.",
+      "Uses the texture_2ds_to_3ds visual-hull pipeline. Canvas-only, no HUD."
+    ]
+  }
+}

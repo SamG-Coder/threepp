@@ -1,12 +1,9 @@
-import { sampleViewAtPixel, viewDepth, worldToPixel } from "./silhouette.mjs";
+import { pixelToView, sampleViewAtPixel, viewDepth, worldToPixel } from "./silhouette.mjs";
 import { unprojectView } from "./views.mjs";
 import { keepGroundConnected, occupiedCount, voxelCenter, voxelIndex } from "./visual-hull.mjs";
 
 function pixelToCamera(view, px, py) {
-  return {
-    x: (px - view.trunkBaseX) * view.worldPerPixel,
-    y: (view.bounds.maxY - py) * view.worldPerPixel,
-  };
+  return pixelToView(view, px, py);
 }
 
 function colorDistance(a, b) {

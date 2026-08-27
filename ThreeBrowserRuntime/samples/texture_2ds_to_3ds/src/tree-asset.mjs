@@ -12,7 +12,7 @@ import {
   occupancyFromSdf,
 } from "./mvs-tsdf.mjs";
 import { carvePhotoconsistent } from "./photoconsistency.mjs";
-import { keyedViewFromRgba, resizeView } from "./silhouette.mjs";
+import { keyedViewFromRgba, normalizeOrbitViews } from "./silhouette.mjs";
 import { estimateCanopyStart, hollowCanopy } from "./structure.mjs";
 import { matchAllSlices } from "./slice-match.mjs";
 import { bakeMaterialMaps } from "./unwrap.mjs";
@@ -72,7 +72,19 @@ export async function loadOrbitViews(assetRoot, catalog = ORBIT_VIEWS, folder = 
 export function reconstructFromViews(views, options = {}) {
   const silhouetteSize = options.silhouetteSize ?? ORBIT_ASSET.silhouetteSize;
   const resolution = options.resolution ?? ORBIT_ASSET.resolution;
-  const working = views.map(view => resizeView(view, silhouetteSize));
+  const normalized = normalizeOrbitViews(views, silhouetteSize, {
+    padding: options.framePadding,
+    limits: options.frameLimits,
+  });
+  if (options.rejectFrameIssues === true && !normalized.report.ok) {
+    const error = new Error(`orbit frame rejected (${normalized.report.reasons.join(", ")})`);
+    error.name = "OrbitFrameError";
+    error.code = "ORBIT_FRAME_REJECTED";
+    error.frameReport = normalized.report;
+    throw error;
+  }
+  const sourceViews = normalized.sourceViews;
+  const working = normalized.workingViews;
   const shape = options.shape ?? classifyOrbitShape(working);
   const selection = chooseOrbitAngles(working, {
     resolution: options.angleResolution ?? Math.min(48, resolution),
@@ -93,7 +105,7 @@ export function reconstructFromViews(views, options = {}) {
   if (options.hollowCanopy === true && shape.kind === "custom") {
     hollowCanopy(volume, canopyY, options.canopyThickness ?? 2.6);
   }
-  bakeVoxelColors(volume, views);
+  bakeVoxelColors(volume, sourceViews);
   const afterPhoto = volume.filled;
   const snapshot = Uint8Array.from(volume.occupancy);
   let sdf = chamferSignedDistance(volume);
@@ -113,20 +125,24 @@ export function reconstructFromViews(views, options = {}) {
   volume.canopyY = canopyY;
   const slices = matchAllSlices(volume, working);
   const primitive = shape.kind === "cylinder" || shape.kind === "capsule";
-  const mesh = extractIsosurface(volume, sdf, views, {
+  const mesh = extractIsosurface(volume, sdf, sourceViews, {
     smoothIterations: options.smoothIterations ?? (primitive ? 12 : 8),
     smoothLambda: options.smoothLambda ?? (primitive ? 0.5 : 0.45),
     shape,
   });
-  const maps = bakeMaterialMaps(volume, {
-    width: options.mapSize ?? ORBIT_ASSET.mapSize,
-    height: options.mapSize ?? ORBIT_ASSET.mapSize,
-    shape,
-    views,
-  });
+  const maps = options.bakeMaps === false
+    ? null
+    : bakeMaterialMaps(volume, {
+      width: options.mapSize ?? ORBIT_ASSET.mapSize,
+      height: options.mapSize ?? ORBIT_ASSET.mapSize,
+      shape,
+      views: sourceViews,
+    });
   return {
-    views,
+    views: sourceViews,
     working,
+    frame: normalized.frame,
+    frameReport: normalized.report,
     chosen,
     selection,
     shape,
@@ -160,6 +176,7 @@ export function assetReport(asset) {
     photoCarved: volume.photoCarved ?? 0,
     meanIoU: slices.meanIoU,
     minIoU: slices.minIoU,
+    frame: asset.frameReport ?? null,
     vertices: mesh.vertexCount,
     triangles: mesh.triangleCount,
     candidates: selection.candidates.map(candidate => ({

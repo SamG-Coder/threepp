@@ -1,4 +1,4 @@
-import { sampleViewAtPixel } from "./silhouette.mjs";
+import { pixelToView, sampleViewAtPixel } from "./silhouette.mjs";
 import { occupiedCount, voxelCenter, voxelIndex } from "./visual-hull.mjs";
 
 function isFoliageRgb(r, g, b) {
@@ -14,7 +14,10 @@ export function estimateCanopyStart(views) {
   for (const view of views) {
     const { occupancy, width, bounds } = view;
     let trunkWidth = 1;
-    const yBottom = bounds.maxY;
+    const yBottom = Math.min(
+      view.height - 1,
+      Math.max(bounds.minY, Math.round(view.supportY ?? bounds.maxY)),
+    );
     const yTrunk = Math.max(bounds.minY, yBottom - Math.floor(bounds.height * 0.12));
     for (let y = yTrunk; y <= yBottom; y++) {
       let minX = width;
@@ -46,7 +49,7 @@ export function estimateCanopyStart(views) {
       const span = maxX >= minX ? maxX - minX + 1 : 0;
       const foliage = count > 0 ? green / count : 0;
       if (span > trunkWidth * 2.05 && foliage > 0.35) {
-        const worldY = (bounds.maxY - y) * view.worldPerPixel;
+        const worldY = pixelToView(view, view.cameraCenterX ?? 0, y).y;
         start = Math.min(start, Math.max(0.18, worldY));
         break;
       }
