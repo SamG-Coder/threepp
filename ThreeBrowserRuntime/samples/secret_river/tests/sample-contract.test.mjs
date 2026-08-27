@@ -83,18 +83,19 @@ test("main has no HUD and presents exactly one swapchain image per frame", async
 
 test("photoreal tree photographs are shipped with the sample", async () => {
   const files = await walk(join(sampleRoot, "assets"));
-  for (const name of [
-    "scribbly-gum.jpg",
-    "casuarina.jpg",
-    "paperbark.jpg",
-    "angophora.jpg",
-    "banksia.jpg",
-    "tea-tree.jpg",
-    "profile.jpg",
-  ]) {
+  const { TREE_SPECIES } = await import("../src/tree-layout.mjs");
+  const { FLORA_KINDS } = await import("../src/flora-layout.mjs");
+  for (const species of TREE_SPECIES) {
     assert.ok(
-      files.some(path => path.endsWith(name)),
-      `missing ${name}`,
+      files.some(path => path.endsWith(species.file)),
+      `missing tree ${species.file}`,
     );
   }
+  for (const kind of FLORA_KINDS) {
+    assert.ok(
+      files.some(path => path.endsWith(kind.file)),
+      `missing flora ${kind.file}`,
+    );
+  }
+  assert.ok(files.some(path => path.endsWith("profile.jpg")));
 });

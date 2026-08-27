@@ -21,7 +21,19 @@ function kindById(id) {
   return FLORA_KINDS.find(kind => kind.id === id) ?? FLORA_KINDS[0];
 }
 
-export function layoutFlora(seed = 0x51c7e1) {
+export const DEFAULT_FLORA_SEED = 0x51c7e1;
+
+export function reedEdgeShare(records, maxDelta = 3.5) {
+  const reeds = records.filter(record => record.kind === "reeds");
+  const near = reeds.filter(record => Math.abs(record.z - riverEdgeZ(record.x)) <= maxDelta);
+  return {
+    reeds: reeds.length,
+    near: near.length,
+    share: reeds.length ? near.length / reeds.length : 0,
+  };
+}
+
+export function layoutFlora(seed = DEFAULT_FLORA_SEED) {
   const random = mulberry32(seed);
   const records = [];
 

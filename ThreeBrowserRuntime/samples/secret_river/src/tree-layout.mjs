@@ -108,7 +108,37 @@ function inSightLine(x, sightLines) {
   return false;
 }
 
-export function layoutTrees(seed = 0x51c7e1) {
+export const DEFAULT_LAYOUT_SEED = 0x51c7e1;
+export const CANOPY_BIN_WIDTH = 12;
+
+export function inlandCanopyOccupancy(records, binWidth = CANOPY_BIN_WIDTH) {
+  const minX = WORLD.minX + 6;
+  const maxX = WORLD.maxX - 6;
+  const bins = Math.max(1, Math.ceil((maxX - minX) / binWidth));
+  const counts = new Array(bins).fill(0);
+  for (const record of records) {
+    if (record.z <= WORLD.pathMaxZ) continue;
+    const index = Math.floor((record.x - minX) / binWidth);
+    if (index >= 0 && index < bins) counts[index] += 1;
+  }
+  return { bins, counts, occupied: counts.filter(count => count > 0).length };
+}
+
+export function longestEmptyRun(counts) {
+  let longest = 0;
+  let current = 0;
+  for (const count of counts) {
+    if (count === 0) {
+      current += 1;
+      if (current > longest) longest = current;
+    } else {
+      current = 0;
+    }
+  }
+  return longest;
+}
+
+export function layoutTrees(seed = DEFAULT_LAYOUT_SEED) {
   const random = mulberry32(seed);
   const records = [];
 
@@ -122,10 +152,10 @@ export function layoutTrees(seed = 0x51c7e1) {
   }
 
   const sightLines = [];
-  for (let index = 0; index < 5; index++) {
+  for (let index = 0; index < 3; index++) {
     sightLines.push({
       x: mix(random, WORLD.minX + 14, WORLD.maxX - 14),
-      half: mix(random, 5.5, 9),
+      half: mix(random, 3.2, 4.8),
     });
   }
 
@@ -366,6 +396,14 @@ export function layoutTrees(seed = 0x51c7e1) {
       ]);
       if (push(id, x, z, mix(random, 0.85, 1.2), layer)) extra += 1;
     }
+  }
+
+  const occupancy = inlandCanopyOccupancy(records);
+  for (let index = 0; index < occupancy.bins; index++) {
+    if (occupancy.counts[index] > 0) continue;
+    const x = WORLD.minX + 6 + (index + 0.5) * CANOPY_BIN_WIDTH;
+    const z = mix(random, 32, 62);
+    push("scribbly-gum", x, z, mix(random, 1.05, 1.35), "mid");
   }
 
   return records;
