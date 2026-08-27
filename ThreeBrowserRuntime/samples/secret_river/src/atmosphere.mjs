@@ -1,0 +1,319 @@
+import * as THREE from "three/webgpu";
+import {
+  float,
+  mix,
+  normalize,
+  positionWorld,
+  smoothstep,
+  uniform,
+} from "three/tsl";
+
+const LIGHT_DISTANCE = 60;
+const SKY_RADIUS = 220;
+const DEFAULT_PRESET = "afternoon";
+const CAMPFIRE_POSITION = Object.freeze([3.6, 1.68, 17.8]);
+
+function freezeVec(value) {
+  return Object.freeze([value[0], value[1], value[2]]);
+}
+
+function freezePreset(preset) {
+  const frozen = {
+    name: preset.name,
+    sunDirection: freezeVec(preset.sunDirection),
+    sunColor: preset.sunColor,
+    sunIntensity: preset.sunIntensity,
+    hemiSky: preset.hemiSky,
+    hemiGround: preset.hemiGround,
+    hemiIntensity: preset.hemiIntensity,
+    fogColor: preset.fogColor,
+    fogDensity: preset.fogDensity,
+    skyHorizon: preset.skyHorizon,
+    skyZenith: preset.skyZenith,
+    exposure: preset.exposure,
+    treeTint: freezeVec(preset.treeTint),
+    rtxCelestialIntensity: preset.rtxCelestialIntensity,
+    rtxShadowStrength: preset.rtxShadowStrength,
+    rtxAoStrength: preset.rtxAoStrength,
+  };
+  if (preset.moon) {
+    frozen.moon = Object.freeze({
+      direction: freezeVec(preset.moon.direction),
+      color: preset.moon.color,
+      intensity: preset.moon.intensity,
+    });
+  }
+  if (preset.campfire) frozen.campfire = true;
+  return Object.freeze(frozen);
+}
+
+function configureShadow(light) {
+  light.castShadow = true;
+  light.shadow.mapSize.set(2048, 2048);
+  light.shadow.camera.near = 4;
+  light.shadow.camera.far = 140;
+  light.shadow.camera.left = -40;
+  light.shadow.camera.right = 40;
+  light.shadow.camera.top = 24;
+  light.shadow.camera.bottom = -24;
+  light.shadow.bias = -0.0008;
+}
+
+function placeDirectional(light, direction, distance = LIGHT_DISTANCE) {
+  light.position.copy(direction).multiplyScalar(distance);
+  light.target.position.set(0, 0, 0);
+}
+
+export const PRESETS = Object.freeze({
+  morning: freezePreset({
+    name: "Morning",
+    sunDirection: [-0.76, 0.36, 0.18],
+    sunColor: 0xffe2c4,
+    sunIntensity: 1.95,
+    hemiSky: 0xd2e4f2,
+    hemiGround: 0x7d6a4e,
+    hemiIntensity: 0.58,
+    fogColor: 0xd0d4c8,
+    fogDensity: 0.014,
+    skyHorizon: 0xf0cbb0,
+    skyZenith: 0x7aadd0,
+    exposure: 1.04,
+    treeTint: [0.94, 0.97, 1.02],
+    rtxCelestialIntensity: 3.6,
+    rtxShadowStrength: 0.58,
+    rtxAoStrength: 0.22,
+  }),
+  midday: freezePreset({
+    name: "Midday",
+    sunDirection: [0.18, 0.96, 0.20],
+    sunColor: 0xfff3dc,
+    sunIntensity: 2.9,
+    hemiSky: 0xc5def0,
+    hemiGround: 0x9a8860,
+    hemiIntensity: 0.95,
+    fogColor: 0xd5d2c6,
+    fogDensity: 0.007,
+    skyHorizon: 0xc5d6e4,
+    skyZenith: 0x4a90c8,
+    exposure: 1.20,
+    treeTint: [1.04, 1.02, 0.96],
+    rtxCelestialIntensity: 5.8,
+    rtxShadowStrength: 0.36,
+    rtxAoStrength: 0.10,
+  }),
+  afternoon: freezePreset({
+    name: "Late afternoon",
+    sunDirection: [0.74, 0.40, 0.22],
+    sunColor: 0xffd4a0,
+    sunIntensity: 1.85,
+    hemiSky: 0xd8e8f4,
+    hemiGround: 0xb08a55,
+    hemiIntensity: 1.35,
+    fogColor: 0x9eb0a4,
+    fogDensity: 0.0028,
+    skyHorizon: 0xd7c19a,
+    skyZenith: 0x6a9cc8,
+    exposure: 1.28,
+    treeTint: [1.02, 1.0, 0.94],
+    rtxCelestialIntensity: 4.4,
+    rtxShadowStrength: 0.52,
+    rtxAoStrength: 0.18,
+  }),
+  sunset: freezePreset({
+    name: "Sunset",
+    sunDirection: [0.86, 0.22, 0.14],
+    sunColor: 0xff8c4a,
+    sunIntensity: 1.85,
+    hemiSky: 0xffb07a,
+    hemiGround: 0x6e4030,
+    hemiIntensity: 0.48,
+    fogColor: 0xd8a07a,
+    fogDensity: 0.016,
+    skyHorizon: 0xff9a5c,
+    skyZenith: 0x2e3e68,
+    exposure: 1.16,
+    treeTint: [1.22, 0.72, 0.48],
+    rtxCelestialIntensity: 3.2,
+    rtxShadowStrength: 0.66,
+    rtxAoStrength: 0.26,
+  }),
+  night: freezePreset({
+    name: "Night",
+    sunDirection: [-0.35, 0.68, -0.44],
+    sunColor: 0xa8b8c8,
+    sunIntensity: 0,
+    hemiSky: 0x1c2a38,
+    hemiGround: 0x121014,
+    hemiIntensity: 0.22,
+    fogColor: 0x161c24,
+    fogDensity: 0.018,
+    skyHorizon: 0x1a2430,
+    skyZenith: 0x05070c,
+    exposure: 0.82,
+    treeTint: [0.52, 0.62, 0.82],
+    rtxCelestialIntensity: 1.15,
+    rtxShadowStrength: 0.74,
+    rtxAoStrength: 0.34,
+    moon: {
+      direction: [-0.35, 0.68, -0.44],
+      color: 0xc5d2de,
+      intensity: 0.88,
+    },
+    campfire: true,
+  }),
+});
+
+export const SUN_DIRECTION = PRESETS.afternoon.sunDirection;
+
+export function createAtmosphere(scene) {
+  if (!scene.background?.isColor) scene.background = new THREE.Color();
+  if (!scene.fog?.isFogExp2) scene.fog = new THREE.FogExp2(0xc4c0ae, 0.011);
+
+  const hemi = new THREE.HemisphereLight(0xcfe4f4, 0x8a6e4a, 0.72);
+  hemi.name = "Australian sky hemisphere";
+  scene.add(hemi);
+
+  const sun = new THREE.DirectionalLight(0xffd4a0, 2.35);
+  sun.name = "Late-afternoon sun";
+  configureShadow(sun);
+  scene.add(sun);
+  scene.add(sun.target);
+
+  const moon = new THREE.DirectionalLight(0xc5d2de, 0);
+  moon.name = "Moonlight";
+  configureShadow(moon);
+  moon.castShadow = false;
+  moon.visible = false;
+  scene.add(moon);
+  scene.add(moon.target);
+
+  const campfire = new THREE.PointLight(0xff7a32, 0, 11, 2);
+  campfire.name = "Night campfire";
+  campfire.position.set(CAMPFIRE_POSITION[0], CAMPFIRE_POSITION[1], CAMPFIRE_POSITION[2]);
+  campfire.visible = false;
+  scene.add(campfire);
+
+  const skyHorizon = uniform(new THREE.Color(PRESETS.afternoon.skyHorizon));
+  const skyZenith = uniform(new THREE.Color(PRESETS.afternoon.skyZenith));
+  const skyGeometry = new THREE.SphereGeometry(SKY_RADIUS, 24, 16);
+  const skyMaterial = new THREE.MeshBasicNodeMaterial({
+    side: THREE.BackSide,
+    fog: false,
+    depthWrite: false,
+  });
+  const up = normalize(positionWorld).y;
+  skyMaterial.colorNode = mix(
+    skyHorizon,
+    skyZenith,
+    smoothstep(float(-0.02), float(0.58), up),
+  );
+  const sky = new THREE.Mesh(skyGeometry, skyMaterial);
+  sky.name = "Late-day sky dome";
+  sky.userData.rtxIgnore = true;
+  sky.frustumCulled = false;
+  sky.renderOrder = -1000;
+  scene.add(sky);
+
+  const moonDiscGeometry = new THREE.CircleGeometry(3.4, 32);
+  const moonDiscMaterial = new THREE.MeshBasicNodeMaterial({
+    color: 0xc5d2de,
+    fog: false,
+    depthWrite: false,
+    toneMapped: false,
+  });
+  const moonDisc = new THREE.Mesh(moonDiscGeometry, moonDiscMaterial);
+  moonDisc.name = "Moon disc";
+  moonDisc.userData.rtxIgnore = true;
+  moonDisc.frustumCulled = false;
+  moonDisc.renderOrder = -900;
+  moonDisc.visible = false;
+  scene.add(moonDisc);
+
+  const sunDirection = new THREE.Vector3();
+  const scratch = new THREE.Vector3();
+  let currentName = DEFAULT_PRESET;
+
+  function applyExposure(value) {
+    const renderer = scene.userData.renderer;
+    if (renderer && "toneMappingExposure" in renderer) {
+      renderer.toneMappingExposure = value;
+    }
+  }
+
+  function applyPreset(name) {
+    const preset = PRESETS[name];
+    if (!preset) throw new RangeError(`Unknown atmosphere preset: ${name}`);
+    currentName = name;
+
+    sunDirection.set(preset.sunDirection[0], preset.sunDirection[1], preset.sunDirection[2]);
+    if (sunDirection.y <= 0) sunDirection.y = 0.02;
+    sunDirection.normalize();
+
+    sun.color.setHex(preset.sunColor);
+    sun.intensity = preset.sunIntensity;
+    sun.visible = preset.sunIntensity > 0.02;
+    sun.castShadow = sun.visible;
+    sun.name = `${preset.name} sun`;
+    placeDirectional(sun, sunDirection);
+
+    hemi.color.setHex(preset.hemiSky);
+    hemi.groundColor.setHex(preset.hemiGround);
+    hemi.intensity = preset.hemiIntensity;
+
+    scene.background.setHex(preset.fogColor);
+    scene.fog.color.setHex(preset.fogColor);
+    scene.fog.density = preset.fogDensity;
+    skyHorizon.value.setHex(preset.skyHorizon);
+    skyZenith.value.setHex(preset.skyZenith);
+    sky.name = `${preset.name} sky dome`;
+    applyExposure(preset.exposure);
+
+    const moonPreset = preset.moon;
+    if (moonPreset) {
+      scratch.set(moonPreset.direction[0], moonPreset.direction[1], moonPreset.direction[2]);
+      if (scratch.y <= 0) scratch.y = 0.02;
+      scratch.normalize();
+      moon.color.setHex(moonPreset.color);
+      moon.intensity = moonPreset.intensity;
+      moon.visible = true;
+      moon.castShadow = true;
+      placeDirectional(moon, scratch);
+      moonDisc.position.copy(scratch).multiplyScalar(SKY_RADIUS * 0.84);
+      moonDisc.lookAt(0, 0, 0);
+      moonDiscMaterial.color.setHex(moonPreset.color);
+      moonDisc.visible = true;
+      sunDirection.copy(scratch);
+    } else {
+      moon.intensity = 0;
+      moon.visible = false;
+      moon.castShadow = false;
+      moonDisc.visible = false;
+    }
+
+    campfire.visible = Boolean(preset.campfire);
+    campfire.intensity = preset.campfire ? 2.6 : 0;
+    return preset;
+  }
+
+  applyPreset(DEFAULT_PRESET);
+
+  return {
+    sun,
+    hemi,
+    sky,
+    moon,
+    campfire,
+    applyPreset,
+    getPreset() {
+      return PRESETS[currentName];
+    },
+    sunDirection,
+    dispose() {
+      skyGeometry.dispose();
+      skyMaterial.dispose();
+      moonDiscGeometry.dispose();
+      moonDiscMaterial.dispose();
+      scene.remove(sun, sun.target, hemi, sky, moon, moon.target, campfire, moonDisc);
+    },
+  };
+}
