@@ -689,7 +689,6 @@ function finitePartScale(value) {
  */
 function plantAssembly(assembly, pose, label, prototypes) {
   const missing = missingAssemblyModules(assembly, prototypes);
-  if (missing.length) return null;
 
   const placement = pose ?? assembly;
   const x = Number.isFinite(Number(placement.x)) ? Number(placement.x) : Number(assembly.x) || 0;
@@ -698,6 +697,7 @@ function plantAssembly(assembly, pose, label, prototypes) {
   const group = new THREE.Group();
   const resolvedLabel = label || assembly.label || assembly.id;
   group.name = resolvedLabel;
+  group.userData.missingReconstructedModules = missing;
   group.position.set(x, footprintSeatY(placement, assembly, walkSurfaceHeight), z);
   group.rotation.y = yaw;
 
@@ -710,6 +710,7 @@ function plantAssembly(assembly, pose, label, prototypes) {
 
   for (const [moduleId, parts] of byModule) {
     const proto = prototypes.get(moduleId);
+    if (!proto || proto.failed) continue;
     if (parts.length === 1) {
       const part = parts[0];
       const px = Number.isFinite(Number(part.x)) ? Number(part.x) : 0;
@@ -764,14 +765,27 @@ function plantAssembly(assembly, pose, label, prototypes) {
     batch.computeBoundingSphere();
     group.add(batch);
   }
-  return group;
+  return group.children.length > 0 ? group : null;
 }
 
-async function reconstructSubject(subject, atlasAnisotropy) {
+async function reconstructSubject(subject, atlasAnisotropy, assetPolicy) {
   const options = reconstructionOptionsFor(subject, import.meta.url);
   const { catalog } = options;
   console.log(`[Minamihama] reconstructing ${subject.label}…`);
-  const asset = await reconstructOrbitAsset(options);
+  let strictFrameFailure = null;
+  let asset;
+  try {
+    asset = await reconstructOrbitAsset(options);
+  } catch (error) {
+    if (error?.code !== "ORBIT_FRAME_REJECTED" || !assetPolicy.renderRejectedForTesting) throw error;
+    strictFrameFailure = error.frameReport ?? { ok: false, reasons: [error.message] };
+    console.warn(
+      `[Minamihama] ${subject.id} strict frame QA failed `
+        + `(${strictFrameFailure.reasons?.join(", ") || error.message}); `
+        + "rendering the same Grok 2D sources in testing mode",
+    );
+    asset = await reconstructOrbitAsset({ ...options, rejectFrameIssues: false });
+  }
   const cleanup = cleanupReconstructionMesh(asset.mesh);
   const report = assetReport({ ...asset, mesh: cleanup.mesh });
   const quality = assessReconstruction(report);
@@ -779,10 +793,16 @@ async function reconstructSubject(subject, atlasAnisotropy) {
     `[Minamihama] ${subject.id}  shape=${report.kind}  views=${report.recommendedCount}  ${subject.realHeight}m  tris=${report.triangles}`,
   );
   if (!quality.ok) {
+    if (!assetPolicy.renderRejectedForTesting) {
+      console.warn(
+        `[Minamihama] ${subject.id} orbit rejected (${quality.reasons.join(", ")}) — 3D asset omitted`,
+      );
+      return { failed: true, quality, strictFrameFailure };
+    }
     console.warn(
-      `[Minamihama] ${subject.id} orbit rejected (${quality.reasons.join(", ")}) — 3D asset omitted`,
+      `[Minamihama] ${subject.id} quality warning (${quality.reasons.join(", ")}); `
+        + "best-effort Grok reconstruction remains visible for testing",
     );
-    return { failed: true, quality };
   }
   if (cleanup.stats.removedComponents > 0) {
     console.info(
@@ -824,6 +844,8 @@ async function reconstructSubject(subject, atlasAnisotropy) {
     geometry: projection.geometry,
     material,
     failed: false,
+    degraded: Boolean(strictFrameFailure) || !quality.ok,
+    strictFrameFailure,
     quality,
     cleanup: cleanup.stats,
     scale: new THREE.Vector3(scale.x, scale.y, scale.z),
@@ -833,6 +855,18 @@ async function reconstructSubject(subject, atlasAnisotropy) {
 
 function yieldToAnimationFrame() {
   return new Promise(resolve => globalThis.requestAnimationFrame(() => resolve()));
+}
+
+async function loadAssetQualityPolicy() {
+  const url = new URL("../asset-quality-policy.json", import.meta.url);
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Asset quality policy fetch failed: ${response.status} ${url.href}`);
+  const source = await response.json();
+  return Object.freeze({
+    version: Number(source.version) || 1,
+    renderRejectedForTesting: source.renderRejectedForTesting === true,
+    reportRejectedAssets: source.reportRejectedAssets !== false,
+  });
 }
 
 async function main() {
@@ -861,6 +895,11 @@ async function main() {
   const scene = new THREE.Scene();
   scene.name = "Minamihama 1986";
   const groundSurfaces = await createStudio(scene);
+  const assetPolicy = await loadAssetQualityPolicy();
+  console.info(
+    `[Minamihama] asset policy: rejected reconstructions `
+      + `${assetPolicy.renderRejectedForTesting ? "render for testing" : "omit"}`,
+  );
 
   const camera = new THREE.PerspectiveCamera(55, innerWidth / Math.max(1, innerHeight), 0.12, 220);
   const walk = {
@@ -898,7 +937,10 @@ async function main() {
       return !subject.moduleOnly && Boolean(proto && !proto.failed);
     }
     const assembly = assembliesById.get(assetId);
-    return Boolean(assembly && missingAssemblyModules(assembly, prototypes).length === 0);
+    return Boolean(assembly && assembly.parts.some(part => {
+      const proto = prototypes.get(part.module);
+      return proto && !proto.failed;
+    }));
   }
 
   function createAssetInstance(assetId, pose, label) {
@@ -988,7 +1030,7 @@ async function main() {
     await yieldToAnimationFrame();
     let proto;
     try {
-      proto = await reconstructSubject(subject, atlasAnisotropy);
+      proto = await reconstructSubject(subject, atlasAnisotropy, assetPolicy);
     } catch (error) {
       console.error(`[Minamihama] ${subject.id} reconstruction failed; continuing asset stream`, error);
       proto = { failed: true, error };
@@ -1003,19 +1045,26 @@ async function main() {
   const installedAssemblies = [];
   for (const assembly of WORLD_ASSEMBLIES) {
     const missing = missingAssemblyModules(assembly, prototypes);
-    if (missing.length) {
+    const object = plantAssembly(assembly, assembly, assembly.label, prototypes);
+    if (!object) {
       console.warn(
-        `[Minamihama] ${assembly.id} assembly omitted; required reconstructed module(s) unavailable: ${missing.join(", ")}`,
+        `[Minamihama] ${assembly.id} assembly omitted; no reconstructed component is available`,
       );
       continue;
     }
-    const object = plantAssembly(assembly, assembly, assembly.label, prototypes);
-    if (!object) continue;
     scene.add(object);
     installedAssemblies.push(assembly);
-    console.info(
-      `[Minamihama] ${assembly.id} assembled from ${assembly.parts.length} reconstructed component(s)`,
-    );
+    if (missing.length) {
+      const renderedParts = assembly.parts.filter(part => !missing.includes(part.module)).length;
+      console.warn(
+        `[Minamihama] ${assembly.id} partial testing assembly: ${renderedParts}/${assembly.parts.length} `
+          + `components rendered; unavailable: ${missing.join(", ")}`,
+      );
+    } else {
+      console.info(
+        `[Minamihama] ${assembly.id} assembled from ${assembly.parts.length} reconstructed component(s)`,
+      );
+    }
   }
 
   await yieldToAnimationFrame();
@@ -1047,6 +1096,34 @@ async function main() {
     createAssetInstance,
     assetSubjects: assetDefinitionsById,
   });
+  const assetValidation = ORBIT_SUBJECTS.map(subject => {
+    const proto = prototypes.get(subject.id);
+    const status = proto?.failed ? "failed" : proto?.degraded ? "warning" : "pass";
+    return Object.freeze({
+      id: subject.id,
+      status,
+      reasons: Object.freeze([
+        ...(proto?.strictFrameFailure?.reasons ?? []),
+        ...(proto?.quality?.reasons ?? []),
+      ]),
+    });
+  });
+  const failedSubjects = assetValidation.filter(entry => entry.status === "failed");
+  const warningSubjects = assetValidation.filter(entry => entry.status === "warning");
+  const validationReport = Object.freeze({
+    format: 1,
+    policy: assetPolicy,
+    summary: Object.freeze({
+      passed: assetValidation.length - failedSubjects.length - warningSubjects.length,
+      warnings: warningSubjects.length,
+      failed: failedSubjects.length,
+    }),
+    assets: Object.freeze(assetValidation),
+  });
+  globalThis.__MINAMIHAMA_ASSET_REPORT__ = validationReport;
+  if (assetPolicy.reportRejectedAssets) {
+    console.info(`[Minamihama] asset-report-json ${JSON.stringify(validationReport)}`);
+  }
   const counts = {
     standalone: installedSubjects.length,
     assemblies: installedAssemblies.length,
@@ -1071,16 +1148,16 @@ async function main() {
     + `${counts.assemblies} modular assemblies, ${counts.walkers} walkers, `
     + `${counts.standing} standing civilians, ${counts.van} moving van, `
     + `${counts.boats} boats, ${counts.gulls} gulls, ${counts.signs} moving signs`;
-  const complete = Object.entries(expected).every(([name, value]) => counts[name] === value);
+  const complete = Object.entries(expected).every(([name, value]) => counts[name] === value)
+    && failedSubjects.length === 0
+    && warningSubjects.length === 0;
   if (complete) {
     console.info(`[Minamihama] world ready: ${populationSummary}`);
   } else {
-    const failedSubjects = ORBIT_SUBJECTS
-      .filter(subject => prototypes.get(subject.id)?.failed)
-      .map(subject => subject.id);
-    console.error(
-      `[Minamihama] world incomplete: ${populationSummary}; `
-        + `failed reconstructed sources: ${failedSubjects.join(", ") || "none"}`,
+    console.warn(
+      `[Minamihama] world testing: ${populationSummary}; `
+        + `${warningSubjects.length} rejected source(s) rendered with warnings; `
+        + `${failedSubjects.length} source(s) unavailable`,
     );
   }
 }

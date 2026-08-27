@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "renderRejectedForTesting": true,
+  "reportRejectedAssets": true,
+  "description": "Keep Grok-derived 2D-to-3D reconstructions visible during world-building while retaining strict QA results."
+}
