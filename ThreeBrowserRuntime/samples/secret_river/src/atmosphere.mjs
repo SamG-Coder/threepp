@@ -59,9 +59,9 @@ function configureShadow(light) {
   light.shadow.bias = -0.0008;
 }
 
-function placeDirectional(light, direction, distance = LIGHT_DISTANCE) {
-  light.position.copy(direction).multiplyScalar(distance);
-  light.target.position.set(0, 0, 0);
+function placeDirectional(light, direction, focus, distance = LIGHT_DISTANCE) {
+  light.position.copy(focus).addScaledVector(direction, distance);
+  light.target.position.copy(focus);
 }
 
 export const PRESETS = Object.freeze({
@@ -80,8 +80,8 @@ export const PRESETS = Object.freeze({
     exposure: 1.04,
     treeTint: [0.94, 0.97, 1.02],
     rtxCelestialIntensity: 3.6,
-    rtxShadowStrength: 0.58,
-    rtxAoStrength: 0.22,
+    rtxShadowStrength: 0.34,
+    rtxAoStrength: 0.12,
   }),
   midday: freezePreset({
     name: "Midday",
@@ -92,14 +92,14 @@ export const PRESETS = Object.freeze({
     hemiGround: 0x9a8860,
     hemiIntensity: 0.95,
     fogColor: 0xd5d2c6,
-    fogDensity: 0.007,
+    fogDensity: 0.0055,
     skyHorizon: 0xc5d6e4,
     skyZenith: 0x4a90c8,
     exposure: 1.20,
     treeTint: [1.04, 1.02, 0.96],
     rtxCelestialIntensity: 5.8,
-    rtxShadowStrength: 0.36,
-    rtxAoStrength: 0.10,
+    rtxShadowStrength: 0.20,
+    rtxAoStrength: 0.055,
   }),
   afternoon: freezePreset({
     name: "Late afternoon",
@@ -110,14 +110,14 @@ export const PRESETS = Object.freeze({
     hemiGround: 0xb08a55,
     hemiIntensity: 1.35,
     fogColor: 0x9eb0a4,
-    fogDensity: 0.0028,
+    fogDensity: 0.0048,
     skyHorizon: 0xd7c19a,
     skyZenith: 0x6a9cc8,
     exposure: 1.28,
     treeTint: [1.02, 1.0, 0.94],
     rtxCelestialIntensity: 4.4,
-    rtxShadowStrength: 0.52,
-    rtxAoStrength: 0.18,
+    rtxShadowStrength: 0.28,
+    rtxAoStrength: 0.085,
   }),
   sunset: freezePreset({
     name: "Sunset",
@@ -134,8 +134,8 @@ export const PRESETS = Object.freeze({
     exposure: 1.16,
     treeTint: [1.22, 0.72, 0.48],
     rtxCelestialIntensity: 3.2,
-    rtxShadowStrength: 0.66,
-    rtxAoStrength: 0.26,
+    rtxShadowStrength: 0.38,
+    rtxAoStrength: 0.14,
   }),
   night: freezePreset({
     name: "Night",
@@ -152,8 +152,8 @@ export const PRESETS = Object.freeze({
     exposure: 0.82,
     treeTint: [0.52, 0.62, 0.82],
     rtxCelestialIntensity: 1.15,
-    rtxShadowStrength: 0.74,
-    rtxAoStrength: 0.34,
+    rtxShadowStrength: 0.42,
+    rtxAoStrength: 0.16,
     moon: {
       direction: [-0.35, 0.68, -0.44],
       color: 0xc5d2de,
@@ -231,7 +231,16 @@ export function createAtmosphere(scene) {
 
   const sunDirection = new THREE.Vector3();
   const scratch = new THREE.Vector3();
+  const moonDirection = new THREE.Vector3(-0.35, 0.68, -0.44).normalize();
+  const shadowFocus = new THREE.Vector3(0, 1.2, 34);
+  const desiredShadowFocus = new THREE.Vector3();
   let currentName = DEFAULT_PRESET;
+  let rayTracedShadows = false;
+
+  function syncShadowMode() {
+    sun.castShadow = sun.visible && !rayTracedShadows;
+    moon.castShadow = moon.visible && !rayTracedShadows;
+  }
 
   function applyExposure(value) {
     const renderer = scene.userData.renderer;
@@ -252,9 +261,9 @@ export function createAtmosphere(scene) {
     sun.color.setHex(preset.sunColor);
     sun.intensity = preset.sunIntensity;
     sun.visible = preset.sunIntensity > 0.02;
-    sun.castShadow = sun.visible;
+    sun.castShadow = sun.visible && !rayTracedShadows;
     sun.name = `${preset.name} sun`;
-    placeDirectional(sun, sunDirection);
+    placeDirectional(sun, sunDirection, shadowFocus);
 
     hemi.color.setHex(preset.hemiSky);
     hemi.groundColor.setHex(preset.hemiGround);
@@ -276,8 +285,9 @@ export function createAtmosphere(scene) {
       moon.color.setHex(moonPreset.color);
       moon.intensity = moonPreset.intensity;
       moon.visible = true;
-      moon.castShadow = true;
-      placeDirectional(moon, scratch);
+      moonDirection.copy(scratch);
+      moon.castShadow = !rayTracedShadows;
+      placeDirectional(moon, moonDirection, shadowFocus);
       moonDisc.position.copy(scratch).multiplyScalar(SKY_RADIUS * 0.84);
       moonDisc.lookAt(0, 0, 0);
       moonDiscMaterial.color.setHex(moonPreset.color);
@@ -292,6 +302,7 @@ export function createAtmosphere(scene) {
 
     campfire.visible = Boolean(preset.campfire);
     campfire.intensity = preset.campfire ? 2.6 : 0;
+    syncShadowMode();
     return preset;
   }
 
@@ -308,6 +319,16 @@ export function createAtmosphere(scene) {
       return PRESETS[currentName];
     },
     sunDirection,
+    updateFocus(position, delta = 1 / 60) {
+      desiredShadowFocus.set(position.x, 1.2, position.z + 22);
+      shadowFocus.lerp(desiredShadowFocus, 1 - Math.exp(-Math.max(0, delta) * 7));
+      placeDirectional(sun, sunDirection, shadowFocus);
+      if (moon.visible) placeDirectional(moon, moonDirection, shadowFocus);
+    },
+    setRayTracedShadows(enabled) {
+      rayTracedShadows = Boolean(enabled);
+      syncShadowMode();
+    },
     dispose() {
       skyGeometry.dispose();
       skyMaterial.dispose();

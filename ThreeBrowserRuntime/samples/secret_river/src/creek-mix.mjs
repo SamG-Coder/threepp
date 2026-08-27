@@ -1,8 +1,8 @@
 /** Fresnel mix used by the TSL river: reflectionWeight = fresnel * SCALE + BIAS. */
-export const CREEK_FRESNEL_SCALE = 0.58;
-export const CREEK_FRESNEL_BIAS = 0.34;
-export const CREEK_BREAK_SCALE = 0.22;
-export const CREEK_BREAK_BIAS = 0.78;
+export const CREEK_FRESNEL_SCALE = 0.52;
+export const CREEK_FRESNEL_BIAS = 0.25;
+export const CREEK_BREAK_SCALE = 0.20;
+export const CREEK_BREAK_BIAS = 0.72;
 
 export function clamp01(value) {
   return Math.min(1, Math.max(0, Number(value) || 0));

@@ -68,7 +68,7 @@ export function layoutFlora(seed = DEFAULT_FLORA_SEED) {
     });
   }
 
-  for (let bed = 0; bed < 36; bed++) {
+  for (let bed = 0; bed < 27; bed++) {
     if (random() < 0.2) continue;
     const cx = WORLD.minX + 6 + random() * (WORLD.maxX - WORLD.minX - 12);
     const n = 6 + Math.floor(random() * 10);
@@ -93,10 +93,11 @@ export function layoutFlora(seed = DEFAULT_FLORA_SEED) {
     }
   }
 
-  for (let patch = 0; patch < 48; patch++) {
+  for (let patch = 0; patch < 34; patch++) {
     if (random() < 0.16) continue;
     const cx = WORLD.minX + 5 + random() * (WORLD.maxX - WORLD.minX - 10);
     const inland = random() < 0.22;
+    if (inland && Math.abs(cx + 4) < 8) continue;
     const n = 5 + Math.floor(random() * 8);
     for (let index = 0; index < n; index++) {
       const x = cx + (random() - 0.5) * (inland ? 4.4 : 6.2);
@@ -117,7 +118,7 @@ export function layoutFlora(seed = DEFAULT_FLORA_SEED) {
     push("wattle", x, z, 0.84 + random() * 0.42, random() < 0.5);
   }
 
-  for (let clump = 0; clump < 28; clump++) {
+  for (let clump = 0; clump < 21; clump++) {
     if (random() < 0.2) continue;
     const cx = WORLD.minX + 6 + random() * (WORLD.maxX - WORLD.minX - 12);
     const n = 2 + Math.floor(random() * 5);

@@ -92,13 +92,18 @@ void main() {
     if (isBackground(depth)) return;
 
     vec3 world = reconstructWorld(pixel, depth);
-    // Planar river + wet mud sit near y=0; keep their raster / reflector colour.
-    if (world.y < 0.42) return;
+    // The planar river sits at y ~= 0.06. Keep its authored reflector colour,
+    // while allowing the rising wet bank immediately behind it to receive AO.
+    if (world.y < 0.12) return;
 
     float depthX = readDepth(pixel + ivec2(1, 0));
     float depthY = readDepth(pixel + ivec2(0, 1));
     vec3 worldX = reconstructWorld(pixel + ivec2(1, 0), depthX);
     vec3 worldY = reconstructWorld(pixel + ivec2(0, 1), depthY);
+    // Alpha-card and silhouette boundaries jump to a different depth. Never
+    // let a derivative across that discontinuity turn a transparent edge (or
+    // the sky behind it) into an opaque black receiver.
+    if (length(worldX - world) > 0.85 || length(worldY - world) > 0.85) return;
     vec3 normal = normalize(cross(worldY - world, worldX - world));
     vec3 toCamera = normalize(frame.cameraPositionMaximumDistance.xyz - world);
     if (any(isnan(normal)) || any(isinf(normal))) normal = vec3(0.0, 1.0, 0.0);
@@ -106,14 +111,15 @@ void main() {
 
     // Face-on 2.5D cards reconstruct as camera-facing walls and must not
     // receive ray-tested self-shadow.
-    if (abs(normal.y) < 0.28 && abs(dot(normal, toCamera)) > 0.82) return;
+    if (abs(dot(normal, toCamera)) > 0.58) return;
 
     float rayBias = frame.lightingParameters.w;
     vec3 origin = world + normal * rayBias;
     vec3 directionalLightDirection =
         normalize(frame.directionalLightDirectionAngularRadius.xyz);
+    // A stable per-pixel pattern avoids unaccumulated ray noise shimmering on
+    // the painted ground as the character walks.
     uint state = uint(pixel.x) * 1973u ^ uint(pixel.y) * 9277u ^ 0x68bc21ebu;
-    state ^= frame.extentFlags.w * 26699u;
 
     uint directionalSampleCount =
         (frame.extentFlags.z >> kDirectionalSampleShift) & kSampleMask;

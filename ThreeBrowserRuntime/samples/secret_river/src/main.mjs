@@ -1,6 +1,6 @@
 import * as THREE from "three/webgpu";
 import WebGPU from "three/addons/capabilities/WebGPU.js";
-import { createAtmosphere, PRESETS } from "./atmosphere.mjs";
+import { createAtmosphere } from "./atmosphere.mjs";
 import { createFaceOnCamera } from "./camera.mjs";
 import { createFlora } from "./flora.mjs";
 import { createHills } from "./hills.mjs";
@@ -17,8 +17,9 @@ import { createWalker } from "./walker.mjs";
 
 document.title = "Secret River — ThreeBrowser Runtime";
 
-const MAX_INTERNAL_PIXELS = 5_300_000;
-const MAX_INTERNAL_RATIO = 2.1;
+const MAX_INTERNAL_PIXELS = 3_200_000;
+const MAX_INTERNAL_RATIO = 1.6;
+const TARGET_FRAME_INTERVAL_MS = 1000 / 60;
 const PRESET_KEYS = Object.freeze(["morning", "midday", "afternoon", "sunset", "night"]);
 
 function chooseInternalRatio(width, height) {
@@ -85,6 +86,9 @@ async function main() {
   if (!renderer.backend?.isWebGPUBackend || !renderer.backend?.device) {
     throw new Error("WebGPURenderer did not initialize the native WebGPU backend.");
   }
+  renderer.backend.device.addEventListener?.("uncapturederror", event => {
+    console.error("[Secret River WebGPU validation]", event.error?.message || event.error || event);
+  });
 
   const scene = new THREE.Scene();
   scene.name = "Hawkesbury riverbank";
@@ -108,9 +112,13 @@ async function main() {
 
   const follow = createFaceOnCamera(camera, walker);
   follow.update(1);
+  atmosphere.updateFocus(walker.position, 1);
   const input = createInput();
 
   prepareRtxGuideMaterials(scene);
+  // The planar reflector sees the actual alpha-cutout artwork. Native scene
+  // hits use simplified shadow volumes, so applying those reflections to the
+  // creek would replace faithful trees with opaque proxy blobs.
   river.mesh.material.rtxReflectionMask = 0;
 
   const rtx = navigator.gpu?.threeBrowserRTX ?? null;
@@ -134,15 +142,23 @@ async function main() {
       typeof rtx.evaluateRayReflections === "function")) {
     try {
       staticScene = collectStaticRiverScene(
-        [...terrain.rtxRoots, ...(hills.rtxRoots ?? []), ...trees.rtxRoots],
+        [
+          ...terrain.rtxRoots,
+          ...(hills.rtxRoots ?? []),
+          ...trees.rtxRoots,
+          ...(flora.rtxRoots ?? []),
+        ],
         atmosphere.campfire ? [atmosphere.campfire] : [],
       );
-      trees.hideProxies();
     } catch (error) {
       console.warn(`[Secret River RTX] Static-scene collection failed: ${error?.message || error}`);
+    } finally {
+      trees.hideProxies();
+      flora.hideProxies?.();
     }
   } else {
     trees.hideProxies();
+    flora.hideProxies?.();
   }
 
   const internalSize = (scale = 1) => new THREE.Vector2(
@@ -156,14 +172,20 @@ async function main() {
     : false;
 
   const state = {
-    rtxRequested: nativeConfigured,
+    rtxRequested: nativeConfigured && nativeRenderer.rayLightingReady,
     elapsed: 0,
     preset: "afternoon",
   };
 
   function useNativePath() {
-    return Boolean(state.rtxRequested && nativeRenderer.enabled);
+    return Boolean(state.rtxRequested && nativeRenderer.rayLightingReady);
   }
+
+  function syncShadowPath() {
+    atmosphere.setRayTracedShadows(useNativePath());
+  }
+
+  syncShadowPath();
 
   function setPreset(name) {
     const preset = atmosphere.applyPreset(name);
@@ -179,6 +201,7 @@ async function main() {
       return;
     }
     state.rtxRequested = !state.rtxRequested;
+    syncShadowPath();
     console.log(`[Secret River] path=${state.rtxRequested ? "RTX" : "WebGPU raster"}`);
   }
 
@@ -200,18 +223,23 @@ async function main() {
     renderer.setSize(width, height);
     nativeRenderer.resize(internalSize().x, internalSize().y);
     if (!nativeRenderer.enabled) state.rtxRequested = false;
+    syncShadowPath();
   }
   globalThis.addEventListener("resize", resize);
   resize();
 
   let previousTime = performance.now();
+  let nextFrameTime = previousTime;
   let diagnosticTime = 0;
   let diagnosticFrames = 0;
   let diagnosticWallTime = 0;
   renderer.setAnimationLoop(() => {
     const now = performance.now();
+    if (now + 0.25 < nextFrameTime) return;
+    if (now - nextFrameTime > TARGET_FRAME_INTERVAL_MS * 2) nextFrameTime = now;
+    nextFrameTime += TARGET_FRAME_INTERVAL_MS;
     const wallDelta = Math.max(0, (now - previousTime) / 1000);
-    const delta = Math.min(0.05, wallDelta);
+    const delta = Math.min(0.1, wallDelta);
     previousTime = now;
     state.elapsed += delta;
     diagnosticTime += delta;
@@ -220,6 +248,7 @@ async function main() {
 
     walker.update(delta, input.axis());
     follow.update(delta);
+    atmosphere.updateFocus(walker.position, delta);
     river.update(state.elapsed);
     flora.update?.(state.elapsed);
     trees.update?.(state.elapsed);
@@ -231,6 +260,7 @@ async function main() {
     if (useNativePath()) {
       nativeRendered = nativeRenderer.render(scene, camera, {
         skipReflections: true,
+        skipLighting: false,
         celestialDirection: atmosphere.sunDirection,
         celestialIntensity: preset.rtxCelestialIntensity,
         shadowStrength: preset.rtxShadowStrength,
@@ -238,7 +268,10 @@ async function main() {
       });
     }
     if (!nativeRendered) {
-      if (useNativePath() && !nativeRenderer.enabled) state.rtxRequested = false;
+      if (state.rtxRequested && !nativeRenderer.rayLightingReady) {
+        state.rtxRequested = false;
+        syncShadowPath();
+      }
       offscreenRendered = nativeRenderer.renderRaster(scene, camera);
     }
     if (nativeRendered || offscreenRendered) {

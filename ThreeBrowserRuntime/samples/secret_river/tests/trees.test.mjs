@@ -6,6 +6,7 @@ import { layoutTrees, TREE_SPECIES } from "../src/tree-layout.mjs";
 test("the authored forest uses every Hawkesbury species and stays on land", () => {
   const records = layoutTrees(0x51c7e1);
   assert.ok(records.length >= 40, `expected a sparse riverbank grove, got ${records.length}`);
+  assert.ok(records.length < 105, `grove should retain authored breathing room, got ${records.length}`);
   const ids = new Set(records.map(record => record.species));
   for (const species of TREE_SPECIES) {
     assert.equal(ids.has(species.id), true, `missing ${species.id}`);

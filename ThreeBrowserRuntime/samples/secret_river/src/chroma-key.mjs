@@ -96,6 +96,40 @@ export function erodeAlpha(imageData, radius = 1) {
   return imageData;
 }
 
+/**
+ * Give the surviving silhouette a one-pixel premultiplied-looking fringe.
+ * Generated cards otherwise leave a binary, sticker-like edge after erosion.
+ */
+export function featherAlpha(imageData, radius = 1, edgeAlpha = 176) {
+  const width = imageData.width;
+  const height = imageData.height;
+  const data = imageData.data;
+  const source = new Uint8ClampedArray(data);
+  const extent = Math.max(1, Math.trunc(radius));
+  const feather = Math.max(1, Math.min(254, Math.trunc(edgeAlpha)));
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const index = (y * width + x) * 4;
+      if (source[index + 3] === 0) continue;
+      let touchesVoid = false;
+      for (let dy = -extent; dy <= extent && !touchesVoid; dy++) {
+        for (let dx = -extent; dx <= extent; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= width || ny >= height ||
+              source[(ny * width + nx) * 4 + 3] === 0) {
+            touchesVoid = true;
+            break;
+          }
+        }
+      }
+      if (touchesVoid) data[index + 3] = Math.min(data[index + 3], feather);
+    }
+  }
+  return imageData;
+}
+
 export function alphaBounds(imageData, threshold = 12) {
   const width = imageData.width;
   const height = imageData.height;
@@ -166,7 +200,20 @@ export function keyedCanvasFromImage(image, options = {}) {
   keyImageData(imageData, options);
   despillImageData(imageData);
   if (options.erode !== false) erodeAlpha(imageData, options.erode === true ? 1 : options.erode ?? 1);
+  if (options.feather !== false) {
+    featherAlpha(imageData, options.feather === true ? 1 : options.feather ?? 1);
+  }
   const bounds = alphaBounds(imageData);
+  if (options.crop === false) {
+    sourceContext.putImageData(imageData, 0, 0);
+    return {
+      canvas: sourceCanvas,
+      width: sourceWidth,
+      height: sourceHeight,
+      aspect: sourceWidth / Math.max(1, sourceHeight),
+      bounds,
+    };
+  }
   const cropped = cropImageData(imageData, bounds, options.padding ?? 2);
   const canvas = makeCanvas(cropped.width, cropped.height);
   const context = canvas.getContext("2d");

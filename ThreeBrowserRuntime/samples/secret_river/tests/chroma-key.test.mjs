@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   alphaBounds,
   cropImageData,
+  featherAlpha,
   keyImageData,
   magentaKeyAlpha,
 } from "../src/chroma-key.mjs";
@@ -15,6 +16,18 @@ test("hot-pink studio pixels key out and foliage stays opaque", () => {
   assert.equal(magentaKeyAlpha(210, 200, 180), 255);
   assert.equal(magentaKeyAlpha(160, 80, 150), 0);
   assert.equal(magentaKeyAlpha(180, 110, 90), 255);
+});
+
+test("cutout erosion leaves a softly blended silhouette fringe", () => {
+  const width = 7;
+  const height = 7;
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let y = 1; y <= 5; y++) {
+    for (let x = 1; x <= 5; x++) data[(y * width + x) * 4 + 3] = 255;
+  }
+  featherAlpha({ width, height, data }, 1, 176);
+  assert.equal(data[(3 * width + 3) * 4 + 3], 255, "interior stays opaque");
+  assert.equal(data[(1 * width + 3) * 4 + 3], 176, "edge becomes translucent");
 });
 
 test("keyImageData clears magenta and the grok watermark corner", () => {

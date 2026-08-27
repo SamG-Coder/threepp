@@ -24,8 +24,8 @@
     "notes": [
       "Self-contained WebGPU/TSL 2.5D walking sample; HTML only bootstraps the module graph.",
       "Photoreal 2D tree and walker cutouts stand as face-on cards in a 3D Hawkesbury riverbank.",
-      "Native RTX ray queries supply sun shadows/AO and one-bounce river reflections against a static terrain/tree-proxy snapshot.",
-      "The walker, water transport and dirt-road locomotion remain JavaScript-authored.",
+      "Native RTX ray queries supply sun visibility/AO against a static terrain and organic tree-proxy snapshot; a planar reflector mirrors the real painted cards into the river.",
+      "The fixed-registration walker atlas, distance-driven gait, water transport and dirt-road locomotion remain JavaScript-authored.",
       "No native/C++ runtime files or downloaded models are required."
     ]
   }

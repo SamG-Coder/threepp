@@ -5,8 +5,10 @@ the water looking inland, so the creek fills the **bottom of the screen**, the
 dirt bank is the playable strip, and eucalyptus hills recede behind.
 
 Photoreal 2D cutouts (gums, wattles, reeds, grasses) stand as face-on cards in
-a 3D bank. Native RTX supplies sun shadows and one-bounce water reflections.
-The walker uses a keyed profile plus a walk-cycle when moving.
+a 3D bank. Native RTX ray queries supply grounded sun visibility and ambient
+occlusion against organic proxy volumes, while a planar reflector mirrors the
+actual painted cards into the creek. The walker uses a fixed-registration atlas
+with a distance-driven gait, so its stride remains smooth at every frame rate.
 
 Inspired by the *place* in Kate Grenville's *The Secret River* — sandstone
 country, tannin water, pale trunks — not an adaptation of the plot.
@@ -26,7 +28,7 @@ node C:\ThreeBrowser\ThreeBrowserRuntime\build\bin\runtime\launch.mjs C:\ThreeBr
 | **S** / **Down** | Step toward the water |
 | **Shift** | Walk faster |
 | **1**–**5** | Morning, midday, late afternoon, sunset, night |
-| **X** | RTX lighting/reflections on or off |
+| **X** | RTX ray shadows and ambient occlusion on or off |
 
 No on-screen HUD. Status stays in stdout.
 

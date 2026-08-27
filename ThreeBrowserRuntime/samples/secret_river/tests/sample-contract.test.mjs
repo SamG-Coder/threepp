@@ -50,10 +50,18 @@ test("main walks a face-on riverbank and uses the generic RTX lighting and refle
   assert.match(native, /evaluateRayReflections/);
   assert.match(native, /compileRayQueryPipeline/);
   assert.match(native, /BANK_LIGHTING_GLSL/);
+  assert.match(native, /_evaluateLighting\(frameOptions,\s*layouts\)/);
+  assert.doesNotMatch(native, /skipLighting:\s*true/);
+  assert.match(main, /skipLighting:\s*false/);
   assert.match(trees, /layoutTrees/);
   assert.match(trees, /PlaneGeometry/);
   assert.match(trees, /rtxIgnore/);
   assert.match(walker, /profile\.jpg/);
+  assert.match(walker, /WALK_FRAME_FIRST\s*=\s*8/);
+  assert.match(walker, /WALK_FRAME_LAST\s*=\s*30/);
+  assert.match(walker, /fixed-registration atlas/);
+  assert.match(walker, /gaitFrameFromDistance/);
+  assert.doesNotMatch(walker, /texture\.needsUpdate\s*=\s*true[\s\S]*update\(delta, axis\)[\s\S]*texture\.needsUpdate/);
   assert.match(
     camera,
     /Face-on stage camera|side-on cinematic|creek bottom/i,

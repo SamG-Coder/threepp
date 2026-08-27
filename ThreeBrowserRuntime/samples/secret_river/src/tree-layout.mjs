@@ -1,6 +1,6 @@
 /**
- * Dense-but-gappy 2.5D Hawkesbury bush. Cards stay irregular so the
- * camera can see a long way inland; this is not a wall of trunks.
+ * Clustered 2.5D Hawkesbury bush. Authored sight lines and irregular groves
+ * keep the walker readable instead of turning the bank into a clone wall.
  */
 
 import {
@@ -142,7 +142,7 @@ export function layoutTrees(seed = DEFAULT_LAYOUT_SEED) {
   const random = mulberry32(seed);
   const records = [];
 
-  const clearings = [];
+  const clearings = [{ x: -4, z: 39, r: 15 }];
   for (let index = 0; index < 8; index++) {
     clearings.push({
       x: mix(random, WORLD.minX + 16, WORLD.maxX - 16),
@@ -151,7 +151,7 @@ export function layoutTrees(seed = DEFAULT_LAYOUT_SEED) {
     });
   }
 
-  const sightLines = [];
+  const sightLines = [{ x: -4, half: 7.5 }];
   for (let index = 0; index < 3; index++) {
     sightLines.push({
       x: mix(random, WORLD.minX + 14, WORLD.maxX - 14),
@@ -209,6 +209,10 @@ export function layoutTrees(seed = DEFAULT_LAYOUT_SEED) {
     let x = startX;
     let placed = 0;
     while (x < WORLD.maxX - 8 && placed < count) {
+      if (Math.abs(x + 4) < 10) {
+        x += 12;
+        continue;
+      }
       const id = pick(random, [
         ["river-red-gum", 3.4],
         ["scribbly-gum", 2.2],
@@ -266,6 +270,10 @@ export function layoutTrees(seed = DEFAULT_LAYOUT_SEED) {
 
   let xCursor = WORLD.minX + mix(random, 6, 14);
   while (xCursor < WORLD.maxX - 6) {
+    if (Math.abs(xCursor + 4) < 8.5) {
+      xCursor += mix(random, 12, 16);
+      continue;
+    }
     const inland = Math.max(22, roadCenterZ(xCursor) + WORLD.roadWidth * 0.7);
     const z = Math.min(28, inland + random() * Math.max(0.4, 28 - inland));
     const id = pick(random, [
@@ -281,7 +289,7 @@ export function layoutTrees(seed = DEFAULT_LAYOUT_SEED) {
   }
 
   scatter({
-    count: 38,
+    count: 25,
     z0: 28,
     z1: 52,
     minDist: 6.4,
@@ -300,7 +308,7 @@ export function layoutTrees(seed = DEFAULT_LAYOUT_SEED) {
     ],
   });
   scatter({
-    count: 25,
+    count: 16,
     z0: 28,
     z1: 52,
     minDist: 4.4,
@@ -318,7 +326,7 @@ export function layoutTrees(seed = DEFAULT_LAYOUT_SEED) {
   });
 
   scatter({
-    count: 28,
+    count: 19,
     z0: 50,
     z1: 86,
     minDist: 7.6,
@@ -337,7 +345,7 @@ export function layoutTrees(seed = DEFAULT_LAYOUT_SEED) {
     ],
   });
   scatter({
-    count: 18,
+    count: 12,
     z0: 50,
     z1: 86,
     minDist: 5.5,
@@ -375,8 +383,8 @@ export function layoutTrees(seed = DEFAULT_LAYOUT_SEED) {
     }
   }
 
-  if (records.length < 120) {
-    const need = Math.min(28, 140 - records.length);
+  if (records.length < 72) {
+    const need = Math.min(18, 82 - records.length);
     let extra = 0;
     let attempts = 0;
     while (extra < need && attempts < need * 40) {

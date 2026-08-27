@@ -91,10 +91,12 @@ export async function createTerrain() {
   geometry.name = "Riverbank heightfield";
   const positions = geometry.getAttribute("position");
   const splat = new Float32Array(positions.count * 4);
+  const shoreDistance = new Float32Array(positions.count);
   for (let index = 0; index < positions.count; index++) {
     const x = positions.getX(index);
     const z = positions.getZ(index);
     positions.setY(index, terrainHeight(x, z));
+    shoreDistance[index] = z - riverEdgeZ(x);
     const weights = groundWeights(x, z);
     splat[index * 4] = weights.dirt;
     splat[index * 4 + 1] = weights.grass;
@@ -102,6 +104,7 @@ export async function createTerrain() {
     splat[index * 4 + 3] = weights.mud;
   }
   geometry.setAttribute("splat", new THREE.BufferAttribute(splat, 4));
+  geometry.setAttribute("shoreDistance", new THREE.BufferAttribute(shoreDistance, 1));
   geometry.computeVertexNormals();
   geometry.computeBoundingSphere();
 
@@ -132,9 +135,9 @@ export async function createTerrain() {
     .add(grass.mul(weights.y))
     .add(litter.mul(weights.z))
     .add(mud.mul(weights.w));
-  const shoreZ = float(WORLD.shoreZ);
-  const bankMask = tslSmoothstep(shoreZ.sub(0.35), shoreZ.add(0.7), positionWorld.z)
-    .mul(float(1).sub(tslSmoothstep(shoreZ.add(2.4), shoreZ.add(7.2), positionWorld.z)));
+  const shoreline = attribute("shoreDistance", "float");
+  const bankMask = tslSmoothstep(float(-0.35), float(0.7), shoreline)
+    .mul(float(1).sub(tslSmoothstep(float(2.4), float(7.2), shoreline)));
   const bankUv = vec2(
     positionWorld.x.mul(0.055).add(positionWorld.z.mul(0.012)),
     tslSmoothstep(float(0.02), float(2.35), positionWorld.y),
@@ -157,16 +160,18 @@ export async function createTerrain() {
 
   const group = new THREE.Group();
   group.name = "Hawkesbury bank";
-  group.add(mesh);
+  const road = createRoadRibbon(maps.dirt);
+  group.add(mesh, road.mesh);
 
   return {
     group,
-    rtxRoots: [mesh],
+    rtxRoots: [mesh, road.mesh],
     heightAt: terrainHeight,
     normalAt: sampleNormal,
     dispose() {
       geometry.dispose();
       material.dispose();
+      road.dispose();
       maps.dirt.dispose();
       maps.grass.dispose();
       maps.litter.dispose();
@@ -243,72 +248,6 @@ function createRoadRibbon(dirtMap) {
     dispose() {
       geometry.dispose();
       material.dispose();
-    },
-  };
-}
-
-function createRockInstances(geometry, material, count, inWaterBias, seed) {
-  const mesh = new THREE.InstancedMesh(geometry, material, count);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  mesh.frustumCulled = false;
-  const dummy = new THREE.Object3D();
-  const span = WORLD.maxX - WORLD.minX - 10;
-  for (let index = 0; index < count; index++) {
-    const wander = fbm(index * 1.37 + seed, seed * 0.13);
-    const x = WORLD.minX + 5 + ((index + wander * 0.45) / Math.max(1, count)) * span;
-    const edge = riverEdgeZ(x);
-    const scatter = fbm(index * 1.91, seed + 4.6) - 0.5;
-    const wet = fbm(index * 0.73, seed + 9.2);
-    const z = THREE.MathUtils.clamp(
-      wet < inWaterBias
-        ? edge - 0.4 - Math.abs(scatter) * 5.6
-        : edge + 0.12 + Math.abs(scatter) * 2.35,
-      WORLD.minZ + 1,
-      WORLD.pathMinZ - 0.35,
-    );
-    const px = x + scatter * 2.2;
-    const size = 0.20 + Math.pow(Math.abs(scatter) * 2, 1.35) * 0.58 + (index % 5) * 0.05;
-    dummy.position.set(px, terrainHeight(px, z) + size * 0.26, z);
-    dummy.rotation.set(index * 0.71, index * 1.13 + seed, index * 0.37);
-    dummy.scale.set(size * 1.18, size * (0.42 + wet * 0.22), size * 0.96);
-    dummy.updateMatrix();
-    mesh.setMatrixAt(index, dummy.matrix);
-  }
-  mesh.instanceMatrix.needsUpdate = true;
-  return mesh;
-}
-
-function createShoreRocks() {
-  const dodecaGeometry = new THREE.DodecahedronGeometry(1, 0);
-  const sphereGeometry = new THREE.SphereGeometry(1, 8, 6);
-  dodecaGeometry.name = "River cobble";
-  sphereGeometry.name = "River pebble";
-  const cobbleMaterial = nodeMaterial({
-    name: "Grey-brown river cobble",
-    color: 0x8a8070,
-    roughness: 0.82,
-    metalness: 0.04,
-    flatShading: false,
-  });
-  const pebbleMaterial = nodeMaterial({
-    name: "Wet grey-brown river stone",
-    color: 0x6a6560,
-    roughness: 0.55,
-    metalness: 0.08,
-    flatShading: false,
-  });
-  const cobbles = createRockInstances(dodecaGeometry, cobbleMaterial, 44, 0.42, 2.7);
-  cobbles.name = "Muddy-edge cobbles";
-  const pebbles = createRockInstances(sphereGeometry, pebbleMaterial, 40, 0.78, 8.1);
-  pebbles.name = "In-water river stones";
-  return {
-    meshes: [cobbles, pebbles],
-    dispose() {
-      dodecaGeometry.dispose();
-      sphereGeometry.dispose();
-      cobbleMaterial.dispose();
-      pebbleMaterial.dispose();
     },
   };
 }

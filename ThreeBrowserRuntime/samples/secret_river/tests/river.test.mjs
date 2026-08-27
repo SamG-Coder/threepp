@@ -28,4 +28,7 @@ test("shipped river material mixes reflector.rgb rather than a flat mud colour",
   assert.match(river, /CREEK_FRESNEL_SCALE/);
   assert.match(river, /mix\(\s*bodyShallow,\s*reflected,\s*reflectionWeight\)/);
   assert.doesNotMatch(river, /material\.colorNode\s*=\s*color\(/);
+  assert.match(river, /shoreDistance/);
+  assert.doesNotMatch(river, /riverEdgeZ\(x\)\s*\+\s*1\.6/);
+  assert.match(river, /resolutionScale:\s*0\.62/);
 });

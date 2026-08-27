@@ -71,10 +71,10 @@ export async function createHills() {
       name: card.name,
       map,
       transparent: true,
-      alphaTest: 0.28,
+      alphaTest: 0.18,
       fog: true,
       depthWrite: true,
-      toneMapped: false,
+      toneMapped: true,
       side: THREE.DoubleSide,
     });
     material.userData.rtxIgnore = true;

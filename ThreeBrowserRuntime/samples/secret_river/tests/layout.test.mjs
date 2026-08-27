@@ -25,6 +25,7 @@ test("inland canopy fills most x-bins without a rectangular empty run", () => {
 test("most reeds sit on the wet river edge", () => {
   for (const seed of [0x51c7e1, 0x9e3779b9]) {
     const records = layoutFlora(seed);
+    assert.ok(records.length < 700, `seed ${seed} overfilled the painted bank (${records.length})`);
     const near = reedEdgeShare(records, 1.2);
     const wet = wetReedShare(records);
     assert.ok(near.reeds >= 24, `seed ${seed} reeds ${near.reeds}`);
@@ -32,4 +33,3 @@ test("most reeds sit on the wet river edge", () => {
     assert.ok(wet.share > 0.5, `seed ${seed} wet band ${wet.share}`);
   }
 });
-

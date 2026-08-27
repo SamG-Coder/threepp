@@ -217,6 +217,10 @@ export class NativeRtxRenderer {
     return "WEBGPU FALLBACK";
   }
 
+  get rayLightingReady() {
+    return Boolean(this.enabled && this.lightingEnabled && this._lightingPipeline);
+  }
+
   async configure(width, height, staticScene) {
     this.enabled = false;
     this.failure = "";
@@ -262,6 +266,7 @@ export class NativeRtxRenderer {
           console.log("[Secret River RTX] compiled lighting-v1 bank shader (skips cutouts and water)");
         } catch (error) {
           this._lightingPipeline = null;
+          this.lightingEnabled = false;
           console.warn(`[Secret River RTX] Custom bank lighting shader failed: ${error?.message || error}`);
         }
       }
@@ -451,10 +456,14 @@ export class NativeRtxRenderer {
         cameraPosition: this._cameraPosition,
         directionalLightDirection:
           vectorArray(frameOptions.celestialDirection, [-0.32, 0.78, -0.53]),
-        directionalLightIntensity: Number(frameOptions.celestialIntensity ?? 3.2),
-        directionalAngularRadius: 0.0065,
+        // The raster scene already contains the authored sun/moon intensity.
+        // This compute pass contributes visibility only; the native bridge
+        // multiplies intensity into shadowStrength before dispatch, so values
+        // above one would clamp every occluded pixel to black.
+        directionalLightIntensity: 1,
+        directionalAngularRadius: 0.015,
         directionalSampleCount: 4,
-        aoSampleCount: 8,
+        aoSampleCount: 4,
         maxDistance: 10000,
         rayBias: 0.002,
         frameIndex: this.frameIndex,
@@ -543,14 +552,8 @@ export class NativeRtxRenderer {
       camera.getWorldPosition(this._cameraPosition);
 
       const layouts = this.rtx.vulkanImageLayouts;
-      const lightingUsed = this._evaluateLighting({
-        ...frameOptions,
-        skipLighting: true,
-      }, layouts);
-      const reflectionsUsed = this._evaluateReflections({
-        ...frameOptions,
-        skipReflections: true,
-      }, layouts);
+      const lightingUsed = this._evaluateLighting(frameOptions, layouts);
+      const reflectionsUsed = this._evaluateReflections(frameOptions, layouts);
 
       if (reflectionsUsed) {
         this._activeTexture = this.outputTarget.texture;
@@ -559,8 +562,11 @@ export class NativeRtxRenderer {
         this._activeTexture = this.sceneTarget.textures[0];
         this.lastPath = "rtx-ray-lighting";
       } else {
-        this._activeTexture = this.sceneTarget.textures[0];
-        this.lastPath = "rtx-raster";
+        // Never advertise an MRT-only frame as RTX. Let the caller use the
+        // cheaper ordinary raster target when no native ray pass actually ran.
+        this._lastFrameNative = false;
+        this.lastPath = "raster-fallback";
+        return false;
       }
       this._lastFrameNative = true;
       this.frameIndex += 1;
