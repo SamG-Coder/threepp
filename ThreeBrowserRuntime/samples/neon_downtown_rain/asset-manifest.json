@@ -1,0 +1,162 @@
+{
+  "format": 2,
+  "generator": "grok-only",
+  "assetMode": "modular-front-elevation-cards",
+  "chromaKey": "#ff00ff",
+  "styleAnchor": "assets/style/neon-rain-style-anchor.png",
+  "contract": {
+    "nonSurfaceProjection": "face-on-orthographic-front-elevation",
+    "surfaceProjection": "top-down-seamless",
+    "oneCenteredSubjectPerFile": true,
+    "minimumSafeMarginPercent": 6,
+    "allowBakedGround": false,
+    "allowPerspective": false,
+    "allowCompositeStreetPanels": false,
+    "allowFinishedBuildingComposites": false,
+    "atlas": {
+      "columns": 4,
+      "rows": 2,
+      "gridRegion": {
+        "leftPercent": 0,
+        "topPercent": 0,
+        "widthPercent": 75,
+        "heightPercent": 87
+      },
+      "reservedField": "right 25% and bottom 13% remain uninterrupted #ff00ff"
+    }
+  },
+  "groups": {
+    "surfaces": [
+      "assets/surfaces/asphalt-neutral.png",
+      "assets/surfaces/sidewalk-tile-neutral.png",
+      "assets/surfaces/alley-concrete-neutral.png",
+      "assets/surfaces/crosswalk-paint-neutral.png",
+      "assets/surfaces/wetness-breakup-mask.png",
+      "assets/surfaces/roof-gravel-neutral.png",
+      "assets/surfaces/curb-neutral.png",
+      "assets/surfaces/lane-white-neutral.png",
+      "assets/surfaces/lane-yellow-neutral.png",
+      "assets/surfaces/drain-grate-neutral.png"
+    ],
+    "backgroundStructures": [
+      "assets/background-structures/tower-slab-narrow-a.png",
+      "assets/background-structures/tower-slab-narrow-b.png",
+      "assets/background-structures/tower-slab-wide-a.png",
+      "assets/background-structures/tower-slab-wide-b.png",
+      "assets/background-structures/rooftop-utility-room.png",
+      "assets/background-structures/elevated-rail-span.png",
+      "assets/background-structures/elevated-rail-pier.png",
+      "assets/background-structures/service-alley-wall.png",
+      "assets/background-structures/service-alley-gate.png",
+      "assets/background-structures/rear-fire-stair-tower.png"
+    ],
+    "buildingShells": [
+      "assets/building-shells/concrete-shell-narrow.png",
+      "assets/building-shells/concrete-shell-wide.png",
+      "assets/building-shells/brick-shell-narrow.png",
+      "assets/building-shells/tile-shell-wide.png",
+      "assets/building-shells/service-block-shell.png",
+      "assets/building-shells/hotel-tower-shell.png"
+    ],
+    "storefronts": [
+      "assets/storefronts/arcade-storefront.png",
+      "assets/storefronts/noodle-bar-storefront.png",
+      "assets/storefronts/capsule-checkin-storefront.png",
+      "assets/storefronts/electronics-storefront.png",
+      "assets/storefronts/jazz-stair-storefront.png",
+      "assets/storefronts/pharmacy-storefront.png",
+      "assets/storefronts/cinema-ticket-storefront.png",
+      "assets/storefronts/laundromat-storefront.png",
+      "assets/storefronts/department-display-storefront.png",
+      "assets/storefronts/coffee-counter-storefront.png",
+      "assets/storefronts/pawn-camera-storefront.png",
+      "assets/storefronts/loading-bay-storefront.png"
+    ],
+    "windowUnits": [
+      "assets/window-units/sash-window-warm.png",
+      "assets/window-units/sash-window-dark.png",
+      "assets/window-units/metal-window-cyan.png",
+      "assets/window-units/metal-window-violet.png",
+      "assets/window-units/hotel-window-curtained.png",
+      "assets/window-units/industrial-window-wired.png"
+    ],
+    "signs": [
+      "assets/signs/neon-spiral-cyan.png",
+      "assets/signs/neon-bowl-red.png",
+      "assets/signs/neon-capsule-blue.png",
+      "assets/signs/neon-camera-violet.png",
+      "assets/signs/neon-note-amber.png",
+      "assets/signs/neon-cross-green.png",
+      "assets/signs/neon-film-rose.png",
+      "assets/signs/neon-coffee-cyan.png",
+      "assets/signs/neon-washer-blue.png",
+      "assets/signs/neon-key-amber.png",
+      "assets/signs/neon-arrow-red.png",
+      "assets/signs/neon-eye-violet.png"
+    ],
+    "awnings": [
+      "assets/awnings/canvas-awning-striped.png",
+      "assets/awnings/canvas-awning-dark.png",
+      "assets/awnings/metal-canopy-shallow.png",
+      "assets/awnings/translucent-canopy-cyan.png"
+    ],
+    "props": [
+      "assets/props/traffic-light.png",
+      "assets/props/streetlamp-double.png",
+      "assets/props/vending-machine-cyan.png",
+      "assets/props/vending-machine-red.png",
+      "assets/props/phone-booth.png",
+      "assets/props/bus-shelter.png",
+      "assets/props/news-kiosk.png",
+      "assets/props/bicycle-rack.png",
+      "assets/props/trash-bin.png",
+      "assets/props/wooden-crate.png",
+      "assets/props/restaurant-menu-stand.png",
+      "assets/props/roadwork-barrier.png",
+      "assets/props/fire-escape.png",
+      "assets/props/utility-pole.png",
+      "assets/props/overhead-cable-span.png",
+      "assets/props/alley-steam-vent.png",
+      "assets/props/planter-box.png",
+      "assets/props/sidewalk-bench.png",
+      "assets/props/parking-meter.png"
+    ],
+    "vehicles": [
+      "assets/vehicles/taxi-sedan-right.png",
+      "assets/vehicles/taxi-sedan-left.png",
+      "assets/vehicles/city-bus-right.png",
+      "assets/vehicles/city-bus-left.png",
+      "assets/vehicles/compact-hatch.png",
+      "assets/vehicles/delivery-van-right.png",
+      "assets/vehicles/delivery-van-left.png",
+      "assets/vehicles/black-sedan.png",
+      "assets/vehicles/motor-scooter.png",
+      "assets/vehicles/parked-wagon.png",
+      "assets/vehicles/service-truck.png"
+    ],
+    "walkers": [
+      "assets/people/walk-streetwise-player.png",
+      "assets/people/walk-student-raincoat.png",
+      "assets/people/walk-courier.png",
+      "assets/people/walk-elder-umbrella.png",
+      "assets/people/walk-night-worker.png",
+      "assets/people/walk-office-worker-umbrella.png"
+    ],
+    "people": [
+      "assets/people/person-stall-vendor.png",
+      "assets/people/person-bus-stop-commuter.png",
+      "assets/people/person-doorway-smoker.png",
+      "assets/people/person-alley-worker.png",
+      "assets/people/person-night-cook.png",
+      "assets/people/person-newspaper-reader.png"
+    ],
+    "weather": [
+      "assets/weather/rain-streak-tile.png",
+      "assets/weather/window-rain-sheet.png",
+      "assets/weather/low-mist-bank.png",
+      "assets/weather/tire-spray.png",
+      "assets/weather/puddle-ripple-sheet.png",
+      "assets/weather/contact-shadow-soft.png"
+    ]
+  }
+}

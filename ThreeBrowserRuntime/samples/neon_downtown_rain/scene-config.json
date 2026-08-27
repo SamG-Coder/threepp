@@ -1,0 +1,171 @@
+{
+  "format": 2,
+  "name": "Rainward Central",
+  "world": {
+    "minX": -112,
+    "maxX": 112,
+    "nearSidewalkZ": [-22, -18],
+    "roadZ": [-18, 5.8],
+    "farSidewalkZ": [6.0, 14.6],
+    "facadeZ": 15.4,
+    "playerStart": [-8, 0.14, 10.8]
+  },
+  "backgroundStructures": [
+    { "asset": "background-structures/tower-slab-wide-a.png", "x": -98, "z": 118, "height": 34, "order": -74 },
+    { "asset": "background-structures/tower-slab-narrow-a.png", "x": -73, "z": 118, "height": 30, "order": -73 },
+    { "asset": "background-structures/tower-slab-wide-b.png", "x": -45, "z": 118, "height": 37, "order": -72 },
+    { "asset": "background-structures/tower-slab-narrow-b.png", "x": -18, "z": 118, "height": 31, "order": -71 },
+    { "asset": "background-structures/tower-slab-wide-a.png", "x": 12, "z": 118, "height": 35, "order": -74 },
+    { "asset": "background-structures/tower-slab-narrow-a.png", "x": 40, "z": 118, "height": 32, "order": -73 },
+    { "asset": "background-structures/tower-slab-wide-b.png", "x": 70, "z": 118, "height": 38, "order": -72 },
+    { "asset": "background-structures/tower-slab-narrow-b.png", "x": 100, "z": 118, "height": 30, "order": -71 },
+    { "asset": "background-structures/tower-slab-narrow-b.png", "x": -94, "z": 57, "height": 24, "order": -60 },
+    { "asset": "background-structures/tower-slab-wide-a.png", "x": -62, "z": 57, "height": 27, "order": -60 },
+    { "asset": "background-structures/tower-slab-narrow-a.png", "x": -31, "z": 57, "height": 25, "order": -60 },
+    { "asset": "background-structures/tower-slab-wide-b.png", "x": 1, "z": 57, "height": 29, "order": -60 },
+    { "asset": "background-structures/tower-slab-narrow-b.png", "x": 33, "z": 57, "height": 26, "order": -60 },
+    { "asset": "background-structures/tower-slab-wide-a.png", "x": 65, "z": 57, "height": 28, "order": -60 },
+    { "asset": "background-structures/tower-slab-narrow-a.png", "x": 96, "z": 57, "height": 25, "order": -60 },
+    { "asset": "background-structures/elevated-rail-span.png", "x": -78, "z": 78, "height": 8, "order": -52, "baseY": 13.5 },
+    { "asset": "background-structures/elevated-rail-span.png", "x": -26, "z": 78, "height": 8, "order": -52, "baseY": 13.5 },
+    { "asset": "background-structures/elevated-rail-span.png", "x": 26, "z": 78, "height": 8, "order": -52, "baseY": 13.5 },
+    { "asset": "background-structures/elevated-rail-span.png", "x": 78, "z": 78, "height": 8, "order": -52, "baseY": 13.5 },
+    { "asset": "background-structures/elevated-rail-pier.png", "x": -102, "z": 77.8, "height": 18, "order": -51 },
+    { "asset": "background-structures/elevated-rail-pier.png", "x": -52, "z": 77.8, "height": 18, "order": -51 },
+    { "asset": "background-structures/elevated-rail-pier.png", "x": 0, "z": 77.8, "height": 18, "order": -51 },
+    { "asset": "background-structures/elevated-rail-pier.png", "x": 52, "z": 77.8, "height": 18, "order": -51 },
+    { "asset": "background-structures/elevated-rail-pier.png", "x": 102, "z": 77.8, "height": 18, "order": -51 },
+    { "asset": "background-structures/service-alley-wall.png", "x": -32, "z": 33, "height": 15, "order": -40 },
+    { "asset": "background-structures/service-alley-gate.png", "x": 52, "z": 33, "height": 13, "order": -39 },
+    { "asset": "background-structures/rear-fire-stair-tower.png", "x": 57, "z": 37, "height": 22, "order": -43 },
+    { "asset": "background-structures/rooftop-utility-room.png", "x": -36, "z": 54, "height": 8, "order": -55, "baseY": 18.5 }
+  ],
+  "buildings": [
+    {
+      "id": "loading-bay", "shell": "building-shells/service-block-shell.png",
+      "x": -99, "width": 18, "height": 8, "light": "#4ac7d9", "energy": 1.2,
+      "storefront": { "asset": "storefronts/loading-bay-storefront.png", "width": 16.6, "height": 3.4, "xOffset": 0, "baseY": 0.14 },
+      "windows": { "asset": "window-units/industrial-window-wired.png", "columns": 3, "rows": 1, "height": 1.45, "xGap": 4.3, "yGap": 2.1, "centerX": 0, "baseY": 4.65 },
+      "sign": { "asset": "signs/neon-arrow-red.png", "width": 3.8, "height": 1.15, "xOffset": -4.5, "baseY": 3.55 },
+      "awning": { "asset": "awnings/metal-canopy-shallow.png", "width": 6.0, "height": 0.85, "xOffset": 4.4, "baseY": 3.2 }
+    },
+    {
+      "id": "laundromat", "shell": "building-shells/tile-shell-wide.png",
+      "x": -83, "width": 14, "height": 8, "light": "#61b7ff", "energy": 1.7,
+      "storefront": { "asset": "storefronts/laundromat-storefront.png", "width": 13.0, "height": 3.45, "xOffset": 0, "baseY": 0.14 },
+      "windows": { "asset": "window-units/sash-window-warm.png", "columns": 3, "rows": 1, "height": 1.45, "xGap": 3.5, "yGap": 2.2, "centerX": 0, "baseY": 4.7 },
+      "sign": { "asset": "signs/neon-washer-blue.png", "width": 3.6, "height": 1.1, "xOffset": -3.7, "baseY": 3.55 },
+      "awning": { "asset": "awnings/translucent-canopy-cyan.png", "width": 5.6, "height": 0.9, "xOffset": 3.3, "baseY": 3.15 }
+    },
+    {
+      "id": "pawn-camera", "shell": "building-shells/brick-shell-narrow.png",
+      "x": -69, "width": 14, "height": 9, "light": "#ea4cff", "energy": 2.0,
+      "storefront": { "asset": "storefronts/pawn-camera-storefront.png", "width": 13.0, "height": 3.55, "xOffset": 0, "baseY": 0.14 },
+      "windows": { "asset": "window-units/metal-window-violet.png", "columns": 3, "rows": 2, "height": 1.4, "xGap": 3.5, "yGap": 2.05, "centerX": 0, "baseY": 4.55 },
+      "sign": { "asset": "signs/neon-camera-violet.png", "width": 3.8, "height": 1.2, "xOffset": 3.8, "baseY": 3.55 },
+      "awning": { "asset": "awnings/canvas-awning-dark.png", "width": 5.5, "height": 0.9, "xOffset": -3.2, "baseY": 3.15 }
+    },
+    {
+      "id": "jazz-basement", "shell": "building-shells/concrete-shell-narrow.png",
+      "x": -56, "width": 12, "height": 11, "light": "#a94dff", "energy": 1.9,
+      "storefront": { "asset": "storefronts/jazz-stair-storefront.png", "width": 11.0, "height": 3.5, "xOffset": 0, "baseY": 0.14 },
+      "windows": { "asset": "window-units/sash-window-dark.png", "columns": 3, "rows": 3, "height": 1.35, "xGap": 3.0, "yGap": 2.05, "centerX": 0, "baseY": 4.45 },
+      "sign": { "asset": "signs/neon-note-amber.png", "width": 3.2, "height": 1.15, "xOffset": -3.1, "baseY": 3.55 },
+      "awning": null
+    },
+    {
+      "id": "noodle-bar", "shell": "building-shells/tile-shell-wide.png",
+      "x": -43, "width": 14, "height": 9, "light": "#ff5a32", "energy": 2.1,
+      "storefront": { "asset": "storefronts/noodle-bar-storefront.png", "width": 13.0, "height": 3.55, "xOffset": 0, "baseY": 0.14 },
+      "windows": { "asset": "window-units/sash-window-warm.png", "columns": 3, "rows": 2, "height": 1.4, "xGap": 3.45, "yGap": 2.05, "centerX": 0, "baseY": 4.55 },
+      "sign": { "asset": "signs/neon-bowl-red.png", "width": 4.0, "height": 1.25, "xOffset": -3.6, "baseY": 3.55 },
+      "awning": { "asset": "awnings/canvas-awning-striped.png", "width": 5.7, "height": 0.95, "xOffset": 3.1, "baseY": 3.12 }
+    },
+    {
+      "id": "arcade", "shell": "building-shells/concrete-shell-wide.png",
+      "x": -19, "width": 18, "height": 14, "light": "#19d9ff", "energy": 2.4,
+      "storefront": { "asset": "storefronts/arcade-storefront.png", "width": 16.8, "height": 4.0, "xOffset": 0, "baseY": 0.14 },
+      "windows": { "asset": "window-units/metal-window-cyan.png", "columns": 4, "rows": 4, "height": 1.45, "xGap": 3.65, "yGap": 2.2, "centerX": 0, "baseY": 5.05 },
+      "sign": { "asset": "signs/neon-spiral-cyan.png", "width": 4.6, "height": 1.45, "xOffset": 4.8, "baseY": 4.05 },
+      "awning": { "asset": "awnings/metal-canopy-shallow.png", "width": 6.0, "height": 0.9, "xOffset": -4.5, "baseY": 3.65 }
+    },
+    {
+      "id": "coffee-counter", "shell": "building-shells/brick-shell-narrow.png",
+      "x": -5, "width": 10, "height": 7, "light": "#ff8c45", "energy": 1.6,
+      "storefront": { "asset": "storefronts/coffee-counter-storefront.png", "width": 9.1, "height": 3.2, "xOffset": 0, "baseY": 0.14 },
+      "windows": { "asset": "window-units/sash-window-warm.png", "columns": 2, "rows": 1, "height": 1.35, "xGap": 3.6, "yGap": 2.0, "centerX": 0, "baseY": 4.4 },
+      "sign": { "asset": "signs/neon-coffee-cyan.png", "width": 3.0, "height": 1.05, "xOffset": 2.7, "baseY": 3.35 },
+      "awning": { "asset": "awnings/canvas-awning-striped.png", "width": 4.4, "height": 0.85, "xOffset": -2.2, "baseY": 3.0 }
+    },
+    {
+      "id": "electronics-market", "shell": "building-shells/concrete-shell-wide.png",
+      "x": 9, "width": 18, "height": 10, "light": "#21f0c5", "energy": 2.2,
+      "storefront": { "asset": "storefronts/electronics-storefront.png", "width": 16.8, "height": 3.7, "xOffset": 0, "baseY": 0.14 },
+      "windows": { "asset": "window-units/metal-window-cyan.png", "columns": 4, "rows": 2, "height": 1.45, "xGap": 3.7, "yGap": 2.15, "centerX": 0, "baseY": 4.8 },
+      "sign": { "asset": "signs/neon-eye-violet.png", "width": 4.2, "height": 1.25, "xOffset": -4.7, "baseY": 3.8 },
+      "awning": { "asset": "awnings/translucent-canopy-cyan.png", "width": 6.0, "height": 0.9, "xOffset": 4.6, "baseY": 3.35 }
+    },
+    {
+      "id": "pharmacy", "shell": "building-shells/concrete-shell-narrow.png",
+      "x": 24, "width": 12, "height": 8, "light": "#52ff83", "energy": 2.0,
+      "storefront": { "asset": "storefronts/pharmacy-storefront.png", "width": 11.0, "height": 3.45, "xOffset": 0, "baseY": 0.14 },
+      "windows": { "asset": "window-units/sash-window-dark.png", "columns": 3, "rows": 1, "height": 1.4, "xGap": 3.0, "yGap": 2.1, "centerX": 0, "baseY": 4.65 },
+      "sign": { "asset": "signs/neon-cross-green.png", "width": 2.1, "height": 1.6, "xOffset": 3.8, "baseY": 3.6 },
+      "awning": { "asset": "awnings/canvas-awning-dark.png", "width": 5.2, "height": 0.86, "xOffset": -2.5, "baseY": 3.15 }
+    },
+    {
+      "id": "cinema", "shell": "building-shells/concrete-shell-wide.png",
+      "x": 39, "width": 18, "height": 15, "light": "#ff3d78", "energy": 2.5,
+      "storefront": { "asset": "storefronts/cinema-ticket-storefront.png", "width": 16.8, "height": 4.0, "xOffset": 0, "baseY": 0.14 },
+      "windows": { "asset": "window-units/metal-window-violet.png", "columns": 4, "rows": 4, "height": 1.45, "xGap": 3.65, "yGap": 2.25, "centerX": 0, "baseY": 5.05 },
+      "sign": { "asset": "signs/neon-film-rose.png", "width": 4.4, "height": 1.4, "xOffset": 4.7, "baseY": 4.15 },
+      "awning": { "asset": "awnings/metal-canopy-shallow.png", "width": 7.0, "height": 0.95, "xOffset": -3.8, "baseY": 3.65 }
+    },
+    {
+      "id": "capsule-hotel", "shell": "building-shells/hotel-tower-shell.png",
+      "x": 65, "width": 18, "height": 24, "light": "#4a8dff", "energy": 1.8,
+      "storefront": { "asset": "storefronts/capsule-checkin-storefront.png", "width": 16.4, "height": 3.8, "xOffset": 0, "baseY": 0.14 },
+      "windows": { "asset": "window-units/hotel-window-curtained.png", "columns": 4, "rows": 8, "height": 1.35, "xGap": 3.7, "yGap": 2.25, "centerX": 0, "baseY": 4.8 },
+      "sign": { "asset": "signs/neon-capsule-blue.png", "width": 4.2, "height": 1.3, "xOffset": -4.7, "baseY": 3.9 },
+      "awning": { "asset": "awnings/translucent-canopy-cyan.png", "width": 6.3, "height": 0.9, "xOffset": 4.4, "baseY": 3.4 }
+    },
+    {
+      "id": "department-store", "shell": "building-shells/concrete-shell-wide.png",
+      "x": 86, "width": 24, "height": 18, "light": "#ffca69", "energy": 1.9,
+      "storefront": { "asset": "storefronts/department-display-storefront.png", "width": 22.6, "height": 4.0, "xOffset": 0, "baseY": 0.14 },
+      "windows": { "asset": "window-units/sash-window-warm.png", "columns": 5, "rows": 5, "height": 1.45, "xGap": 4.25, "yGap": 2.3, "centerX": 0, "baseY": 5.1 },
+      "sign": { "asset": "signs/neon-key-amber.png", "width": 4.2, "height": 1.35, "xOffset": 6.8, "baseY": 4.0 },
+      "awning": { "asset": "awnings/canvas-awning-striped.png", "width": 8.0, "height": 1.0, "xOffset": -6.2, "baseY": 3.55 }
+    }
+  ],
+  "props": [
+    { "asset": "props/traffic-light.png", "x": -18, "z": 6.6, "height": 5.6 },
+    { "asset": "props/streetlamp-double.png", "x": 36, "z": 6.8, "height": 6.5 },
+    { "asset": "props/vending-machine-cyan.png", "x": -45, "z": 13.6, "height": 2.25 },
+    { "asset": "props/vending-machine-red.png", "x": -42.8, "z": 13.58, "height": 2.25 },
+    { "asset": "props/phone-booth.png", "x": 12, "z": 13.2, "height": 2.7 },
+    { "asset": "props/bus-shelter.png", "x": 63, "z": 13.2, "height": 3.2 },
+    { "asset": "props/news-kiosk.png", "x": -10, "z": 13.4, "height": 3.0 },
+    { "asset": "props/bicycle-rack.png", "x": -25, "z": 12.8, "height": 1.35 },
+    { "asset": "props/trash-bin.png", "x": 45, "z": 13.6, "height": 1.45 },
+    { "asset": "props/wooden-crate.png", "x": 47, "z": 13.55, "height": 1.0 },
+    { "asset": "props/restaurant-menu-stand.png", "x": -39, "z": 13.2, "height": 1.45 },
+    { "asset": "props/roadwork-barrier.png", "x": 82, "z": 6.7, "height": 1.35 },
+    { "asset": "props/fire-escape.png", "x": 53, "z": 14.8, "height": 10.5 },
+    { "asset": "props/utility-pole.png", "x": -52, "z": 14.2, "height": 11.0 },
+    { "asset": "props/overhead-cable-span.png", "x": -35, "z": 14.25, "height": 2.1, "baseY": 8.7 },
+    { "asset": "props/alley-steam-vent.png", "x": 52, "z": 13.8, "height": 3.5 },
+    { "asset": "props/planter-box.png", "x": 18, "z": 7.0, "height": 1.2 },
+    { "asset": "props/sidewalk-bench.png", "x": 21, "z": 7.05, "height": 1.25 },
+    { "asset": "props/parking-meter.png", "x": 31, "z": 6.75, "height": 1.45 }
+  ],
+  "staticPeople": [
+    { "asset": "people/person-stall-vendor.png", "x": -43, "z": 12.7, "height": 1.95 },
+    { "asset": "people/person-bus-stop-commuter.png", "x": 63, "z": 11.9, "height": 2.05 },
+    { "asset": "people/person-doorway-smoker.png", "x": -56, "z": 13.6, "height": 2.1 },
+    { "asset": "people/person-alley-worker.png", "x": -32, "z": 13.4, "height": 2.0 },
+    { "asset": "people/person-night-cook.png", "x": -5, "z": 13.0, "height": 1.98 },
+    { "asset": "people/person-newspaper-reader.png", "x": 18, "z": 12.1, "height": 2.0 }
+  ],
+  "lightPulses": [0.91, 1.0, 0.96, 1.04, 0.88, 1.0, 1.08, 0.94, 1.0, 0.98, 1.06, 0.90]
+}
