@@ -1,0 +1,336 @@
+#version 460
+#extension GL_EXT_ray_query : require
+
+// Ghibli background painting (poster / gouache), not character ink-cel.
+// lighting-v1 ABI. Four-value foliage, painted sky/sea, no black outlines.
+// Source hdrColor is a classifier only — albedo is replaced.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(set = 0, binding = 0) uniform accelerationStructureEXT topLevelScene;
+layout(rgba16f, set = 0, binding = 1) uniform image2D hdrColor;
+layout(set = 0, binding = 2) uniform sampler2D sceneDepth;
+
+layout(push_constant) uniform FrameConstants {
+    mat4 inverseViewProjection;
+    vec4 cameraPositionMaximumDistance;
+    vec4 directionalLightDirectionAngularRadius;
+    vec4 lightingParameters;
+    uvec4 extentFlags;
+} frame;
+
+const uint kDepthInverted = 1u;
+
+// Coastal Ghibli palettes. Shadows stay green or gray-brown — never purple.
+const vec3 kZenith = vec3(0.10, 0.40, 0.90);
+const vec3 kMidSky = vec3(0.34, 0.68, 0.96);
+const vec3 kHorizon = vec3(0.78, 0.90, 0.98);
+const vec3 kCloudLight = vec3(0.97, 0.98, 1.00);
+const vec3 kCloudShade = vec3(0.70, 0.82, 0.92);
+const vec3 kSeaDeep = vec3(0.14, 0.44, 0.72);
+const vec3 kSeaMid = vec3(0.28, 0.62, 0.78);
+const vec3 kSeaHorizon = vec3(0.55, 0.80, 0.90);
+const vec3 kGrassSun = vec3(0.62, 0.88, 0.28);
+const vec3 kGrassMid = vec3(0.40, 0.72, 0.22);
+const vec3 kGrassShadow = vec3(0.20, 0.50, 0.20);
+const vec3 kLeafSun = vec3(0xC6, 0xE6, 0x4C) / 255.0;
+const vec3 kLeafMid = vec3(0x6A, 0xAD, 0x42) / 255.0;
+const vec3 kLeafShadow = vec3(0x2F, 0x6E, 0x52) / 255.0;
+const vec3 kLeafAO = vec3(0x1E, 0x43, 0x34) / 255.0;
+const vec3 kBarkLit = vec3(0.64, 0.58, 0.50);
+const vec3 kBarkMid = vec3(0.50, 0.46, 0.42);
+const vec3 kBarkShade = vec3(0.36, 0.34, 0.32);
+const vec3 kMoss = vec3(0.30, 0.50, 0.24);
+
+float saturate(float value) {
+    return clamp(value, 0.0, 1.0);
+}
+
+float readDepth(ivec2 pixel) {
+    pixel = clamp(pixel, ivec2(0), ivec2(frame.extentFlags.xy) - ivec2(1));
+    return texelFetch(sceneDepth, pixel, 0).r;
+}
+
+bool isBackground(float depth) {
+    return (frame.extentFlags.z & kDepthInverted) != 0u
+        ? depth <= 1e-6
+        : depth >= 0.999999;
+}
+
+vec3 reconstructWorld(ivec2 pixel, float depth) {
+    pixel = clamp(pixel, ivec2(0), ivec2(frame.extentFlags.xy) - ivec2(1));
+    vec2 uv = (vec2(pixel) + vec2(0.5)) / vec2(frame.extentFlags.xy);
+    vec4 clip = vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0);
+    vec4 world = frame.inverseViewProjection * clip;
+    return world.xyz / max(abs(world.w), 1e-8);
+}
+
+vec3 screenNormal(ivec2 pixel, float depth, vec3 viewDir) {
+    vec3 center = reconstructWorld(pixel, depth);
+    vec3 right = reconstructWorld(pixel + ivec2(1, 0), readDepth(pixel + ivec2(1, 0)));
+    vec3 up = reconstructWorld(pixel + ivec2(0, 1), readDepth(pixel + ivec2(0, 1)));
+    vec3 normal = cross(right - center, up - center);
+    float lengthSq = dot(normal, normal);
+    if (lengthSq < 1e-12) return vec3(0.0, 1.0, 0.0);
+    normal = normalize(normal);
+    if (dot(normal, viewDir) < 0.0) normal = -normal;
+    return normal;
+}
+
+float hash21(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+vec2 hash22(vec2 p) {
+    float n = hash21(p);
+    return vec2(n, hash21(p + n + 19.19));
+}
+
+float noise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash21(i);
+    float b = hash21(i + vec2(1.0, 0.0));
+    float c = hash21(i + vec2(0.0, 1.0));
+    float d = hash21(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+float fbm(vec2 p) {
+    float v = 0.0;
+    float a = 0.5;
+    for (int i = 0; i < 4; ++i) {
+        v += a * noise(p);
+        p = p * 2.07 + vec2(1.7, 9.2);
+        a *= 0.5;
+    }
+    return v;
+}
+
+vec2 voronoi(vec2 p) {
+    vec2 n = floor(p);
+    vec2 f = fract(p);
+    float best = 8.0;
+    float second = 8.0;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            vec2 g = vec2(x, y);
+            vec2 o = hash22(n + g);
+            vec2 r = g + o - f;
+            float d = dot(r, r);
+            if (d < best) {
+                second = best;
+                best = d;
+            } else if (d < second) {
+                second = d;
+            }
+        }
+    }
+    return vec2(best, second);
+}
+
+float paperGrain(vec2 uv) {
+    return mix(0.97, 1.03, noise(uv * vec2(frame.extentFlags.xy) * 0.28));
+}
+
+vec3 poster4(float tone, vec3 ao, vec3 shadow, vec3 mid, vec3 sun) {
+    const float w = 0.04;
+    float t = saturate(tone);
+    vec3 color = mix(ao, shadow, smoothstep(0.18 - 0.5 * w, 0.18 + 0.5 * w, t));
+    color = mix(color, mid, smoothstep(0.46 - 0.5 * w, 0.46 + 0.5 * w, t));
+    color = mix(color, sun, smoothstep(0.68 - 0.5 * w, 0.68 + 0.5 * w, t));
+    return color;
+}
+
+vec3 posterLeaf(float tone) {
+    return poster4(tone, kLeafAO, kLeafShadow, kLeafMid, kLeafSun);
+}
+
+vec3 cameraSmoothNormal(ivec2 pixel, vec3 viewDir) {
+    float centerDepth = readDepth(pixel);
+    vec3 sum = screenNormal(pixel, centerDepth, viewDir);
+    float weight = 1.0;
+    const ivec2 taps[4] = ivec2[](ivec2(3, 0), ivec2(-3, 0), ivec2(0, 3), ivec2(0, -3));
+    for (int i = 0; i < 4; ++i) {
+        ivec2 samplePixel = pixel + taps[i];
+        float sampleDepth = readDepth(samplePixel);
+        if (isBackground(sampleDepth)) continue;
+        if (abs(sampleDepth - centerDepth) > 0.012) continue;
+        vec3 sampleWorld = reconstructWorld(samplePixel, sampleDepth);
+        vec3 sampleView = normalize(frame.cameraPositionMaximumDistance.xyz - sampleWorld);
+        sum += screenNormal(samplePixel, sampleDepth, sampleView);
+        weight += 1.0;
+    }
+    vec3 normal = normalize(sum / weight);
+    if (dot(normal, viewDir) < 0.0) normal = -normal;
+    return normal;
+}
+
+bool occluded(vec3 origin, vec3 direction, float maximumDistance) {
+    rayQueryEXT query;
+    rayQueryInitializeEXT(
+        query,
+        topLevelScene,
+        gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT,
+        0xffu,
+        origin,
+        0.0,
+        direction,
+        maximumDistance
+    );
+    while (rayQueryProceedEXT(query)) {}
+    return rayQueryGetIntersectionTypeEXT(query, true) !=
+        gl_RayQueryCommittedIntersectionNoneEXT;
+}
+
+vec3 ghibliSky(vec2 uv) {
+    // Display quad flips v, so uv.y = 0 is the TOP of the window.
+    float alt = saturate(1.0 - uv.y);
+    vec3 sky = mix(kHorizon, kMidSky, smoothstep(0.0, 0.38, alt));
+    sky = mix(sky, kZenith, smoothstep(0.34, 0.88, alt));
+
+    vec2 cloudUv = uv * vec2(2.4, 3.6) + vec2(0.31, 0.08);
+    cloudUv += 0.22 * vec2(fbm(cloudUv), fbm(cloudUv + 4.2));
+    float density = fbm(cloudUv);
+    float horizonBand = smoothstep(0.08, 0.42, uv.y) * (1.0 - smoothstep(0.52, 0.68, uv.y));
+    float highWisp = smoothstep(0.62, 0.80, density) * smoothstep(0.72, 0.95, alt) * 0.35;
+    float cumulus = smoothstep(0.50, 0.74, density) * horizonBand;
+    float bottom = saturate(1.0 - alt * 1.4) * 0.55;
+    vec3 cloud = mix(kCloudLight, kCloudShade, bottom + (1.0 - density) * 0.25);
+    sky = mix(sky, cloud, saturate(cumulus + highWisp));
+    return sky;
+}
+
+vec3 ghibliSea(vec2 uv) {
+    float fromHorizon = saturate((uv.y - 0.58) / 0.42);
+    float bands = fbm(vec2(uv.x * 2.8, uv.y * 14.0 + 1.7));
+    vec3 sea = mix(kSeaHorizon, kSeaMid, smoothstep(0.05, 0.45, fromHorizon));
+    sea = mix(sea, kSeaDeep, smoothstep(0.45, 0.95, fromHorizon));
+    sea = mix(sea, kSeaHorizon, bands * 0.18 * (1.0 - fromHorizon));
+    float sparkle = smoothstep(0.78, 0.94, noise(vec2(uv.x * 18.0, uv.y * 40.0)));
+    sea = mix(sea, vec3(0.82, 0.93, 0.98), sparkle * 0.12 * (1.0 - fromHorizon));
+    return sea;
+}
+
+vec3 ghibliSkyAndSea(vec2 uv) {
+    vec3 sky = ghibliSky(uv);
+    vec3 sea = ghibliSea(uv);
+    float shore = smoothstep(0.56, 0.63, uv.y);
+    vec3 haze = mix(kHorizon, kSeaHorizon, 0.35);
+    vec3 painted = mix(sky, sea, shore);
+    float hazeAmt = 1.0 - abs(uv.y - 0.60) * 8.0;
+    painted = mix(painted, haze, saturate(hazeAmt) * 0.28);
+    return painted;
+}
+
+vec3 ghibliGrass(vec3 world, vec3 normal, vec3 lightDir, bool canopyShadow) {
+    float wrap = saturate(dot(normal, lightDir) * 0.45 + 0.55);
+    vec2 tuft = voronoi(world.xz * 2.4);
+    float dab = fbm(world.xz * 3.1);
+    float tone = saturate(wrap * 0.72 + dab * 0.18 - tuft.x * 0.22);
+    if (canopyShadow) tone *= 0.38;
+    vec3 grass = poster4(tone, kGrassShadow * 0.85, kGrassShadow, kGrassMid, kGrassSun);
+    grass = mix(grass, grass * vec3(1.06, 1.10, 0.88), dab * 0.18);
+
+    float flower = hash21(floor(world.xz * 6.5));
+    float inTuft = 1.0 - smoothstep(0.04, 0.16, tuft.x);
+    if (flower > 0.973 && inTuft > 0.2 && !canopyShadow) {
+        float kind = hash21(floor(world.xz * 6.5) + 8.1);
+        vec3 petal = kind < 0.40 ? vec3(0.95, 0.88, 0.35)
+            : kind < 0.75 ? vec3(0.92, 0.72, 0.82)
+            : vec3(0.96, 0.96, 0.92);
+        grass = mix(grass, petal, 0.85);
+    }
+    return grass;
+}
+
+vec3 ghibliLeaf(vec3 world, vec2 uv, vec3 normal, vec3 lightDir, vec3 viewDir, bool canopyShadow) {
+    float dist = length(frame.cameraPositionMaximumDistance.xyz - world);
+    float bunch = mix(2.6, 1.35, saturate((dist - 8.0) / 12.0));
+    vec2 field = world.xz * bunch + vec2(world.y * 1.15, world.y * 0.55);
+    field += 0.18 * vec2(fbm(field * 0.7), fbm(field * 0.7 + 3.1));
+    vec2 cell = voronoi(field);
+    float clump = saturate(1.0 - cell.x * 1.8);
+    float edge = saturate(cell.y - cell.x);
+
+    float wrap = saturate(dot(normal, lightDir) * 0.38 + 0.62);
+    float underside = pow(saturate(1.0 - abs(dot(normal, viewDir))), 1.35);
+    float tone = mix(0.22, 0.88, wrap);
+    tone = mix(tone, 0.10, underside * 0.55);
+    tone = mix(tone, tone * 0.72, 1.0 - clump);
+    if (canopyShadow) tone *= 0.42;
+    tone = mix(tone, 0.14, smoothstep(0.12, 0.02, edge) * 0.35);
+    float wash = fbm(uv * 9.0 + world.xz);
+    tone = saturate(tone + (wash - 0.5) * 0.04);
+    return posterLeaf(tone);
+}
+
+float classifyLeafFromPhoto(vec3 photo) {
+    vec3 classified = saturate(photo);
+    float channelMax = max(classified.r, max(classified.g, classified.b));
+    return float(classified.g >= channelMax && channelMax > 0.04);
+}
+
+vec3 ghibliBark(vec3 world, vec3 normal, vec3 lightDir) {
+    float wrap = saturate(dot(normal, lightDir) * 0.48 + 0.52);
+    float grain = fbm(vec2(world.x + world.z, world.y) * vec2(1.8, 4.6));
+    float tone = saturate(wrap * 0.85 + grain * 0.12);
+    vec3 color = poster4(tone, kBarkShade * 0.85, kBarkShade, kBarkMid, kBarkLit);
+    color *= mix(0.92, 1.08, grain);
+
+    float shady = 1.0 - wrap;
+    float mossDab = hash21(floor(world.xy * 7.0 + world.z * 3.0));
+    if (shady > 0.45 && mossDab > 0.82) {
+        color = mix(color, kMoss, 0.45 * shady);
+    }
+    return color;
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(pixel, ivec2(frame.extentFlags.xy)))) return;
+
+    vec2 uv = (vec2(pixel) + vec2(0.5)) / vec2(frame.extentFlags.xy);
+    float depth = readDepth(pixel);
+    vec4 source = imageLoad(hdrColor, pixel);
+
+    if (isBackground(depth)) {
+        imageStore(hdrColor, pixel, vec4(ghibliSkyAndSea(uv), 1.0));
+        return;
+    }
+
+    vec3 world = reconstructWorld(pixel, depth);
+    vec3 camera = frame.cameraPositionMaximumDistance.xyz;
+    vec3 viewDir = normalize(camera - world);
+    vec3 normal = cameraSmoothNormal(pixel, viewDir);
+    vec3 lightTravel = frame.directionalLightDirectionAngularRadius.xyz;
+    vec3 lightDir = normalize(dot(lightTravel, vec3(0.0, 1.0, 0.0)) >= 0.0 ? lightTravel : -lightTravel);
+
+    float bias = max(frame.lightingParameters.w, 0.05);
+    bool canopyShadow = occluded(world + normal * bias, lightDir, 36.0);
+
+    vec3 painted;
+    float radial = length(world.xz);
+    bool groundish = world.y < 0.55 && abs(normal.y) > 0.42;
+
+    if (groundish && radial > 7.6) {
+        source = vec4(0.0);
+        painted = ghibliSea(uv);
+        float haze = saturate((radial - 14.0) / 28.0);
+        painted = mix(painted, kSeaHorizon, haze * 0.35);
+    } else if (groundish) {
+        source = vec4(0.0);
+        painted = ghibliGrass(world, normal, lightDir, canopyShadow);
+    } else {
+        float leaf = classifyLeafFromPhoto(source.rgb);
+        source = vec4(0.0);
+        painted = leaf > 0.5
+            ? ghibliLeaf(world, uv, normal, lightDir, viewDir, canopyShadow)
+            : ghibliBark(world, normal, lightDir);
+    }
+
+    painted *= paperGrain(uv);
+    imageStore(hdrColor, pixel, vec4(clamp(painted, vec3(0.0), vec3(4.0)), 1.0));
+}

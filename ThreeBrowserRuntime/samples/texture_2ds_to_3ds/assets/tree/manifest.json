@@ -1,0 +1,16 @@
+{
+  "id": "english-oak",
+  "kind": "orbit-stills",
+  "stepDegrees": 45,
+  "background": "hot-magenta",
+  "views": [
+    { "yaw": 0, "file": "yaw-000.png", "label": "front" },
+    { "yaw": 45, "file": "yaw-045.png", "label": "front-right" },
+    { "yaw": 90, "file": "yaw-090.png", "label": "right" },
+    { "yaw": 135, "file": "yaw-135.png", "label": "back-right" },
+    { "yaw": 180, "file": "yaw-180.png", "label": "back" },
+    { "yaw": 225, "file": "yaw-225.png", "label": "back-left" },
+    { "yaw": 270, "file": "yaw-270.png", "label": "left" },
+    { "yaw": 315, "file": "yaw-315.png", "label": "front-left" }
+  ]
+}
