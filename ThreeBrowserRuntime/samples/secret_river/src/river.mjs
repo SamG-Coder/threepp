@@ -24,6 +24,12 @@ import {
   vec3,
 } from "three/tsl";
 import { riverEdgeZ, WORLD } from "./path.mjs";
+import {
+  CREEK_BREAK_BIAS,
+  CREEK_BREAK_SCALE,
+  CREEK_FRESNEL_BIAS,
+  CREEK_FRESNEL_SCALE,
+} from "./creek-mix.mjs";
 
 const riverTime = uniform(0);
 
@@ -127,7 +133,9 @@ export function createRiver() {
     .sub(abs(currentField).mul(0.22))
     .sub(shoreFoam.mul(0.75))
     .saturate();
-  const reflectionWeight = fresnel.mul(0.52).add(0.26).mul(broken.mul(0.35).add(0.65)).saturate();
+  const reflectionWeight = fresnel.mul(CREEK_FRESNEL_SCALE).add(CREEK_FRESNEL_BIAS)
+    .mul(broken.mul(CREEK_BREAK_SCALE).add(CREEK_BREAK_BIAS))
+    .saturate();
 
   const deep = color(0x1a2818);
   const tannin = color(0x3a4a32);
