@@ -33,6 +33,20 @@ export function reedEdgeShare(records, maxDelta = 3.5) {
   };
 }
 
+/** Share of reeds whose z sits in [edge - intoWater, edge + inland]. */
+export function wetReedShare(records, intoWater = 1.2, inland = 0.9) {
+  const reeds = records.filter(record => record.kind === "reeds");
+  const wet = reeds.filter(record => {
+    const delta = record.z - riverEdgeZ(record.x);
+    return delta >= -intoWater && delta <= inland;
+  });
+  return {
+    reeds: reeds.length,
+    near: wet.length,
+    share: reeds.length ? wet.length / reeds.length : 0,
+  };
+}
+
 export function layoutFlora(seed = DEFAULT_FLORA_SEED) {
   const random = mulberry32(seed);
   const records = [];
@@ -58,12 +72,15 @@ export function layoutFlora(seed = DEFAULT_FLORA_SEED) {
     if (random() < 0.2) continue;
     const cx = WORLD.minX + 6 + random() * (WORLD.maxX - WORLD.minX - 12);
     const n = 6 + Math.floor(random() * 10);
-    const wetBias = (random() - 0.28) * 1.6;
+    // Reed beds sit in or just inland of the wet edge, including in-water stems.
+    const wetBias = (random() - 0.62) * 1.4;
     for (let index = 0; index < n; index++) {
       const x = cx + (random() - 0.5) * 5.6;
       const edge = riverEdgeZ(x);
-      const z = edge + wetBias + (random() - 0.5) * 2.8;
-      if (z < edge - 1.55) continue;
+      const z = Math.min(
+        edge + 0.9,
+        Math.max(edge - 1.2, edge + wetBias + (random() - 0.5) * 0.85),
+      );
       const inWater = z < edge;
       push(
         "reeds",

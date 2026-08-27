@@ -18,6 +18,15 @@ export function magentaKeyAlpha(r, g, b) {
   ) {
     return 0;
   }
+  if (
+    red > 90
+    && blue > 70
+    && green < 145
+    && magenta > 40
+    && Math.abs(red - blue) < 80
+  ) {
+    return 0;
+  }
   return 255;
 }
 

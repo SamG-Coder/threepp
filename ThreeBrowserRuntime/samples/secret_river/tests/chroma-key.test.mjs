@@ -13,6 +13,8 @@ test("hot-pink studio pixels key out and foliage stays opaque", () => {
   assert.equal(magentaKeyAlpha(240, 90, 170), 0);
   assert.equal(magentaKeyAlpha(60, 110, 40), 255);
   assert.equal(magentaKeyAlpha(210, 200, 180), 255);
+  assert.equal(magentaKeyAlpha(160, 80, 150), 0);
+  assert.equal(magentaKeyAlpha(180, 110, 90), 255);
 });
 
 test("keyImageData clears magenta and the grok watermark corner", () => {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { layoutFlora, reedEdgeShare } from "../src/flora-layout.mjs";
+import { layoutFlora, reedEdgeShare, wetReedShare } from "../src/flora-layout.mjs";
 import {
   CANOPY_BIN_WIDTH,
   DEFAULT_LAYOUT_SEED,
@@ -24,8 +24,12 @@ test("inland canopy fills most x-bins without a rectangular empty run", () => {
 
 test("most reeds sit on the wet river edge", () => {
   for (const seed of [0x51c7e1, 0x9e3779b9]) {
-    const share = reedEdgeShare(layoutFlora(seed), 3.5);
-    assert.ok(share.reeds >= 24, `seed ${seed} reeds ${share.reeds}`);
-    assert.ok(share.share >= 0.45, `seed ${seed} edge share ${share.share}`);
+    const records = layoutFlora(seed);
+    const near = reedEdgeShare(records, 1.2);
+    const wet = wetReedShare(records);
+    assert.ok(near.reeds >= 24, `seed ${seed} reeds ${near.reeds}`);
+    assert.ok(near.share > 0.5, `seed ${seed} within 1.2m ${near.share}`);
+    assert.ok(wet.share > 0.5, `seed ${seed} wet band ${wet.share}`);
   }
 });
+
