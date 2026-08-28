@@ -3218,6 +3218,15 @@ WGPULoadOp loadOpFrom(uint32_t v) {
     return WGPULoadOp_Clear;
 }
 
+WGPUStoreOp storeOpFrom(uint32_t v) {
+    // The JS command protocol encodes store=1 and discard=2. Keep zero as
+    // Store for the legacy packet format, whose historical default was store.
+    if (v == 2 || v == static_cast<uint32_t>(WGPUStoreOp_Discard)) {
+        return WGPUStoreOp_Discard;
+    }
+    return WGPUStoreOp_Store;
+}
+
 WGPUPrimitiveTopology topologyFrom(uint32_t v) {
     if (v == 0) {
         return WGPUPrimitiveTopology_TriangleList;
@@ -4202,8 +4211,13 @@ void execOne(uint32_t op, Reader& r) {
                 if (input.resolve != 0xffffffffu) attachment.resolveTarget = viewFromHandle(input.resolve, input.resolve == 0);
                 attachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
                 attachment.loadOp = loadOpFrom(input.load);
-                attachment.storeOp = attachment.resolveTarget ? WGPUStoreOp_Discard :
-                    (input.store ? WGPUStoreOp_Store : WGPUStoreOp_Discard);
+                // A later pass may load the multisampled attachment after its
+                // resolved colour has already been presented (for example,
+                // Three.js transmission/node-material passes). Honour the
+                // page's requested storeOp even when a resolve target exists;
+                // forcing Discard here turns that later load into transparent
+                // black and erases the opaque scene drawn by the first pass.
+                attachment.storeOp = storeOpFrom(input.store);
                 attachment.clearValue = {input.r, input.g, input.b, input.a};
             }
             WGPURenderPassDepthStencilAttachment da{};
@@ -4211,10 +4225,10 @@ void execOne(uint32_t op, Reader& r) {
             if (dv) {
                 da.view = dv;
                 da.depthLoadOp = loadOpFrom(depthLoad);
-                da.depthStoreOp = depthStore ? WGPUStoreOp_Store : WGPUStoreOp_Discard;
+                da.depthStoreOp = storeOpFrom(depthStore);
                 da.depthClearValue = depthClear;
                 da.stencilLoadOp = stencilLoad ? loadOpFrom(stencilLoad) : WGPULoadOp_Undefined;
-                da.stencilStoreOp = stencilStore ? WGPUStoreOp_Store : WGPUStoreOp_Undefined;
+                da.stencilStoreOp = stencilStore ? storeOpFrom(stencilStore) : WGPUStoreOp_Undefined;
                 da.stencilClearValue = stencilClear;
             }
             WGPURenderPassDescriptor rd{};
