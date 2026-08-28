@@ -20,6 +20,9 @@ export function createFaceOnCamera(camera, walker) {
   camera.updateProjectionMatrix();
 
   return {
+    snap() {
+      ready = false;
+    },
     resize(width, height) {
       camera.aspect = Math.max(0.5, width / Math.max(1, height));
       camera.updateProjectionMatrix();

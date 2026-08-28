@@ -1,6 +1,10 @@
 import * as THREE from "three/webgpu";
 import { keyedCanvasFromImage } from "./chroma-key.mjs";
-import { layoutTrees, TREE_SPECIES } from "./tree-layout.mjs";
+import {
+  DEFAULT_LAYOUT_SEED,
+  layoutTrees,
+  TREE_SPECIES,
+} from "./tree-layout.mjs";
 import { applyFoliageWind } from "./wind.mjs";
 
 export { layoutTrees, TREE_SPECIES };
@@ -47,8 +51,25 @@ async function loadSpeciesTexture(species) {
   return { texture, aspect: keyed.aspect, width: keyed.width, height: keyed.height };
 }
 
-export async function createTreeFlats(seed = 0x51c7e1) {
-  const records = layoutTrees(seed);
+/**
+ * Resolve card placements without changing the authored demo default.
+ *
+ * Game locations can inject map-conditioned records as the second argument,
+ * or use the options form `{ seed, records }`. The original zero/one-argument
+ * calls still run `layoutTrees(seed)` exactly as before.
+ */
+export function treeRecordsFor(seed = DEFAULT_LAYOUT_SEED, recordsOverride = null) {
+  if (Array.isArray(seed)) return seed;
+  if (seed && typeof seed === "object") {
+    if (Array.isArray(seed.records)) return seed.records;
+    return layoutTrees(seed.seed ?? DEFAULT_LAYOUT_SEED);
+  }
+  if (Array.isArray(recordsOverride)) return recordsOverride;
+  return layoutTrees(seed);
+}
+
+export async function createTreeFlats(seed = DEFAULT_LAYOUT_SEED, recordsOverride = null) {
+  const records = treeRecordsFor(seed, recordsOverride);
   const assets = new Map();
   for (const species of TREE_SPECIES) {
     try {

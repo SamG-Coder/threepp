@@ -1,26 +1,13 @@
 import * as THREE from "three/webgpu";
 import WebGPU from "three/addons/capabilities/WebGPU.js";
-import { createAtmosphere } from "./atmosphere.mjs";
-import { createFaceOnCamera } from "./camera.mjs";
-import { createFlora } from "./flora.mjs";
-import { createHills } from "./hills.mjs";
-import { createInput } from "./input.mjs";
-import {
-  NativeRtxRenderer,
-  prepareRtxGuideMaterials,
-} from "./native-rtx-renderer.mjs";
-import { createRiver } from "./river.mjs";
-import { collectStaticRiverScene } from "./rtx-scene.mjs";
-import { createTerrain } from "./terrain.mjs";
-import { createTreeFlats } from "./trees.mjs";
-import { createWalker } from "./walker.mjs";
+import { createModeRouter } from "./app/mode-router.mjs";
+import { createMainMenu } from "./modes/main-menu.mjs";
 
 document.title = "Secret River — ThreeBrowser Runtime";
 
 const MAX_INTERNAL_PIXELS = 3_200_000;
 const MAX_INTERNAL_RATIO = 1.6;
 const TARGET_FRAME_INTERVAL_MS = 1000 / 60;
-const cutoutTintColor = new THREE.Color();
 
 function chooseInternalRatio(width, height) {
   const budgetRatio = Math.sqrt(MAX_INTERNAL_PIXELS / Math.max(1, width * height));
@@ -40,14 +27,6 @@ function reportBridge(rtx) {
     ` · rayLighting=${typeof rtx.evaluateRayLighting === "function"}` +
     ` · rayReflections=${typeof rtx.evaluateRayReflections === "function"}`,
   );
-}
-
-function applyCutoutTint(preset, trees, flora, walker) {
-  const tint = preset?.treeTint ?? [1, 1, 1];
-  cutoutTintColor.setRGB(tint[0], tint[1], tint[2]);
-  trees.setTint?.(cutoutTintColor);
-  flora.setTint?.(cutoutTintColor);
-  walker.setTint?.(cutoutTintColor);
 }
 
 async function main() {
@@ -90,37 +69,6 @@ async function main() {
     console.error("[Secret River WebGPU validation]", event.error?.message || event.error || event);
   });
 
-  const scene = new THREE.Scene();
-  scene.name = "Hawkesbury riverbank";
-  scene.userData.renderer = renderer;
-  const camera = new THREE.PerspectiveCamera(52, innerWidth / Math.max(1, innerHeight), 0.15, 280);
-
-  const atmosphere = createAtmosphere(scene);
-  const terrain = await createTerrain();
-  scene.add(terrain.group);
-  const river = createRiver();
-  scene.add(river.mesh);
-  const hills = await createHills();
-  scene.add(hills.group);
-  const trees = await createTreeFlats();
-  scene.add(trees.group);
-  const flora = await createFlora();
-  scene.add(flora.group);
-  const walker = await createWalker();
-  scene.add(walker.mesh);
-  applyCutoutTint(atmosphere.getPreset(), trees, flora, walker);
-
-  const follow = createFaceOnCamera(camera, walker);
-  follow.update(1);
-  atmosphere.updateFocus(walker.position, 1);
-  const input = createInput();
-
-  prepareRtxGuideMaterials(scene);
-  // The planar reflector sees the actual alpha-cutout artwork. Native scene
-  // hits use simplified shadow volumes, so applying those reflections to the
-  // creek would replace faithful trees with opaque proxy blobs.
-  river.mesh.material.rtxReflectionMask = 0;
-
   const rtx = navigator.gpu?.threeBrowserRTX ?? null;
   reportBridge(rtx);
   if (rtx?.capabilities?.reflex) {
@@ -136,72 +84,80 @@ async function main() {
     }
   }
 
-  const nativeRenderer = new NativeRtxRenderer(renderer, camera, rtx);
-  let staticScene = null;
-  if (rtx && (typeof rtx.evaluateRayLighting === "function" ||
-      typeof rtx.evaluateRayReflections === "function")) {
-    try {
-      staticScene = collectStaticRiverScene(
-        [
-          ...terrain.rtxRoots,
-          ...(hills.rtxRoots ?? []),
-          ...trees.rtxRoots,
-          ...(flora.rtxRoots ?? []),
-        ],
-        atmosphere.campfire ? [atmosphere.campfire] : [],
+  function currentViewport() {
+    const width = Math.max(1, Number(innerWidth) || 1);
+    const height = Math.max(1, Number(innerHeight) || 1);
+    return Object.freeze({
+      width,
+      height,
+      internalWidth: Math.max(1, Math.round(width * internalRatio)),
+      internalHeight: Math.max(1, Math.round(height * internalRatio)),
+      displayPixelRatio,
+      internalRatio,
+    });
+  }
+
+  let previousTime = performance.now();
+  let nextFrameTime = previousTime;
+  function resetFrameClock() {
+    previousTime = performance.now();
+    nextFrameTime = previousTime;
+  }
+
+  let router = null;
+  async function requestMode(modeId) {
+    const started = await router.activate(modeId);
+    if (started) resetFrameClock();
+    return started;
+  }
+
+  function modeContext() {
+    return {
+      renderer,
+      rtx,
+      viewport: currentViewport(),
+      requestMode,
+    };
+  }
+
+  router = createModeRouter({
+    factories: {
+      menu: () => createMainMenu({ renderer, onSelect: requestMode }),
+      demo: async () => {
+        const { createDemoMode } = await import("./modes/demo-mode.mjs");
+        return createDemoMode(modeContext());
+      },
+      game: async () => {
+        const { createGameMode } = await import("./modes/game-mode.mjs");
+        if (typeof createGameMode !== "function") {
+          throw new TypeError("Secret River game-mode.mjs must export createGameMode(context).");
+        }
+        return createGameMode(modeContext());
+      },
+    },
+    onError(error, detail) {
+      console.error(
+        `[Secret River] ${detail.phase} ${detail.modeId} failed`,
+        error?.message || error,
       );
-    } catch (error) {
-      console.warn(`[Secret River RTX] Static-scene collection failed: ${error?.message || error}`);
-    } finally {
-      trees.hideProxies();
-      flora.hideProxies?.();
-    }
-  } else {
-    trees.hideProxies();
-    flora.hideProxies?.();
-  }
-
-  const internalSize = (scale = 1) => new THREE.Vector2(
-    Math.max(1, Math.round(innerWidth * internalRatio * scale)),
-    Math.max(1, Math.round(innerHeight * internalRatio * scale)),
-  );
-  const initialSize = internalSize();
-  nativeRenderer.resize(initialSize.x, initialSize.y);
-  const nativeConfigured = staticScene
-    ? await nativeRenderer.configure(initialSize.x, initialSize.y, staticScene)
-    : false;
-
-  const state = {
-    elapsed: 0,
-  };
-
-  function useNativePath() {
-    return Boolean(nativeConfigured && nativeRenderer.rayLightingReady);
-  }
-
-  function syncShadowPath() {
-    atmosphere.setRayTracedShadows(useNativePath());
-  }
-
-  syncShadowPath();
+    },
+  });
 
   function resize() {
-    const width = Math.max(1, innerWidth);
-    const height = Math.max(1, innerHeight);
+    const width = Math.max(1, Number(innerWidth) || 1);
+    const height = Math.max(1, Number(innerHeight) || 1);
     internalRatio = chooseInternalRatio(width, height);
-    follow.resize(width, height);
     renderer.setSize(width, height);
-    nativeRenderer.resize(internalSize().x, internalSize().y);
-    syncShadowPath();
+    router.resize(currentViewport());
   }
   globalThis.addEventListener("resize", resize);
   resize();
 
-  let previousTime = performance.now();
-  let nextFrameTime = previousTime;
-  let diagnosticTime = 0;
-  let diagnosticFrames = 0;
-  let diagnosticWallTime = 0;
+  if (!await router.activate("menu")) {
+    throw new Error("Secret River main screen could not start.");
+  }
+  resetFrameClock();
+
   renderer.setAnimationLoop(() => {
     const now = performance.now();
     if (now + 0.25 < nextFrameTime) return;
@@ -210,66 +166,7 @@ async function main() {
     const wallDelta = Math.max(0, (now - previousTime) / 1000);
     const delta = Math.min(0.1, wallDelta);
     previousTime = now;
-    state.elapsed += delta;
-    diagnosticTime += delta;
-    diagnosticFrames += 1;
-    diagnosticWallTime += wallDelta;
-
-    walker.update(delta, input.axis());
-    follow.update(delta);
-    const preset = atmosphere.updateCycle(state.elapsed);
-    applyCutoutTint(preset, trees, flora, walker);
-    atmosphere.updateFocus(walker.position, delta);
-    river.update(state.elapsed);
-    flora.update?.(state.elapsed);
-    trees.update?.(state.elapsed);
-
-    renderer.info.reset();
-    let nativeRendered = false;
-    let offscreenRendered = false;
-    if (useNativePath()) {
-      nativeRendered = nativeRenderer.render(scene, camera, {
-        skipReflections: true,
-        skipLighting: false,
-        celestialDirection: atmosphere.sunDirection,
-        celestialIntensity: preset.rtxCelestialIntensity,
-        shadowStrength: preset.rtxShadowStrength,
-        aoStrength: preset.rtxAoStrength,
-      });
-    }
-    if (!nativeRendered) {
-      if (!nativeRenderer.rayLightingReady) syncShadowPath();
-      offscreenRendered = nativeRenderer.renderRaster(scene, camera);
-    }
-    if (nativeRendered || offscreenRendered) {
-      if (!nativeRenderer.present(null, 0)) {
-        nativeRendered = false;
-        offscreenRendered = false;
-      }
-    }
-    if (!nativeRendered && !offscreenRendered) {
-      renderer.setRenderTarget(null);
-      renderer.setMRT(null);
-      renderer.clear(true, true, true);
-      renderer.render(scene, camera);
-    }
-
-    if (diagnosticTime >= 7) {
-      diagnosticTime = 0;
-      const fps = diagnosticWallTime > 0 ? Math.round(diagnosticFrames / diagnosticWallTime) : 0;
-      const renderInfo = renderer.info?.render ?? {};
-      console.log(
-        `[Secret River] fps=${fps}` +
-        ` · calls=${renderInfo.drawCalls ?? renderInfo.calls ?? 0}` +
-        ` · trees=${trees.records.length}` +
-        ` · flora=${flora.records.length}` +
-        ` · atmosphere=${preset.name}` +
-        ` · path=${nativeRendered || offscreenRendered ? nativeRenderer.lastPath : "webgpu-fallback"}` +
-        ` · pos=${walker.position.x.toFixed(1)},${walker.position.z.toFixed(1)}`,
-      );
-      diagnosticFrames = 0;
-      diagnosticWallTime = 0;
-    }
+    router.frame({ now, delta, wallDelta });
   });
 }
 

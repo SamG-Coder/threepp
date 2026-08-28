@@ -143,7 +143,20 @@ function createContactShadow() {
   return { mesh, geometry, material };
 }
 
-export async function createWalker() {
+/**
+ * Create the painted walker.
+ *
+ * Game worlds can inject a navigation model without changing the committed
+ * Demo path. A navigation model implements:
+ *
+ *   spawn({ x, z }) -> { x, z, y? }
+ *   resolveMove({ x, z }, { x, z, delta }) -> { x, z, y? }
+ *   heightAt(x, z) -> y
+ *
+ * Returning y from spawn/resolveMove is optional; heightAt supplies it when
+ * absent. Passing no navigation model keeps the original path.mjs behaviour.
+ */
+export async function createWalker({ navigation: initialNavigation = null } = {}) {
   const idleKeyed = await loadRegisteredKey(new URL("../assets/walker/profile.jpg", import.meta.url));
   const walkKeyed = (await Promise.all(
     Array.from({ length: WALK_FRAME_LAST - WALK_FRAME_FIRST + 1 }, (_, offset) => {
@@ -194,7 +207,10 @@ export async function createWalker() {
   root.userData.rtxIgnore = true;
   root.add(contact.mesh, card);
 
-  const spawn = spawnOnRoad(-4);
+  let navigation = validateNavigation(initialNavigation);
+  const spawn = navigation
+    ? resolveNavigationSpawn(navigation, -4, null)
+    : spawnOnRoad(-4);
   const position = new THREE.Vector3(spawn.x, spawn.y, spawn.z);
   const velocity = new THREE.Vector3();
   let facing = 1;
@@ -215,12 +231,32 @@ export async function createWalker() {
   }
   place();
 
-  return {
+  const walker = {
     mesh: root,
     card,
     position,
     velocity,
     get moving() { return moving; },
+    get navigation() { return navigation; },
+    setNavigation(nextNavigation = null, nextSpawn = null) {
+      navigation = validateNavigation(nextNavigation);
+      if (nextSpawn && typeof nextSpawn === "object") {
+        return walker.relocate(nextSpawn.x, nextSpawn.z);
+      }
+      return position;
+    },
+    relocate(x = 0, z = null) {
+      const next = navigation
+        ? resolveNavigationSpawn(navigation, x, z)
+        : Number.isFinite(z) ? clampToBank(x, z) : spawnOnRoad(x);
+      position.set(next.x, next.y, next.z);
+      velocity.set(0, 0, 0);
+      gaitDistance = 0;
+      moving = false;
+      showFrame(0);
+      place();
+      return position;
+    },
     update(delta, axis) {
       const speed = axis.sprint ? SPRINT_SPEED : WALK_SPEED;
       const targetX = -axis.x * speed;
@@ -233,8 +269,19 @@ export async function createWalker() {
 
       const beforeX = position.x;
       const beforeZ = position.z;
-      const clamped = clampToBank(position.x + stepX.distance, position.z + stepZ.distance);
-      position.set(clamped.x, terrainHeight(clamped.x, clamped.z), clamped.z);
+      const proposedX = position.x + stepX.distance;
+      const proposedZ = position.z + stepZ.distance;
+      const clamped = navigation
+        ? resolveNavigationMove(navigation, proposedX, proposedZ, {
+          x: beforeX,
+          z: beforeZ,
+          delta,
+        })
+        : clampToBank(proposedX, proposedZ);
+      const height = navigation
+        ? navigationHeight(navigation, clamped)
+        : terrainHeight(clamped.x, clamped.z);
+      position.set(clamped.x, height, clamped.z);
       if (Math.abs(clamped.x - (beforeX + stepX.distance)) > 1e-4) velocity.x = 0;
       if (Math.abs(clamped.z - (beforeZ + stepZ.distance)) > 1e-4) velocity.z = 0;
 
@@ -270,4 +317,51 @@ export async function createWalker() {
       contact.material.dispose();
     },
   };
+
+  return walker;
+}
+
+function validateNavigation(navigation) {
+  if (navigation == null) return null;
+  if (
+    typeof navigation !== "object"
+    || typeof navigation.spawn !== "function"
+    || typeof navigation.resolveMove !== "function"
+    || typeof navigation.heightAt !== "function"
+  ) {
+    throw new TypeError("Walker navigation needs spawn, resolveMove and heightAt functions.");
+  }
+  return navigation;
+}
+
+function finiteNavigationPoint(point, label) {
+  if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.z)) {
+    throw new TypeError(`Walker navigation ${label} must return finite x and z coordinates.`);
+  }
+  return point;
+}
+
+function navigationHeight(navigation, point) {
+  const height = Number.isFinite(point.y)
+    ? point.y
+    : navigation.heightAt(point.x, point.z);
+  if (!Number.isFinite(height)) {
+    throw new TypeError("Walker navigation heightAt must return a finite height.");
+  }
+  return height;
+}
+
+function resolveNavigationSpawn(navigation, x, z) {
+  const point = finiteNavigationPoint(
+    navigation.spawn({ x, z: Number.isFinite(z) ? z : null }),
+    "spawn",
+  );
+  return { x: point.x, y: navigationHeight(navigation, point), z: point.z };
+}
+
+function resolveNavigationMove(navigation, x, z, previous) {
+  return finiteNavigationPoint(
+    navigation.resolveMove({ x, z }, previous),
+    "resolveMove",
+  );
 }

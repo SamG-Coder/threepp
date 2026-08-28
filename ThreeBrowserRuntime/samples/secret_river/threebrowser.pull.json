@@ -10,7 +10,11 @@
   "files": [
     { "url": "https://secret-river.runtime.threebrowser.local/", "path": "index.html", "type": "html", "bytes": 0 },
     { "url": "https://secret-river.runtime.threebrowser.local/site-entry.mjs", "path": "site-entry.mjs", "type": "module", "bytes": 0 },
-    { "url": "https://secret-river.runtime.threebrowser.local/src/main.mjs", "path": "src/main.mjs", "type": "module", "bytes": 0 }
+    { "url": "https://secret-river.runtime.threebrowser.local/src/main.mjs", "path": "src/main.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://secret-river.runtime.threebrowser.local/src/modes/main-menu.mjs", "path": "src/modes/main-menu.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://secret-river.runtime.threebrowser.local/src/modes/demo-mode.mjs", "path": "src/modes/demo-mode.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://secret-river.runtime.threebrowser.local/src/modes/game-mode.mjs", "path": "src/modes/game-mode.mjs", "type": "module", "bytes": 0 },
+    { "url": "https://secret-river.runtime.threebrowser.local/src/game/map-data.generated.mjs", "path": "src/game/map-data.generated.mjs", "type": "module", "bytes": 0 }
   ],
   "compatibility": {
     "threeImportable": true,
@@ -22,11 +26,13 @@
     "htmlOverlay": false,
     "domRequired": false,
     "notes": [
-      "Self-contained WebGPU/TSL 2.5D walking sample; HTML only bootstraps the module graph.",
+      "Self-contained WebGPU/TSL 2.5D game and preserved walking demo; HTML only bootstraps the module graph.",
+      "A GPU-painted main screen routes to either mode and displays the bundled NSW Spatial Services Hawkesbury/Macdonald vector map.",
+      "Game mode connects map-derived Wisemans Ferry / Broad Reach and Macdonald River / First Branch locations through an objective-gated crossing.",
       "Photoreal 2D tree and walker cutouts stand as face-on cards in a 3D Hawkesbury riverbank.",
       "Native RTX ray queries supply sun visibility/AO against a static terrain and organic tree-proxy snapshot; a planar reflector mirrors the real painted cards into the river.",
       "The fixed-registration walker atlas, distance-driven gait, water transport and dirt-road locomotion remain JavaScript-authored.",
-      "No native/C++ runtime files or downloaded models are required."
+      "No native/C++ runtime files or downloaded 3D models are required; new location markers remain painted 2.5D cards."
     ]
   }
 }

@@ -1,6 +1,10 @@
 import * as THREE from "three/webgpu";
 import { keyedCanvasFromImage } from "./chroma-key.mjs";
-import { layoutFlora, FLORA_KINDS } from "./flora-layout.mjs";
+import {
+  DEFAULT_FLORA_SEED,
+  layoutFlora,
+  FLORA_KINDS,
+} from "./flora-layout.mjs";
 import { applyCardWind, setWindTime } from "./wind.mjs";
 
 export { layoutFlora, FLORA_KINDS };
@@ -36,8 +40,19 @@ async function loadKindTexture(kind) {
   return { texture, aspect: keyed.aspect, width: keyed.width, height: keyed.height };
 }
 
-export async function createFlora(seed = 0x51c7e1) {
-  const records = layoutFlora(seed);
+/** Map-aware game locations may inject records; Demo retains its authored layout. */
+export function floraRecordsFor(seed = DEFAULT_FLORA_SEED, recordsOverride = null) {
+  if (Array.isArray(seed)) return seed;
+  if (seed && typeof seed === "object") {
+    if (Array.isArray(seed.records)) return seed.records;
+    return layoutFlora(seed.seed ?? DEFAULT_FLORA_SEED);
+  }
+  if (Array.isArray(recordsOverride)) return recordsOverride;
+  return layoutFlora(seed);
+}
+
+export async function createFlora(seed = DEFAULT_FLORA_SEED, recordsOverride = null) {
+  const records = floraRecordsFor(seed, recordsOverride);
   const assets = new Map();
   for (const kind of FLORA_KINDS) {
     try {

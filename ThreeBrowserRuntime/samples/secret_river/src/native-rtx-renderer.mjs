@@ -162,6 +162,25 @@ export class NativeRtxRenderer {
     this._hudQuad.visible = false;
     this._displayScene.add(this._hudQuad);
 
+    // A retained GPU quad handles mode/location fades. Animating material
+    // opacity is transform/uniform work only; it avoids uploading a full-size
+    // CanvasTexture on every transition frame.
+    this._fadeGeometry = new THREE.PlaneGeometry(2, 2);
+    this._fadeMaterial = new THREE.MeshBasicNodeMaterial({
+      color: 0x0e1411,
+      transparent: true,
+      opacity: 0,
+      depthTest: false,
+      depthWrite: false,
+      fog: false,
+    });
+    this._fadeMaterial.toneMapped = false;
+    this._fadeQuad = new THREE.Mesh(this._fadeGeometry, this._fadeMaterial);
+    this._fadeQuad.frustumCulled = false;
+    this._fadeQuad.renderOrder = 2;
+    this._fadeQuad.visible = false;
+    this._displayScene.add(this._fadeQuad);
+
     this._viewProjection = new THREE.Matrix4();
     this._inverseViewProjection = new THREE.Matrix4();
     this._cameraPosition = new THREE.Vector3();
@@ -607,7 +626,7 @@ export class NativeRtxRenderer {
     }
   }
 
-  present(hudTexture = null, debugMode = 0) {
+  present(hudTexture = null, debugMode = 0, overlayOpacity = 0) {
     if (!this._activeTexture) return false;
     try {
       let presentationTexture = this._activeTexture;
@@ -623,6 +642,9 @@ export class NativeRtxRenderer {
         this._hudMaterial.needsUpdate = true;
       }
       this._hudQuad.visible = Boolean(hudTexture);
+      const fadeOpacity = THREE.MathUtils.clamp(Number(overlayOpacity) || 0, 0, 1);
+      this._fadeMaterial.opacity = fadeOpacity;
+      this._fadeQuad.visible = fadeOpacity > 0.001;
       this.renderer.setRenderTarget(null);
       this.renderer.setMRT(null);
       const previousAutoClear = this.renderer.autoClear;
@@ -688,5 +710,7 @@ export class NativeRtxRenderer {
     this._displayMaterial = null;
     this._hudGeometry.dispose();
     this._hudMaterial.dispose();
+    this._fadeGeometry.dispose();
+    this._fadeMaterial.dispose();
   }
 }

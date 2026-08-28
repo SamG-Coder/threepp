@@ -34,17 +34,21 @@ test("sample is self-contained MJS with no native implementation source", async 
 
 test("main walks a face-on riverbank and uses the generic RTX lighting and reflection bridge", async () => {
   const main = await readFile(join(sampleRoot, "src", "main.mjs"), "utf8");
+  const demo = await readFile(join(sampleRoot, "src", "modes", "demo-mode.mjs"), "utf8");
   const native = await readFile(join(sampleRoot, "src", "native-rtx-renderer.mjs"), "utf8");
   const trees = await readFile(join(sampleRoot, "src", "trees.mjs"), "utf8");
   const walker = await readFile(join(sampleRoot, "src", "walker.mjs"), "utf8");
   const camera = await readFile(join(sampleRoot, "src", "camera.mjs"), "utf8");
 
-  assert.match(main, /createTreeFlats/);
-  assert.match(main, /createWalker/);
-  assert.match(main, /createRiver/);
-  assert.match(main, /createFaceOnCamera/);
-  assert.match(main, /collectStaticRiverScene/);
-  assert.match(main, /trees\.hideProxies/);
+  assert.match(main, /createModeRouter/);
+  assert.match(main, /import\("\.\/modes\/demo-mode\.mjs"\)/);
+  assert.match(main, /import\("\.\/modes\/game-mode\.mjs"\)/);
+  assert.match(demo, /createTreeFlats/);
+  assert.match(demo, /createWalker/);
+  assert.match(demo, /createRiver/);
+  assert.match(demo, /createFaceOnCamera/);
+  assert.match(demo, /collectStaticRiverScene/);
+  assert.match(demo, /trees\.hideProxies/);
   assert.match(native, /registerStaticScene/);
   assert.match(native, /evaluateRayLighting/);
   assert.match(native, /evaluateRayReflections/);
@@ -52,10 +56,10 @@ test("main walks a face-on riverbank and uses the generic RTX lighting and refle
   assert.match(native, /BANK_LIGHTING_GLSL/);
   assert.match(native, /_evaluateLighting\(frameOptions,\s*layouts\)/);
   assert.doesNotMatch(native, /skipLighting:\s*true/);
-  assert.match(main, /skipLighting:\s*false/);
-  assert.match(main, /atmosphere\.updateCycle\(state\.elapsed\)/);
-  assert.doesNotMatch(main, /\b(?:toggleRtx|rtxRequested|PRESET_KEYS)\b/);
-  assert.match(main, /nativeConfigured\s*&&\s*nativeRenderer\.rayLightingReady/);
+  assert.match(demo, /skipLighting:\s*false/);
+  assert.match(demo, /atmosphere\.updateCycle\(state\.elapsed\)/);
+  assert.doesNotMatch(`${main}\n${demo}`, /\b(?:toggleRtx|rtxRequested|PRESET_KEYS)\b/);
+  assert.match(demo, /nativeConfigured\s*&&\s*nativeRenderer\.rayLightingReady/);
   assert.match(trees, /layoutTrees/);
   assert.match(trees, /PlaneGeometry/);
   assert.match(trees, /rtxIgnore/);
@@ -72,21 +76,38 @@ test("main walks a face-on riverbank and uses the generic RTX lighting and refle
   );
 });
 
-test("main has no HUD and presents exactly one swapchain image per frame", async () => {
+test("the canvas-only app owns one renderer and every mode presents one swapchain image per frame", async () => {
   const main = await readFile(join(sampleRoot, "src", "main.mjs"), "utf8");
+  const menu = await readFile(join(sampleRoot, "src", "modes", "main-menu.mjs"), "utf8");
+  const demo = await readFile(join(sampleRoot, "src", "modes", "demo-mode.mjs"), "utf8");
+  const game = await readFile(join(sampleRoot, "src", "modes", "game-mode.mjs"), "utf8");
+  const manifest = JSON.parse(await readFile(join(sampleRoot, "threebrowser.pull.json"), "utf8"));
   const imports = [...main.matchAll(/\bfrom\s+["']([^"']+)["']/g)].map(match => match[1]);
   assert.equal(
     imports.some(specifier => /(?:^|[-_/])(?:hud|ui)(?:[-_.]|$)/i.test(specifier)),
     false,
     "the canvas-only sample must not import a HUD/UI module",
   );
-  assert.doesNotMatch(main, /renderer\.render\(scene,\s*camera\)[\s\S]*nativeRenderer\.present/);
-  assert.match(main, /nativeRenderer\.render\(scene,\s*camera/);
-  assert.match(main, /nativeRenderer\.renderRaster\(scene,\s*camera\)/);
-  assert.match(main, /skipReflections:\s*true/);
-  assert.match(main, /nativeRenderer\.present\(null,\s*0\)/);
+  assert.equal((main.match(/new THREE\.WebGPURenderer/g) ?? []).length, 1);
+  assert.equal((main.match(/document\.body\.appendChild/g) ?? []).length, 1);
+  assert.equal((main.match(/renderer\.setAnimationLoop/g) ?? []).length, 1);
+  assert.doesNotMatch(`${menu}\n${demo}\n${game}`, /new THREE\.WebGPURenderer|document\.body\.appendChild|setAnimationLoop/);
+  assert.equal(manifest.compatibility.canvasOnly, true);
+  assert.equal(manifest.compatibility.uiMode, "canvas-only");
+  assert.equal(manifest.compatibility.htmlOverlay, false);
+  assert.equal(manifest.compatibility.domRequired, false);
+  assert.match(menu, /new THREE\.CanvasTexture/);
+  assert.match(menu, /material\.toneMapped\s*=\s*false/);
+  assert.doesNotMatch(menu, /createElement\(["'](?:button|div|dialog|input)["']\)/i);
+  assert.match(menu, /renderer\.render\(scene,\s*camera\)/);
+  assert.doesNotMatch(demo, /renderer\.render\(scene,\s*camera\)[\s\S]*nativeRenderer\.present/);
+  assert.match(demo, /nativeRenderer\.render\(scene,\s*camera/);
+  assert.match(demo, /nativeRenderer\.renderRaster\(scene,\s*camera\)/);
+  assert.match(demo, /skipReflections:\s*true/);
+  assert.match(demo, /nativeRenderer\.present\(null,\s*0\)/);
+  assert.match(game, /nativeRenderer\.present\(hudTexture,\s*0,\s*transition\?\.alpha \?\? 0\)/);
   assert.match(
-    main,
+    demo,
     /if \(!nativeRendered && !offscreenRendered\) \{[\s\S]*?renderer\.render\(scene,\s*camera\);/,
     "direct canvas render is only the emergency fallback",
   );
