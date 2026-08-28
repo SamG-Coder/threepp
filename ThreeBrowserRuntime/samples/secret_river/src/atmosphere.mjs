@@ -7,6 +7,7 @@ import {
   smoothstep,
   uniform,
 } from "three/tsl";
+import { dayBlendAt, dayProgressAt } from "./day-cycle.mjs";
 
 const LIGHT_DISTANCE = 60;
 const SKY_RADIUS = 220;
@@ -62,6 +63,10 @@ function configureShadow(light) {
 function placeDirectional(light, direction, focus, distance = LIGHT_DISTANCE) {
   light.position.copy(focus).addScaledVector(direction, distance);
   light.target.position.copy(focus);
+}
+
+function mixNumber(a, b, amount) {
+  return a + (b - a) * amount;
 }
 
 export const PRESETS = Object.freeze({
@@ -183,14 +188,14 @@ export function createAtmosphere(scene) {
   moon.name = "Moonlight";
   configureShadow(moon);
   moon.castShadow = false;
-  moon.visible = false;
+  moon.visible = true;
   scene.add(moon);
   scene.add(moon.target);
 
   const campfire = new THREE.PointLight(0xff7a32, 0, 11, 2);
   campfire.name = "Night campfire";
   campfire.position.set(CAMPFIRE_POSITION[0], CAMPFIRE_POSITION[1], CAMPFIRE_POSITION[2]);
-  campfire.visible = false;
+  campfire.visible = true;
   scene.add(campfire);
 
   const skyHorizon = uniform(new THREE.Color(PRESETS.afternoon.skyHorizon));
@@ -217,6 +222,7 @@ export function createAtmosphere(scene) {
   const moonDiscGeometry = new THREE.CircleGeometry(3.4, 32);
   const moonDiscMaterial = new THREE.MeshBasicNodeMaterial({
     color: 0xc5d2de,
+    transparent: true,
     fog: false,
     depthWrite: false,
     toneMapped: false,
@@ -226,20 +232,30 @@ export function createAtmosphere(scene) {
   moonDisc.userData.rtxIgnore = true;
   moonDisc.frustumCulled = false;
   moonDisc.renderOrder = -900;
-  moonDisc.visible = false;
+  moonDisc.visible = true;
   scene.add(moonDisc);
 
   const sunDirection = new THREE.Vector3();
   const scratch = new THREE.Vector3();
+  const colorScratch = new THREE.Color();
+  const defaultMoonDirection = PRESETS.night.moon.direction;
   const moonDirection = new THREE.Vector3(-0.35, 0.68, -0.44).normalize();
   const shadowFocus = new THREE.Vector3(0, 1.2, 34);
   const desiredShadowFocus = new THREE.Vector3();
-  let currentName = DEFAULT_PRESET;
+  const runtimePreset = {
+    name: PRESETS[DEFAULT_PRESET].name,
+    exposure: PRESETS[DEFAULT_PRESET].exposure,
+    treeTint: [...PRESETS[DEFAULT_PRESET].treeTint],
+    rtxCelestialIntensity: PRESETS[DEFAULT_PRESET].rtxCelestialIntensity,
+    rtxShadowStrength: PRESETS[DEFAULT_PRESET].rtxShadowStrength,
+    rtxAoStrength: PRESETS[DEFAULT_PRESET].rtxAoStrength,
+  };
+  let dayProgress = dayProgressAt(0);
   let rayTracedShadows = false;
 
   function syncShadowMode() {
-    sun.castShadow = sun.visible && !rayTracedShadows;
-    moon.castShadow = moon.visible && !rayTracedShadows;
+    sun.castShadow = sun.intensity > 0.02 && !rayTracedShadows;
+    moon.castShadow = moon.intensity > 0.01 && !rayTracedShadows;
   }
 
   function applyExposure(value) {
@@ -249,61 +265,99 @@ export function createAtmosphere(scene) {
     }
   }
 
-  function applyPreset(name) {
-    const preset = PRESETS[name];
-    if (!preset) throw new RangeError(`Unknown atmosphere preset: ${name}`);
-    currentName = name;
+  function mixColor(target, from, to, amount) {
+    target.setHex(from);
+    colorScratch.setHex(to);
+    target.lerp(colorScratch, amount);
+  }
 
-    sunDirection.set(preset.sunDirection[0], preset.sunDirection[1], preset.sunDirection[2]);
+  function applyBlend(fromName, toName, amount = 0) {
+    const from = PRESETS[fromName];
+    const to = PRESETS[toName];
+    if (!from || !to) throw new RangeError(`Unknown atmosphere blend: ${fromName} -> ${toName}`);
+    const blend = THREE.MathUtils.clamp(Number(amount) || 0, 0, 1);
+
+    sunDirection.set(
+      mixNumber(from.sunDirection[0], to.sunDirection[0], blend),
+      mixNumber(from.sunDirection[1], to.sunDirection[1], blend),
+      mixNumber(from.sunDirection[2], to.sunDirection[2], blend),
+    );
     if (sunDirection.y <= 0) sunDirection.y = 0.02;
     sunDirection.normalize();
 
-    sun.color.setHex(preset.sunColor);
-    sun.intensity = preset.sunIntensity;
-    sun.visible = preset.sunIntensity > 0.02;
-    sun.castShadow = sun.visible && !rayTracedShadows;
-    sun.name = `${preset.name} sun`;
+    mixColor(sun.color, from.sunColor, to.sunColor, blend);
+    sun.intensity = mixNumber(from.sunIntensity, to.sunIntensity, blend);
+    sun.visible = true;
+    sun.castShadow = sun.intensity > 0.02 && !rayTracedShadows;
+    sun.name = `${from.name} to ${to.name} sun`;
     placeDirectional(sun, sunDirection, shadowFocus);
 
-    hemi.color.setHex(preset.hemiSky);
-    hemi.groundColor.setHex(preset.hemiGround);
-    hemi.intensity = preset.hemiIntensity;
+    mixColor(hemi.color, from.hemiSky, to.hemiSky, blend);
+    mixColor(hemi.groundColor, from.hemiGround, to.hemiGround, blend);
+    hemi.intensity = mixNumber(from.hemiIntensity, to.hemiIntensity, blend);
 
-    scene.background.setHex(preset.fogColor);
-    scene.fog.color.setHex(preset.fogColor);
-    scene.fog.density = preset.fogDensity;
-    skyHorizon.value.setHex(preset.skyHorizon);
-    skyZenith.value.setHex(preset.skyZenith);
-    sky.name = `${preset.name} sky dome`;
-    applyExposure(preset.exposure);
+    mixColor(scene.background, from.fogColor, to.fogColor, blend);
+    scene.fog.color.copy(scene.background);
+    scene.fog.density = mixNumber(from.fogDensity, to.fogDensity, blend);
+    mixColor(skyHorizon.value, from.skyHorizon, to.skyHorizon, blend);
+    mixColor(skyZenith.value, from.skyZenith, to.skyZenith, blend);
+    sky.name = `${from.name} to ${to.name} sky dome`;
 
-    const moonPreset = preset.moon;
-    if (moonPreset) {
-      scratch.set(moonPreset.direction[0], moonPreset.direction[1], moonPreset.direction[2]);
-      if (scratch.y <= 0) scratch.y = 0.02;
-      scratch.normalize();
-      moon.color.setHex(moonPreset.color);
-      moon.intensity = moonPreset.intensity;
-      moon.visible = true;
-      moonDirection.copy(scratch);
-      moon.castShadow = !rayTracedShadows;
-      placeDirectional(moon, moonDirection, shadowFocus);
-      moonDisc.position.copy(scratch).multiplyScalar(SKY_RADIUS * 0.84);
-      moonDisc.lookAt(0, 0, 0);
-      moonDiscMaterial.color.setHex(moonPreset.color);
-      moonDisc.visible = true;
-      sunDirection.copy(scratch);
-    } else {
-      moon.intensity = 0;
-      moon.visible = false;
-      moon.castShadow = false;
-      moonDisc.visible = false;
-    }
+    runtimePreset.name = fromName === toName
+      ? from.name
+      : `${from.name} → ${to.name}`;
+    runtimePreset.exposure = mixNumber(from.exposure, to.exposure, blend);
+    runtimePreset.treeTint[0] = mixNumber(from.treeTint[0], to.treeTint[0], blend);
+    runtimePreset.treeTint[1] = mixNumber(from.treeTint[1], to.treeTint[1], blend);
+    runtimePreset.treeTint[2] = mixNumber(from.treeTint[2], to.treeTint[2], blend);
+    runtimePreset.rtxCelestialIntensity = mixNumber(
+      from.rtxCelestialIntensity,
+      to.rtxCelestialIntensity,
+      blend,
+    );
+    runtimePreset.rtxShadowStrength = mixNumber(
+      from.rtxShadowStrength,
+      to.rtxShadowStrength,
+      blend,
+    );
+    runtimePreset.rtxAoStrength = mixNumber(from.rtxAoStrength, to.rtxAoStrength, blend);
+    applyExposure(runtimePreset.exposure);
 
-    campfire.visible = Boolean(preset.campfire);
-    campfire.intensity = preset.campfire ? 2.6 : 0;
+    const fromMoon = from.moon;
+    const toMoon = to.moon;
+    const fromMoonDirection = fromMoon?.direction ?? toMoon?.direction ?? defaultMoonDirection;
+    const toMoonDirection = toMoon?.direction ?? fromMoon?.direction ?? defaultMoonDirection;
+    scratch.set(
+      mixNumber(fromMoonDirection[0], toMoonDirection[0], blend),
+      mixNumber(fromMoonDirection[1], toMoonDirection[1], blend),
+      mixNumber(fromMoonDirection[2], toMoonDirection[2], blend),
+    );
+    if (scratch.y <= 0) scratch.y = 0.02;
+    moonDirection.copy(scratch.normalize());
+    moon.intensity = mixNumber(fromMoon?.intensity ?? 0, toMoon?.intensity ?? 0, blend);
+    moon.visible = true;
+    moon.castShadow = moon.intensity > 0.01 && !rayTracedShadows;
+    mixColor(
+      moon.color,
+      fromMoon?.color ?? toMoon?.color ?? 0xc5d2de,
+      toMoon?.color ?? fromMoon?.color ?? 0xc5d2de,
+      blend,
+    );
+    placeDirectional(moon, moonDirection, shadowFocus);
+    moonDisc.position.copy(moonDirection).multiplyScalar(SKY_RADIUS * 0.84);
+    moonDisc.lookAt(0, 0, 0);
+    moonDiscMaterial.color.copy(moon.color);
+    moonDiscMaterial.opacity = THREE.MathUtils.clamp(moon.intensity / 0.88, 0, 1);
+    moonDisc.visible = true;
+
+    campfire.intensity = mixNumber(from.campfire ? 2.6 : 0, to.campfire ? 2.6 : 0, blend);
+    campfire.visible = true;
     syncShadowMode();
-    return preset;
+    return runtimePreset;
+  }
+
+  function applyPreset(name) {
+    return applyBlend(name, name, 0);
   }
 
   applyPreset(DEFAULT_PRESET);
@@ -315,8 +369,16 @@ export function createAtmosphere(scene) {
     moon,
     campfire,
     applyPreset,
+    updateCycle(elapsedSeconds) {
+      dayProgress = dayProgressAt(elapsedSeconds);
+      const phase = dayBlendAt(dayProgress);
+      return applyBlend(phase.from, phase.to, phase.mix);
+    },
+    get dayProgress() {
+      return dayProgress;
+    },
     getPreset() {
-      return PRESETS[currentName];
+      return runtimePreset;
     },
     sunDirection,
     updateFocus(position, delta = 1 / 60) {

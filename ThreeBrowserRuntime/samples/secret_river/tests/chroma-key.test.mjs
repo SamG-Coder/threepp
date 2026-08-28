@@ -62,6 +62,37 @@ test("keyImageData clears magenta and the grok watermark corner", () => {
   assert.equal(data[corner + 3], 0);
 });
 
+test("full-width artwork patches its watermark without cutting an alpha hole", () => {
+  const width = 12;
+  const height = 8;
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const index = (y * width + x) * 4;
+      data[index] = x * 10;
+      data[index + 1] = 100 + y;
+      data[index + 2] = 40;
+      data[index + 3] = 255;
+    }
+  }
+  const corner = ((height - 1) * width + (width - 1)) * 4;
+  data[corner] = 250;
+  data[corner + 1] = 250;
+  data[corner + 2] = 250;
+
+  keyImageData(
+    { width, height, data },
+    {
+      watermarkMode: "patch",
+      watermarkWidth: 0.25,
+      watermarkHeight: 0.25,
+    },
+  );
+
+  assert.equal(data[corner + 3], 255, "patched ridge remains opaque at ground level");
+  assert.notEqual(data[corner], 250, "watermark pixels are replaced with nearby artwork");
+});
+
 test("alpha crop tightens a cutout to the opaque silhouette", () => {
   const width = 16;
   const height = 16;

@@ -53,6 +53,9 @@ test("main walks a face-on riverbank and uses the generic RTX lighting and refle
   assert.match(native, /_evaluateLighting\(frameOptions,\s*layouts\)/);
   assert.doesNotMatch(native, /skipLighting:\s*true/);
   assert.match(main, /skipLighting:\s*false/);
+  assert.match(main, /atmosphere\.updateCycle\(state\.elapsed\)/);
+  assert.doesNotMatch(main, /\b(?:toggleRtx|rtxRequested|PRESET_KEYS)\b/);
+  assert.match(main, /nativeConfigured\s*&&\s*nativeRenderer\.rayLightingReady/);
   assert.match(trees, /layoutTrees/);
   assert.match(trees, /PlaneGeometry/);
   assert.match(trees, /rtxIgnore/);

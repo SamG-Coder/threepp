@@ -56,7 +56,13 @@ export async function createHills() {
       console.warn(`[Secret River] skipped ridge ${card.file}: ${error?.message || error}`);
       continue;
     }
-    const keyed = keyedCanvasFromImage(image, { padding: 2 });
+    // Ridge artwork fills the full bottom edge. Clearing the usual watermark
+    // corner would cut a row of rectangular sky-coloured holes through the
+    // distant tree line, so repair that corner from neighbouring forest.
+    const keyed = keyedCanvasFromImage(image, {
+      padding: 2,
+      watermarkMode: "patch",
+    });
     const map = new THREE.CanvasTexture(keyed.canvas);
     map.colorSpace = THREE.SRGBColorSpace;
     map.anisotropy = 8;

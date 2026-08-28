@@ -27,8 +27,10 @@ node C:\ThreeBrowser\ThreeBrowserRuntime\build\bin\runtime\launch.mjs C:\ThreeBr
 | **W** / **Up** | Step inland |
 | **S** / **Down** | Step toward the water |
 | **Shift** | Walk faster |
-| **1**–**5** | Morning, midday, late afternoon, sunset, night |
-| **X** | RTX ray shadows and ambient occlusion on or off |
+
+The riverbank moves continuously through morning, midday, afternoon, sunset,
+and night. RTX ray shadows and ambient occlusion stay engaged automatically
+when the native bridge is available; raster shadows remain the safe fallback.
 
 No on-screen HUD. Status stays in stdout.
 

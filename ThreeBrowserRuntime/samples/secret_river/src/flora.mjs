@@ -23,7 +23,10 @@ async function loadImage(url) {
 async function loadKindTexture(kind) {
   const url = new URL(`../assets/flora/${kind.file}`, import.meta.url);
   const image = await loadImage(url);
-  const keyed = keyedCanvasFromImage(image, { padding: 3 });
+  const keyed = keyedCanvasFromImage(image, {
+    padding: 3,
+    watermarkMode: kind.watermarkMode,
+  });
   const texture = new THREE.CanvasTexture(keyed.canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.anisotropy = 8;

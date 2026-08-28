@@ -8,7 +8,12 @@ import {
 
 export const FLORA_KINDS = Object.freeze([
   Object.freeze({ id: "reeds", file: "reeds.jpg", height: 1.8 }),
-  Object.freeze({ id: "grass", file: "kangaroo-grass.jpg", height: 0.7 }),
+  Object.freeze({
+    id: "grass",
+    file: "kangaroo-grass.jpg",
+    height: 0.7,
+    watermarkMode: "patch",
+  }),
   Object.freeze({ id: "wattle", file: "wattle.jpg", height: 2.8 }),
   Object.freeze({ id: "lomandra", file: "lomandra.jpg", height: 0.9 }),
   Object.freeze({ id: "sapling", file: "sapling.jpg", height: 4.5 }),

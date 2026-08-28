@@ -30,17 +30,60 @@ export function magentaKeyAlpha(r, g, b) {
   return 255;
 }
 
+/**
+ * Replace a generated-image watermark with a neighbouring strip of artwork.
+ *
+ * Cutout cards can safely clear this corner because it sits outside their
+ * silhouette. Full-width ridge cards cannot: clearing the corner punches a
+ * rectangular window through the forest at ground level. Copying a distant
+ * part of the same bottom band keeps the backdrop continuous instead. The
+ * fill mirrors the immediately adjacent artwork so the left edge is seamless,
+ * then feathers in below the top edge of the repaired region.
+ */
+export function patchWatermarkImageData(imageData, options = {}) {
+  const width = imageData.width;
+  const height = imageData.height;
+  const data = imageData.data;
+  const patchWidth = Math.max(1, Math.floor(width * (options.watermarkWidth ?? 0.24)));
+  const patchHeight = Math.max(1, Math.floor(height * (options.watermarkHeight ?? 0.075)));
+  const destinationX = Math.max(0, width - patchWidth);
+  const destinationY = Math.max(0, height - patchHeight);
+  const source = new Uint8ClampedArray(data);
+  const featherHeight = Math.max(1, Math.floor(patchHeight * 0.22));
+
+  for (let y = 0; y < patchHeight; y++) {
+    const patchMix = Math.min(1, (y + 1) / featherHeight);
+    for (let x = 0; x < patchWidth; x++) {
+      const sourceX = Math.max(0, destinationX - 1 - x);
+      const from = ((destinationY + y) * width + sourceX) * 4;
+      const to = ((destinationY + y) * width + destinationX + x) * 4;
+      for (let channel = 0; channel < 4; channel++) {
+        data[to + channel] = Math.round(
+          source[to + channel] * (1 - patchMix) + source[from + channel] * patchMix,
+        );
+      }
+    }
+  }
+  return imageData;
+}
+
 export function keyImageData(imageData, options = {}) {
   const width = imageData.width;
   const height = imageData.height;
   const data = imageData.data;
+  const watermarkMode = options.watermarkMode ?? "clear";
+  if (watermarkMode === "patch") patchWatermarkImageData(imageData, options);
   const watermarkWidth = Math.max(1, Math.floor(width * (options.watermarkWidth ?? 0.24)));
   const watermarkHeight = Math.max(1, Math.floor(height * (options.watermarkHeight ?? 0.075)));
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const index = (y * width + x) * 4;
       let alpha = magentaKeyAlpha(data[index], data[index + 1], data[index + 2]);
-      if (x >= width - watermarkWidth && y >= height - watermarkHeight) alpha = 0;
+      if (
+        watermarkMode === "clear"
+        && x >= width - watermarkWidth
+        && y >= height - watermarkHeight
+      ) alpha = 0;
       data[index + 3] = alpha;
     }
   }

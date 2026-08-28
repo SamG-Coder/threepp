@@ -20,7 +20,7 @@ document.title = "Secret River — ThreeBrowser Runtime";
 const MAX_INTERNAL_PIXELS = 3_200_000;
 const MAX_INTERNAL_RATIO = 1.6;
 const TARGET_FRAME_INTERVAL_MS = 1000 / 60;
-const PRESET_KEYS = Object.freeze(["morning", "midday", "afternoon", "sunset", "night"]);
+const cutoutTintColor = new THREE.Color();
 
 function chooseInternalRatio(width, height) {
   const budgetRatio = Math.sqrt(MAX_INTERNAL_PIXELS / Math.max(1, width * height));
@@ -44,10 +44,10 @@ function reportBridge(rtx) {
 
 function applyCutoutTint(preset, trees, flora, walker) {
   const tint = preset?.treeTint ?? [1, 1, 1];
-  const color = new THREE.Color(tint[0], tint[1], tint[2]);
-  trees.setTint?.(color);
-  flora.setTint?.(color);
-  walker.setTint?.(color);
+  cutoutTintColor.setRGB(tint[0], tint[1], tint[2]);
+  trees.setTint?.(cutoutTintColor);
+  flora.setTint?.(cutoutTintColor);
+  walker.setTint?.(cutoutTintColor);
 }
 
 async function main() {
@@ -172,13 +172,11 @@ async function main() {
     : false;
 
   const state = {
-    rtxRequested: nativeConfigured && nativeRenderer.rayLightingReady,
     elapsed: 0,
-    preset: "afternoon",
   };
 
   function useNativePath() {
-    return Boolean(state.rtxRequested && nativeRenderer.rayLightingReady);
+    return Boolean(nativeConfigured && nativeRenderer.rayLightingReady);
   }
 
   function syncShadowPath() {
@@ -187,34 +185,6 @@ async function main() {
 
   syncShadowPath();
 
-  function setPreset(name) {
-    const preset = atmosphere.applyPreset(name);
-    state.preset = name;
-    renderer.toneMappingExposure = preset.exposure;
-    applyCutoutTint(preset, trees, flora, walker);
-    console.log(`[Secret River] atmosphere=${preset.name}`);
-  }
-
-  function toggleRtx() {
-    if (!nativeConfigured || !nativeRenderer.enabled) {
-      state.rtxRequested = false;
-      return;
-    }
-    state.rtxRequested = !state.rtxRequested;
-    syncShadowPath();
-    console.log(`[Secret River] path=${state.rtxRequested ? "RTX" : "WebGPU raster"}`);
-  }
-
-  globalThis.addEventListener("keydown", event => {
-    if (event.repeat) return;
-    const key = String(event.key || "");
-    if (key === "1" || key === "2" || key === "3" || key === "4" || key === "5") {
-      setPreset(PRESET_KEYS[Number(key) - 1]);
-    } else if (key.toLowerCase() === "x") {
-      toggleRtx();
-    }
-  });
-
   function resize() {
     const width = Math.max(1, innerWidth);
     const height = Math.max(1, innerHeight);
@@ -222,7 +192,6 @@ async function main() {
     follow.resize(width, height);
     renderer.setSize(width, height);
     nativeRenderer.resize(internalSize().x, internalSize().y);
-    if (!nativeRenderer.enabled) state.rtxRequested = false;
     syncShadowPath();
   }
   globalThis.addEventListener("resize", resize);
@@ -248,12 +217,13 @@ async function main() {
 
     walker.update(delta, input.axis());
     follow.update(delta);
+    const preset = atmosphere.updateCycle(state.elapsed);
+    applyCutoutTint(preset, trees, flora, walker);
     atmosphere.updateFocus(walker.position, delta);
     river.update(state.elapsed);
     flora.update?.(state.elapsed);
     trees.update?.(state.elapsed);
 
-    const preset = atmosphere.getPreset();
     renderer.info.reset();
     let nativeRendered = false;
     let offscreenRendered = false;
@@ -268,10 +238,7 @@ async function main() {
       });
     }
     if (!nativeRendered) {
-      if (state.rtxRequested && !nativeRenderer.rayLightingReady) {
-        state.rtxRequested = false;
-        syncShadowPath();
-      }
+      if (!nativeRenderer.rayLightingReady) syncShadowPath();
       offscreenRendered = nativeRenderer.renderRaster(scene, camera);
     }
     if (nativeRendered || offscreenRendered) {

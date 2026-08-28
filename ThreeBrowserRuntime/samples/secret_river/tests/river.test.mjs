@@ -4,6 +4,7 @@ import test from "node:test";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  creekOpacity,
   creekReflectionWeight,
   mixCreekColour,
 } from "../src/creek-mix.mjs";
@@ -31,4 +32,17 @@ test("shipped river material mixes reflector.rgb rather than a flat mud colour",
   assert.match(river, /shoreDistance/);
   assert.doesNotMatch(river, /riverEdgeZ\(x\)\s*\+\s*1\.6/);
   assert.match(river, /resolutionScale:\s*0\.62/);
+  assert.match(river, /mx_fractal_noise_float/g);
+  assert.doesNotMatch(river, /const phase[A-Z]/, "surface motion is not built from parallel sine bands");
+  assert.doesNotMatch(river, /\bsin\s*\(/, "creek shader has no periodic line-wave masks");
+  assert.match(river, /normalMap\s*\(/, "procedural surface fields drive a real tangent normal");
+});
+
+test("creek is translucent at the wet bank and gains opacity with depth", () => {
+  const bank = creekOpacity(0);
+  const wading = creekOpacity(1.5);
+  const channel = creekOpacity(9);
+  assert.ok(bank >= 0.1 && bank < 0.25, `bank opacity ${bank}`);
+  assert.ok(wading > bank && wading < channel, `${bank} < ${wading} < ${channel}`);
+  assert.ok(channel > 0.9 && channel < 1, `channel opacity ${channel}`);
 });

@@ -2,14 +2,13 @@ import * as THREE from "three/webgpu";
 import {
   abs,
   attribute,
-  bumpMap,
   cameraPosition,
   color,
-  cos,
   dot,
   float,
   mix,
   mx_fractal_noise_float,
+  normalMap,
   normalize,
   normalWorld,
   positionLocal,
@@ -17,10 +16,8 @@ import {
   pow,
   reflector,
   saturate,
-  sin,
   smoothstep,
   uniform,
-  uv,
   vec2,
   vec3,
 } from "three/tsl";
@@ -28,8 +25,11 @@ import { riverEdgeZ, WORLD } from "./path.mjs";
 import {
   CREEK_BREAK_BIAS,
   CREEK_BREAK_SCALE,
+  CREEK_DEEP_OPACITY,
   CREEK_FRESNEL_BIAS,
   CREEK_FRESNEL_SCALE,
+  CREEK_OPACITY_DEPTH,
+  CREEK_SHORE_OPACITY,
 } from "./creek-mix.mjs";
 
 const riverTime = uniform(0);
@@ -86,81 +86,74 @@ export function createRiver() {
     samples: 1,
   });
 
-  // Advect along +X so current, streaks and ripples travel down the creek.
-  const flow = riverTime.mul(1.05);
-  const advectedX = positionWorld.x.sub(flow);
-  const currentField = mx_fractal_noise_float(
-    vec3(advectedX.mul(0.048), float(0.18), positionWorld.z.mul(0.52)),
-    5,
-    2.03,
-    0.48,
-  );
-  const rippleField = mx_fractal_noise_float(
-    vec3(advectedX.mul(0.22), riverTime.mul(0.08), positionWorld.z.mul(0.85)),
-    3,
-    2.11,
-    0.52,
-  );
-  const phaseA = advectedX.mul(0.46).add(positionWorld.z.mul(0.11));
-  const phaseB = advectedX.mul(1.08).sub(positionWorld.z.mul(0.19)).sub(flow.mul(0.35));
-  const phaseC = advectedX.mul(2.35).add(positionWorld.z.mul(0.27));
-  const waveHeight = sin(phaseA).mul(0.22)
-    .add(sin(phaseB).mul(0.13))
-    .add(sin(phaseC).mul(0.045))
-    .add(currentField.mul(0.16));
-  const slopeX = cos(phaseA).mul(0.46)
-    .add(cos(phaseB).mul(0.22))
-    .add(currentField.mul(0.28))
-    .add(rippleField.mul(0.12));
-  const slopeZ = cos(phaseA).mul(0.08)
-    .add(cos(phaseB).mul(0.16))
-    .add(rippleField.mul(0.09));
-  const waveNormal = bumpMap(waveHeight.add(rippleField.mul(0.08)), 0.42);
+  // Three differently oriented, aperiodic fields make rolling cells and
+  // cross-current eddies. The former sine bands read as evenly spaced lines.
+  const flow = riverTime.mul(0.34);
+  const broadField = mx_fractal_noise_float(vec3(
+    positionWorld.x.mul(0.052).sub(flow),
+    positionWorld.z.mul(0.28).add(flow.mul(0.08)),
+    riverTime.mul(0.018),
+  ), 5, 2.03, 0.48);
+  const crossField = mx_fractal_noise_float(vec3(
+    positionWorld.x.mul(-0.11).add(positionWorld.z.mul(0.075)).add(flow.mul(0.42)),
+    positionWorld.z.mul(0.19).sub(positionWorld.x.mul(0.026)).sub(flow.mul(0.16)),
+    riverTime.mul(0.052),
+  ), 4, 2.09, 0.51);
+  const microField = mx_fractal_noise_float(vec3(
+    positionWorld.x.mul(0.46).sub(positionWorld.z.mul(0.09)).sub(flow.mul(1.8)),
+    positionWorld.z.mul(0.63).add(positionWorld.x.mul(0.07)).add(flow.mul(0.36)),
+    riverTime.mul(0.14),
+  ), 3, 2.17, 0.53);
+  const surfaceNoise = broadField.mul(0.50)
+    .add(crossField.mul(0.32))
+    .add(microField.mul(0.18));
+  const waveHeight = broadField.mul(0.18)
+    .add(crossField.mul(0.11))
+    .add(microField.mul(0.035));
 
-  // Keep the photographed bank recognisable. Small current-aligned offsets
-  // break the mirror without melting trunks into broad vertical smears.
+  const shoreDistance = attribute("shoreDistance", "float").max(0);
+  const noisyShoreDistance = shoreDistance
+    .add(broadField.mul(0.16))
+    .add(crossField.mul(0.08));
+  const bankBlend = smoothstep(float(0.03), float(CREEK_OPACITY_DEPTH), noisyShoreDistance);
+  const depthMix = smoothstep(float(0.25), float(10.5), shoreDistance);
+  const shoreBand = float(1).sub(smoothstep(float(0.08), float(0.82), noisyShoreDistance));
+
+  // Keep the photographed bank recognisable. Small noise-driven offsets
+  // break the mirror into finite eddies without melting trunks into stripes.
   const distortion = vec2(
-    slopeX.mul(0.0062).add(currentField.mul(0.0035)),
-    slopeZ.mul(0.0032),
+    broadField.mul(0.0048).add(microField.mul(0.0016)),
+    crossField.mul(0.0035).sub(microField.mul(0.0011)),
   );
   reflection.uvNode = reflection.uvNode.add(distortion);
-  const nearWater = float(1).sub(uv().y);
   const blurAmount = saturate(
-    nearWater.mul(0.62)
-      .add(abs(currentField).mul(0.22))
-      .add(abs(rippleField).mul(0.12)),
+    depthMix.mul(0.38)
+      .add(abs(broadField).mul(0.36))
+      .add(abs(microField).mul(0.18)),
   );
-  reflection.levelNode = mix(float(0.16), float(1.15), blurAmount);
+  reflection.levelNode = mix(float(0.12), float(1.08), blurAmount);
 
   const view = normalize(cameraPosition.sub(positionWorld));
   const fresnel = pow(saturate(float(1).sub(abs(dot(normalWorld, view)))), 3.4);
-  const shoreDistance = attribute("shoreDistance", "float").max(0);
-  const shoreBand = float(1).sub(smoothstep(float(0.12), float(0.66), shoreDistance));
-  const shoreBreakup = sin(advectedX.mul(1.32).add(currentField.mul(2.1)))
-    .mul(0.5).add(0.5)
-    .mul(sin(advectedX.mul(0.37).sub(riverTime.mul(0.8))).mul(0.28).add(0.72));
-  const shoreFoam = shoreBand.mul(shoreBreakup);
-  const lanes = saturate(sin(positionWorld.z.mul(0.78).add(currentField.mul(1.7))).mul(0.5).add(0.5));
-  const streaks = saturate(
-    sin(phaseA.mul(1.85).add(currentField.mul(2.3))).mul(0.5).add(0.5)
-      .mul(lanes.mul(0.55).add(0.45)),
-  );
+  const foamNoise = surfaceNoise.mul(0.5).add(0.5).saturate();
+  const shoreFoam = shoreBand.mul(smoothstep(float(0.58), float(0.82), foamNoise));
   const broken = float(1)
-    .sub(streaks.mul(0.62))
-    .sub(abs(currentField).mul(0.22))
-    .sub(shoreFoam.mul(0.75))
+    .sub(abs(crossField).mul(0.34))
+    .sub(abs(microField).mul(0.28))
+    .sub(shoreFoam.mul(0.58))
     .saturate();
   const reflectionWeight = fresnel.mul(CREEK_FRESNEL_SCALE).add(CREEK_FRESNEL_BIAS)
     .mul(broken.mul(CREEK_BREAK_SCALE).add(CREEK_BREAK_BIAS))
+    .mul(mix(float(0.20), float(1), bankBlend))
     .saturate();
 
-  const deep = color(0x1a2818);
-  const tannin = color(0x3a4a32);
-  const silt = color(0x6a6850);
-  const depth = smoothstep(float(-18), float(12), positionWorld.z);
-  const shallow = smoothstep(float(0.58), float(0.97), uv().y);
-  const body = mix(deep, tannin, depth);
-  const bodyShallow = mix(body, silt, shallow.mul(0.35));
+  const exposedBed = color(0x8a8062);
+  const shallowOlive = color(0x596249);
+  const tannin = color(0x344631);
+  const deep = color(0x14251a);
+  const shallows = mix(exposedBed, shallowOlive, smoothstep(float(0.08), float(1.5), shoreDistance));
+  const body = mix(shallows, tannin, smoothstep(float(0.9), float(5.4), shoreDistance));
+  const bodyShallow = mix(body, deep, pow(depthMix, 1.35).mul(0.58));
 
   const material = new THREE.MeshBasicNodeMaterial({
     name: "Australian river water",
@@ -169,17 +162,34 @@ export function createRiver() {
     fog: true,
     side: THREE.DoubleSide,
   });
-  const reflected = reflection.rgb.mul(color(0xd8c8a8)).mul(0.92);
-  const foam = color(0xd8cfb8).mul(shoreFoam.mul(0.16));
-  const currentGlint = color(0xc4b898).mul(
-    pow(saturate(sin(phaseB.mul(2.1)).mul(0.5).add(0.5)), 10).mul(0.06),
+  const reflected = reflection.rgb.mul(color(0xd2c5a5)).mul(0.86);
+  const foam = color(0xd8cfb8).mul(shoreFoam.mul(0.11));
+  const crestNoise = microField.mul(0.56)
+    .add(crossField.mul(0.28))
+    .add(broadField.mul(0.16))
+    .mul(0.5).add(0.5).saturate();
+  const surfaceGlint = color(0xc9bea0).mul(
+    pow(crestNoise, 11).mul(0.055).mul(bankBlend),
   );
   material.colorNode = mix(bodyShallow, reflected, reflectionWeight)
     .add(foam)
-    .add(currentGlint);
-  material.normalNode = waveNormal;
-  material.positionNode = positionLocal.add(vec3(0, waveHeight.mul(0.026), 0));
-  material.opacityNode = mix(float(0.94), float(0.76), shoreBand.mul(0.82));
+    .add(surfaceGlint);
+  const normalSample = vec3(
+    broadField.mul(0.30).add(microField.mul(0.18)).mul(0.5).add(0.5),
+    crossField.mul(0.34).sub(microField.mul(0.13)).mul(0.5).add(0.5),
+    float(1),
+  );
+  material.normalNode = normalMap(normalSample, vec2(0.44, 0.34));
+  material.positionNode = positionLocal.add(vec3(
+    0,
+    waveHeight.mul(0.024).mul(mix(float(0.12), float(1), bankBlend)),
+    0,
+  ));
+  material.opacityNode = mix(
+    float(CREEK_SHORE_OPACITY),
+    float(CREEK_DEEP_OPACITY),
+    bankBlend,
+  );
   material.alphaTest = 0.01;
   material.rtxReflectionMask = 0;
   material.userData.rtxIgnore = true;
