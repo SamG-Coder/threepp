@@ -178,6 +178,7 @@ export function wrapUv(x, y, z, options = {}) {
   if (kind === "cylinder") return cylinderUv(x, y, z, bounds, options);
   if (kind === "capsule") return capsuleUv(x, y, z, bounds);
   if (kind === "square" || kind === "rectangle") return boxUv(x, y, z, normal, bounds);
+  if (kind === "humanoid") return customUv(x, y, z, { ...options, bounds });
   return customUv(x, y, z, { ...options, bounds });
 }
 

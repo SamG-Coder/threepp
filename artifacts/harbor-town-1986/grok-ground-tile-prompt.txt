@@ -1,0 +1,31 @@
+Asset-only correction pass for harbor_town_1986. You remain the exclusive image generator; make no code changes and generate no 3D files. Atomically replace only the six PNGs listed below under:
+
+C:\ThreeBrowser\ThreeBrowserRuntime\samples\harbor_town_1986\assets\ground-tiles\
+
+Files:
+- asphalt.png
+- dock-concrete.png
+- grass-earth.png
+- harbor-water.png
+- sidewalk-concrete.png
+- yokobori-paving.png
+
+GLOBAL TILE CONTRACT
+- Exactly 1024x1024 PNG, opaque, square, straight orthographic top-down material view.
+- Mathematically seamless/periodic on all four edges: left matches right and top matches bottom in color, structure, wear, and lighting.
+- Reopen a 3x3 repeat preview and reject any visible horizontal/vertical seam, border, tonal jump, edge line, or grid caused by the tile boundary.
+- Uniform neutral overcast illumination. No directional cast shadow, vignette, perspective, horizon, depth-of-field, panel, framing, caption, watermark, logo, modern branding, or text.
+- No large unique focal mark that announces the repeating tile: no single repair rectangle, painted circle, number, drain, stain, crack intersection, debris cluster, or dark patch.
+- Fine-to-medium stochastic detail with several scales so repetition stays inconspicuous in a large world.
+- Realistic slightly worn 1986 Yokosuka harbor-town material language, but clean enough to read at game scale.
+- Generate into temporary files, inspect the 3x3 repeat, then atomically replace the destination only when it passes.
+
+FILE-SPECIFIC MATERIALS
+1. asphalt.png — dark charcoal late-1980s Japanese road asphalt, fine aggregate, subtle distributed wear and tiny repaired grains only. Remove the current large rectangular patchwork, diagonal repair seams, and distinctive isolated markings.
+2. dock-concrete.png — pale salt-weathered poured dock concrete with fine aggregate and subtle distributed salt staining. Remove the current giant white circles, letters/numbers, yellow line fragments, concentrated rust anchors, and unique repair scars.
+3. grass-earth.png — sparse municipal verge: muted late-summer grass blades mixed with compacted brown earth and tiny diffuse leaf fragments. Avoid the current central radial/bright patch and any repeated clump silhouette.
+4. harbor-water.png — top-down blue-grey working-harbor water with small irregular wind ripples, subtle broken reflections, and low-contrast dark/light variation. It must not be a flat color; no shoreline, foam edge, boats, debris, horizon, or directional sun glitter. It will be UV-scrolled in game.
+5. sidewalk-concrete.png — warm light-grey poured sidewalk concrete with very fine aggregate, restrained small weather cracks and diffuse grime. No large crack nexus, slab boundary, curb, drain, leaf, gum cluster, or centered stain.
+6. yokobori-paving.png — tightly laid small dark-grey Japanese shotengai/interlocking pavers viewed exactly top-down, evenly scaled, with subtle distributed wear. Continuous brick/paver bonds must cross every boundary perfectly; remove the current bottom edge band, lower-right patch/panel, and large tonal blobs.
+
+Do not touch road-white-paint.png or road-yellow-paint.png in this pass. Report the exact six replaced paths and whether each passed a visually inspected 3x3 repeat.

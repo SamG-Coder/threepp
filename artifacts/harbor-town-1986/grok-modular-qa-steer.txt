@@ -1,0 +1,17 @@
+QA STEER — the currently written stone-step-slab, stone-cap-slab, and quay-wall-block files are NOT accepted finals and must be atomically replaced.
+
+Observed exact failures:
+- Every set still contains visible Grok branding/watermark and/or a rectangular generation panel instead of pure edge-to-edge #E040A0.
+- stone-step-slab yaw-270 has widespread non-key residue; framing/elevation/scale do not match the other yaws.
+- stone-cap-slab yaw-270 contains TWO separate slabs plus a dark magenta panel; other yaws have inconsistent framing/elevation.
+- quay-wall-block changes scale/elevation between yaws, is not the requested simple rectangular 4.0 x 0.86 x 1.6 module, and has an unwanted bottom notch/feet.
+Do not treat any of those sets as passed.
+
+For every module, regenerate the physical subject consistently where needed. Then perform deterministic background sanitation under your own Grok task:
+1. identify the true central subject bounding box conservatively;
+2. outside an expanded safe subject box, force EVERY pixel to exact #E040A0 — this must remove branding, panels, gradients, residue, captions and watermark completely;
+3. inside the safe box, preserve every subject pixel; only normalize background pixels connected to the outer key field, never broad/fuzzy erase;
+4. verify one subject only, no duplicates;
+5. verify same silhouette height, baseline, orthographic camera elevation and pivot across all four; legitimate width changes only from rotation;
+6. visually reopen all four final destination PNGs after writing.
+Do not stop or call success with branding, panels, duplicates, residue, camera drift or changed geometry. Continue the remaining component kit only under this stricter process.

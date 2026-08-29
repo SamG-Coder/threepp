@@ -1,0 +1,60 @@
+NEXT ASSET-ONLY SWARM FOR harbor_town_1986 — run this only after the complete 40-folder modular kit has been atomically installed and QA-approved. You are still the exclusive 2D image generator; make no code changes, no tests, no game launch, no screenshots outside the source folders, and no 3D files.
+
+Every currently active legacy orbit set failed strict visual QA. Regenerate all 23 sets below atomically using a disjoint swarm: one exact folder per worker, no shared destinations, plus an independent QA lead. Do not patch isolated bad yaws onto incompatible old views. Establish one corrected physical master for each folder, derive the full frozen orbit from that master, validate the entire set, then replace all destination views together.
+
+DESTINATION
+C:\ThreeBrowser\ThreeBrowserRuntime\samples\harbor_town_1986\assets\<folder>\<view>.png
+
+GLOBAL LOCKED-ORBIT CONTRACT
+- Exactly 1024x1024 PNG.
+- Exact solid edge-to-edge #E040A0 background. No floor, horizon, pedestal, water plane, cast/contact shadow, gradient, panel, patch, caption, watermark, border, or stray residue.
+- One isolated subject only. No duplicate/fused body, ghost limb, second object, neighboring prop, or detached generated fragment.
+- Frozen identity and physical geometry in every yaw: same person/face/clothes/pose, or same branch/vehicle/boat/prop details. Only camera azimuth changes.
+- Fixed orthographic camera, fixed modest downward elevation, fixed lighting, fixed pivot, fixed support baseline, fixed pixel height and fixed scale. No perspective and no oblique substitute for a cardinal view.
+- yaw000=front, yaw090=right, yaw180=rear, yaw270=left; diagonal filenames are exact intermediate azimuths. Opposite silhouettes must be geometrically compatible while legitimate front/side projected widths remain different.
+- Preserve every subject pixel, including pale glass/chrome/concrete, spokes, branches, cables, limbs and lettering. Cleanup may replace only true border-connected key background; never broad fuzzy deletion.
+- Period-authentic, realistic, slightly worn Yokosuka on Saturday 29 November 1986 at 15:20. No modern branding.
+- Generate in temporary folders. QA must reopen every final view, verify the exact key and locked orbit, and only then atomically install the complete set. Zero partial or best-available installs.
+
+EIGHT-VIEW SETS
+Use yaw000.png, yaw045.png, yaw090.png, yaw135.png, yaw180.png, yaw225.png, yaw270.png, yaw315.png.
+
+1 civilian-hiro — 0.52 W x 1.72 H x 0.32 D. One Japanese young man, recognizable stable face, late-1986 casual jacket/trousers/shoes, natural neutral mid-walk stance that remains pixel-consistent around the orbit. Current diagonals contain fused duplicate bodies.
+2 civilian-mika — 0.48 x 1.62 x 0.30. One Japanese young woman, stable face/hair and period autumn outfit, frozen relaxed walking pose. Current diagonals contain double bodies.
+3 civilian-dock-worker — 0.56 x 1.68 x 0.34. One Japanese harbor worker in worn 1986 work clothes, cap and boots, frozen pose, no tool detached from body. Current diagonals contain double bodies.
+4 civilian-shopper — 0.48 x 1.58 x 0.32. One Japanese Saturday shopper in period coat/skirt/trousers with one small carried shopping bag held consistently. Current views change person, clothes and props.
+5 civilian-student — 0.50 x 1.66 x 0.32. One Japanese secondary-school student in accurate late-1986 winter uniform with one consistent school bag, frozen pose. Current set has watermarks, key holes and pose drift.
+6 civilian-shopkeeper — 0.54 x 1.69 x 0.34. One middle-aged Japanese shopkeeper in period apron/cardigan/work trousers, frozen welcoming stance. Current set contains overlapping bodies and destructive erasure.
+7 english-oak — 7.0 x 7.0 x 7.0. One mature late-autumn English oak with a single stable trunk, exact scar/branch topology and sparse remaining brown leaves; completely rigid across the orbit.
+8 weeping-willow — 5.5 x 6.0 x 5.5. One salt-worn harbor willow with one stable trunk, dead limb and drooping branch topology; no wind/pose mutation between yaws.
+9 steel-bin — 0.54 x 0.75 x 0.54. One upright galvanized cylindrical street bin with fixed lid, handles, dents and wear; no floor or panel.
+10 zelkova — 4.5 x 5.5 x 4.5. One late-autumn Japanese street zelkova, fixed trunk/branch/canopy topology and support.
+11 honda-cub — 0.62 x 1.05 x 1.82. One complete parked mid-1980s Japanese delivery step-through motorcycle with fixed wheels, stand, bars, seat, lamps and one rear delivery crate; identical geometry, no ground shadow.
+12 city-bicycle — 0.58 x 1.12 x 1.82. One complete 1980s Japanese utility bicycle with fixed thin wheels/spokes, frame, basket, stand, saddle, pedals and lamp; do not thicken or delete spokes.
+13 fishing-boat — 2.15 x 3.90 x 7.20. One small worn 1980s Japanese harbor fishing boat, isolated dry with no water plane: stable hull, cabin, windows, mast/rigging, buoys and flag; keel/support baseline and waterline remain fixed.
+14 harbor-gull — 1.35 x 0.42 x 0.58. One adult harbor gull in a frozen shallow gliding pose with both wings spread symmetrically and stable feather/body geometry. No alternate flap poses, panels, or second bird.
+
+FOUR-VIEW SETS
+Use yaw000.png, yaw090.png, yaw180.png, yaw270.png.
+
+15 vending-enamel — 0.90 W x 1.82 H x 0.72 D. One late-1980s Japanese enamel beverage vending machine with recessed product windows/buttons/coin slot in true relief; fixed wear and period labels; no floor/shadow/gradient.
+16 phone-booth — 0.90 x 2.40 x 0.90. One complete green 1980s Japanese public phone booth with fixed frame, glass, door, roof and visible period telephone; uncropped base, correct cardinal sides.
+17 crate-stack — 1.40 x 1.60 x 0.90. One stable tied stack of worn harbor wooden crates with fixed rope, labels and cloth details; no chroma holes.
+18 park-bench — 1.82 x 0.86 x 0.68. One weathered municipal slat bench with stable cast-metal supports, exact orthographic front/right/rear/left views.
+19 dock-forklift — 1.25 x 2.15 x 2.65. One small worn 1980s harbor forklift with fixed mast, forks, overhead guard, seat, tires and controls; no driver, floor, shadow, panels or black-mask holes.
+20 shop-hanging-sign — 0.58 x 0.95 x 0.12. One genuinely thin volumetric 1986 Japanese hanging shop sign and top mounting hinge/bracket, fixed face/rear/edge geometry; 000/180 are true opposites and 090/270 are the two thin sides.
+21 dock-handcart — 0.92 x 1.15 x 1.70. One worn two-wheel harbor handcart with fixed tray, handles, axle/wheels and braces; exact orthographic cardinals, no floor/gradient.
+
+TWO-VIEW CYLINDER SETS
+Use yaw000.png and yaw090.png only; both depict the same upright subject rotated 90 degrees around world-up.
+
+22 telephone-pole — 0.35 W x 10.0 H x 0.35 D. One complete upright weathered concrete Japanese utility pole with fixed top crossarms, ceramic insulators and a short self-contained cable attachment only; do not crop top/base and do not generate long scene-spanning wires.
+23 oil-drum — 0.58 x 0.88 x 0.58. One upright worn kerosene drum with fixed rings, cap, dents and period stencil. Both views upright; never rotate it onto its side.
+
+KNOWN FAILURES TO EXPLICITLY REMOVE
+- No fused/duplicate people on diagonals; no changed identities, clothes, bags or tools.
+- No watermarks, gradient studios, inner rectangles, lower-right patches, black masks, or magenta holes in pale subject areas.
+- No mutable trunks/branches/canopies, vehicle parts, boat windows/buoys/flag, sign faces, crate rope, bench supports, cart parts, or bird wing poses.
+- No camera scale/baseline/elevation drift and no oblique image substituted for an exact cardinal side.
+
+Finish with an exact 23-folder completion list and a QA table. If any set fails, regenerate it rather than declaring partial success.

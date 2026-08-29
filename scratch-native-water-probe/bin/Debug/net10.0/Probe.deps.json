@@ -1,0 +1,461 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v10.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v10.0": {
+      "Probe/1.0.0": {
+        "dependencies": {
+          "Fable.Core": "1.0.0",
+          "Fable.Formats": "1.0.0",
+          "Fable.Game": "1.0.0"
+        },
+        "runtime": {
+          "Probe.dll": {}
+        }
+      },
+      "Microsoft.DotNet.PlatformAbstractions/3.1.6": {
+        "runtime": {
+          "lib/netstandard2.0/Microsoft.DotNet.PlatformAbstractions.dll": {
+            "assemblyVersion": "3.1.6.0",
+            "fileVersion": "3.100.620.31604"
+          }
+        }
+      },
+      "Microsoft.Extensions.DependencyModel/9.0.9": {
+        "runtime": {
+          "lib/net9.0/Microsoft.Extensions.DependencyModel.dll": {
+            "assemblyVersion": "9.0.0.9",
+            "fileVersion": "9.0.925.41916"
+          }
+        }
+      },
+      "Silk.NET.Core/2.23.0": {
+        "dependencies": {
+          "Microsoft.DotNet.PlatformAbstractions": "3.1.6",
+          "Microsoft.Extensions.DependencyModel": "9.0.9"
+        },
+        "runtime": {
+          "lib/net6.0/Silk.NET.Core.dll": {
+            "assemblyVersion": "2.23.0.0",
+            "fileVersion": "2.23.0.0"
+          }
+        }
+      },
+      "Silk.NET.GLFW/2.23.0": {
+        "dependencies": {
+          "Silk.NET.Core": "2.23.0",
+          "Ultz.Native.GLFW": "3.4.0"
+        },
+        "runtime": {
+          "lib/net5.0/Silk.NET.GLFW.dll": {
+            "assemblyVersion": "2.23.0.0",
+            "fileVersion": "2.23.0.0"
+          }
+        }
+      },
+      "Silk.NET.Input/2.23.0": {
+        "dependencies": {
+          "Silk.NET.Input.Common": "2.23.0",
+          "Silk.NET.Input.Glfw": "2.23.0"
+        }
+      },
+      "Silk.NET.Input.Common/2.23.0": {
+        "dependencies": {
+          "Silk.NET.Windowing.Common": "2.23.0"
+        },
+        "runtime": {
+          "lib/net5.0/Silk.NET.Input.Common.dll": {
+            "assemblyVersion": "2.23.0.0",
+            "fileVersion": "2.23.0.0"
+          }
+        }
+      },
+      "Silk.NET.Input.Glfw/2.23.0": {
+        "dependencies": {
+          "Silk.NET.Input.Common": "2.23.0",
+          "Silk.NET.Windowing.Glfw": "2.23.0"
+        },
+        "runtime": {
+          "lib/net5.0/Silk.NET.Input.Glfw.dll": {
+            "assemblyVersion": "2.23.0.0",
+            "fileVersion": "2.23.0.0"
+          }
+        }
+      },
+      "Silk.NET.Maths/2.23.0": {
+        "runtime": {
+          "lib/net5.0/Silk.NET.Maths.dll": {
+            "assemblyVersion": "2.23.0.0",
+            "fileVersion": "2.23.0.0"
+          }
+        }
+      },
+      "Silk.NET.Shaderc/2.23.0": {
+        "dependencies": {
+          "Silk.NET.Core": "2.23.0",
+          "Silk.NET.Shaderc.Native": "2.23.0"
+        },
+        "runtime": {
+          "lib/net5.0/Silk.NET.Shaderc.dll": {
+            "assemblyVersion": "2.23.0.0",
+            "fileVersion": "2.23.0.0"
+          }
+        }
+      },
+      "Silk.NET.Shaderc.Native/2.23.0": {
+        "runtimeTargets": {
+          "runtimes/linux-arm/native/libshaderc_shared.so": {
+            "rid": "linux-arm",
+            "assetType": "native",
+            "fileVersion": "0.0.0.0"
+          },
+          "runtimes/linux-arm64/native/libshaderc_shared.so": {
+            "rid": "linux-arm64",
+            "assetType": "native",
+            "fileVersion": "0.0.0.0"
+          },
+          "runtimes/linux-x64/native/libshaderc_shared.so": {
+            "rid": "linux-x64",
+            "assetType": "native",
+            "fileVersion": "0.0.0.0"
+          },
+          "runtimes/osx-arm64/native/libshaderc_shared.dylib": {
+            "rid": "osx-arm64",
+            "assetType": "native",
+            "fileVersion": "0.0.0.0"
+          },
+          "runtimes/osx-x64/native/libshaderc_shared.dylib": {
+            "rid": "osx-x64",
+            "assetType": "native",
+            "fileVersion": "0.0.0.0"
+          },
+          "runtimes/win-arm64/native/shaderc_shared.dll": {
+            "rid": "win-arm64",
+            "assetType": "native",
+            "fileVersion": "0.0.0.0"
+          },
+          "runtimes/win-x64/native/shaderc_shared.dll": {
+            "rid": "win-x64",
+            "assetType": "native",
+            "fileVersion": "0.0.0.0"
+          },
+          "runtimes/win-x86/native/shaderc_shared.dll": {
+            "rid": "win-x86",
+            "assetType": "native",
+            "fileVersion": "0.0.0.0"
+          }
+        }
+      },
+      "Silk.NET.Vulkan/2.23.0": {
+        "dependencies": {
+          "Silk.NET.Core": "2.23.0"
+        },
+        "runtime": {
+          "lib/net5.0/Silk.NET.Vulkan.dll": {
+            "assemblyVersion": "2.23.0.0",
+            "fileVersion": "2.23.0.0"
+          }
+        }
+      },
+      "Silk.NET.Vulkan.Extensions.EXT/2.23.0": {
+        "dependencies": {
+          "Silk.NET.Core": "2.23.0",
+          "Silk.NET.Vulkan": "2.23.0"
+        },
+        "runtime": {
+          "lib/net5.0/Silk.NET.Vulkan.Extensions.EXT.dll": {
+            "assemblyVersion": "2.23.0.0",
+            "fileVersion": "2.23.0.0"
+          }
+        }
+      },
+      "Silk.NET.Vulkan.Extensions.KHR/2.23.0": {
+        "dependencies": {
+          "Silk.NET.Core": "2.23.0",
+          "Silk.NET.Vulkan": "2.23.0"
+        },
+        "runtime": {
+          "lib/net5.0/Silk.NET.Vulkan.Extensions.KHR.dll": {
+            "assemblyVersion": "2.23.0.0",
+            "fileVersion": "2.23.0.0"
+          }
+        }
+      },
+      "Silk.NET.Windowing.Common/2.23.0": {
+        "dependencies": {
+          "Silk.NET.Core": "2.23.0",
+          "Silk.NET.Maths": "2.23.0"
+        },
+        "runtime": {
+          "lib/netstandard2.1/Silk.NET.Windowing.Common.dll": {
+            "assemblyVersion": "2.23.0.0",
+            "fileVersion": "2.23.0.0"
+          }
+        }
+      },
+      "Silk.NET.Windowing.Glfw/2.23.0": {
+        "dependencies": {
+          "Silk.NET.GLFW": "2.23.0",
+          "Silk.NET.Windowing.Common": "2.23.0"
+        },
+        "runtime": {
+          "lib/net5.0/Silk.NET.Windowing.Glfw.dll": {
+            "assemblyVersion": "2.23.0.0",
+            "fileVersion": "2.23.0.0"
+          }
+        }
+      },
+      "Ultz.Native.GLFW/3.4.0": {
+        "runtimeTargets": {
+          "runtimes/linux-arm/native/libglfw.so.3": {
+            "rid": "linux-arm",
+            "assetType": "native",
+            "fileVersion": "0.0.0.0"
+          },
+          "runtimes/linux-arm64/native/libglfw.so.3": {
+            "rid": "linux-arm64",
+            "assetType": "native",
+            "fileVersion": "0.0.0.0"
+          },
+          "runtimes/linux-x64/native/libglfw.so.3": {
+            "rid": "linux-x64",
+            "assetType": "native",
+            "fileVersion": "0.0.0.0"
+          },
+          "runtimes/osx-arm64/native/libglfw.3.dylib": {
+            "rid": "osx-arm64",
+            "assetType": "native",
+            "fileVersion": "0.0.0.0"
+          },
+          "runtimes/osx-x64/native/libglfw.3.dylib": {
+            "rid": "osx-x64",
+            "assetType": "native",
+            "fileVersion": "0.0.0.0"
+          },
+          "runtimes/win-arm64/native/glfw3.dll": {
+            "rid": "win-arm64",
+            "assetType": "native",
+            "fileVersion": "3.4.0.0"
+          },
+          "runtimes/win-x64/native/glfw3.dll": {
+            "rid": "win-x64",
+            "assetType": "native",
+            "fileVersion": "3.4.0.0"
+          },
+          "runtimes/win-x86/native/glfw3.dll": {
+            "rid": "win-x86",
+            "assetType": "native",
+            "fileVersion": "3.4.0.0"
+          }
+        }
+      },
+      "Fable.Core/1.0.0": {
+        "runtime": {
+          "Fable.Core.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      },
+      "Fable.Dx9/1.0.0": {
+        "runtime": {
+          "Fable.Dx9.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      },
+      "Fable.Formats/1.0.0": {
+        "dependencies": {
+          "Fable.Core": "1.0.0"
+        },
+        "runtime": {
+          "Fable.Formats.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      },
+      "Fable.Game/1.0.0": {
+        "dependencies": {
+          "Fable.Core": "1.0.0",
+          "Fable.Dx9": "1.0.0",
+          "Fable.Formats": "1.0.0",
+          "Fable.Render": "1.0.0"
+        },
+        "runtime": {
+          "Fable.Game.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      },
+      "Fable.Render/1.0.0": {
+        "dependencies": {
+          "Fable.Core": "1.0.0",
+          "Fable.Dx9": "1.0.0",
+          "Fable.Formats": "1.0.0",
+          "Silk.NET.Core": "2.23.0",
+          "Silk.NET.Input": "2.23.0",
+          "Silk.NET.Shaderc": "2.23.0",
+          "Silk.NET.Vulkan": "2.23.0",
+          "Silk.NET.Vulkan.Extensions.EXT": "2.23.0",
+          "Silk.NET.Vulkan.Extensions.KHR": "2.23.0"
+        },
+        "runtime": {
+          "Fable.Render.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "Probe/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Microsoft.DotNet.PlatformAbstractions/3.1.6": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-jek4XYaQ/PGUwDKKhwR8K47Uh1189PFzMeLqO83mXrXQVIpARZCcfuDedH50YDTepBkfijCZN5U/vZi++erxtg==",
+      "path": "microsoft.dotnet.platformabstractions/3.1.6",
+      "hashPath": "microsoft.dotnet.platformabstractions.3.1.6.nupkg.sha512"
+    },
+    "Microsoft.Extensions.DependencyModel/9.0.9": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-fNGvKct2De8ghm0Bpfq0iWthtzIWabgOTi+gJhNOPhNJIowXNEUE2eZNW/zNCzrHVA3PXg2yZ+3cWZndC2IqYA==",
+      "path": "microsoft.extensions.dependencymodel/9.0.9",
+      "hashPath": "microsoft.extensions.dependencymodel.9.0.9.nupkg.sha512"
+    },
+    "Silk.NET.Core/2.23.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-D7AT/nnwlB+4RZ84XY8QNGBZMJI5z9l4CSSETIJ1wCfRJzRt/341y3MRZ4HbnFz4r/IGaWOEZr86iE+0/65yyQ==",
+      "path": "silk.net.core/2.23.0",
+      "hashPath": "silk.net.core.2.23.0.nupkg.sha512"
+    },
+    "Silk.NET.GLFW/2.23.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-UIs4sH57xlPUNHQ/1bt9rymPWlGy8IMDCNv86h0iM4TOA1CkIx0XM/n/tA4AReh1zQkNrvkxPEdZ3Blvy1dyXg==",
+      "path": "silk.net.glfw/2.23.0",
+      "hashPath": "silk.net.glfw.2.23.0.nupkg.sha512"
+    },
+    "Silk.NET.Input/2.23.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-Xzl+tVwAp2eEd8blmGQjmJrsZPnp3PWG0KJjiAQHaY2Zr/ELVWeAROKXmZdCAvexzmte2JVGEy/dxnMycbxlpg==",
+      "path": "silk.net.input/2.23.0",
+      "hashPath": "silk.net.input.2.23.0.nupkg.sha512"
+    },
+    "Silk.NET.Input.Common/2.23.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-QbJVV7kFBHEByayXCYdJtXXI9Sp4a+QAf0IdGV6uCWkFYcEmqBYW3aaNGvFOdSwTBDbHL5T/OtOCrGh4qYhk7A==",
+      "path": "silk.net.input.common/2.23.0",
+      "hashPath": "silk.net.input.common.2.23.0.nupkg.sha512"
+    },
+    "Silk.NET.Input.Glfw/2.23.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-KGHYqsv/IQRJtD6dloYh2tN4CkaM40vxM2kj0cGKBoCQiBDYHHhJiyDTyMPx0W7Fz5IgnhnG42ELmIAa0DH69A==",
+      "path": "silk.net.input.glfw/2.23.0",
+      "hashPath": "silk.net.input.glfw.2.23.0.nupkg.sha512"
+    },
+    "Silk.NET.Maths/2.23.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-r8PdIVzME8EH0qAgbmRPO87I4GfgR2j8TofT7EMuRJDf1QluoQwnVypDoFJjQ2ZBSRsGYk5unYxxogI05Ogsmw==",
+      "path": "silk.net.maths/2.23.0",
+      "hashPath": "silk.net.maths.2.23.0.nupkg.sha512"
+    },
+    "Silk.NET.Shaderc/2.23.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-+pXfOhmSCeeMECOo9HMi3C63LVbQ7FBxPFgxPKOT6mXD8Gg/90Wt4fLX4LqUuVbGid5LW6BXAUu1g17XQoawdA==",
+      "path": "silk.net.shaderc/2.23.0",
+      "hashPath": "silk.net.shaderc.2.23.0.nupkg.sha512"
+    },
+    "Silk.NET.Shaderc.Native/2.23.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-H6OMLIWdh2HITvkmj+ALs8LTIdQvQ2/JTtkDXinVbJ3xxrQIBXhVmc9jnuTQ67YDybGlENSMrgthzhLwK0rjnQ==",
+      "path": "silk.net.shaderc.native/2.23.0",
+      "hashPath": "silk.net.shaderc.native.2.23.0.nupkg.sha512"
+    },
+    "Silk.NET.Vulkan/2.23.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-3/irtlSWXZ3eTi8N6nelI6L34NTB8ZJHpqVMNzZx2aX7Ek9YEQ34NoQW8/Tljrtmkg8KRhHW8hKTEzZaKV8PgA==",
+      "path": "silk.net.vulkan/2.23.0",
+      "hashPath": "silk.net.vulkan.2.23.0.nupkg.sha512"
+    },
+    "Silk.NET.Vulkan.Extensions.EXT/2.23.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-+Oth189ksRiL6HvGCwIdnsYHawqrbO8y49u1H61z3wsfcHhQZeVDYe/wF5LD7fk3NcdgDvwFD3mLm1QWhdZySw==",
+      "path": "silk.net.vulkan.extensions.ext/2.23.0",
+      "hashPath": "silk.net.vulkan.extensions.ext.2.23.0.nupkg.sha512"
+    },
+    "Silk.NET.Vulkan.Extensions.KHR/2.23.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-uRaf4j+SmH3DumjSSSUbFg33BnsGZUyXGj93O9NgGKZSJN3OTmNmQDxRew+/KiVLcgH6qzbto8aNGZ++j9GFWg==",
+      "path": "silk.net.vulkan.extensions.khr/2.23.0",
+      "hashPath": "silk.net.vulkan.extensions.khr.2.23.0.nupkg.sha512"
+    },
+    "Silk.NET.Windowing.Common/2.23.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-ThStSinmY9KQI8DGiF5XEhkLJVnBcgRTBTzL9ijg1wMZAYuckz7ykrNw04fjRm2Gryh6tCNGbvz2XaY0efeFzg==",
+      "path": "silk.net.windowing.common/2.23.0",
+      "hashPath": "silk.net.windowing.common.2.23.0.nupkg.sha512"
+    },
+    "Silk.NET.Windowing.Glfw/2.23.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-aYBudKmENmvLRn9p15HbdvlQTnnXskcDfTfbYwSb/4fr263rGLwYuDw/txUEc2jihHJiWCp5+75Y7z5wTJWl7g==",
+      "path": "silk.net.windowing.glfw/2.23.0",
+      "hashPath": "silk.net.windowing.glfw.2.23.0.nupkg.sha512"
+    },
+    "Ultz.Native.GLFW/3.4.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-Iy22JopynbOJ32vA0lBhFEzGi65GQJBuJHYBYRBpydrDpNoTiHnjIXfA65Gu+8qsOr/ZEoIF8r9aHCgAXuO6DA==",
+      "path": "ultz.native.glfw/3.4.0",
+      "hashPath": "ultz.native.glfw.3.4.0.nupkg.sha512"
+    },
+    "Fable.Core/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Fable.Dx9/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Fable.Formats/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Fable.Game/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Fable.Render/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}

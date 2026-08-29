@@ -1,0 +1,92 @@
+FINAL MODULE REPAIR SWARM — GROK IS THE SOLE IMAGE GENERATOR
+
+Use exactly 23 disjoint asset-generation workers, one worker per folder listed below, plus one independent QA lead. Generate only 2D PNG source images. Do not edit code, tests, metadata, dimensions, or launch/run any game or 3D process. Do not generate or import any 3D asset. Each worker may read the four current PNGs in its assigned folder as design references, but must replace the folder atomically only after a coherent new four-view set is complete.
+
+ROOT
+C:\ThreeBrowser\ThreeBrowserRuntime\samples\harbor_town_1986\assets
+
+NON-NEGOTIABLE FOUR-VIEW CONTRACT FOR EVERY WORKER
+- Output exactly yaw-000.png, yaw-090.png, yaw-180.png, yaw-270.png, each 1024x1024 RGBA or RGB PNG.
+- These are four true orthographic cardinal elevations of one locked physical object: 000 front, 090 right, 180 back, 270 left. Never use a 3/4 camera.
+- The flat exterior field must be exact #E040A0. It may occur only as removable background/open space. Recolour any intended pink paint, lettering, reflection, poster art, metal highlight, or texture so it is visibly outside the strict key colour range.
+- No floor, cyclorama horizon, contact/cast shadow, glow, detached fragment, annotation, measurement mark, logo, watermark, border contact, or cropped subject.
+- Generous clean border on all four edges. Centre every view on the same world-space origin and common baseline.
+- Lock a single pixels-per-metre scale across all four views. For dimensions W x H x D, the visible solid envelope ratios must be approximately: 000/180 width:height = W:H and 090/270 width:height = D:H. Opposite views must agree within 10% width and 5% centre/height; tighter is preferred.
+- Materials, wear, seams, windows, openings and identifiers must correspond across views. Do not invent face-specific protrusions that change the declared envelope.
+- Preserve high-quality, grounded 1986 Japanese harbor-town art direction. These are reusable reconstruction inputs, not presentation cards.
+- Install all four files atomically. Never leave a mixed old/new orbit.
+
+WORKER 01 — quay-edge-cap — W=2.00m H=0.12m D=1.90m
+One low weathered concrete quay coping/cap slab. Current 000/180/270 contain hot-magenta chips inside solid concrete (090 has smaller spots), which become holes. Regenerate clean continuous concrete. Preserve plausible salt wear in non-key colours. Because it is very low, front/back and side elevations should be long thin slabs with ratios 16.67 and 15.83 respectively.
+
+WORKER 02 — road-wheel — W=0.22m H=0.52m D=0.52m
+One small 1980s kei-vehicle steel road wheel/tire with axle along X. 000/180 show the narrow tread/end envelope W:H=0.423; 090/270 show coherent round wheel faces D:H=1.0. Legitimate hub/vent apertures may expose background, but current hot-magenta speckles/arcs on solid silver rim metal and vertical sidewall strips are destructive. Regenerate clean opaque rubber and metal surfaces with only physically real openings.
+
+WORKER 03 — bus-wheel — W=0.30m H=0.84m D=0.84m
+One 1980s Japanese city-bus tire/wheel with axle along X. 000/180 narrow tread/end envelope W:H=0.357; 090/270 round faces D:H=1.0. Real centre/rim holes may expose background consistently. Remove the current hot-magenta arc/speckles from the solid front hub and any other key-colour contamination.
+
+WORKER 04 — town-wall-window-tile — W=2.00m H=3.00m D=0.32m
+One reusable tiled town-wall window bay. 000/180 W:H=0.667; 090/270 D:H=0.107 as true thin profiles. Remove the detached triangular tiled-roof/eave/wire fragment at lower-right and all corresponding stray side hardware. Keep only one rectangular bay, with coherent tile/window detail and no protrusion beyond the 0.32m depth.
+
+WORKER 05 — town-shopfront-shutter — W=2.00m H=3.00m D=0.45m
+One reusable rear metal shop-shutter bay, not a whole shop. 000/180 W:H=0.667; 090/270 D:H=0.150. Current front/rear are about 52–56% too wide and the sides about 217–233% too thick, which crushes the awning. Regenerate as the exact thin rectangular bay, keeping era-appropriate worn shutter/awning detail within its depth.
+
+WORKER 06 — wood-house-wall-blank — W=2.00m H=3.00m D=0.32m
+One blank timber-house wall bay. 000/180 W:H=0.667; 090/270 D:H=0.107. Current side widths differ about 43%, and 270 is over twice the declared depth. Regenerate coherent thin side twins with the same timber boards/wear; no door, window, utility fixture, or detached trim.
+
+WORKER 07 — wood-house-door-bay — W=2.00m H=3.00m D=0.42m
+One timber-house entrance bay with period Japanese door. 000/180 W:H=0.667; 090/270 D:H=0.140. Current sides depict about 0.39–0.40 H depth, nearly 180% too thick. Keep the door and a very shallow threshold entirely inside the declared 0.42m envelope; true thin side elevations.
+
+WORKER 08 — warehouse-wall-bay — W=2.50m H=7.00m D=0.40m
+One tall corrugated harbor-warehouse wall bay. 000/180 W:H=0.357; 090/270 D:H=0.057. Current front is roughly 50% too wide, side opposites differ 31%, and both are too thick. Regenerate a tall, narrow, thin modular bay with matching corrugation/rust seams and no detached pipes.
+
+WORKER 09 — warehouse-door-bay — W=3.00m H=4.20m D=0.50m
+One corrugated warehouse sliding-door bay. 000/180 W:H=0.714; 090/270 D:H=0.119. Current front is 32–35% too wide and sides 46–47% too thick. Regenerate to the exact envelope, same door on the front and coherent backing on the rear.
+
+WORKER 10 — warehouse-upper-bay — W=3.00m H=2.80m D=0.40m
+One upper corrugated warehouse bay. 000/180 W:H=1.071; 090/270 D:H=0.143. Current side widths differ 39% and 270 is about twice the declared depth. Regenerate true thin mirrored side envelopes, with any vent/window repeated coherently.
+
+WORKER 11 — warehouse-roof-bay — W=2.50m H=1.20m D=12.00m
+One long gabled warehouse roof strip used repeatedly across building width. 000/180 gable envelope W:H=2.083. 090/270 long eave envelope D:H=10.0. Current side roof is only about 1.4x the gable width rather than the required D/W=4.8, so it reconstructs far too short. Regenerate the full 12m long roof strip; use a low vertical pixel height so the entire long side fits with generous margins. No vents, pipes, hatches, or face-specific clutter.
+
+WORKER 12 — kei-van-cargo-box — W=1.34m H=0.98m D=1.55m
+One compact off-white kei-van cargo box matching the repaired cab/lower body. 000/180 W:H=1.367; 090/270 D:H=1.582. Current front/rear are 26–27% too narrow while the side proportions are good. Regenerate all four from one box master, keeping door seams/latches coherent and no wheels/chassis/cab.
+
+FACADE WORKERS 13–23 — COMMON FACADE RULES
+Each folder is one complete but very thin street-facing facade slab, not a whole 3D building. Preserve the shop identity, period materials, signs and 1986 Japanese detail from the current yaw-000 design, but reconstruct all four views from one locked slab. The front is the decorated street face; rear is its coherent plain backing; 090/270 are extremely thin profiles. All intended pink/red-magenta letters, awning stripes, posters, produce, packaging, reflections and trim must be recoloured away from exact #E040A0 so the chroma key cannot punch them out. Keep real window glass opaque/tinted rather than background-colour holes. No detached blade signs beyond the declared 0.45m total depth. Side profile target is D:H, usually only about 6% of the facade height.
+
+WORKER 13 — facade-soba-shop — W=6.40m H=7.20m D=0.45m
+Ratios: front/rear 0.889; sides 0.0625. Current front is about 26% too wide and exact-key pixels contaminate NISHIYA/lantern/window-sill detail. Preserve a believable period soba storefront and legible era-appropriate signage without key-colour pixels inside the subject.
+
+WORKER 14 — facade-you-arcade — W=8.00m H=7.80m D=0.45m
+Ratios: front/rear 1.026; sides 0.0577. Preserve the small 1986 arcade/neon facade identity. Current neon lettering, door and cabinet art contain exact key colour. Recolour those details and make both side profiles truly thin.
+
+WORKER 15 — facade-yokobori-bar — W=5.20m H=7.60m D=0.45m
+Ratios: front/rear 0.684; sides 0.0592. Current front is about 33% too wide and sign outlines/text contain exact key colour. Preserve a compact, weathered harbor bar facade while correcting the envelope and chroma contamination.
+
+WORKER 16 — facade-flower-shop — W=6.60m H=6.80m D=0.45m
+Ratios: front/rear 0.971; sides 0.0662. Current awning stripes contain exact key colour. Preserve flowers and striped awning in safe non-key reds/pinks; thin coherent profiles and no protruding floor display beyond 0.45m.
+
+WORKER 17 — facade-cassette-shop — W=6.20m H=7.10m D=0.45m
+Ratios: front/rear 0.873; sides 0.0634. Current record posters/person/signage contain exact key colour, and yaw-090 has a large dusty-magenta residue/halo left of the wall/awning. Regenerate cleanly with no person/detached figure and no halo. Preserve a believable 1986 cassette/record shop facade.
+
+WORKER 18 — facade-greengrocer — W=5.40m H=6.90m D=0.45m
+Ratios: front/rear 0.783; sides 0.0652. Current front is about 24% too wide and signage/produce contain exact key colour. Preserve dense but orderly produce/sign detail in safe colours, kept within the thin facade envelope.
+
+WORKER 19 — facade-tobacco-shop — W=5.20m H=7.00m D=0.45m
+Ratios: front/rear 0.743; sides 0.0643. Current magazines/Open/sign details contain exact key colour. Preserve a period tobacco kiosk facade with safe colour separation and coherent thin side profiles.
+
+WORKER 20 — facade-pharmacy — W=6.60m H=7.00m D=0.45m
+Ratios: front/rear 0.943; sides 0.0643. Current product boxes/banner contain exact key colour. Preserve mint-tile pharmacy identity and legible period Japanese pharmacy signage; remove key contamination and any face-specific protrusion.
+
+WORKER 21 — facade-barber-shop — W=6.20m H=7.00m D=0.45m
+Ratios: front/rear 0.886; sides 0.0643. Current BARBER/sign/chair detail contains exact key colour. Preserve the period barber facade, pole/sign language and interior suggestion, but fit every solid/detail inside the thin slab and use safe colours.
+
+WORKER 22 — facade-hardware-shop — W=6.40m H=7.00m D=0.45m
+Ratios: front/rear 0.914; sides 0.0643. Current main sign and paint-label details contain exact key colour. Preserve a busy but readable 1986 hardware shop facade; safe non-key paints, thin profiles, no detached stock or floor.
+
+WORKER 23 — facade-kissaten — W=6.00m H=6.80m D=0.45m
+Ratios: front/rear 0.882; sides 0.0662. Current front is about 22% too narrow and chair/lantern/poster borders contain exact key colour. Preserve a warm period kissaten facade, correcting the envelope and all key contamination.
+
+INDEPENDENT QA LEAD — DO NOT GENERATE OR EDIT
+Wait until all 23 workers report. For every folder, inspect all four current installed PNGs and measure the connected exterior background, foreground bounds, border clearance, centre/baseline drift, common pixels-per-metre scale, target projected ratios, and opposite-view agreement. Inspect at pixel level for exact #E040A0 inside solid/detail surfaces and for any watermark/residue. Reject mixed or incoherent sets. Report a compact PASS/FAIL table with exact folder and yaw reasons. Do not run code, tests, reconstruction, or the game.

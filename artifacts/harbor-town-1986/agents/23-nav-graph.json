@@ -1,0 +1,20 @@
+{
+  "id": "minamihama-1986",
+  "units": "metres",
+  "nodes": [
+    { "id": "hill", "x": -22, "z": -32, "edges": ["stairs"] },
+    { "id": "stairs", "x": -18, "z": -14, "edges": ["hill", "tobacco", "soba"] },
+    { "id": "route16", "x": -40, "z": 4, "edges": ["tobacco"] },
+    { "id": "tobacco", "x": -25, "z": -1.5, "edges": ["stairs", "route16", "soba"] },
+    { "id": "soba", "x": -14, "z": -1.5, "edges": ["stairs", "tobacco", "produce", "flower"] },
+    { "id": "produce", "x": -4, "z": -1.5, "edges": ["soba", "sakae", "arcade", "flower"] },
+    { "id": "sakae", "x": 0, "z": 1.5, "edges": ["produce", "arcade", "flower", "harbor-gate"] },
+    { "id": "arcade", "x": 8, "z": -1.5, "edges": ["produce", "sakae", "records"] },
+    { "id": "records", "x": 20, "z": -1.5, "edges": ["arcade", "bar"] },
+    { "id": "flower", "x": -6, "z": 5.2, "edges": ["soba", "produce", "sakae"] },
+    { "id": "bar", "x": 22, "z": 12, "edges": ["records", "harbor-gate"] },
+    { "id": "harbor-gate", "x": 0, "z": 48, "edges": ["sakae", "bar", "harbor", "quay"] },
+    { "id": "harbor", "x": -8, "z": 58, "edges": ["harbor-gate", "quay"] },
+    { "id": "quay", "x": 0, "z": 82, "edges": ["harbor-gate", "harbor"] }
+  ]
+}

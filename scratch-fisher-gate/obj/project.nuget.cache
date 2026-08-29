@@ -1,0 +1,26 @@
+{
+  "version": 2,
+  "dgSpecHash": "ARBkEuRt9n4=",
+  "success": true,
+  "projectFilePath": "C:\\ThreeBrowser\\scratch-fisher-gate\\FisherGateProbe.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\samue\\.nuget\\packages\\microsoft.dotnet.platformabstractions\\3.1.6\\microsoft.dotnet.platformabstractions.3.1.6.nupkg.sha512",
+    "C:\\Users\\samue\\.nuget\\packages\\microsoft.extensions.dependencymodel\\9.0.9\\microsoft.extensions.dependencymodel.9.0.9.nupkg.sha512",
+    "C:\\Users\\samue\\.nuget\\packages\\silk.net.core\\2.23.0\\silk.net.core.2.23.0.nupkg.sha512",
+    "C:\\Users\\samue\\.nuget\\packages\\silk.net.glfw\\2.23.0\\silk.net.glfw.2.23.0.nupkg.sha512",
+    "C:\\Users\\samue\\.nuget\\packages\\silk.net.input\\2.23.0\\silk.net.input.2.23.0.nupkg.sha512",
+    "C:\\Users\\samue\\.nuget\\packages\\silk.net.input.common\\2.23.0\\silk.net.input.common.2.23.0.nupkg.sha512",
+    "C:\\Users\\samue\\.nuget\\packages\\silk.net.input.glfw\\2.23.0\\silk.net.input.glfw.2.23.0.nupkg.sha512",
+    "C:\\Users\\samue\\.nuget\\packages\\silk.net.maths\\2.23.0\\silk.net.maths.2.23.0.nupkg.sha512",
+    "C:\\Users\\samue\\.nuget\\packages\\silk.net.shaderc\\2.23.0\\silk.net.shaderc.2.23.0.nupkg.sha512",
+    "C:\\Users\\samue\\.nuget\\packages\\silk.net.shaderc.native\\2.23.0\\silk.net.shaderc.native.2.23.0.nupkg.sha512",
+    "C:\\Users\\samue\\.nuget\\packages\\silk.net.vulkan\\2.23.0\\silk.net.vulkan.2.23.0.nupkg.sha512",
+    "C:\\Users\\samue\\.nuget\\packages\\silk.net.vulkan.extensions.ext\\2.23.0\\silk.net.vulkan.extensions.ext.2.23.0.nupkg.sha512",
+    "C:\\Users\\samue\\.nuget\\packages\\silk.net.vulkan.extensions.khr\\2.23.0\\silk.net.vulkan.extensions.khr.2.23.0.nupkg.sha512",
+    "C:\\Users\\samue\\.nuget\\packages\\silk.net.windowing\\2.23.0\\silk.net.windowing.2.23.0.nupkg.sha512",
+    "C:\\Users\\samue\\.nuget\\packages\\silk.net.windowing.common\\2.23.0\\silk.net.windowing.common.2.23.0.nupkg.sha512",
+    "C:\\Users\\samue\\.nuget\\packages\\silk.net.windowing.glfw\\2.23.0\\silk.net.windowing.glfw.2.23.0.nupkg.sha512",
+    "C:\\Users\\samue\\.nuget\\packages\\ultz.native.glfw\\3.4.0\\ultz.native.glfw.3.4.0.nupkg.sha512"
+  ],
+  "logs": []
+}

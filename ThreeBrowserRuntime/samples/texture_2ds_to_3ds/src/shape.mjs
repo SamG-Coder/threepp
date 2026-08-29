@@ -190,19 +190,25 @@ export function classifyOrbitShape(views) {
     || (planDelta > 0.18 && !rotationallySymmetric)
   );
 
+  const skinny = mean(stats.map(item => item.aspect)) < 0.55;
+  const humanoidLike = organic && skinny && !flared && planDelta > 0.1;
+
   let kind = "custom";
-  if (organic || flared) kind = "custom";
+  if (humanoidLike) kind = "humanoid";
+  else if (organic || flared) kind = "custom";
   else if (capsuleLike) kind = "capsule";
   else if (cylinderLike) kind = "cylinder";
   else if (squareLike) kind = "square";
   else if (rectangleLike) kind = "rectangle";
 
-  const generic = kind !== "custom";
+  const generic = kind !== "custom" && kind !== "humanoid";
   const recommendedCount = kind === "cylinder" || kind === "capsule"
     ? 2
-    : generic
-      ? 4
-      : 8;
+    : kind === "humanoid" || kind === "custom"
+      ? 8
+      : generic
+        ? 4
+        : 8;
   return {
     generic,
     kind,

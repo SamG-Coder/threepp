@@ -1,0 +1,83 @@
+Asset-only pivot for harbor_town_1986. You are the exclusive 2D source-asset generator; I will implement all code. Stop spending effort on the monolithic hill-stairway, quay-seawall-segment, whole-building, kei-sedan, kei-van, and city-bus orbit sets. Those whole objects are being retired from active runtime. Generate a clean modular component kit instead under:
+
+C:\ThreeBrowser\ThreeBrowserRuntime\samples\harbor_town_1986\assets\<folder>\yaw-000.png
+yaw-090.png
+yaw-180.png
+yaw-270.png
+
+You may swarm up to 32 sub-agents. Work asset-only: no source-code edits, no procedural meshes, no 3D model files, no tests, no screenshots outside these source PNG folders. Do not overwrite reliable unrelated asset folders. Complete every listed four-view set atomically before declaring success.
+
+GLOBAL ORBIT CONTRACT FOR EVERY COMPONENT
+- 1024x1024 PNG, solid exact edge-to-edge #E040A0 background.
+- No floor, horizon, pedestal, cast shadow, contact shadow, lower-right patch, generation panel, caption, watermark, border, or stray residue.
+- Preserve every non-magenta subject pixel. Never apply broad fuzzy/flood cleanup that erases pale concrete, glass, chrome, lettering, roof edges, or thin structure. If cleanup is needed, replace only border-connected pixels that are actually the key background; do not remove enclosed subject pixels.
+- One frozen physical component: identical geometry, material, wear, proportions, pivot, baseline, pixel height, orthographic camera, camera elevation and lighting in all four images. Only camera azimuth changes.
+- Modest fixed downward orthographic elevation so top surfaces are visible; no perspective; no camera pitch change.
+- Component centered on the same pivot and baseline with generous equal padding; nothing touches/crops at canvas borders.
+- yaw-000 = front, yaw-090 = right side, yaw-180 = rear, yaw-270 = left side. Opposites must be geometrically consistent.
+- Each image shows ONLY the named isolated component. Vehicle bodies contain no wheels; wheels are separate. Building modules contain no neighboring modules.
+- Weathered, grounded, realistic late-1986 Yokosuka/Japanese harbor-town material language. No modern branding. Intended Japanese storefront lettering is part of the facade, not a watermark.
+
+GENERATE THESE EXACT FOLDERS / PHYSICAL MODULES
+
+STONE + QUAY
+1 stone-step-slab — 1.08m W x 0.30m H x 1.12m D, one weathered gray granite tread block, square joints.
+2 stone-side-wall-course — 0.75 W x 0.55 H x 1.12 D, matching rough retaining-wall course block.
+3 stone-cap-slab — 0.85 W x 0.15 H x 1.16 D, matching beveled wall cap.
+4 quay-wall-block — 4.00 W x 0.86 H x 1.60 D, salt-stained 1980s poured-concrete seawall block with subtle formwork seams; simple solid module.
+5 quay-edge-cap — 2.00 W x 0.12 H x 1.90 D, weathered dock-edge cap slab.
+
+TOWN SHELL MODULES
+6 town-wall-window-plaster — 2.00 W x 3.00 H x 0.32 D, aged cream plaster wall bay with deeply framed period aluminum window; fully solid relief, not a flat card.
+7 town-wall-window-tile — 2.00 x 3.00 x 0.32, small-tile wall bay with framed window.
+8 town-wall-blank — 2.00 x 3.00 x 0.32, aged side/back service wall bay with pipes/vents in real relief.
+9 town-corner-post — 0.35 x 3.00 x 0.35, concrete corner/pilaster.
+10 town-roof-slab — 2.00 x 0.32 x 2.00, flat weathered roof/parapet slab module with visible top.
+11 town-shopfront-shutter — 2.00 x 3.00 x 0.45, generic closed 1986 metal shopfront/shutter bay with frame and shallow awning.
+
+UNIQUE FRONT-FACADE COMPONENTS
+Each is a thin but genuinely volumetric complete front facade with doors, window recesses, awnings, mullions and signs in relief; simple sealed rear/edges. Match the stated W x H x 0.45m D. Do not include the building sides, roof, or rear.
+12 facade-soba-shop — 6.40 x 7.20 x 0.45, Nishiya soba.
+13 facade-you-arcade — 8.00 x 7.80 x 0.45, Starlight Arcade.
+14 facade-yokobori-bar — 5.20 x 7.60 x 0.45, Galaxy sakaba.
+15 facade-flower-shop — 6.60 x 6.80 x 0.45, Midori florist.
+16 facade-cassette-shop — 6.20 x 7.10 x 0.45, Minato-machi records.
+17 facade-greengrocer — 5.40 x 6.90 x 0.45, Yaoya produce shop.
+18 facade-tobacco-shop — 5.20 x 7.00 x 0.45, Kamimura tobacco.
+19 facade-pharmacy — 6.60 x 7.00 x 0.45, Minato-machi pharmacy.
+20 facade-barber-shop — 6.20 x 7.00 x 0.45, Haru barber.
+21 facade-hardware-shop — 6.40 x 7.00 x 0.45, Yamato kanagu.
+22 facade-kissaten — 6.00 x 6.80 x 0.45, Kissa Miharu.
+
+HILL-HOUSE KIT
+23 wood-house-wall-window — 2.00 x 3.00 x 0.32, dark weathered timber/siding bay with period window.
+24 wood-house-wall-blank — 2.00 x 3.00 x 0.32, matching blank/utility wall bay.
+25 wood-house-door-bay — 2.00 x 3.00 x 0.42, matching recessed genkan/door bay.
+26 wood-house-roof-bay — 2.00 W x 1.40 H x 7.80 D, complete narrow slice of a traditional gabled dark ceramic-tile roof from eave to eave, intended to repeat side-by-side; ridge/eaves align exactly.
+
+WAREHOUSE KIT
+27 warehouse-wall-bay — 2.50 x 7.00 x 0.40, corrugated weathered harbor warehouse wall bay, period industrial glazing/vents.
+28 warehouse-door-bay — 3.00 x 4.20 x 0.50, heavy roller/loading door module.
+29 warehouse-upper-bay — 3.00 x 2.80 x 0.40, matching corrugated upper wall/gable infill above door.
+30 warehouse-roof-bay — 2.50 W x 1.20 H x 12.00 D, complete narrow gabled corrugated roof slice intended to repeat across width; aligned ridge/eaves.
+
+VEHICLE KIT
+All vehicle pieces use one coherent late-1980s slightly worn aesthetic per vehicle family. Bodies have clean wheel clearance and contain NO wheels.
+31 road-wheel — 0.22 W x 0.52 H x 0.52 D, isolated compact steel wheel/tire, axle along local X, circular sidewalls and tread.
+32 bus-wheel — 0.30 x 0.84 x 0.84, isolated bus tire/steel rim, axle local X.
+33 kei-sedan-body — 1.42 x 0.72 x 3.25, pale 1980s Japanese kei sedan lower body/chassis, bumpers/lights included, no cabin/glass and no wheels.
+34 kei-sedan-cabin — 1.22 x 0.66 x 1.65, matching sedan glass cabin/roof isolated, no lower body/wheels.
+35 kei-van-lower-body — 1.40 x 0.64 x 3.20, matching compact commercial lower chassis/nose/bed, no cab/cargo upper/wheels.
+36 kei-van-cab — 1.28 x 1.13 x 1.32, matching cab/cabin with windows and roof, isolated.
+37 kei-van-cargo-box — 1.34 x 0.98 x 1.55, matching small commercial cargo upper/box, isolated.
+38 city-bus-lower-body — 2.50 x 0.92 x 10.40, 1986 municipal bus lower chassis/bumpers/skirts, no passenger cabin or wheels.
+39 city-bus-passenger-body — 2.42 x 1.76 x 9.65, matching passenger body/windows/front/rear upper shell, isolated, no lower chassis/roof/wheels.
+40 city-bus-roof — 2.34 x 0.32 x 9.50, matching slightly crowned bus roof module, isolated.
+
+QUALITY PROCESS
+- First delegate independent fixed subsets and a QA lead; never let multiple workers write the same folder.
+- For each set, visually compare all four views and reject/regenerate any identity, support, framing, scale, pose, camera-elevation, key, residue or cropping mismatch.
+- Check exact dimensions as proportions, especially thin-depth facade/roof/wheel side views. Do not make every yaw equally wide.
+- Write via temporary folder/files, then atomically replace the complete four-file destination only after the entire set passes.
+- Do not make a report file inside assets. Summarize failures and final exact completed-folder list in the terminal.
+- Zero partial or “best available” sets. If a generation is wrong, keep regenerating that set. Do not stop early.

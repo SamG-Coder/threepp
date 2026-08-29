@@ -79,5 +79,6 @@ export function pickViewsForShape(views, shape) {
     const side = viewNearYaw(views, 90);
     if (front && side && front !== side) return [front, side];
   }
+  if (kind === "humanoid") return equallySpacedSubset(views, Math.min(8, views.length));
   return equallySpacedSubset(views, shape?.recommendedCount ?? views.length);
 }

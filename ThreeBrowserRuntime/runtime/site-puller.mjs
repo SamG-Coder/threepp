@@ -143,7 +143,7 @@ function collectReference(record, value, hint = "asset", allowAssetLiteral = fal
   // instead of enqueueing a second, document-relative copy of the same text.
   const existingReference = record.references.find(reference => reference.value === value);
   if (existingReference) return records.get(existingReference.target);
-  const resolved = resolveReference(value, record.url, allowAssetLiteral, documentRelative);
+  const resolved = resolveReference(value, record.referenceBaseURL ?? record.url, allowAssetLiteral, documentRelative);
   if (!resolved || !new Set(["http:", "https:"]).has(resolved.protocol)) return;
   const dependency = enqueue(resolved, hintFor(value, hint), record.url.href);
   record.references.push({
@@ -333,6 +333,10 @@ function inspectHtml(record, source) {
       const inlineURL = new URL(`./__inline__/entry-${++inlineIndex}.mjs`, record.url);
       const inline = enqueue(inlineURL, "module", record.url.href);
       inline.virtualSource = match[2];
+      // Relative references in an inline module use the document URL in a
+      // browser, while the extracted module still needs file-relative paths
+      // from its synthetic __inline__ location after localization.
+      inline.referenceBaseURL = rootURL;
       inline.localPath = path.join("__inline__", `entry-${inlineIndex}.mjs`);
       record.inlineModules ??= [];
       record.inlineModules.push(inline.url.href);

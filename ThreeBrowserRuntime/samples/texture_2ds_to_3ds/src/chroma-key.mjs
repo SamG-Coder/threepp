@@ -1,63 +1,215 @@
 /**
- * Punch a hot-magenta studio backdrop. Generated magenta is never a perfect
- * #FF00FF, so the test is a red+blue versus green chroma gate.
+ * Punch a hot-magenta studio backdrop. Strict studio-magenta is keyed
+ * globally; broader dusty-magenta cleanup remains border-connected.
  */
 
 export function magentaKeyAlpha(r, g, b) {
   const red = Number(r) || 0;
   const green = Number(g) || 0;
   const blue = Number(b) || 0;
-  const magenta = (red - green) + (blue - green);
-  if (red > 135 && blue > 55 && green < 175 && magenta > 95) return 0;
-  if (
-    red > 70
-    && blue > 45
-    && green < Math.min(red, blue) * 0.72
-    && magenta > 60
-  ) {
-    return 0;
+  const redDistance = (red - 224) / 64;
+  const greenDistance = (green - 64) / 48;
+  const blueDistance = (blue - 160) / 64;
+  const nearStudioColor = redDistance * redDistance
+    + greenDistance * greenDistance
+    + blueDistance * blueDistance <= 1;
+  return nearStudioColor
+    && red >= 150
+    && blue >= 105
+    && red - green >= 40
+    && blue - green >= 30
+    && blue >= red * 0.52
+    ? 0
+    : 255;
+}
+
+function isMagentaCandidate(r, g, b) {
+  return magentaKeyAlpha(r, g, b) === 0;
+}
+
+/** Dusty / anti-aliased cyclorama. Warm reds (low blue vs red) stay subject. */
+function isNearMagenta(r, g, b) {
+  const red = Number(r) || 0;
+  const green = Number(g) || 0;
+  const blue = Number(b) || 0;
+  if (isMagentaCandidate(red, green, blue)) return true;
+  const redLead = red - green;
+  const blueLead = blue - green;
+  return red > 48
+    && blue > 38
+    && green < 210
+    && redLead > 8
+    && blueLead > 8
+    && redLead + blueLead > 18
+    && blue >= red * 0.55;
+}
+
+function floodKeyedFromBorder(walkable, width, height) {
+  const keyed = new Uint8Array(walkable.length);
+  const stack = [];
+  const push = (x, y) => {
+    if (x < 0 || y < 0 || x >= width || y >= height) return;
+    const i = y * width + x;
+    if (!walkable[i] || keyed[i]) return;
+    keyed[i] = 1;
+    stack.push(i);
+  };
+  for (let x = 0; x < width; x++) {
+    push(x, 0);
+    push(x, height - 1);
   }
-  if (
-    red > 90
-    && blue > 70
-    && green < 145
-    && magenta > 40
-    && Math.abs(red - blue) < 80
-  ) {
-    return 0;
+  for (let y = 1; y < height - 1; y++) {
+    push(0, y);
+    push(width - 1, y);
   }
-  return 255;
+  while (stack.length) {
+    const i = stack.pop();
+    const x = i % width;
+    const y = (i / width) | 0;
+    push(x - 1, y);
+    push(x + 1, y);
+    push(x, y - 1);
+    push(x, y + 1);
+  }
+  return keyed;
+}
+
+function closeKeyedHoles(keyed, width, height) {
+  const fill = [];
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = y * width + x;
+      if (keyed[i]) continue;
+      let hole = true;
+      for (let oy = -1; oy <= 1 && hole; oy++) {
+        for (let ox = -1; ox <= 1; ox++) {
+          if (ox === 0 && oy === 0) continue;
+          const nx = x + ox;
+          const ny = y + oy;
+          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+          if (!keyed[ny * width + nx]) {
+            hole = false;
+            break;
+          }
+        }
+      }
+      if (hole) fill.push(i);
+    }
+  }
+  for (const i of fill) keyed[i] = 1;
+}
+
+function watermarkCornerIsBackground(keyed, width, height, x0, y0) {
+  if (keyed[(height - 1) * width + (width - 1)]) return true;
+  let hits = 0;
+  let cells = 0;
+  for (let y = y0; y < height; y++) {
+    for (let x = x0; x < width; x++) {
+      cells += 1;
+      if (keyed[y * width + x]) hits += 1;
+    }
+  }
+  return cells > 0 && hits * 2 >= cells;
+}
+
+function punchDisconnectedWatermark(keyed, width, height, x0, y0) {
+  const protectedPixels = new Uint8Array(keyed.length);
+  const stack = [];
+  const push = (x, y) => {
+    if (x < 0 || y < 0 || x >= width || y >= height) return;
+    const i = y * width + x;
+    if (keyed[i] || protectedPixels[i]) return;
+    protectedPixels[i] = 1;
+    stack.push(i);
+  };
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (x >= x0 && y >= y0) continue;
+      if (!keyed[y * width + x]) push(x, y);
+    }
+  }
+  while (stack.length) {
+    const i = stack.pop();
+    const x = i % width;
+    const y = (i / width) | 0;
+    push(x - 1, y);
+    push(x + 1, y);
+    push(x, y - 1);
+    push(x, y + 1);
+  }
+  for (let y = y0; y < height; y++) {
+    for (let x = x0; x < width; x++) {
+      const i = y * width + x;
+      if (!protectedPixels[i]) keyed[i] = 1;
+    }
+  }
 }
 
 export function keyImageData(imageData, options = {}) {
   const width = imageData.width;
   const height = imageData.height;
   const data = imageData.data;
-  const watermarkWidth = Math.max(1, Math.floor(width * (options.watermarkWidth ?? 0.24)));
-  const watermarkHeight = Math.max(1, Math.floor(height * (options.watermarkHeight ?? 0.075)));
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const index = (y * width + x) * 4;
-      let alpha = magentaKeyAlpha(data[index], data[index + 1], data[index + 2]);
-      if (x >= width - watermarkWidth && y >= height - watermarkHeight) alpha = 0;
-      data[index + 3] = alpha;
+  const count = width * height;
+  const strict = new Uint8Array(count);
+  const walkable = new Uint8Array(count);
+  for (let i = 0, p = 0; i < count; i++, p += 4) {
+    strict[i] = isMagentaCandidate(data[p], data[p + 1], data[p + 2]) ? 1 : 0;
+    walkable[i] = data[p + 3] === 0 || strict[i] || isNearMagenta(data[p], data[p + 1], data[p + 2]) ? 1 : 0;
+  }
+
+  const borderKeyed = floodKeyedFromBorder(walkable, width, height);
+  const keyed = borderKeyed.slice();
+  for (let i = 0; i < count; i++) {
+    if (strict[i]) keyed[i] = 1;
+  }
+  if (options.close !== false) closeKeyedHoles(keyed, width, height);
+
+  if (options.watermark !== false) {
+    const watermarkWidth = Math.max(1, Math.floor(width * (options.watermarkWidth ?? 0.24)));
+    const watermarkHeight = Math.max(1, Math.floor(height * (options.watermarkHeight ?? 0.075)));
+    const x0 = width - watermarkWidth;
+    const y0 = height - watermarkHeight;
+    if (watermarkCornerIsBackground(borderKeyed, width, height, x0, y0)) {
+      punchDisconnectedWatermark(keyed, width, height, x0, y0);
     }
+  }
+
+  for (let i = 0, p = 3; i < count; i++, p += 4) {
+    data[p] = keyed[i] ? 0 : 255;
   }
   return imageData;
 }
 
 export function despillImageData(imageData) {
   const data = imageData.data;
-  for (let index = 0; index < data.length; index += 4) {
-    if (data[index + 3] === 0) continue;
-    const red = data[index];
-    const green = data[index + 1];
-    const blue = data[index + 2];
-    const mag = Math.max(0, (red + blue) * 0.5 - green);
-    if (mag < 10) continue;
-    const pull = Math.min(mag * 0.85, 70);
-    data[index] = Math.max(0, red - pull);
-    data[index + 2] = Math.max(0, blue - pull * 0.7);
+  const width = imageData.width;
+  const height = imageData.height;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const index = (y * width + x) * 4;
+      if (data[index + 3] === 0) continue;
+      let border = false;
+      for (let oy = -1; oy <= 1 && !border; oy++) {
+        for (let ox = -1; ox <= 1; ox++) {
+          const nx = x + ox;
+          const ny = y + oy;
+          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+          if (data[(ny * width + nx) * 4 + 3] === 0) {
+            border = true;
+            break;
+          }
+        }
+      }
+      if (!border) continue;
+      const red = data[index];
+      const green = data[index + 1];
+      const blue = data[index + 2];
+      const mag = Math.max(0, (red + blue) * 0.5 - green);
+      if (mag < 10) continue;
+      const pull = Math.min(mag * 0.85, 70);
+      data[index] = Math.max(0, red - pull);
+      data[index + 2] = Math.max(0, blue - pull * 0.7);
+    }
   }
   return imageData;
 }

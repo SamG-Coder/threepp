@@ -43,7 +43,21 @@ export function realWorldScale(mesh, subject) {
   const extents = meshExtents(mesh);
   const realHeight = Number(subject?.realHeight) || 1;
   const realWidth = Number(subject?.realWidth) || realHeight;
+  const realDepth = Number(subject?.realDepth);
   const sy = realHeight / Math.max(1e-6, extents.height);
+  const widthX = Math.max(1e-6, extents.maxX - extents.minX);
+  const depthZ = Math.max(1e-6, extents.maxZ - extents.minZ);
+  if (realDepth > 0) {
+    return {
+      x: realWidth / widthX,
+      y: sy,
+      z: realDepth / depthZ,
+      extents,
+      realHeight,
+      realWidth,
+      realDepth,
+    };
+  }
   const sxz = realWidth / Math.max(1e-6, extents.width);
   return {
     x: sxz,
