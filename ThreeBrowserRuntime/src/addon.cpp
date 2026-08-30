@@ -1275,6 +1275,10 @@ napi_value gpuCapabilitiesObject(napi_env env, const TWGpuCapabilities& capabili
     set(env, object, "dlssSuperResolution", boolean(env, capabilities.dlss_super_resolution != 0));
     set(env, object, "dlssFrameGeneration", boolean(env, capabilities.dlss_frame_generation != 0));
     set(env, object, "dlssRayReconstruction", boolean(env, capabilities.dlss_ray_reconstruction != 0));
+    set(env, object, "dlssNeuralRendering",
+        boolean(env, capabilities.dlss_neural_rendering != 0));
+    set(env, object, "dlssNeuralRenderingApiLoaded",
+        boolean(env, capabilities.dlss_neural_rendering_api_loaded != 0));
     set(env, object, "reflex", boolean(env, capabilities.reflex != 0));
     set(env, object, "nativeRayTracing", boolean(env, capabilities.native_ray_tracing != 0));
     set(env, object, "rayQuery", boolean(env, capabilities.ray_query != 0));
@@ -1459,6 +1463,29 @@ napi_value gpuFeatureStatusObject(napi_env env) {
     set(env, rayReconstruction, "lastResult",
         number(env, statusAvailable ? nativeStatus.ray_reconstruction_last_result : 0));
     set(env, features, "dlssRayReconstruction", rayReconstruction);
+
+    const bool neuralRenderingSupported = statusAvailable
+        ? nativeStatus.neural_rendering_supported != 0
+        : available && capabilities.dlss_neural_rendering != 0;
+    napi_value neuralRendering = makeFeatureState(
+        env, neuralRenderingSupported,
+        statusAvailable && nativeStatus.neural_rendering_requested
+            ? 1 : (statusAvailable ? 0 : -1),
+        statusAvailable && nativeStatus.neural_rendering_configured != 0,
+        statusAvailable && nativeStatus.neural_rendering_active != 0,
+        statusAvailable ? nativeStatus.neural_rendering_reason : unavailableStatus);
+    set(env, neuralRendering, "apiLoaded",
+        boolean(env, statusAvailable && nativeStatus.neural_rendering_api_loaded != 0));
+    set(env, neuralRendering, "evaluationCount",
+        number(env, statusAvailable
+            ? static_cast<double>(nativeStatus.neural_rendering_evaluation_count) : 0));
+    set(env, neuralRendering, "failureCount",
+        number(env, statusAvailable
+            ? static_cast<double>(nativeStatus.neural_rendering_failure_count) : 0));
+    set(env, neuralRendering, "lastResult",
+        number(env, statusAvailable ? nativeStatus.neural_rendering_last_result : 0));
+    set(env, features, "dlssNeuralRendering", neuralRendering);
+
     const bool nativeRayTracingSupported = statusAvailable
         ? nativeStatus.native_ray_tracing_supported != 0
         : available && capabilities.native_ray_tracing != 0;

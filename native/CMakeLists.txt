@@ -32,9 +32,13 @@ set_target_properties(three_native PROPERTIES
         LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 if (MINGW)
-    target_compile_options(threepp PRIVATE -g)
-    target_compile_options(three_native PRIVATE -g)
-    target_link_options(three_native PRIVATE -g)
+    # Release must not embed DWARF. A previous unconditional -g made
+    # three_native.dll ~176 MB; the same binary strips to ~10 MB.
+    if (CMAKE_BUILD_TYPE MATCHES "^(Debug|RelWithDebInfo)$")
+        target_compile_options(threepp PRIVATE -g)
+        target_compile_options(three_native PRIVATE -g)
+        target_link_options(three_native PRIVATE -g)
+    endif ()
     target_link_options(three_native PRIVATE -static -static-libgcc -static-libstdc++)
 endif ()
 
@@ -85,6 +89,17 @@ if (WIN32)
     endif ()
     if (THREEBROWSER_ENABLE_STREAMLINE)
         target_compile_definitions(three_webgpu PRIVATE THREEBROWSER_STREAMLINE=1)
+        if (THREEBROWSER_DLSS5_AVAILABLE)
+            target_compile_definitions(three_webgpu PRIVATE
+                THREEBROWSER_DLSS_NEURAL_RENDERING=1)
+            if (THREEBROWSER_DLSS5_USES_SDK_HEADER)
+                target_compile_definitions(three_webgpu PRIVATE
+                    THREEBROWSER_DLSS_NR_SDK_HEADER=1)
+            elseif (THREEBROWSER_DLSS5_USES_PREVIEW_ABI)
+                target_compile_definitions(three_webgpu PRIVATE
+                    THREEBROWSER_DLSS_NR_PREVIEW_ABI=1)
+            endif ()
+        endif ()
         target_include_directories(three_webgpu PRIVATE
             "${STREAMLINE_INCLUDE_DIR}")
     endif ()
@@ -143,6 +158,14 @@ if (WIN32)
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "${STREAMLINE_BIN_DIR}/${_sl_runtime}" "$<TARGET_FILE_DIR:three_webgpu>/${_sl_runtime}")
         endforeach ()
+        if (THREEBROWSER_DLSS5_AVAILABLE)
+            foreach (_dlss5_runtime sl.dlss_nr.dll nvngx_dlssnr.dll)
+                add_custom_command(TARGET three_webgpu POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${THREEBROWSER_DLSS5_BIN_DIR}/${_dlss5_runtime}"
+                        "$<TARGET_FILE_DIR:three_webgpu>/${_dlss5_runtime}")
+            endforeach ()
+        endif ()
     endif ()
 
     add_executable(three_webgpu_smoke webgpu/three_webgpu_smoke.cpp)

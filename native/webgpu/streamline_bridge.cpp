@@ -19,11 +19,53 @@
 #include <sl_dlss.h>
 #include <sl_dlss_g.h>
 #include <sl_dlss_d.h>
+#if defined(THREEBROWSER_DLSS_NR_SDK_HEADER)
+#include <sl_dlss_nr.h>
+#endif
 #include <sl_helpers_vk.h>
 #include <sl_pcl.h>
 #include <sl_reflex.h>
 
 namespace {
+
+#if defined(THREEBROWSER_DLSS_NEURAL_RENDERING)
+#if defined(THREEBROWSER_DLSS_NR_SDK_HEADER)
+constexpr sl::Feature kFeatureDLSSNR = sl::kFeatureDLSS_NR;
+using DLSSNeuralRenderingOptions = sl::DLSSNROptions;
+#elif defined(THREEBROWSER_DLSS_NR_PREVIEW_ABI)
+// The signed preview plug-in identifies Neural Rendering as feature 1004. This
+// ABI is compiled only for an explicit THREEBROWSER_DLSS5_MODE=ON build; AUTO
+// requires a compatible public SDK header and never reaches this definition.
+constexpr sl::Feature kFeatureDLSSNR = 1004;
+
+struct DLSSNeuralRenderingOptions : sl::BaseStructure {
+    DLSSNeuralRenderingOptions()
+        : sl::BaseStructure(
+              sl::StructType({0x29dfdfe0, 0x273a, 0x4e72,
+                              {0xb4, 0x92, 0x2d, 0xc8, 0x23, 0xd5, 0xb1, 0xad}}),
+              sl::kStructVersion3) {}
+
+    uint32_t mode{1};
+    float intensity{1.0f};
+    float localToneStrength{1.0f};
+    float localStructureStrength{1.0f};
+    float globalToneStrength{1.0f};
+    uint32_t style{};
+    uint32_t renderPreset{};
+    bool useAutoMask{};
+    float skinStructureStrength{1.0f};
+    uint32_t performanceMode{static_cast<uint32_t>(StreamlineDLSSMode::DLAA)};
+};
+
+using PFun_slDLSSNRSetOptions = sl::Result(
+    const sl::ViewportHandle&, const DLSSNeuralRenderingOptions&);
+#else
+#error "DLSS Neural Rendering requires a verified SDK header or explicit preview ABI"
+#endif
+
+static_assert(sizeof(DLSSNeuralRenderingOptions) == 0x48,
+              "DLSS Neural Rendering options ABI must remain 72 bytes");
+#endif
 
 struct Bridge {
     std::mutex mutex;
@@ -47,6 +89,9 @@ struct Bridge {
     PFun_slDLSSDGetOptimalSettings* dlssDGetOptimalSettings{};
     PFun_slDLSSDGetState* dlssDGetState{};
     PFun_slDLSSDSetOptions* dlssDSetOptions{};
+#if defined(THREEBROWSER_DLSS_NEURAL_RENDERING)
+    PFun_slDLSSNRSetOptions* dlssNRSetOptions{};
+#endif
     PFun_slReflexSetOptions* reflexSetOptions{};
     PFun_slReflexSleep* reflexSleep{};
     PFun_slPCLSetMarker* pclSetMarker{};
@@ -58,6 +103,10 @@ struct Bridge {
     std::unordered_map<void*, VkImageView> imageViews;
     std::unordered_set<void*> frameGenerationImages;
     std::unordered_set<uint32_t> rayReconstructionViewports;
+#if defined(THREEBROWSER_DLSS_NEURAL_RENDERING)
+    std::unordered_set<uint32_t> neuralRenderingViewports;
+    std::unordered_set<uint32_t> neuralRenderingActiveViewports;
+#endif
     int reflexMode{1};
     StreamlineCapabilities capabilities{};
     StreamlineFeatureState features{};
@@ -284,6 +333,18 @@ void setRayReconstructionFailure(sl::Result result, std::string reason) {
     g.features.rayReconstructionReason = std::move(reason);
 }
 
+#if defined(THREEBROWSER_DLSS_NEURAL_RENDERING)
+void setNeuralRenderingFailure(uint32_t viewport, sl::Result result,
+                               std::string reason) {
+    g.neuralRenderingActiveViewports.erase(viewport);
+    g.features.neuralRenderingActive =
+        !g.neuralRenderingActiveViewports.empty();
+    g.features.neuralRenderingLastResult = static_cast<int32_t>(result);
+    ++g.features.neuralRenderingFailureCount;
+    g.features.neuralRenderingReason = std::move(reason);
+}
+#endif
+
 sl::Result setConstantsForFrame(const StreamlineFrameConstants& source,
                                 uint32_t viewportValue) {
     if (!g.setConstants || !g.frameToken) return sl::Result::eErrorMissingInputParameter;
@@ -391,9 +452,15 @@ bool streamlinePrepare() {
         return false;
     }
 
+#if defined(THREEBROWSER_DLSS_NEURAL_RENDERING)
+    static const std::array<sl::Feature, 6> features{
+        sl::kFeatureDLSS, sl::kFeatureDLSS_G, sl::kFeatureDLSS_RR,
+        kFeatureDLSSNR, sl::kFeatureReflex, sl::kFeaturePCL};
+#else
     static const std::array<sl::Feature, 5> features{
         sl::kFeatureDLSS, sl::kFeatureDLSS_G, sl::kFeatureDLSS_RR,
         sl::kFeatureReflex, sl::kFeaturePCL};
+#endif
     const std::wstring pluginPath = directory.wstring();
     const wchar_t* pluginPaths[] = {pluginPath.c_str()};
     sl::Preferences preferences{};
@@ -474,14 +541,42 @@ bool streamlineAttachVulkan(const StreamlineVulkanContext& context) {
     const sl::Result dlss = supportResult(sl::kFeatureDLSS, context.physicalDevice);
     const sl::Result frameGeneration = supportResult(sl::kFeatureDLSS_G, context.physicalDevice);
     const sl::Result rayReconstruction = supportResult(sl::kFeatureDLSS_RR, context.physicalDevice);
+#if defined(THREEBROWSER_DLSS_NEURAL_RENDERING)
+    const sl::Result neuralRendering =
+        supportResult(kFeatureDLSSNR, context.physicalDevice);
+#else
+    const sl::Result neuralRendering = sl::Result::eErrorFeatureNotSupported;
+#endif
     const sl::Result reflex = supportResult(sl::kFeatureReflex, context.physicalDevice);
     g.capabilities.dlssSuperResolution = dlss == sl::Result::eOk;
     g.capabilities.dlssFrameGeneration = frameGeneration == sl::Result::eOk;
     g.capabilities.dlssRayReconstruction = rayReconstruction == sl::Result::eOk;
+#if defined(THREEBROWSER_DLSS_NEURAL_RENDERING)
+    g.capabilities.dlssNeuralRendering = neuralRendering == sl::Result::eOk;
+    if (g.capabilities.dlssNeuralRendering) {
+        g.capabilities.dlssNeuralRenderingFunctionsLoaded =
+            importFeatureFunction(kFeatureDLSSNR, "slDLSSNRSetOptions",
+                                  g.dlssNRSetOptions);
+    }
+#endif
     g.capabilities.reflex = reflex == sl::Result::eOk;
     g.features.dlssSupported = g.capabilities.dlssSuperResolution;
     g.features.frameGenerationSupported = g.capabilities.dlssFrameGeneration;
     g.features.rayReconstructionSupported = g.capabilities.dlssRayReconstruction;
+    g.features.neuralRenderingSupported =
+        g.capabilities.dlssNeuralRendering;
+    g.features.neuralRenderingFunctionsLoaded =
+        g.capabilities.dlssNeuralRenderingFunctionsLoaded;
+#if defined(THREEBROWSER_DLSS_NEURAL_RENDERING)
+    g.features.neuralRenderingReason =
+        g.features.neuralRenderingSupported &&
+                g.features.neuralRenderingFunctionsLoaded
+            ? "DLSS Neural Rendering is available; no frame has been evaluated"
+            : "DLSS Neural Rendering is unavailable on this adapter/runtime or its API is incomplete";
+#else
+    g.features.neuralRenderingReason =
+        "DLSS Neural Rendering was not included in this build";
+#endif
 
     if (g.capabilities.dlssSuperResolution) {
         g.features.dlssFunctionsLoaded =
@@ -540,7 +635,8 @@ bool streamlineAttachVulkan(const StreamlineVulkanContext& context) {
     g.capabilities.status = "Streamline connected · SR " +
         std::to_string(static_cast<int>(dlss)) + " · FG " +
         std::to_string(static_cast<int>(frameGeneration)) + " · RR " +
-        std::to_string(static_cast<int>(rayReconstruction)) + " · Reflex " +
+        std::to_string(static_cast<int>(rayReconstruction)) + " · NR " +
+        std::to_string(static_cast<int>(neuralRendering)) + " · Reflex " +
         std::to_string(static_cast<int>(reflex));
     return true;
 }
@@ -784,6 +880,201 @@ bool streamlineDLSSEvaluate(const StreamlineDLSSFrame& frame) {
         }
     }
     return true;
+}
+
+bool streamlineDLSSNREvaluate(const StreamlineDLSSNRFrame& frame) {
+#if !defined(THREEBROWSER_DLSS_NEURAL_RENDERING)
+    (void)frame;
+    return false;
+#else
+    std::lock_guard<std::mutex> lock(g.mutex);
+    if (frame.options.enabled) {
+        g.features.neuralRenderingRequested = true;
+    }
+
+    const sl::ViewportHandle viewport(frame.viewport);
+    if (!frame.options.enabled) {
+        if (g.features.neuralRenderingFunctionsLoaded && g.dlssNRSetOptions) {
+            DLSSNeuralRenderingOptions off{};
+            off.mode = static_cast<decltype(off.mode)>(0);
+            const sl::Result result = g.dlssNRSetOptions(viewport, off);
+            g.features.neuralRenderingLastResult =
+                static_cast<int32_t>(result);
+            if (result != sl::Result::eOk) {
+                setNeuralRenderingFailure(
+                    frame.viewport, result,
+                    "Disabling DLSS Neural Rendering failed (" +
+                                std::to_string(static_cast<int>(result)) + ")");
+                return false;
+            }
+            if (g.freeResources) g.freeResources(kFeatureDLSSNR, viewport);
+        }
+        g.neuralRenderingViewports.erase(frame.viewport);
+        g.neuralRenderingActiveViewports.erase(frame.viewport);
+        g.features.neuralRenderingRequested =
+            !g.neuralRenderingViewports.empty();
+        g.features.neuralRenderingConfigured =
+            !g.neuralRenderingViewports.empty();
+        g.features.neuralRenderingActive =
+            !g.neuralRenderingActiveViewports.empty();
+        g.features.neuralRenderingReason = g.neuralRenderingViewports.empty()
+            ? "DLSS Neural Rendering is off"
+            : "DLSS Neural Rendering is off for this viewport; other viewports remain configured";
+        return true;
+    }
+
+    if (!g.features.neuralRenderingSupported ||
+        !g.features.neuralRenderingFunctionsLoaded || !g.dlssNRSetOptions ||
+        !g.frameToken || !g.evaluateFeature || !g.setTagForFrame ||
+        !g.setConstants) {
+        setNeuralRenderingFailure(
+            frame.viewport, sl::Result::eErrorMissingInputParameter,
+            !g.frameToken
+                ? "No Streamline frame token is active for DLSS Neural Rendering"
+                : "DLSS Neural Rendering is unsupported or its API is unavailable");
+        return false;
+    }
+    if (!frame.commandBuffer) {
+        setNeuralRenderingFailure(
+            frame.viewport, sl::Result::eErrorMissingInputParameter,
+            "DLSS Neural Rendering requires a Vulkan command buffer");
+        return false;
+    }
+    if (frame.options.style > 2) {
+        setNeuralRenderingFailure(
+            frame.viewport, sl::Result::eErrorInvalidParameter,
+            "DLSS Neural Rendering style must be 0, 1, or 2");
+        return false;
+    }
+    const uint32_t performanceMode =
+        static_cast<uint32_t>(frame.options.performanceMode);
+    if (performanceMode != 6) {
+        setNeuralRenderingFailure(
+            frame.viewport, sl::Result::eErrorInvalidParameter,
+            "The same-resolution DLSS Neural Rendering path requires DLAA mode (6)");
+        return false;
+    }
+    if (frame.colorInput.image == frame.colorOutput.image) {
+        setNeuralRenderingFailure(
+            frame.viewport, sl::Result::eErrorInvalidParameter,
+            "DLSS Neural Rendering input and output must be distinct images");
+        return false;
+    }
+    const auto extent = [](const StreamlineVulkanResource& resource) {
+        return std::array<uint32_t, 2>{
+            resource.extentWidth ? resource.extentWidth : resource.width,
+            resource.extentHeight ? resource.extentHeight : resource.height};
+    };
+    const auto inputExtent = extent(frame.colorInput);
+    if (extent(frame.colorOutput) != inputExtent ||
+        extent(frame.depth) != inputExtent ||
+        extent(frame.motionVectors) != inputExtent ||
+        (frame.hasControlMask && extent(frame.controlMask) != inputExtent)) {
+        setNeuralRenderingFailure(
+            frame.viewport, sl::Result::eErrorInvalidParameter,
+            "DLSS Neural Rendering resource regions must have matching extents");
+        return false;
+    }
+    if (frame.hasControlMask &&
+        frame.controlMask.format != static_cast<uint32_t>(VK_FORMAT_R8_UNORM)) {
+        setNeuralRenderingFailure(
+            frame.viewport, sl::Result::eErrorInvalidParameter,
+            "DLSS Neural Rendering control mask must use VK_FORMAT_R8_UNORM");
+        return false;
+    }
+
+    DLSSNeuralRenderingOptions options{};
+    options.mode = static_cast<decltype(options.mode)>(1);
+    options.intensity = frame.options.intensity;
+    options.localToneStrength = frame.options.localToneStrength;
+    options.localStructureStrength = frame.options.localStructureStrength;
+    options.globalToneStrength = frame.options.globalToneStrength;
+    options.style = static_cast<decltype(options.style)>(frame.options.style);
+    options.renderPreset =
+        static_cast<decltype(options.renderPreset)>(frame.options.renderPreset);
+    options.useAutoMask = static_cast<decltype(options.useAutoMask)>(
+        frame.hasControlMask ? 0 : (frame.options.useAutoMask ? 1 : 0));
+    options.skinStructureStrength = frame.options.skinStructureStrength;
+    options.performanceMode =
+        static_cast<decltype(options.performanceMode)>(performanceMode);
+
+    sl::Result result = g.dlssNRSetOptions(viewport, options);
+    g.features.neuralRenderingLastResult = static_cast<int32_t>(result);
+    if (result != sl::Result::eOk) {
+        setNeuralRenderingFailure(
+            frame.viewport, result, "slDLSSNRSetOptions failed (" +
+                        std::to_string(static_cast<int>(result)) + ")");
+        return false;
+    }
+    // Track the configured viewport immediately. Any later view/tag/evaluate
+    // failure can then be recovered by releaseViewport or shutdown.
+    g.neuralRenderingViewports.insert(frame.viewport);
+    g.features.neuralRenderingConfigured = true;
+
+    std::string reason;
+    const VkImageView colorInputView = imageView(frame.colorInput, reason);
+    const VkImageView colorOutputView = imageView(frame.colorOutput, reason);
+    const VkImageView depthView = imageView(frame.depth, reason);
+    const VkImageView motionView = imageView(frame.motionVectors, reason);
+    const VkImageView controlMaskView = frame.hasControlMask
+        ? imageView(frame.controlMask, reason)
+        : VK_NULL_HANDLE;
+    if (!colorInputView || !colorOutputView || !depthView || !motionView ||
+        (frame.hasControlMask && !controlMaskView)) {
+        setNeuralRenderingFailure(
+            frame.viewport, sl::Result::eErrorMissingInputParameter,
+            reason.empty()
+                ? "A mandatory DLSS Neural Rendering image view could not be created"
+                : reason);
+        return false;
+    }
+
+    TaggedResource colorInput(frame.colorInput, colorInputView,
+                              sl::kBufferTypeReserved70);
+    TaggedResource colorOutput(frame.colorOutput, colorOutputView,
+                               sl::kBufferTypeReserved71);
+    TaggedResource motion(frame.motionVectors, motionView,
+                          sl::kBufferTypeMotionVectors);
+    TaggedResource depth(frame.depth, depthView, sl::kBufferTypeDepth);
+    std::vector<sl::ResourceTag> tags{
+        colorInput.tag, colorOutput.tag, motion.tag, depth.tag};
+    std::unique_ptr<TaggedResource> controlMask;
+    if (frame.hasControlMask) {
+        controlMask = std::make_unique<TaggedResource>(
+            frame.controlMask, controlMaskView, sl::kBufferTypeReserved72);
+        tags.push_back(controlMask->tag);
+    }
+
+    auto* commandBuffer =
+        reinterpret_cast<sl::CommandBuffer*>(frame.commandBuffer);
+    result = g.setTagForFrame(*g.frameToken, viewport, tags.data(),
+                              static_cast<uint32_t>(tags.size()), commandBuffer);
+    if (result == sl::Result::eOk) {
+        result = setConstantsForFrame(frame.constants, frame.viewport);
+    }
+    if (result == sl::Result::eOk) {
+        const sl::BaseStructure* inputs[] = {&viewport};
+        result = g.evaluateFeature(kFeatureDLSSNR, *g.frameToken, inputs, 1,
+                                   commandBuffer);
+    }
+    g.features.neuralRenderingLastResult = static_cast<int32_t>(result);
+    if (result != sl::Result::eOk) {
+        setNeuralRenderingFailure(
+            frame.viewport, result,
+            "DLSS Neural Rendering evaluation failed (" +
+                        std::to_string(static_cast<int>(result)) + ")");
+        return false;
+    }
+
+    g.neuralRenderingActiveViewports.insert(frame.viewport);
+    ++g.features.neuralRenderingEvaluationCount;
+    g.features.neuralRenderingConfigured = true;
+    g.features.neuralRenderingActive =
+        !g.neuralRenderingActiveViewports.empty();
+    g.features.neuralRenderingReason =
+        "DLSS Neural Rendering evaluated on the current frame";
+    return true;
+#endif
 }
 
 bool streamlineRayReconstructionEvaluate(
@@ -1204,6 +1495,28 @@ void streamlineReleaseViewport(uint32_t viewportValue) {
                 "Ray Reconstruction viewport resources were released";
         }
     }
+#if defined(THREEBROWSER_DLSS_NEURAL_RENDERING)
+    if (g.neuralRenderingViewports.erase(viewportValue) != 0) {
+        g.neuralRenderingActiveViewports.erase(viewportValue);
+        const sl::ViewportHandle viewport(viewportValue);
+        if (g.dlssNRSetOptions) {
+            DLSSNeuralRenderingOptions off{};
+            off.mode = static_cast<decltype(off.mode)>(0);
+            g.dlssNRSetOptions(viewport, off);
+        }
+        if (g.freeResources) g.freeResources(kFeatureDLSSNR, viewport);
+        g.features.neuralRenderingRequested =
+            !g.neuralRenderingViewports.empty();
+        g.features.neuralRenderingConfigured =
+            !g.neuralRenderingViewports.empty();
+        g.features.neuralRenderingActive =
+            !g.neuralRenderingActiveViewports.empty();
+        if (g.neuralRenderingViewports.empty()) {
+            g.features.neuralRenderingReason =
+                "DLSS Neural Rendering viewport resources were released";
+        }
+    }
+#endif
     if (viewportValue == 0) {
         g.features.dlssConfigured = false;
         g.features.dlssActive = false;
@@ -1240,7 +1553,9 @@ void streamlineFrameBegin(uint32_t frameIndex) {
     g.frameGenerationImages.clear();
     if (!g.getNewFrameToken || (!g.capabilities.reflex && !g.features.dlssConfigured &&
                                 !g.features.frameGenerationConfigured &&
-                                !g.features.rayReconstructionConfigured)) return;
+                                !g.features.rayReconstructionConfigured &&
+                                !g.features.neuralRenderingRequested &&
+                                !g.features.neuralRenderingConfigured)) return;
     g.frameToken = nullptr;
     if (g.getNewFrameToken(g.frameToken, &frameIndex) != sl::Result::eOk || !g.frameToken) return;
     if (g.reflexSleep) g.reflexSleep(*g.frameToken);
@@ -1282,6 +1597,17 @@ void streamlineShutdown() {
     if (g.features.frameGenerationFunctionsLoaded) {
         suspendFrameGenerationLocked("Frame Generation stopped during shutdown", true);
     }
+#if defined(THREEBROWSER_DLSS_NEURAL_RENDERING)
+    if (g.dlssNRSetOptions) {
+        for (uint32_t viewportValue : g.neuralRenderingViewports) {
+            const sl::ViewportHandle viewport(viewportValue);
+            DLSSNeuralRenderingOptions off{};
+            off.mode = static_cast<decltype(off.mode)>(0);
+            g.dlssNRSetOptions(viewport, off);
+            if (g.freeResources) g.freeResources(kFeatureDLSSNR, viewport);
+        }
+    }
+#endif
     if (g.vkDeviceWaitIdle && g.vkDevice) g.vkDeviceWaitIdle(g.vkDevice);
     if (g.vkDestroyImageView && g.vkDevice) {
         for (const auto& [image, view] : g.imageViews) {
@@ -1292,6 +1618,10 @@ void streamlineShutdown() {
     g.imageViews.clear();
     g.frameGenerationImages.clear();
     g.rayReconstructionViewports.clear();
+#if defined(THREEBROWSER_DLSS_NEURAL_RENDERING)
+    g.neuralRenderingViewports.clear();
+    g.neuralRenderingActiveViewports.clear();
+#endif
     if (g.capabilities.initialized && g.shutdown) g.shutdown();
     if (g.module) FreeLibrary(g.module);
     SetEnvironmentVariableW(L"THREEBROWSER_STREAMLINE_VULKAN", nullptr);
@@ -1315,6 +1645,9 @@ void streamlineShutdown() {
     g.dlssDGetOptimalSettings = nullptr;
     g.dlssDGetState = nullptr;
     g.dlssDSetOptions = nullptr;
+#if defined(THREEBROWSER_DLSS_NEURAL_RENDERING)
+    g.dlssNRSetOptions = nullptr;
+#endif
     g.reflexSetOptions = nullptr;
     g.reflexSleep = nullptr;
     g.pclSetMarker = nullptr;
@@ -1340,8 +1673,9 @@ void streamlineShutdown() {
 bool streamlinePrepare() { return false; }
 bool streamlineAttachVulkan(const StreamlineVulkanContext&) { return false; }
 StreamlineCapabilities streamlineCapabilities() {
-    return StreamlineCapabilities{false, false, false, false, false, false, false,
-                                  "Streamline support was disabled at build time"};
+    StreamlineCapabilities capabilities{};
+    capabilities.status = "Streamline support was disabled at build time";
+    return capabilities;
 }
 bool streamlineSetReflexMode(int) { return false; }
 int streamlineReflexMode() { return 0; }
@@ -1349,6 +1683,7 @@ bool streamlineRequestFeatures(const StreamlineDLSSOptions&, bool, bool) { retur
 bool streamlineDLSSGetOptimalSettings(const StreamlineDLSSOptions&,
                                       StreamlineDLSSOptimalSettings&) { return false; }
 bool streamlineDLSSEvaluate(const StreamlineDLSSFrame&) { return false; }
+bool streamlineDLSSNREvaluate(const StreamlineDLSSNRFrame&) { return false; }
 bool streamlineRayReconstructionEvaluate(
     const StreamlineRayReconstructionFrame&) { return false; }
 bool streamlineFrameGenerationTag(const StreamlineFrameGenerationFrame&) { return false; }
@@ -1362,6 +1697,7 @@ StreamlineFeatureState streamlineFeatureState() {
     state.dlssReason = "Streamline support was disabled at build time";
     state.frameGenerationReason = state.dlssReason;
     state.rayReconstructionReason = state.dlssReason;
+    state.neuralRenderingReason = state.dlssReason;
     return state;
 }
 void streamlineFrameBegin(uint32_t) {}

@@ -75,6 +75,7 @@ export const OP = {
   RTX_DYNAMIC_MESH_CREATE: 92,
   RTX_DYNAMIC_MESH_REFIT: 93,
   RTX_DYNAMIC_MESH_DESTROY: 94,
+  DLSS_NR_EVALUATE: 95,
 };
 
 // wgpu-native webgpu.h numeric enums (WGPUTextureFormat, …).
@@ -1090,6 +1091,71 @@ function dlssEvaluate(encoder, frame) {
   end(s);
 }
 
+// DLSS Neural Rendering uses the same in-order native encoder contract as the
+// other Streamline evaluations. The native side independently validates every
+// resource and option before handing the command to an available plug-in.
+function dlssNeuralRenderingEvaluate(encoder, frame) {
+  const resources = [
+    frame.colorInput,
+    frame.colorOutput,
+    frame.depth,
+    frame.motionVectors,
+    frame.controlMask,
+  ];
+  const options = frame.options;
+  const constants = frame.constants;
+  const s = begin(OP.DLSS_NR_EVALUATE, 608);
+  wu32(encoder);
+  wu32(frame.viewport >>> 0);
+  for (const resource of resources) {
+    wu32((resource?.textureHandle ?? 0) >>> 0);
+    wu32((resource?.vulkanLayout ?? 0) >>> 0);
+    wu32((resource?.left ?? 0) >>> 0);
+    wu32((resource?.top ?? 0) >>> 0);
+    wu32((resource?.width ?? 0) >>> 0);
+    wu32((resource?.height ?? 0) >>> 0);
+  }
+  wu32(frame.controlMask ? 1 : 0);
+  wu32(options.enabled ? 1 : 0);
+  wf32(options.intensity);
+  wf32(options.localToneStrength);
+  wf32(options.localStructureStrength);
+  wf32(options.globalToneStrength);
+  wu32(options.style >>> 0);
+  wu32(options.renderPreset >>> 0);
+  wu32(options.useAutoMask ? 1 : 0);
+  wf32(options.skinStructureStrength);
+  wu32(options.performanceMode >>> 0);
+  for (const values of [
+    constants.cameraViewToClip,
+    constants.clipToCameraView,
+    constants.clipToLensClip,
+    constants.clipToPrevClip,
+    constants.prevClipToClip,
+    constants.jitterOffset,
+    constants.motionVectorScale,
+    constants.cameraPinholeOffset,
+    constants.cameraPosition,
+    constants.cameraUp,
+    constants.cameraRight,
+    constants.cameraForward,
+  ]) {
+    for (const value of values) wf32(value);
+  }
+  wf32(constants.cameraNear);
+  wf32(constants.cameraFar);
+  wf32(constants.cameraFov);
+  wf32(constants.cameraAspectRatio);
+  wu32(constants.depthInverted ? 1 : 0);
+  wu32(constants.cameraMotionIncluded ? 1 : 0);
+  wu32(constants.motionVectors3D ? 1 : 0);
+  wu32(constants.reset ? 1 : 0);
+  wu32(constants.orthographicProjection ? 1 : 0);
+  wu32(constants.motionVectorsDilated ? 1 : 0);
+  wu32(constants.motionVectorsJittered ? 1 : 0);
+  end(s);
+}
+
 // DLSS-G consumes these tags during the Present that follows submission.  The
 // native bridge therefore keeps the resources valid-until-present and proves
 // ACTIVE only from the state reported after that Present.
@@ -1667,6 +1733,7 @@ const cmd = {
   drawIndirect,
   renderEnd,
   dlssEvaluate,
+  dlssNeuralRenderingEvaluate,
   frameGenerationTag,
   rayReconstructionEvaluate,
   rtxSceneBegin,

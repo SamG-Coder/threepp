@@ -162,6 +162,26 @@ DLSS rendering features are exposed only when the adapter and Streamline plugin
 support them; a page must still provide the feature's semantic inputs (for
 example depth and motion vectors) before evaluation can be enabled safely.
 
+DLSS Neural Rendering is an additional, optional DLSS 5 path. Its build mode is
+controlled by `THREEBROWSER_DLSS5_MODE=OFF|AUTO|ON` (default `AUTO`). `AUTO`
+enables the path only when one `THREEBROWSER_STREAMLINE_SDK` root contains the
+core runtime, both Neural Rendering plug-ins, and a public `sl_dlss_nr.h` whose
+exact ABI compiles against the bridge. A headerless preview bundle is never
+guessed automatically; using it requires the deliberate `ON` mode and may use
+`THREEBROWSER_DLSS5_PLUGIN_DIR` as an expert plug-in-directory override. Builds
+and machines without the compatible feature continue with the existing raster,
+ray-query, and Streamline paths unchanged.
+
+At runtime, callers must gate use on all three signals:
+`capabilities.dlssNeuralRendering`,
+`capabilities.dlssNeuralRenderingApiLoaded`, and the presence of
+`evaluateNeuralRendering()`. The same-resolution path currently accepts only
+DLAA mode, separate RGBA16F input/output textures, depth32float, RG16F/RG32F
+motion vectors, and the complete temporal camera constants. Its supported
+style values are exactly `0`, `1`, and `2`; no other style numbers are exposed.
+As with the other DLSS paths, a queued command is not an activation claim and a
+failed evaluation must fall back to the ordinary rendered color.
+
 WebGPU pages can inspect and request those features through
 `navigator.gpu.threeBrowserRTX`. The status contract keeps adapter support,
 page request, successful native configuration, and per-frame activity separate;

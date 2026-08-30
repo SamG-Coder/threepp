@@ -1,7 +1,7 @@
 import {
   cmd,
   RTX_MAX_INSTANCE_GROUP_CAPACITY,
-} from "./three-webgpu-cmd.js?tb-native=3";
+} from "./three-webgpu-cmd.js?tb-native=5";
 
 const FEATURES = [
   "core-features-and-limits",
@@ -181,6 +181,65 @@ function normalizeDlssOptions(value, defaultWidth, defaultHeight) {
   };
 }
 
+function neuralRenderingUint32(value, name, fallback = 0, maximum = 0xffffffff) {
+  const number = value === undefined ? fallback : value;
+  if (typeof number !== "number" || !Number.isInteger(number) ||
+      number < 0 || number > maximum) {
+    if (maximum === 2) {
+      throw new RangeError(
+        `${name} must be exactly one of the integers 0, 1, or 2`,
+      );
+    }
+    throw new RangeError(`${name} must be an unsigned 32-bit integer`);
+  }
+  return number;
+}
+
+function normalizeNeuralRenderingOptions(value) {
+  const source = value && typeof value === "object" ? value : {};
+  const performanceMode = dlssModeValue(
+    source.performanceMode ?? source.qualityMode ?? "dlaa",
+    6,
+  );
+  if (performanceMode !== 6) {
+    throw new RangeError(
+      "The same-resolution Neural Rendering path requires performanceMode DLAA",
+    );
+  }
+  return {
+    enabled: source.enabled !== false && value !== false,
+    intensity: finiteNumber(source.intensity, "options.intensity", 1),
+    localToneStrength: finiteNumber(
+      source.localToneStrength,
+      "options.localToneStrength",
+      1,
+    ),
+    localStructureStrength: finiteNumber(
+      source.localStructureStrength,
+      "options.localStructureStrength",
+      1,
+    ),
+    globalToneStrength: finiteNumber(
+      source.globalToneStrength,
+      "options.globalToneStrength",
+      1,
+    ),
+    // Only these three numeric styles are part of the supported contract.
+    style: neuralRenderingUint32(source.style, "options.style", 0, 2),
+    renderPreset: neuralRenderingUint32(
+      source.renderPreset,
+      "options.renderPreset",
+    ),
+    useAutoMask: source.useAutoMask !== false,
+    skinStructureStrength: finiteNumber(
+      source.skinStructureStrength,
+      "options.skinStructureStrength",
+      1,
+    ),
+    performanceMode,
+  };
+}
+
 function numericArray(value, length, name) {
   const source = value?.elements ?? value;
   if (!source || typeof source.length !== "number" || source.length !== length) {
@@ -208,6 +267,10 @@ const DLSS_COLOR_FORMATS = new Set([
 const DLSS_DEPTH_FORMATS = new Set(["depth16unorm", "depth32float", "depth32float-stencil8"]);
 const DLSS_MOTION_FORMATS = new Set(["rg16float", "rg32float", "rgba16float", "rgba32float"]);
 const DLSS_EXPOSURE_FORMATS = new Set(["r16float", "r32float"]);
+const DLSS_NR_COLOR_FORMATS = new Set(["rgba16float"]);
+const DLSS_NR_DEPTH_FORMATS = new Set(["depth32float"]);
+const DLSS_NR_MOTION_FORMATS = new Set(["rg16float", "rg32float"]);
+const DLSS_NR_CONTROL_MASK_FORMATS = new Set(["r8unorm"]);
 // Streamline 2.12 DLSS-G does not support FP16/scRGB final color. Keep this
 // narrower than the DLSS-SR color set so an HDR intermediate cannot be
 // mislabeled as the post-tonemapped HUD-less frame.
@@ -1616,6 +1679,7 @@ class GPUCommandEncoder {
 // compute -> AS update -> ray-query ordering without CPU synchronization.
 const RAW_NATIVE_ENCODER_COMMANDS = new Set([
   "dlssEvaluate",
+  "dlssNeuralRenderingEvaluate",
   "frameGenerationTag",
   "rayReconstructionEvaluate",
   "rtxSceneCommit",
@@ -1689,6 +1753,9 @@ function replayCommandBuffer(buffer, commandSink = cmd) {
       case "setBlend": commandSink.setBlend(enc, entry[1]); break;
       case "renderEnd": commandSink.renderEnd(enc); break;
       case "dlssEvaluate": commandSink.dlssEvaluate(enc, entry[1]); break;
+      case "dlssNeuralRenderingEvaluate":
+        commandSink.dlssNeuralRenderingEvaluate(enc, entry[1]);
+        break;
       case "frameGenerationTag": commandSink.frameGenerationTag(enc, entry[1]); break;
       case "rayReconstructionEvaluate": commandSink.rayReconstructionEvaluate(enc, entry[1]); break;
       case "rtxSceneBegin": commandSink.rtxSceneBegin(); break;
@@ -2334,6 +2401,7 @@ export function install() {
     dlssOptions: null,
     dlssFrameGeneration: -1,
     dlssRayReconstruction: -1,
+    dlssNeuralRendering: -1,
   };
   let staticRaySceneQueued = false;
   let staticRaySceneSubmitted = false;
@@ -2357,6 +2425,8 @@ export function install() {
       dlssSuperResolution: Boolean(raw.dlssSuperResolution),
       dlssFrameGeneration: Boolean(raw.dlssFrameGeneration),
       dlssRayReconstruction: Boolean(raw.dlssRayReconstruction),
+      dlssNeuralRendering: Boolean(raw.dlssNeuralRendering),
+      dlssNeuralRenderingApiLoaded: Boolean(raw.dlssNeuralRenderingApiLoaded),
       nativeRayTracing: Boolean(raw.nativeRayTracing ?? raw.rayQuery ?? raw.rayTracing),
       rayQuery: Boolean(raw.rayQuery ?? raw.nativeRayTracing ?? raw.rayTracing),
       reflex: Boolean(raw.reflex),
@@ -2522,6 +2592,25 @@ export function install() {
           false,
           false,
           unevaluated(capabilities.dlssRayReconstruction, requested.dlssRayReconstruction),
+        ),
+        dlssNeuralRendering: featureState(
+          capabilities.dlssNeuralRendering,
+          requested.dlssNeuralRendering,
+          false,
+          false,
+          capabilities.dlssNeuralRendering &&
+            !capabilities.dlssNeuralRenderingApiLoaded
+            ? "DLSS Neural Rendering support is reported, but its native API is not loaded."
+            : unevaluated(
+                capabilities.dlssNeuralRendering,
+                requested.dlssNeuralRendering,
+              ),
+          {
+            apiLoaded: capabilities.dlssNeuralRenderingApiLoaded,
+            evaluationCount: 0,
+            failureCount: 0,
+            lastResult: 0,
+          },
         ),
         nativeRayTracing: featureState(
           capabilities.nativeRayTracing,
@@ -2705,6 +2794,131 @@ export function install() {
     return immutableSnapshot({
       queued: true,
       viewport: packed.viewport,
+      status: statusBeforeQueue,
+      note: "Evaluation is recorded on the command encoder. Active state changes only after queue submission and successful native replay.",
+    });
+  };
+
+  const evaluateNeuralRendering = (frame = {}) => {
+    if (!frame || typeof frame !== "object") {
+      throw new TypeError("threeBrowserRTX.evaluateNeuralRendering expects a frame object");
+    }
+    const encoder = frame.commandEncoder;
+    if (!(encoder instanceof GPUCommandEncoder) || !encoder._h ||
+        !Array.isArray(encoder._commands)) {
+      throw new TypeError(
+        "frame.commandEncoder must be a native GPUCommandEncoder from this device",
+      );
+    }
+    if (encoder._finished) {
+      throw new TypeError(
+        "frame.commandEncoder has already been finished; record Neural Rendering before finish()",
+      );
+    }
+    const viewport = Math.max(
+      0,
+      Math.trunc(finiteNumber(frame.viewport, "frame.viewport", 0)),
+    );
+    // Validate the caller-owned controls even when the optional native feature
+    // is absent. In particular, the supported style domain is exactly 0..2.
+    const options = normalizeNeuralRenderingOptions(frame.options);
+    const statusBeforeQueue = getStatus();
+    const feature = statusBeforeQueue.features?.dlssNeuralRendering;
+    const runtimeBlock = runtimeControlBlock(
+      feature,
+      statusBeforeQueue,
+      "DLSS Neural Rendering",
+      viewport,
+    );
+    if (runtimeBlock) return runtimeBlock;
+
+    const supported = Boolean(
+      feature?.supported ?? statusBeforeQueue.capabilities?.dlssNeuralRendering,
+    );
+    const apiLoaded = Boolean(
+      feature?.apiLoaded ?? statusBeforeQueue.capabilities?.dlssNeuralRenderingApiLoaded,
+    );
+    if (!supported || !apiLoaded) {
+      const reason = typeof feature?.reason === "string" && feature.reason
+        ? feature.reason
+        : !supported
+          ? "DLSS Neural Rendering is not supported by the active native context."
+          : "The DLSS Neural Rendering API is not loaded by the active native context.";
+      return immutableSnapshot({
+        queued: false,
+        viewport,
+        reason,
+        status: statusBeforeQueue,
+        note: "No native command was recorded; keep the existing rendered frame.",
+      });
+    }
+
+    const packed = {
+      viewport,
+      colorInput: dlssResource(
+        frame.colorInput,
+        "frame.colorInput",
+        DLSS_NR_COLOR_FORMATS,
+        0x04,
+      ),
+      colorOutput: dlssResource(
+        frame.colorOutput,
+        "frame.colorOutput",
+        DLSS_NR_COLOR_FORMATS,
+        0x08,
+      ),
+      depth: dlssResource(
+        frame.depth,
+        "frame.depth",
+        DLSS_NR_DEPTH_FORMATS,
+        0x04,
+      ),
+      motionVectors: dlssResource(
+        frame.motionVectors,
+        "frame.motionVectors",
+        DLSS_NR_MOTION_FORMATS,
+        0x04,
+      ),
+      controlMask: frame.controlMask
+        ? dlssResource(
+            frame.controlMask,
+            "frame.controlMask",
+            DLSS_NR_CONTROL_MASK_FORMATS,
+            0x04,
+          )
+        : null,
+      options,
+      constants: dlssFrameConstants(frame.constants),
+    };
+    if (packed.controlMask) {
+      // A caller-supplied mask and automatic mask generation are mutually
+      // exclusive. Prefer the explicit mask.
+      packed.options.useAutoMask = false;
+    }
+    if (packed.colorInput.textureHandle === packed.colorOutput.textureHandle) {
+      throw new TypeError(
+        "DLSS Neural Rendering colorInput and colorOutput must be different textures",
+      );
+    }
+    for (const [name, resource] of [
+      ["colorOutput", packed.colorOutput],
+      ["depth", packed.depth],
+      ["motionVectors", packed.motionVectors],
+      ["controlMask", packed.controlMask],
+    ]) {
+      if (!resource) continue;
+      if (resource.width !== packed.colorInput.width ||
+          resource.height !== packed.colorInput.height) {
+        throw new RangeError(
+          `frame.${name} region must match frame.colorInput dimensions`,
+        );
+      }
+    }
+    requested.dlssNeuralRendering = packed.options.enabled ? 1 : 0;
+    encoder._commands.push(["dlssNeuralRenderingEvaluate", packed]);
+    return immutableSnapshot({
+      queued: true,
+      viewport,
       status: statusBeforeQueue,
       note: "Evaluation is recorded on the command encoder. Active state changes only after queue submission and successful native replay.",
     });
@@ -3824,6 +4038,7 @@ export function install() {
       requestFeatures,
       getOptimalSettings,
       evaluateSuperResolution,
+      evaluateNeuralRendering,
       tagFrameGeneration,
       evaluateRayReconstruction,
       createRayQueryPipeline,
@@ -3882,6 +4097,7 @@ export {
   GPUDevice,
   GPUAdapter,
   lowerExternalTextureWgsl,
+  normalizeNeuralRenderingOptions,
   replayCommandBuffer,
   RTX_MAX_INSTANCE_GROUP_CAPACITY,
   rtxInstanceGroupCapacity,

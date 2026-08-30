@@ -20,6 +20,8 @@ struct StreamlineCapabilities {
     bool dlssSuperResolution{};
     bool dlssFrameGeneration{};
     bool dlssRayReconstruction{};
+    bool dlssNeuralRendering{};
+    bool dlssNeuralRenderingFunctionsLoaded{};
     bool reflex{};
     std::string status;
 };
@@ -106,6 +108,35 @@ struct StreamlineDLSSFrame {
     StreamlineVulkanResource motionVectors;
     StreamlineVulkanResource exposure;
     bool hasExposure{};
+    StreamlineFrameConstants constants;
+};
+
+// DLSS Neural Rendering consumes full-resolution HDR color, depth, dense
+// motion vectors, and an optional per-pixel control mask. Input and output
+// images must be distinct and remain valid through evaluation.
+struct StreamlineDLSSNROptions {
+    bool enabled{true};
+    float intensity{1.0f};
+    float localToneStrength{1.0f};
+    float localStructureStrength{1.0f};
+    float globalToneStrength{1.0f};
+    uint32_t style{};
+    uint32_t renderPreset{};
+    bool useAutoMask{};
+    float skinStructureStrength{1.0f};
+    StreamlineDLSSMode performanceMode{StreamlineDLSSMode::DLAA};
+};
+
+struct StreamlineDLSSNRFrame {
+    uint32_t viewport{};
+    void* commandBuffer{};
+    StreamlineVulkanResource colorInput;
+    StreamlineVulkanResource colorOutput;
+    StreamlineVulkanResource depth;
+    StreamlineVulkanResource motionVectors;
+    StreamlineVulkanResource controlMask;
+    bool hasControlMask{};
+    StreamlineDLSSNROptions options;
     StreamlineFrameConstants constants;
 };
 
@@ -196,6 +227,15 @@ struct StreamlineFeatureState {
     uint64_t rayReconstructionEstimatedVramBytes{};
     int32_t rayReconstructionLastResult{};
     std::string rayReconstructionReason;
+    bool neuralRenderingSupported{};
+    bool neuralRenderingFunctionsLoaded{};
+    bool neuralRenderingRequested{};
+    bool neuralRenderingConfigured{};
+    bool neuralRenderingActive{};
+    uint64_t neuralRenderingEvaluationCount{};
+    uint64_t neuralRenderingFailureCount{};
+    int32_t neuralRenderingLastResult{};
+    std::string neuralRenderingReason;
 };
 
 bool streamlinePrepare();
@@ -209,6 +249,7 @@ bool streamlineRequestFeatures(const StreamlineDLSSOptions& dlss,
 bool streamlineDLSSGetOptimalSettings(const StreamlineDLSSOptions& options,
                                       StreamlineDLSSOptimalSettings& settings);
 bool streamlineDLSSEvaluate(const StreamlineDLSSFrame& frame);
+bool streamlineDLSSNREvaluate(const StreamlineDLSSNRFrame& frame);
 bool streamlineRayReconstructionEvaluate(const StreamlineRayReconstructionFrame& frame);
 bool streamlineFrameGenerationTag(const StreamlineFrameGenerationFrame& frame);
 void streamlineFrameGenerationBeforePresent(bool inputsMayBePresented);

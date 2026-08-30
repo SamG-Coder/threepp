@@ -28,6 +28,7 @@
 #include <climits>
 #include <cmath>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -4513,6 +4514,68 @@ void execOne(uint32_t op, Reader& r) {
             tw_dlss_evaluate(&frame);
             return;
         }
+        case OP_DLSS_NR_EVALUATE: {
+            TWDLSSNRFrame frame{};
+            frame.struct_size = sizeof(frame);
+            frame.command_encoder_handle = r.u32();
+            frame.viewport = r.u32();
+            auto readResource = [&r](TWDLSSResource& resource) {
+                resource.texture_handle = r.u32();
+                resource.vulkan_layout = r.u32();
+                resource.left = r.u32();
+                resource.top = r.u32();
+                resource.width = r.u32();
+                resource.height = r.u32();
+            };
+            readResource(frame.color_input);
+            readResource(frame.color_output);
+            readResource(frame.depth);
+            readResource(frame.motion_vectors);
+            readResource(frame.control_mask);
+            frame.has_control_mask = static_cast<int>(r.u32());
+            frame.enabled = static_cast<int>(r.u32());
+            frame.intensity = r.f32();
+            frame.local_tone_strength = r.f32();
+            frame.local_structure_strength = r.f32();
+            frame.global_tone_strength = r.f32();
+            frame.style = r.u32();
+            frame.render_preset = r.u32();
+            frame.use_auto_mask = static_cast<int>(r.u32());
+            frame.skin_structure_strength = r.f32();
+            frame.performance_mode = r.u32();
+            auto readFloats = [&r](float* values, uint32_t count) {
+                for (uint32_t i = 0; i < count; ++i) values[i] = r.f32();
+            };
+            readFloats(frame.constants.camera_view_to_clip, 16);
+            readFloats(frame.constants.clip_to_camera_view, 16);
+            readFloats(frame.constants.clip_to_lens_clip, 16);
+            readFloats(frame.constants.clip_to_prev_clip, 16);
+            readFloats(frame.constants.prev_clip_to_clip, 16);
+            readFloats(frame.constants.jitter_offset, 2);
+            readFloats(frame.constants.motion_vector_scale, 2);
+            readFloats(frame.constants.camera_pinhole_offset, 2);
+            readFloats(frame.constants.camera_position, 3);
+            readFloats(frame.constants.camera_up, 3);
+            readFloats(frame.constants.camera_right, 3);
+            readFloats(frame.constants.camera_forward, 3);
+            frame.constants.camera_near = r.f32();
+            frame.constants.camera_far = r.f32();
+            frame.constants.camera_fov = r.f32();
+            frame.constants.camera_aspect_ratio = r.f32();
+            frame.constants.depth_inverted = static_cast<int>(r.u32());
+            frame.constants.camera_motion_included = static_cast<int>(r.u32());
+            frame.constants.motion_vectors_3d = static_cast<int>(r.u32());
+            frame.constants.reset = static_cast<int>(r.u32());
+            frame.constants.orthographic_projection = static_cast<int>(r.u32());
+            frame.constants.motion_vectors_dilated = static_cast<int>(r.u32());
+            frame.constants.motion_vectors_jittered = static_cast<int>(r.u32());
+            if (!r.ok) {
+                setError("DLSS Neural Rendering command payload is truncated");
+                return;
+            }
+            tw_dlss_nr_evaluate(&frame);
+            return;
+        }
         case OP_DLSSG_TAG: {
             TWFrameGenerationFrame frame{};
             frame.struct_size = sizeof(frame);
@@ -5530,6 +5593,16 @@ void copyConstants(const TWDLSSFrameConstants& source, StreamlineFrameConstants&
 }
 #endif
 
+template <typename T>
+bool writeVersionedOutput(T* destination, uint32_t callerSize,
+                          size_t minimumSize, T value) {
+    if (!destination || callerSize < minimumSize) return false;
+    const size_t writeSize = std::min<size_t>(callerSize, sizeof(T));
+    value.struct_size = static_cast<uint32_t>(writeSize);
+    std::memcpy(destination, &value, writeSize);
+    return true;
+}
+
 }// namespace
 
 extern "C" {
@@ -6072,7 +6145,11 @@ const char* tw_backend_name(void) {
 }
 
 int tw_gpu_capabilities(TWGpuCapabilities* capabilities) {
-    if (!capabilities || capabilities->struct_size < sizeof(TWGpuCapabilities)) return 0;
+    constexpr size_t kLegacySize =
+        offsetof(TWGpuCapabilities, dlss_neural_rendering);
+    if (!capabilities) return 0;
+    const uint32_t callerSize = capabilities->struct_size;
+    if (callerSize < kLegacySize) return 0;
     const auto streamline = streamlineCapabilities();
     const auto rayQuery = rayQueryBridgeCapabilities();
     TWGpuCapabilities result{};
@@ -6094,8 +6171,12 @@ int tw_gpu_capabilities(TWGpuCapabilities* capabilities) {
                                   rayQuery.rayQuerySupported;
     result.native_ray_tracing = nativeRayTracing ? 1 : 0;
     result.ray_query = nativeRayTracing ? 1 : 0;
-    *capabilities = result;
-    return 1;
+    result.dlss_neural_rendering =
+        streamline.dlssNeuralRendering ? 1 : 0;
+    result.dlss_neural_rendering_api_loaded =
+        streamline.dlssNeuralRenderingFunctionsLoaded ? 1 : 0;
+    return writeVersionedOutput(capabilities, callerSize, kLegacySize, result)
+        ? 1 : 0;
 }
 
 int tw_request_gpu_features(const TWGpuFeatureRequest* request) {
@@ -6130,7 +6211,11 @@ int tw_request_gpu_features(const TWGpuFeatureRequest* request) {
 }
 
 int tw_gpu_feature_status(TWGpuFeatureStatus* status) {
-    if (!status || status->struct_size < sizeof(TWGpuFeatureStatus)) return 0;
+    constexpr size_t kLegacySize =
+        offsetof(TWGpuFeatureStatus, neural_rendering_supported);
+    if (!status) return 0;
+    const uint32_t callerSize = status->struct_size;
+    if (callerSize < kLegacySize) return 0;
     const StreamlineFeatureState state = runtimeFeatureState();
     const auto rayQuery = rayQueryBridgeCapabilities();
     TWGpuFeatureStatus result{};
@@ -6182,8 +6267,27 @@ int tw_gpu_feature_status(TWGpuFeatureStatus* status) {
     std::snprintf(result.native_ray_tracing_reason,
                   sizeof(result.native_ray_tracing_reason), "%s",
                   rayQuery.status ? rayQuery.status : "Ray query status is unavailable");
-    *status = result;
-    return 1;
+    result.neural_rendering_supported =
+        state.neuralRenderingSupported ? 1 : 0;
+    result.neural_rendering_api_loaded =
+        state.neuralRenderingFunctionsLoaded ? 1 : 0;
+    result.neural_rendering_requested =
+        state.neuralRenderingRequested ? 1 : 0;
+    result.neural_rendering_configured =
+        state.neuralRenderingConfigured ? 1 : 0;
+    result.neural_rendering_active =
+        state.neuralRenderingActive ? 1 : 0;
+    result.neural_rendering_evaluation_count =
+        state.neuralRenderingEvaluationCount;
+    result.neural_rendering_failure_count =
+        state.neuralRenderingFailureCount;
+    result.neural_rendering_last_result =
+        state.neuralRenderingLastResult;
+    std::snprintf(result.neural_rendering_reason,
+                  sizeof(result.neural_rendering_reason), "%s",
+                  state.neuralRenderingReason.c_str());
+    return writeVersionedOutput(status, callerSize, kLegacySize, result)
+        ? 1 : 0;
 }
 
 int tw_dlss_optimal_settings(const TWGpuFeatureRequest* request,
@@ -6295,6 +6399,162 @@ int tw_dlss_evaluate(const TWDLSSFrame* frame) {
             if (status != WGPUStatus_Success || !evaluation.result) {
                 if (status != WGPUStatus_Success) {
                     setError("wgpu-native rejected the native DLSS command-buffer callback");
+                }
+                return 0;
+            }
+            return 1;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+#endif
+}
+
+int tw_dlss_nr_evaluate(const TWDLSSNRFrame* frame) {
+    if (!frame || frame->struct_size < sizeof(TWDLSSNRFrame)) return 0;
+#if !defined(THREEBROWSER_STREAMLINE) || \
+    !defined(THREEBROWSER_DLSS_NEURAL_RENDERING)
+    (void)frame;
+    setError("DLSS Neural Rendering is unavailable in this build");
+    return 0;
+#else
+    const TWDLSSNRFrame copy = *frame;
+    try {
+        return onWorker([copy] {
+            if (!copy.enabled) {
+                StreamlineDLSSNRFrame native{};
+                native.viewport = copy.viewport;
+                native.options.enabled = false;
+                return streamlineDLSSNREvaluate(native) ? 1 : 0;
+            }
+
+            endPasses();
+            WGPUCommandEncoder encoder = g.currentEncoder;
+            if (copy.command_encoder_handle) {
+                Slot* slot = getSlot(copy.command_encoder_handle);
+                encoder = slot && slot->kind == Kind::Encoder
+                    ? slot->encoder
+                    : nullptr;
+            }
+            if (!encoder) {
+                setError("DLSS Neural Rendering requires an active WebGPU command encoder");
+                return 0;
+            }
+            if (copy.style > 2) {
+                setError("DLSS Neural Rendering style must be 0, 1, or 2");
+                return 0;
+            }
+            if (!std::isfinite(copy.intensity) ||
+                !std::isfinite(copy.local_tone_strength) ||
+                !std::isfinite(copy.local_structure_strength) ||
+                !std::isfinite(copy.global_tone_strength) ||
+                !std::isfinite(copy.skin_structure_strength)) {
+                setError("DLSS Neural Rendering controls must be finite numbers");
+                return 0;
+            }
+            if (copy.performance_mode != TW_DLSS_DLAA) {
+                setError("The same-resolution DLSS Neural Rendering path requires DLAA mode (6)");
+                return 0;
+            }
+            if (copy.color_input.texture_handle ==
+                copy.color_output.texture_handle) {
+                setError("DLSS Neural Rendering input and output textures must be distinct");
+                return 0;
+            }
+
+            const Slot* colorInputSlot =
+                textureSlotFromHandle(copy.color_input.texture_handle);
+            const Slot* colorOutputSlot =
+                textureSlotFromHandle(copy.color_output.texture_handle);
+            const Slot* depthSlot =
+                textureSlotFromHandle(copy.depth.texture_handle);
+            const Slot* motionSlot =
+                textureSlotFromHandle(copy.motion_vectors.texture_handle);
+            const Slot* controlMaskSlot = copy.has_control_mask
+                ? textureSlotFromHandle(copy.control_mask.texture_handle)
+                : nullptr;
+            if (!colorInputSlot || !colorOutputSlot || !depthSlot ||
+                !motionSlot || (copy.has_control_mask && !controlMaskSlot)) {
+                setError("DLSS Neural Rendering received an invalid texture handle");
+                return 0;
+            }
+            if (colorInputSlot->texFormat != WGPUTextureFormat_RGBA16Float ||
+                colorOutputSlot->texFormat != WGPUTextureFormat_RGBA16Float) {
+                setError("DLSS Neural Rendering requires rgba16float input and output");
+                return 0;
+            }
+            if (depthSlot->texFormat != WGPUTextureFormat_Depth32Float) {
+                setError("DLSS Neural Rendering requires depth32float depth");
+                return 0;
+            }
+            if (motionSlot->texFormat != WGPUTextureFormat_RG16Float &&
+                motionSlot->texFormat != WGPUTextureFormat_RG32Float) {
+                setError("DLSS Neural Rendering motion vectors must be rg16float or rg32float");
+                return 0;
+            }
+            if (controlMaskSlot &&
+                controlMaskSlot->texFormat != WGPUTextureFormat_R8Unorm) {
+                setError("DLSS Neural Rendering control mask must be r8unorm");
+                return 0;
+            }
+
+            StreamlineDLSSNRFrame native{};
+            native.viewport = copy.viewport;
+            std::string error;
+            if (!makeStreamlineResource(copy.color_input, false, false,
+                                        native.colorInput, error) ||
+                !makeStreamlineResource(copy.color_output, false, true,
+                                        native.colorOutput, error) ||
+                !makeStreamlineResource(copy.depth, true, false,
+                                        native.depth, error) ||
+                !makeStreamlineResource(copy.motion_vectors, false, false,
+                                        native.motionVectors, error) ||
+                (copy.has_control_mask &&
+                 !makeStreamlineResource(copy.control_mask, false, false,
+                                         native.controlMask, error))) {
+                setError(error.c_str());
+                return 0;
+            }
+            native.hasControlMask = copy.has_control_mask != 0;
+            native.options.enabled = true;
+            native.options.intensity = copy.intensity;
+            native.options.localToneStrength = copy.local_tone_strength;
+            native.options.localStructureStrength =
+                copy.local_structure_strength;
+            native.options.globalToneStrength = copy.global_tone_strength;
+            native.options.style = copy.style;
+            native.options.renderPreset = copy.render_preset;
+            native.options.useAutoMask = native.hasControlMask
+                ? false
+                : copy.use_auto_mask != 0;
+            native.options.skinStructureStrength =
+                copy.skin_structure_strength;
+            native.options.performanceMode =
+                static_cast<StreamlineDLSSMode>(copy.performance_mode);
+            copyConstants(copy.constants, native.constants);
+
+            struct Evaluation {
+                StreamlineDLSSNRFrame* frame;
+                bool result{};
+            } evaluation{&native, false};
+            const WGPUStatus status =
+                wgpuCommandEncoderWithNativeVulkanCommandBuffer(
+                    encoder,
+                    [](void* commandBuffer, void* userdata) {
+                        auto* value = static_cast<Evaluation*>(userdata);
+                        value->frame->commandBuffer = commandBuffer;
+                        value->result =
+                            streamlineDLSSNREvaluate(*value->frame);
+                    },
+                    &evaluation);
+            if (status != WGPUStatus_Success || !evaluation.result) {
+                if (status != WGPUStatus_Success) {
+                    setError("wgpu-native rejected the DLSS Neural Rendering command-buffer callback");
+                } else {
+                    const StreamlineFeatureState state =
+                        streamlineFeatureState();
+                    setError(state.neuralRenderingReason.c_str());
                 }
                 return 0;
             }

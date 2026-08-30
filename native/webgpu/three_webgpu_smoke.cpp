@@ -7,12 +7,15 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#include <algorithm>
 #include <chrono>
 #include <array>
+#include <cstddef>
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <new>
 #include <string>
 #include <thread>
 #include <vector>
@@ -251,6 +254,49 @@ bool runDynamicTriangleMeshSmoke() {
     return true;
 }
 
+bool runLegacyGpuQuerySmoke() {
+    constexpr size_t kLegacyCapabilitiesSize =
+        offsetof(TWGpuCapabilities, dlss_neural_rendering);
+    constexpr size_t kLegacyStatusSize =
+        offsetof(TWGpuFeatureStatus, neural_rendering_supported);
+    constexpr size_t kCanarySize = 32;
+
+    alignas(TWGpuCapabilities)
+        std::array<uint8_t, sizeof(TWGpuCapabilities) + kCanarySize>
+            capabilitiesBytes{};
+    auto* capabilities =
+        new (capabilitiesBytes.data()) TWGpuCapabilities{};
+    std::fill(capabilitiesBytes.begin() + kLegacyCapabilitiesSize,
+              capabilitiesBytes.end(), 0xa5);
+    capabilities->struct_size =
+        static_cast<uint32_t>(kLegacyCapabilitiesSize);
+    if (!tw_gpu_capabilities(capabilities) ||
+        capabilities->struct_size != kLegacyCapabilitiesSize ||
+        !std::all_of(capabilitiesBytes.begin() + kLegacyCapabilitiesSize,
+                     capabilitiesBytes.end(),
+                     [](uint8_t value) { return value == 0xa5; })) {
+        std::cerr << "Legacy GPU capability query crossed its caller-owned boundary\n";
+        return false;
+    }
+
+    alignas(TWGpuFeatureStatus)
+        std::array<uint8_t, sizeof(TWGpuFeatureStatus) + kCanarySize>
+            statusBytes{};
+    auto* status = new (statusBytes.data()) TWGpuFeatureStatus{};
+    std::fill(statusBytes.begin() + kLegacyStatusSize, statusBytes.end(),
+              0x5a);
+    status->struct_size = static_cast<uint32_t>(kLegacyStatusSize);
+    if (!tw_gpu_feature_status(status) ||
+        status->struct_size != kLegacyStatusSize ||
+        !std::all_of(statusBytes.begin() + kLegacyStatusSize,
+                     statusBytes.end(),
+                     [](uint8_t value) { return value == 0x5a; })) {
+        std::cerr << "Legacy GPU feature query crossed its caller-owned boundary\n";
+        return false;
+    }
+    return true;
+}
+
 }// namespace
 
 int main() {
@@ -292,8 +338,16 @@ int main() {
               << " dlss=" << gpuCapabilities.dlss_super_resolution
               << " framegen=" << gpuCapabilities.dlss_frame_generation
               << " rayreconstruction=" << gpuCapabilities.dlss_ray_reconstruction
+              << " neuralrendering=" << gpuCapabilities.dlss_neural_rendering
+              << " neuralrendering_api="
+              << gpuCapabilities.dlss_neural_rendering_api_loaded
               << " reflex=" << gpuCapabilities.reflex
               << " status=\"" << gpuCapabilities.status << "\"\n";
+
+    if (!runLegacyGpuQuerySmoke()) {
+        tw_shutdown();
+        return 21;
+    }
 
     if (!runDynamicTriangleMeshSmoke()) {
         tw_shutdown();
@@ -306,6 +360,19 @@ int main() {
         std::cerr << "GPU feature-state query failed\n";
         tw_shutdown();
         return 15;
+    }
+    if (featureStatus.neural_rendering_supported !=
+            gpuCapabilities.dlss_neural_rendering ||
+        featureStatus.neural_rendering_api_loaded !=
+            gpuCapabilities.dlss_neural_rendering_api_loaded ||
+        featureStatus.neural_rendering_requested ||
+        featureStatus.neural_rendering_configured ||
+        featureStatus.neural_rendering_active ||
+        featureStatus.neural_rendering_evaluation_count != 0) {
+        std::cerr << "DLSS Neural Rendering reported state without an evaluation: "
+                  << featureStatus.neural_rendering_reason << '\n';
+        tw_shutdown();
+        return 20;
     }
     if (gpuCapabilities.dlss_super_resolution) {
         TWGpuFeatureRequest request{};

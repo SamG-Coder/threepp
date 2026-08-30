@@ -56,6 +56,8 @@ typedef struct TWGpuCapabilities {
     char status[256];
     int native_ray_tracing;
     int ray_query;
+    int dlss_neural_rendering;
+    int dlss_neural_rendering_api_loaded;
 } TWGpuCapabilities;
 
 enum {
@@ -119,6 +121,15 @@ typedef struct TWGpuFeatureStatus {
     int native_ray_tracing_configured;
     int native_ray_tracing_active;
     char native_ray_tracing_reason[256];
+    int neural_rendering_supported;
+    int neural_rendering_api_loaded;
+    int neural_rendering_requested;
+    int neural_rendering_configured;
+    int neural_rendering_active;
+    uint64_t neural_rendering_evaluation_count;
+    uint64_t neural_rendering_failure_count;
+    int32_t neural_rendering_last_result;
+    char neural_rendering_reason[256];
 } TWGpuFeatureStatus;
 
 typedef struct TWDLSSOptimalSettings {
@@ -179,6 +190,29 @@ typedef struct TWDLSSFrame {
     int has_exposure;
     TWDLSSFrameConstants constants;
 } TWDLSSFrame;
+
+typedef struct TWDLSSNRFrame {
+    uint32_t struct_size;
+    uint32_t viewport;
+    uint32_t command_encoder_handle;
+    TWDLSSResource color_input;
+    TWDLSSResource color_output;
+    TWDLSSResource depth;
+    TWDLSSResource motion_vectors;
+    TWDLSSResource control_mask;
+    int has_control_mask;
+    int enabled;
+    float intensity;
+    float local_tone_strength;
+    float local_structure_strength;
+    float global_tone_strength;
+    uint32_t style;
+    uint32_t render_preset;
+    int use_auto_mask;
+    float skin_structure_strength;
+    uint32_t performance_mode;
+    TWDLSSFrameConstants constants;
+} TWDLSSNRFrame;
 
 typedef struct TWRayReconstructionFrame {
     uint32_t struct_size;
@@ -452,6 +486,7 @@ TW_API int tw_gpu_feature_status(TWGpuFeatureStatus* status);
 TW_API int tw_dlss_optimal_settings(const TWGpuFeatureRequest* request,
                                     TWDLSSOptimalSettings* settings);
 TW_API int tw_dlss_evaluate(const TWDLSSFrame* frame);
+TW_API int tw_dlss_nr_evaluate(const TWDLSSNRFrame* frame);
 TW_API int tw_ray_reconstruction_evaluate(const TWRayReconstructionFrame* frame);
 TW_API int tw_frame_generation_tag(const TWFrameGenerationFrame* frame);
 TW_API int tw_frame_generation_status(TWFrameGenerationStatus* status);

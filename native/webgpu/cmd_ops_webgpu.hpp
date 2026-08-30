@@ -133,6 +133,13 @@ constexpr uint32_t OP_RTX_PIPELINE_CREATE_SOURCE = 91;
 constexpr uint32_t OP_RTX_DYNAMIC_MESH_CREATE = 92;
 constexpr uint32_t OP_RTX_DYNAMIC_MESH_REFIT = 93;
 constexpr uint32_t OP_RTX_DYNAMIC_MESH_DESTROY = 94;
+// DLSS Neural Rendering evaluate. Payload:
+// u32 encoder, viewport; 5x {texture, VkImageLayout, left, top, width, height}
+// for input, output, depth, motion, and optional r8unorm control mask;
+// u32 hasControlMask, enabled; 4x f32 tone/structure controls; u32 style,
+// renderPreset, useAutoMask; f32 skinStructureStrength; u32 performanceMode;
+// then 102x f32 common constants and 7x u32 common-constant flags.
+constexpr uint32_t OP_DLSS_NR_EVALUATE = 95;
 // DLSS Frame Generation resource tag/options command, replayed after rendering
 // and before OP_SUBMIT/OP_PRESENT. Payload:
 // u32 encoder, viewport; 4x {texture, VkImageLayout, left, top, width, height};
