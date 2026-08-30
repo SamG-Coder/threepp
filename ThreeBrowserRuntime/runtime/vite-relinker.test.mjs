@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parse } from "acorn";
-import { detectBundledRendererUsage, relinkViteChunk } from "./vite-relinker.mjs";
+import { detectBundledRendererUsage, detectMinifiedJavaScript, relinkViteChunk } from "./vite-relinker.mjs";
 
 function validModule(source) {
   parse(source, { ecmaVersion: "latest", sourceType: "module" });
@@ -99,6 +99,37 @@ test("detects a constructed minified WebGPU renderer by its semantic marker", ()
     usesWebGL: false,
     usesWebGPU: true,
   });
+});
+
+test("detects a long single-line production chunk as minified", () => {
+  const input = `export default {${"k:1,".repeat(200)}}`;
+  const result = detectMinifiedJavaScript(input, "chunk.js");
+  assert.equal(result.minified, true);
+  assert.ok(result.signals.includes("dense-lines"));
+});
+
+test("detects a dense Vite production chunk as minified", () => {
+  const input = `${"const a=class{constructor(){this.isWebGLRenderer=!0}};const b=new a;".repeat(40)}`;
+  const result = detectMinifiedJavaScript(input, "assets/index-CSHUrFCZ.js");
+  assert.equal(result.minified, true);
+  assert.ok(result.signals.includes("mangled-three-constructors"));
+  assert.ok(result.signals.includes("content-hashed-filename"));
+});
+
+test("does not treat a pretty Three.js module as minified because one shader line is long", () => {
+  const input = [
+    "import { WebGLRenderer } from \"three\";",
+    "export function createRenderer() {",
+    "  return new WebGLRenderer({ antialias: true });",
+    "}",
+    `const fragment = \`${"a".repeat(600)}\`;`,
+    ...Array.from({ length: 24 }, (_, index) => `export const n${index} = ${index};`),
+    "",
+  ].join("\n");
+  const result = detectMinifiedJavaScript(input, "src/main.mjs");
+  assert.equal(result.minified, false);
+  assert.ok(result.signals.includes("long-lines"));
+  assert.ok(!result.signals.includes("mangled-three-constructors"));
 });
 
 test("does not treat an unused bundled renderer definition as application usage", () => {

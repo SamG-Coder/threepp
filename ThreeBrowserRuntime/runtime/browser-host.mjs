@@ -2907,6 +2907,7 @@ function pump() {
   syncWindowSize();
   const callbacks = Array.from(frameCallbacks.values());
   frameCallbacks.clear();
+  globalThis.__threeBrowserDisplayFrame = (globalThis.__threeBrowserDisplayFrame || 0) + 1;
   const timestamp = performance.now();
   for (const callback of callbacks) callback(timestamp);
   setImmediate(pump);
@@ -2941,6 +2942,24 @@ export function loadThreeShim(directory = path.join(here, "three")) {
   return globalThis.THREE;
 }
 
+function applyManifestSearch(url, manifest) {
+  if (!url) return url;
+  if (typeof manifest.search === "string") {
+    url.search = manifest.search === "" || manifest.search.startsWith("?")
+      ? manifest.search
+      : `?${manifest.search}`;
+    return url;
+  }
+  if (manifest.searchParams && typeof manifest.searchParams === "object" && !Array.isArray(manifest.searchParams)) {
+    url.search = "";
+    for (const [key, value] of Object.entries(manifest.searchParams)) {
+      if (value == null) continue;
+      url.searchParams.set(key, String(value));
+    }
+  }
+  return url;
+}
+
 export async function loadEntry(entryPath) {
   lastUnhandledEventError = null;
   const absolute = path.resolve(entryPath);
@@ -2952,7 +2971,7 @@ export async function loadEntry(entryPath) {
       let manifest;
       try { manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")); }
       catch (error) { throw new Error(`Invalid pull manifest in ${manifestPath}: ${error.message}`); }
-      pulledSourceURL = manifest.source ? new URL(manifest.source) : null;
+      pulledSourceURL = applyManifestSearch(manifest.source ? new URL(manifest.source) : null, manifest);
       pulledDirectory = path.dirname(absolute);
       pulledFiles = new Map((manifest.files || []).map(file => [new URL(file.url).href, file.path]));
       const fallbackId = path.basename(pulledDirectory).replace(/[^a-z0-9-]/gi, "-").slice(-40).toLowerCase() || "project";

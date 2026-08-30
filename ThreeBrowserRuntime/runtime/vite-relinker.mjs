@@ -143,6 +143,36 @@ function definitionBinding(ancestors) {
   return null;
 }
 
+const namedRendererConstruction = /\bnew\s+(?:[A-Za-z_$][\w$]*\s*\.\s*)?(?:WebGLRenderer|WebGPURenderer(?:Async)?)\s*\(/;
+const contentHashedFilename = /(?:^|[/\\])[^/\\]*[.-][A-Za-z0-9_-]{8}\.m?js$/i;
+
+// Production Vite/Rollup output is one or two dense lines with mangled
+// identifiers. Pretty Three.js sources can still contain a long GLSL string,
+// so line length alone is not enough unless the file is also dense.
+export function detectMinifiedJavaScript(source, filename = "") {
+  const text = String(source ?? "");
+  const lines = text.split(/\r?\n/);
+  const longestLine = lines.reduce((max, line) => Math.max(max, line.length), 0);
+  const averageLineLength = text.length / Math.max(lines.length, 1);
+  const signals = [];
+  if (longestLine >= 500) signals.push("long-lines");
+  if (averageLineLength >= 200) signals.push("dense-lines");
+  if (/\bis(?:WebGL|WebGPU)Renderer\b/.test(text) && !namedRendererConstruction.test(text)) {
+    signals.push("mangled-three-constructors");
+  }
+  if (contentHashedFilename.test(String(filename).replaceAll("\\", "/"))) {
+    signals.push("content-hashed-filename");
+  }
+  return {
+    minified: signals.includes("dense-lines")
+      || signals.includes("mangled-three-constructors")
+      || (signals.includes("long-lines") && averageLineLength >= 120),
+    signals,
+    longestLine,
+    averageLineLength: Math.round(averageLineLength),
+  };
+}
+
 // Rollup/Vite renames renderer classes, so `new WebGPURenderer()` is not a
 // reliable usage signal in a deployed bundle. Match the stable Three.js
 // semantic marker to its containing constructor, then check whether that

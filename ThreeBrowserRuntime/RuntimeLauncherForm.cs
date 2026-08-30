@@ -262,6 +262,7 @@ internal sealed partial class RuntimeLauncherForm : Form
             var pulledAt = Directory.GetLastWriteTimeUtc(directory);
             var fileCount = 0;
             var requiresWebGpu = false;
+            var minified = false;
             try
             {
                 var manifestPath = Path.Combine(directory, "threebrowser.pull.json");
@@ -276,6 +277,10 @@ internal sealed partial class RuntimeLauncherForm : Form
                         fileCount = filesNode.GetArrayLength();
                     if (root.TryGetProperty("requiresWebGPU", out var gpuNode) && gpuNode.ValueKind is JsonValueKind.True or JsonValueKind.False)
                         requiresWebGpu = gpuNode.GetBoolean();
+                    if (root.TryGetProperty("compatibility", out var compatibility) &&
+                        compatibility.TryGetProperty("minified", out var minifiedNode) &&
+                        minifiedNode.ValueKind is JsonValueKind.True)
+                        minified = true;
                 }
             }
             catch { }
@@ -292,7 +297,7 @@ internal sealed partial class RuntimeLauncherForm : Form
                 }
             }
             catch { }
-            exports.Add(new { id, name, source, pulledAt, fileCount, requiresWebGpu });
+            exports.Add(new { id, name, source, pulledAt, fileCount, requiresWebGpu, minified });
         }
 
         var demos = new List<object>();
@@ -489,7 +494,8 @@ internal sealed partial class RuntimeLauncherForm : Form
     {
         if (!Uri.TryCreate(source, UriKind.Absolute, out var uri)) return HumanizeName(fallback);
         var path = Uri.UnescapeDataString(uri.AbsolutePath).Trim('/');
-        return string.IsNullOrWhiteSpace(path) ? uri.Host : $"{uri.Host} / {path}";
+        var label = string.IsNullOrWhiteSpace(path) ? uri.Host : $"{uri.Host} / {path}";
+        return string.IsNullOrEmpty(uri.Query) ? label : $"{label}{uri.Query}";
     }
 
     private static string HumanizeName(string value) => string.Join(" ", value
@@ -538,7 +544,7 @@ internal sealed partial class RuntimeLauncherForm : Form
 
     private static string GetDestination(Uri address)
     {
-        var key = address.GetComponents(UriComponents.SchemeAndServer | UriComponents.Path, UriFormat.Unescaped);
+        var key = address.GetComponents(UriComponents.SchemeAndServer | UriComponents.Path | UriComponents.Query, UriFormat.Unescaped);
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key))).ToLowerInvariant()[..8];
         var leaf = address.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? "site";
         leaf = Path.GetFileNameWithoutExtension(leaf);
@@ -619,7 +625,7 @@ function makeLibraryItem(item,demo){
  const card=document.createElement('article');card.className='library-item';
  const top=document.createElement('div');top.className='item-top';const mark=document.createElement('div');mark.className='item-mark'+(demo?' demo':'');mark.innerHTML=demo?icons.demo:icons.export;
  const copy=document.createElement('div');copy.className='item-copy';const name=document.createElement('div');name.className='item-name';name.textContent=item.name;name.title=item.name;const source=document.createElement('div');source.className='item-source';source.textContent=demo?item.description:item.source;source.title=source.textContent;copy.append(name,source);top.append(mark,copy);
- const badges=document.createElement('div');badges.className='item-badges';const kind=document.createElement('span');kind.className='badge';kind.textContent=demo?item.kind:formatDate(item.pulledAt);badges.append(kind);if(!demo&&item.fileCount){const files=document.createElement('span');files.className='badge';files.textContent=item.fileCount.toLocaleString()+' files';badges.append(files)}if(!demo&&item.requiresWebGpu){const gpu=document.createElement('span');gpu.className='badge gpu';gpu.textContent='WebGPU';badges.append(gpu)}
+ const badges=document.createElement('div');badges.className='item-badges';const kind=document.createElement('span');kind.className='badge';kind.textContent=demo?item.kind:formatDate(item.pulledAt);badges.append(kind);if(!demo&&item.fileCount){const files=document.createElement('span');files.className='badge';files.textContent=item.fileCount.toLocaleString()+' files';badges.append(files)}if(!demo&&item.requiresWebGpu){const gpu=document.createElement('span');gpu.className='badge gpu';gpu.textContent='WebGPU';badges.append(gpu)}if(!demo&&item.minified){const mini=document.createElement('span');mini.className='badge';mini.textContent='Minified';badges.append(mini)}
  const actions=document.createElement('div');actions.className='item-actions';actions.append(makeAction('▶  Launch','launch',()=>send(demo?'demoLaunch':'libraryLaunch',{id:item.id})));
  if(demo){if(item.exportable)actions.append(makeAction('Export .exe','package',()=>send('bootstrapOpenDemo',{id:item.id})));actions.append(makeAction('Open folder','',()=>send('demoOpen',{id:item.id})));card.append(top,badges,actions)}
  else{actions.append(makeAction('Export .exe','package',()=>send('bootstrapOpen',{id:item.id})));const secondary=document.createElement('div');secondary.className='item-secondary-actions';secondary.append(makeAction('Open folder','',()=>send('libraryOpen',{id:item.id})),makeAction('Rename','',()=>showRename(item)),makeAction('Delete','danger',()=>showDelete(item)));card.append(top,badges,actions,secondary)}
