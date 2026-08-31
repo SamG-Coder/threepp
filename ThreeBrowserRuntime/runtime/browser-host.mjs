@@ -1749,6 +1749,16 @@ globalThis.history = {
   back() {}, forward() {}, go() {},
 };
 const mediaDevices = new MediaDevices();
+const clipboard = Object.freeze({
+  async writeText(value) {
+    if (typeof native.clipboardWriteText !== "function") {
+      throw new DOMException("Native clipboard writing is unavailable", "NotSupportedError");
+    }
+    if (native.clipboardWriteText(String(value)) !== true) {
+      throw new DOMException("Native clipboard writing failed", "OperationError");
+    }
+  },
+});
 Object.defineProperty(globalThis, "navigator", {
   value: {
     // Sites commonly use Chromium User-Agent Client Hints as their desktop
@@ -1788,6 +1798,7 @@ Object.defineProperty(globalThis, "navigator", {
     onLine: false,
     cookieEnabled: false,
     getGamepads: () => [],
+    clipboard,
     mediaDevices,
   },
   configurable: true,

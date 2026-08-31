@@ -2072,6 +2072,76 @@ napi_value pollInput(napi_env env, napi_callback_info) {
     return events;
 }
 
+napi_value clipboardWriteText(napi_env env, napi_callback_info info) {
+    std::array<napi_value, 1> argv{};
+    std::size_t argc = argv.size();
+    napi_get_cb_info(env, info, &argc, argv.data(), nullptr, nullptr);
+    if (argc != 1) {
+        napi_throw_type_error(env, nullptr, "clipboardWriteText requires one string");
+        return nullptr;
+    }
+
+    napi_valuetype type = napi_undefined;
+    if (napi_typeof(env, argv[0], &type) != napi_ok || type != napi_string) {
+        napi_throw_type_error(env, nullptr, "clipboardWriteText requires a string");
+        return nullptr;
+    }
+
+    std::size_t length = 0;
+    if (napi_get_value_string_utf16(env, argv[0], nullptr, 0, &length) != napi_ok) {
+        napi_throw_error(env, nullptr, "clipboardWriteText could not read the string");
+        return nullptr;
+    }
+    constexpr std::size_t maximumClipboardCharacters = 16 * 1024 * 1024;
+    if (length > maximumClipboardCharacters) {
+        napi_throw_range_error(env, nullptr, "clipboardWriteText exceeds the 16 Mi-character limit");
+        return nullptr;
+    }
+
+    std::u16string text(length, u'\0');
+    std::size_t copied = 0;
+    if (napi_get_value_string_utf16(env, argv[0], reinterpret_cast<char16_t*>(text.data()),
+                                    text.size() + 1, &copied) != napi_ok) {
+        napi_throw_error(env, nullptr, "clipboardWriteText could not decode the string");
+        return nullptr;
+    }
+    text.resize(copied);
+
+    bool opened = false;
+    for (int attempt = 0; attempt < 10 && !opened; ++attempt) {
+        opened = OpenClipboard(runtimeHwnd()) != FALSE;
+        if (!opened) Sleep(5);
+    }
+    if (!opened) {
+        napi_throw_error(env, nullptr, "clipboardWriteText could not open the Windows clipboard");
+        return nullptr;
+    }
+
+    HGLOBAL storage = nullptr;
+    bool accepted = false;
+    if (EmptyClipboard()) {
+        const std::size_t bytes = (text.size() + 1) * sizeof(char16_t);
+        storage = GlobalAlloc(GMEM_MOVEABLE, bytes);
+        if (storage) {
+            if (void* destination = GlobalLock(storage)) {
+                std::memcpy(destination, text.c_str(), bytes);
+                GlobalUnlock(storage);
+                if (SetClipboardData(CF_UNICODETEXT, storage)) {
+                    accepted = true;
+                    storage = nullptr; // The clipboard now owns the allocation.
+                }
+            }
+        }
+    }
+    if (storage) GlobalFree(storage);
+    CloseClipboard();
+    if (!accepted) {
+        napi_throw_error(env, nullptr, "clipboardWriteText could not publish Unicode text");
+        return nullptr;
+    }
+    return boolean(env, true);
+}
+
 napi_value init(napi_env env, napi_value exports) {
     const napi_property_descriptor properties[] = {
         {"start", nullptr, start, nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -2143,6 +2213,7 @@ napi_value init(napi_env env, napi_value exports) {
         {"destroySlot", nullptr, destroySlot, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"stats", nullptr, stats, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"pollInput", nullptr, pollInput, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"clipboardWriteText", nullptr, clipboardWriteText, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setPointerLock", nullptr, setPointerLock, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setLoading", nullptr, setLoading, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setOverlay", nullptr, setOverlay, nullptr, nullptr, nullptr, napi_default, nullptr},
