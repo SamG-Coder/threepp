@@ -56,6 +56,24 @@ test("native Canvas2D rasterizes generated textures without a window", {
   context.fillText("MARS 241", 5, 18);
   assert.ok(context.measureText("MARS 241").width > 20);
 
+  const fallback = document.createElement("canvas");
+  fallback.width = 24;
+  fallback.height = 24;
+  const glyphSignature = symbol => {
+    const glyphContext = fallback.getContext("2d");
+    glyphContext.clearRect(0, 0, 24, 24);
+    glyphContext.font = "16px sans-serif";
+    glyphContext.fillStyle = "#ffffff";
+    glyphContext.fillText(symbol, 3, 18);
+    return Array.from(glyphContext.getImageData(0, 0, 24, 24).data)
+      .filter((_, index) => index % 4 === 3)
+      .join(",");
+  };
+  const missingGlyphSignature = glyphSignature("\ufffd");
+  for (const symbol of "⊕✦⌫↓↙↗‹›＋") {
+    assert.notEqual(glyphSignature(symbol), missingGlyphSignature, `${symbol} must not use the missing-glyph bitmap`);
+  }
+
   const source = document.createElement("canvas");
   source.width = 8;
   source.height = 8;

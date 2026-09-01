@@ -836,9 +836,18 @@ GlyphBitmap glyphBitmap(std::uint32_t codepoint) {
         case 0x03c6: glyph.rows={4,14,21,21,21,14,4}; break;
         case 0x2013: glyph.rows={0,0,0,31,0,0,0}; glyph.advance=.55; break;
         case 0x2014: glyph.rows={0,0,0,31,0,0,0}; glyph.advance=.9; break;
+        case 0x2039: glyph.rows={0,2,4,8,4,2,0}; glyph.advance=.42; break;
+        case 0x203a: glyph.rows={0,8,4,2,4,8,0}; glyph.advance=.42; break;
+        case 0x2193: glyph.rows={4,4,4,4,21,14,4}; break;
+        case 0x2197: glyph.rows={31,1,5,9,17,0,0}; break;
+        case 0x2199: glyph.rows={0,0,17,18,20,16,31}; break;
         case 0x2212: glyph.rows={0,0,0,31,0,0,0}; glyph.advance=.62; break;
+        case 0x2295: glyph.rows={14,21,21,31,21,21,14}; break;
+        case 0x232b: glyph.rows={4,8,31,21,31,8,4}; glyph.advance=.72; break;
         case 0x2082: glyph.rows={0,0,14,17,2,4,31}; glyph.advance=.45; glyph.scale=.7; glyph.yOffset=.28; break;
+        case 0x2726: glyph.rows={4,4,21,14,21,4,4}; break;
         case 0x25b8: glyph.rows={16,24,28,30,28,24,16}; glyph.advance=.62; break;
+        case 0xff0b: glyph.rows={0,4,4,31,4,4,0}; glyph.advance=.8; break;
         case 0x200a: glyph.advance=.12; break;
         case ' ': glyph.advance=.34; break;
         default: glyph.rows={31,17,2,4,0,4,0}; break;
