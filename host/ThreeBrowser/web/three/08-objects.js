@@ -703,6 +703,10 @@
 
   class InstancedMesh extends Mesh {
     constructor(geometry, material, count = 1) {
+      // Web-facing counts can arrive as computed non-integers. Typed-array
+      // lengths truncate those values while a `for (i < count)` loop rounds
+      // them up in effect, causing the last identity write to exceed storage.
+      const instanceCount = Math.max(0, Math.floor(Number(count) || 0));
       const n = native();
       ensureNativeGeometry(geometry);
       let handle = 0;
@@ -710,10 +714,10 @@
       const mh = materialHandle(material);
       if (TN.cmd && gh && mh) {
         handle = TN.cmd.alloc();
-        TN.cmd.instanced(handle, gh, mh, count);
+        TN.cmd.instanced(handle, gh, mh, instanceCount);
       } else if (n && typeof n.InstancedMeshCreate === "function" && gh && mh) {
         try {
-          handle = n.InstancedMeshCreate(gh, mh, count) || 0;
+          handle = n.InstancedMeshCreate(gh, mh, instanceCount) || 0;
         } catch {
           handle = 0;
         }
@@ -721,14 +725,14 @@
       super(geometry, material, handle);
       this.isInstancedMesh = true;
       this.type = "InstancedMesh";
-      this.count = count;
-      this._capacity = count;
-      this.instanceMatrix = instancedAttr(new Float32Array(count * 16), 16);
+      this.count = instanceCount;
+      this._capacity = instanceCount;
+      this.instanceMatrix = instancedAttr(new Float32Array(instanceCount * 16), 16);
       this.instanceColor = null;
       this.morphTexture = null;
       this.boundingBox = null;
       this.boundingSphere = null;
-      for (let i = 0; i < count; i++) {
+      for (let i = 0; i < instanceCount; i++) {
         this.instanceMatrix.array.set(_identity, i * 16);
       }
       // A native handle already exists, but the JS-side instance attributes

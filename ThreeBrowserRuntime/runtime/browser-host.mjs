@@ -1897,7 +1897,7 @@ const audioParam = (value = 0) => ({
   cancelScheduledValues() { return this; },
 });
 const audioNode = extra => Object.assign({
-  connect() { return this; },
+  connect(destination) { return destination; },
   disconnect() {},
   addEventListener() {},
   removeEventListener() {},
@@ -1919,6 +1919,16 @@ class SilentAudioContext {
   suspend() { this.state = "suspended"; return Promise.resolve(); }
   close() { this.state = "closed"; return Promise.resolve(); }
   createGain() { return audioNode({ gain: audioParam(1) }); }
+  createDynamicsCompressor() {
+    return audioNode({
+      threshold: audioParam(-24),
+      knee: audioParam(30),
+      ratio: audioParam(12),
+      attack: audioParam(0.003),
+      release: audioParam(0.25),
+      reduction: 0,
+    });
+  }
   createOscillator() {
     return audioNode({
       type: "sine",

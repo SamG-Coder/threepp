@@ -74,11 +74,23 @@ function facadeURL() {
   if (stockPath) for (const name of moduleExportNames(stockPath)) names.add(name);
   const sortedNames = [...names].sort();
   const source = [
-    ...(stockPath ? [`import * as STOCK from ${JSON.stringify(pathToFileURL(stockPath).href)};`] : ["const STOCK = {};"]),
+    ...(stockPath ? [
+      "const nativeRevisionMarker = globalThis.__THREE__;",
+      "delete globalThis.__THREE__;",
+      "let STOCK;",
+      `try { STOCK = await import(${JSON.stringify(pathToFileURL(stockPath).href)}); } finally {`,
+      "  if (nativeRevisionMarker === undefined) delete globalThis.__THREE__;",
+      "  else globalThis.__THREE__ = nativeRevisionMarker;",
+      "}",
+    ] : ["const STOCK = {};"]),
     "const THREE = globalThis.THREE;",
+    // Renderer shader registries are mutable singleton libraries shared with
+    // Three.js addons. The stock copies are complete; the native copies only
+    // contain the subset required by the compatibility renderer.
+    `const STOCK_PREFERRED = new Set(${JSON.stringify(["ShaderChunk", "ShaderLib", "UniformsLib", "UniformsUtils"])});`,
     "const merged = Object.assign({}, STOCK, THREE);",
     "export default merged;",
-    ...sortedNames.map(name => `export const ${name} = Object.hasOwn(THREE, ${JSON.stringify(name)}) ? THREE[${JSON.stringify(name)}] : STOCK[${JSON.stringify(name)}];`),
+    ...sortedNames.map(name => `export const ${name} = STOCK_PREFERRED.has(${JSON.stringify(name)}) && Object.hasOwn(STOCK, ${JSON.stringify(name)}) ? STOCK[${JSON.stringify(name)}] : Object.hasOwn(THREE, ${JSON.stringify(name)}) ? THREE[${JSON.stringify(name)}] : STOCK[${JSON.stringify(name)}];`),
   ].join("\n");
   threeFacadeURL = `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
   return threeFacadeURL;

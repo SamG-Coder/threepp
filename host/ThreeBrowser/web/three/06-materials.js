@@ -667,7 +667,13 @@
       this.blendDstAlpha = null;
       this.blendEquationAlpha = null;
       this.vertexColors = false;
-      this.color = makeColor(0xffffff);
+      // Material itself has no color property in stock Three.js. Most native
+      // material subclasses still rely on this shared default, but external
+      // subclasses such as LineMaterial define a prototype color accessor that
+      // reads uniforms initialized only after super() returns. Do not invoke
+      // such a derived setter from the base constructor.
+      const colorDescriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(this), "color");
+      if (!colorDescriptor?.set) this.color = makeColor(0xffffff);
       this.map = null;
       this.alphaMap = null;
       this.alphaTest = 0;
