@@ -555,8 +555,8 @@ const entryLines = [
         `globalThis.__threeBrowserSourceRevision = ${Math.max(...threeSourceRevisions)};`,
       ]
     : []),
-  ...(rootRecord.htmlElements || []).map(element =>
-    `{ const element = document.createElement(${JSON.stringify(element.tag)}); element.id = ${JSON.stringify(element.id)}; document.body.appendChild(element); }`),
+  `if (!document.body.children.length) globalThis.__threeBrowserHydrateDocument?.(${JSON.stringify(
+    Buffer.isBuffer(rootRecord.content) ? rootRecord.content.toString("utf8") : String(rootRecord.content || ""))});`,
   ...(rootRecord.inlineScripts || []).map(script => `(0, eval)(${JSON.stringify(script)});`),
   ...(rootClassicScripts.length ? [`const { readFileSync: __threeBrowserReadFile } = await import("node:fs");`] : []),
   ...rootClassicScripts.map(record =>

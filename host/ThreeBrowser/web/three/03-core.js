@@ -730,6 +730,10 @@
   const _position = new Vector3();
   const _scale = new Vector3();
   const _quaternion = new Quaternion();
+  const _manualMatrixPosition = new Vector3();
+  const _manualMatrixScale = new Vector3();
+  const _manualMatrixQuaternion = new Quaternion();
+  const _manualMatrixRotation = new Euler();
   const _xAxis = new Vector3(1, 0, 0);
   const _yAxis = new Vector3(0, 1, 0);
   const _zAxis = new Vector3(0, 0, 1);
@@ -2042,26 +2046,66 @@
       }
     }
 
+    syncNativeManualMatrix() {
+      if (this.matrixAutoUpdate !== false || !this._h || !TN.cmd) return false;
+      const elements = this.matrix?.elements;
+      if (!elements || elements.length < 16) return false;
+      let snapshot = this._nativeManualMatrix;
+      let changed = !snapshot;
+      if (!snapshot) snapshot = this._nativeManualMatrix = new Float32Array(16);
+      for (let i = 0; i < 16; i++) {
+        const value = Number(elements[i]) || 0;
+        if (snapshot[i] !== value) changed = true;
+        snapshot[i] = value;
+      }
+      if (!changed) return false;
+      this._manualMatrixDirty = true;
+      TN.cmd.markPose(this);
+      return true;
+    }
+
     flushSelf() {
       if (!this._h) return this;
       const posDirty = this._posDirty;
       const rotDirty = this._rotDirty;
       const scaleDirty = this._scaleDirty;
       const lookDirty = this._lookDirty;
-      if (!posDirty && !rotDirty && !scaleDirty && !lookDirty) return this;
-      const px = this.position.x;
-      const py = this.position.y;
-      const pz = this.position.z;
+      const manualMatrixDirty = this._manualMatrixDirty === true;
+      if (!posDirty && !rotDirty && !scaleDirty && !lookDirty && !manualMatrixDirty) return this;
+      let posePosition = this.position;
+      let poseRotation = this.rotation;
+      let poseQuaternion = this.quaternion;
+      let poseScale = this.scale;
+      if (manualMatrixDirty) {
+        decomposeMatrix(this.matrix, _manualMatrixPosition, _manualMatrixQuaternion, _manualMatrixScale);
+        setFromQuaternion(_manualMatrixRotation, _manualMatrixQuaternion, 'XYZ');
+        posePosition = _manualMatrixPosition;
+        poseRotation = _manualMatrixRotation;
+        poseQuaternion = _manualMatrixQuaternion;
+        poseScale = _manualMatrixScale;
+      }
+      const px = posePosition.x;
+      const py = posePosition.y;
+      const pz = posePosition.z;
       if (TN.cmd) {
-        if (this._look && (lookDirty || posDirty)) {
+        if (!manualMatrixDirty && this._look && (lookDirty || posDirty)) {
           TN.cmd.lookFrom(this._h, px, py, pz, this._look.x, this._look.y, this._look.z);
-        } else if (posDirty || rotDirty || scaleDirty) {
-          TN.cmd.setPose(
-            this._h,
-            px, py, pz,
-            this.rotation.x, this.rotation.y, this.rotation.z,
-            this.scale.x, this.scale.y, this.scale.z
-          );
+        } else if (posDirty || rotDirty || scaleDirty || manualMatrixDirty) {
+          if (typeof TN.cmd.setPoseQuat === 'function') {
+            TN.cmd.setPoseQuat(
+              this._h,
+              px, py, pz,
+              poseQuaternion.x, poseQuaternion.y, poseQuaternion.z, poseQuaternion.w,
+              poseScale.x, poseScale.y, poseScale.z
+            );
+          } else {
+            TN.cmd.setPose(
+              this._h,
+              px, py, pz,
+              poseRotation.x, poseRotation.y, poseRotation.z,
+              poseScale.x, poseScale.y, poseScale.z
+            );
+          }
         }
       } else {
         const n = native();
@@ -2087,6 +2131,7 @@
       this._rotDirty = false;
       this._scaleDirty = false;
       this._lookDirty = false;
+      this._manualMatrixDirty = false;
       return this;
     }
 

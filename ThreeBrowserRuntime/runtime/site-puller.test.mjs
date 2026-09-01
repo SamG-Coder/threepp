@@ -11,6 +11,38 @@ import test from "node:test";
 const execFileAsync = promisify(execFile);
 const puller = fileURLToPath(new URL("./site-puller.mjs", import.meta.url));
 
+test("preserves structured HTML gates for runtime interaction hydration", async () => {
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "text/html" });
+    response.end(`<!doctype html><body>
+      <section id="login-gate" data-screen="login">
+        <form><label for="email">Email address</label><input id="email" type="email" required>
+        <button data-action="continue">Continue</button></form>
+      </section><script>globalThis.siteLoaded = true;</script>
+    </body>`);
+  });
+  const temporaryRoot = await mkdtemp(path.join(tmpdir(), "threebrowser-site-puller-"));
+  const destination = path.join(temporaryRoot, "pull");
+  try {
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    assert.equal(typeof address, "object");
+    await execFileAsync(process.execPath, [puller, `http://127.0.0.1:${address.port}/`, destination]);
+
+    const entry = await readFile(path.join(destination, "site-entry.mjs"), "utf8");
+    assert.match(entry, /__threeBrowserHydrateDocument/);
+    assert.match(entry, /Email address/);
+    assert.match(entry, /data-screen=\\\"login\\\"/);
+    assert.doesNotMatch(entry, /document\.createElement\("input"\)/);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
 test("inline module references resolve from the document and rewrite from the extracted module", async () => {
   const requests = [];
   const server = createServer((request, response) => {

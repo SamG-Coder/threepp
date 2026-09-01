@@ -238,6 +238,8 @@
       pixelStorei() {},
       texSubImage2D() {},
       texImage2D() {},
+      flush() {},
+      finish() {},
       getExtension(name) {
         return new Set([
           "OES_texture_float",
@@ -584,7 +586,13 @@
     initRenderTarget() {}
     clear() {}
     clearColor() {}
-    clearDepth() {}
+    clearDepth() {
+      // A following render is a browser-style depth-cleared overlay pass
+      // (first-person arms, weapon scenes, HUD geometry). The native runtime
+      // records it alongside the primary scene and composes both in one
+      // backbuffer frame.
+      this._nativeClearDepthPending = true;
+    }
     clearStencil() {}
     resetState() {}
 
@@ -638,6 +646,14 @@
       this.info.render.frame++;
       globalThis.__threeBrowserRendererCalls = (globalThis.__threeBrowserRendererCalls || 0) + 1;
       TN._renderFrame = this.info.render.frame;
+      const displayFrame = globalThis.__threeBrowserDisplayFrame || 0;
+      if (this._nativeOverlayDisplayFrame !== displayFrame) {
+        this._nativeOverlayDisplayFrame = displayFrame;
+        this._nativeOverlayScene = null;
+        this._nativeOverlayCamera = null;
+      }
+      const depthClearedOverlay = this._nativeClearDepthPending === true;
+      this._nativeClearDepthPending = false;
       // Three.js before r110 passed the destination directly to render().
       // Modern Three.js uses setRenderTarget(). Supporting both is essential
       // for old EffectComposer builds, otherwise every offscreen pass is
@@ -753,6 +769,11 @@
         const batched = [];
         let nativeTraceMeshIndex = 0;
         scene.traverse(function (obj) {
+          // Three.js permits matrixAutoUpdate=false objects to author their
+          // local transform by writing matrix directly. GLTF attachment rigs
+          // and first-person viewmodels rely on this, so detect matrix changes
+          // and transfer the decomposed pose across the native boundary.
+          obj?.syncNativeManualMatrix?.();
           if (globalThis.process?.env?.THREEBROWSER_NATIVE_TERRAIN_TRACE && obj?.name === "terrain" && !self._nativeTerrainTraceDone) {
             const uv = obj.geometry?.attributes?.uv;
             const values = uv?.array || [];
@@ -873,6 +894,7 @@
         }
         if (
           hasNativeDraw && camera?._h &&
+          !depthClearedOverlay &&
           (perspectiveScene || (!this._lastNativeCameraIsPerspective && hasNativeSceneDraw))
         ) {
           this._lastNativeScene = scene;
@@ -883,6 +905,11 @@
             globalThis.__threeBrowserWindowCamera = camera;
             globalThis.__threeBrowserWindowSceneScore = sceneObjectCount;
           }
+        }
+
+        if (depthClearedOverlay && hasNativeDraw && camera?._h) {
+          this._nativeOverlayScene = scene;
+          this._nativeOverlayCamera = camera;
         }
 
         // Offscreen passes are still evaluated on the JS side, including
@@ -938,6 +965,20 @@
         }
       }
       if (TN.cmd) {
+        const overlayScene = this._nativeOverlayDisplayFrame === displayFrame ? this._nativeOverlayScene : null;
+        const overlayCamera = this._nativeOverlayDisplayFrame === displayFrame ? this._nativeOverlayCamera : null;
+        if (overlayScene?._h && overlayCamera?._h && typeof TN.cmd.submitComposite === "function") {
+          const worldScene = depthClearedOverlay
+            ? (globalThis.__threeBrowserWindowScene || this._lastNativeScene)
+            : nativeScene;
+          const worldCamera = depthClearedOverlay
+            ? (globalThis.__threeBrowserWindowCamera || this._lastNativeCamera)
+            : nativeCamera;
+          if (worldScene?._h && worldCamera?._h) {
+            TN.cmd.submitComposite(worldScene._h, worldCamera._h, overlayScene._h, overlayCamera._h);
+            return true;
+          }
+        }
         if (typeof TN.cmd.submitFrame === "function") {
           TN.cmd.submitFrame(nativeScene?._h || 0, nativeCamera?._h || 0);
         } else {

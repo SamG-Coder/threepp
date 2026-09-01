@@ -434,9 +434,10 @@ namespace {
                             [&](std::vector<std::unordered_map<std::string, NestedUniformValue>*> arg) {
                                 for (auto& u : seq) {
                                     const auto index = utils::parseInt(u->id);
+                                    if (index < 0 || static_cast<std::size_t>(index) >= arg.size()) continue;
                                     auto value = arg[index];
                                     if (!value) continue;
-                                    u->setValue(*arg[index], textures);
+                                    u->setValue(*value, textures);
                                 }
                             }},
                     value);

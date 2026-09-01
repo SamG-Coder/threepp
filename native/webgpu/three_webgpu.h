@@ -471,6 +471,12 @@ TW_API const uint8_t* tw_overlay_raster(int width, int height, int fps, int fram
                                         const char* backend, int backlog, uint64_t packets,
                                         int* row_bytes);
 TW_API uint64_t tw_overlay_revision(void);
+// Present one caller-owned RGBA8 bitmap through the bounded native overlay
+// texture. The bitmap is copied; pass visible=0 to release it.
+TW_API int tw_canvas_overlay_set(int visible, int left, int top,
+                                 int display_width, int display_height,
+                                 int source_width, int source_height,
+                                 const uint8_t* rgba_pixels, int row_bytes);
 TW_API int tw_set_pointer_lock(int on);
 TW_API int tw_poll_input(TWInputEvent* events, int capacity);
 TW_API void tw_stats(int* fps, int* frame_us, int* width, int* height, int* vsync, uint64_t* presents);

@@ -73,6 +73,8 @@ struct Runtime {
     bool workerStarted{false};
     std::atomic<uint32_t> drawScene{0};
     std::atomic<uint32_t> drawCamera{0};
+    std::atomic<uint32_t> drawOverlayScene{0};
+    std::atomic<uint32_t> drawOverlayCamera{0};
     std::atomic<bool> sceneDirty{false};
     std::atomic<bool> vsync{false};
     std::atomic<bool> standalone{false};

@@ -9,6 +9,7 @@
     SET_SIZE: 2,
     CLEAR_COLOR: 3,
     RENDER_PASS: 4,
+    RENDER_COMPOSITE: 5,
     SCENE_CREATE: 10,
     SCENE_BG: 11,
     SCENE_FOG: 12,
@@ -62,6 +63,7 @@
     SET_VISIBLE: 84,
     OBJECT_REMOVE: 85,
     SLOT_DESTROY: 86,
+    SET_POSE_QUAT: 87,
     LIGHT_AMBIENT: 90,
     LIGHT_DIR: 91,
     LIGHT_HEMI: 92,
@@ -315,6 +317,15 @@
     end(s);
   }
 
+  function appendComposite(worldScene, worldCamera, overlayScene, overlayCamera) {
+    const s = begin(OP.RENDER_COMPOSITE, 16);
+    wu32(worldScene);
+    wu32(worldCamera);
+    wu32(overlayScene);
+    wu32(overlayCamera);
+    end(s);
+  }
+
   function emitAsyncFrame() {
     const scene = pendingAsyncScene;
     const camera = pendingAsyncCamera;
@@ -324,6 +335,15 @@
     appendRender(scene, camera);
     lastAsyncSubmitAt = performance.now();
     submitNow(true);
+  }
+
+  function cancelAsyncFrame() {
+    pendingAsyncScene = 0;
+    pendingAsyncCamera = 0;
+    if (asyncSubmitTimer) {
+      clearTimeout(asyncSubmitTimer);
+      asyncSubmitTimer = 0;
+    }
   }
 
   function submitFrame(scene, camera) {
@@ -374,6 +394,16 @@
     submit,
     submitAsync,
     submitFrame,
+    submitComposite(worldScene, worldCamera, overlayScene, overlayCamera) {
+      // A composite is the complete, newest presentation for this display
+      // frame. Never allow an older coalesced single-scene render to fire
+      // afterward and erase its viewmodel/HUD overlay.
+      cancelAsyncFrame();
+      flushPoses();
+      appendComposite(worldScene, worldCamera, overlayScene, overlayCamera);
+      lastAsyncSubmitAt = performance.now();
+      submitNow(true);
+    },
     ready() {
       return !!host();
     },
@@ -894,6 +924,21 @@
       wf32(rx);
       wf32(ry);
       wf32(rz);
+      wf32(sx);
+      wf32(sy);
+      wf32(sz);
+      end(s);
+    },
+    setPoseQuat(id, px, py, pz, qx, qy, qz, qw, sx, sy, sz) {
+      const s = begin(OP.SET_POSE_QUAT, 44);
+      wu32(id);
+      wf32(px);
+      wf32(py);
+      wf32(pz);
+      wf32(qx);
+      wf32(qy);
+      wf32(qz);
+      wf32(qw);
       wf32(sx);
       wf32(sy);
       wf32(sz);

@@ -1217,6 +1217,23 @@
     return TN.Matrix4 ? new TN.Matrix4() : { elements: _identity.slice() };
   }
 
+  const _skinBasePosition = TN.Vector3 ? new TN.Vector3() : null;
+  const _skinVertex = TN.Vector3 ? new TN.Vector3() : null;
+  const _skinMatrix = newMatrix4();
+
+  function attributeComponent(attribute, index, component) {
+    if (!attribute) return 0;
+    if (typeof attribute.getComponent === "function") {
+      return Number(attribute.getComponent(index, component)) || 0;
+    }
+    const accessors = [attribute.getX, attribute.getY, attribute.getZ, attribute.getW];
+    if (typeof accessors[component] === "function") {
+      return Number(accessors[component].call(attribute, index)) || 0;
+    }
+    const itemSize = attribute.itemSize || 1;
+    return Number(attribute.array?.[index * itemSize + component]) || 0;
+  }
+
   class Skeleton {
     constructor(bones = [], boneInverses = []) {
       this.uuid = TN.MathUtils?.generateUUID?.() || "";
@@ -1433,12 +1450,22 @@
         skeleton._nativePoseFrame = poseFrame;
         for (const bone of skeleton.bones || []) {
           if (!bone?._h) continue;
-          TN.cmd.setPose(
-            bone._h,
-            bone.position?.x || 0, bone.position?.y || 0, bone.position?.z || 0,
-            bone.rotation?.x || 0, bone.rotation?.y || 0, bone.rotation?.z || 0,
-            bone.scale?.x ?? 1, bone.scale?.y ?? 1, bone.scale?.z ?? 1
-          );
+          if (typeof TN.cmd.setPoseQuat === "function") {
+            TN.cmd.setPoseQuat(
+              bone._h,
+              bone.position?.x || 0, bone.position?.y || 0, bone.position?.z || 0,
+              bone.quaternion?.x || 0, bone.quaternion?.y || 0, bone.quaternion?.z || 0,
+              bone.quaternion?.w ?? 1,
+              bone.scale?.x ?? 1, bone.scale?.y ?? 1, bone.scale?.z ?? 1
+            );
+          } else {
+            TN.cmd.setPose(
+              bone._h,
+              bone.position?.x || 0, bone.position?.y || 0, bone.position?.z || 0,
+              bone.rotation?.x || 0, bone.rotation?.y || 0, bone.rotation?.z || 0,
+              bone.scale?.x ?? 1, bone.scale?.y ?? 1, bone.scale?.z ?? 1
+            );
+          }
         }
       }
     }
@@ -1488,8 +1515,42 @@
         }
       }
     }
+    updateMatrixWorld(force) {
+      super.updateMatrixWorld(force);
+      if (this.bindMode === (TN.AttachedBindMode || "attached")) {
+        this.bindMatrixInverse.copy(this.matrixWorld);
+        if (typeof this.bindMatrixInverse.invert === "function") this.bindMatrixInverse.invert();
+      } else if (this.bindMode === (TN.DetachedBindMode || "detached")) {
+        this.bindMatrixInverse.copy(this.bindMatrix);
+        if (typeof this.bindMatrixInverse.invert === "function") this.bindMatrixInverse.invert();
+      } else {
+        console.warn(`THREE.SkinnedMesh: Unrecognized bindMode: ${this.bindMode}`);
+      }
+    }
     applyBoneTransform(index, target) {
-      return target;
+      const skeleton = this.skeleton;
+      const skinIndex = this.geometry?.attributes?.skinIndex;
+      const skinWeight = this.geometry?.attributes?.skinWeight;
+      if (!skeleton || !skinIndex || !skinWeight || !_skinBasePosition || !_skinVertex) {
+        return target;
+      }
+
+      _skinBasePosition.copy(target).applyMatrix4(this.bindMatrix);
+      target.set(0, 0, 0);
+
+      for (let i = 0; i < 4; i++) {
+        const weight = attributeComponent(skinWeight, index, i);
+        if (weight === 0) continue;
+        const boneIndex = attributeComponent(skinIndex, index, i) | 0;
+        const bone = skeleton.bones?.[boneIndex];
+        const inverse = skeleton.boneInverses?.[boneIndex];
+        if (!bone?.matrixWorld || !inverse || typeof _skinMatrix.multiplyMatrices !== "function") continue;
+        _skinMatrix.multiplyMatrices(bone.matrixWorld, inverse);
+        _skinVertex.copy(_skinBasePosition).applyMatrix4(_skinMatrix);
+        target.addScaledVector(_skinVertex, weight);
+      }
+
+      return target.applyMatrix4(this.bindMatrixInverse);
     }
     getVertexPosition(index, target) {
       super.getVertexPosition(index, target);

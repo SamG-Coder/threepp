@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { Worker as NodeWorker } from "node:worker_threads";
 import { configureModuleDocument, configureModuleFile } from "./module-loader.mjs";
+import { HtmlInteractionBridge } from "./html-interaction-bridge.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -82,6 +83,17 @@ class BrowserEventTarget {
         }
         if (entry.once) currentTarget.removeEventListener(event.type, entry.listener, { capture });
       }
+      if (!capture && !event.cancelBubble) {
+        const handler = currentTarget?.[`on${event.type}`];
+        if (typeof handler === "function") {
+          try {
+            if (handler.call(currentTarget, event) === false) event.preventDefault?.();
+          } catch (error) {
+            lastUnhandledEventError = error;
+            console.error(`Unhandled on${event.type} event listener error:`, error);
+          }
+        }
+      }
     };
     for (let index = path.length - 1; index > 0 && !event.cancelBubble; --index) invoke(path[index], true);
     if (!event.cancelBubble) {
@@ -124,11 +136,23 @@ class Element extends BrowserEventTarget {
       // are assigned. Animation libraries use the `in` operator for feature
       // detection (transform, perspective, opacity, and vendor prefixes).
       has: (_target, property) => typeof property === "string",
+      set: (target, property, value) => {
+        target[property] = value;
+        this._styleChanged?.();
+        return true;
+      },
+      deleteProperty: (target, property) => {
+        delete target[property];
+        this._styleChanged?.();
+        return true;
+      },
     });
     this.dataset = {};
     this._attributes = new Map();
     this.children = [];
     this.parentNode = null;
+    this._textContent = "";
+    this._innerHTML = "";
     Object.defineProperties(this, {
       childNodes: { get: () => this.children },
       parentElement: { get: () => this.parentNode },
@@ -137,9 +161,20 @@ class Element extends BrowserEventTarget {
       firstElementChild: { get: () => this.children.find(child => child.nodeType === 1) ?? null },
       lastElementChild: { get: () => this.children.findLast(child => child.nodeType === 1) ?? null },
       childElementCount: { get: () => this.children.filter(child => child.nodeType === 1).length },
+      textContent: {
+        configurable: true,
+        get: () => this.nodeType === 3 ? this._textContent :
+          `${this._textContent}${this.children.map(child => child.textContent ?? "").join("")}`,
+        set: value => {
+          for (const child of this.children) demotePresentedCanvasTree(child);
+          for (const child of this.children) child.parentNode = null;
+          this.children.length = 0;
+          this._innerHTML = "";
+          this._textContent = String(value ?? "");
+        },
+      },
     });
     this.ownerDocument = globalThis.document ?? null;
-    this.textContent = "";
     this.id = "";
     this._clientWidth = null;
     this._clientHeight = null;
@@ -172,7 +207,19 @@ class Element extends BrowserEventTarget {
       get: () => [...classes].join(" "),
       set: value => { classes.clear(); String(value).split(/\s+/).filter(Boolean).forEach(name => classes.add(name)); },
     });
-    this._innerHTML = "";
+    if (this.tagName === "INPUT") {
+      this.type = "text";
+      this.value = "";
+      this.checked = false;
+    } else if (this.tagName === "TEXTAREA" || this.tagName === "SELECT" || this.tagName === "OPTION") {
+      this.value = "";
+    } else if (this.tagName === "BUTTON") {
+      this.type = "submit";
+    }
+    if (["INPUT", "TEXTAREA", "SELECT", "BUTTON", "OPTION"].includes(this.tagName)) {
+      this.disabled = false;
+      this.required = false;
+    }
     if (this.tagName === "STYLE") {
       const rules = [];
       this.sheet = {
@@ -232,11 +279,15 @@ class Element extends BrowserEventTarget {
   removeChild(child) {
     const index = this.children.indexOf(child);
     if (index >= 0) this.children.splice(index, 1);
+    demotePresentedCanvasTree(child);
     child.parentNode = null;
     return child;
   }
   replaceChildren(...children) {
-    for (const child of this.children) child.parentNode = null;
+    for (const child of this.children) {
+      demotePresentedCanvasTree(child);
+      child.parentNode = null;
+    }
     this.children.length = 0;
     this._innerHTML = "";
     this.append(...children);
@@ -245,6 +296,7 @@ class Element extends BrowserEventTarget {
     const index = this.children.indexOf(child);
     if (index < 0) throw new Error("Node to replace is not a child");
     if (replacement.parentNode) replacement.parentNode.removeChild(replacement);
+    demotePresentedCanvasTree(child);
     child.parentNode = null;
     replacement.parentNode = this;
     replacement.ownerDocument ??= this.ownerDocument || globalThis.document || null;
@@ -263,7 +315,9 @@ class Element extends BrowserEventTarget {
     } else if (normalized.startsWith("data-")) {
       const key = normalized.slice(5).replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase());
       this.dataset[key] = String(value);
-    } else this[name] = String(value);
+    } else if (["disabled", "required", "checked", "selected", "multiple", "hidden", "autofocus"].includes(normalized)) {
+      this[normalized] = true;
+    } else this[normalized] = String(value);
   }
   setAttributeNS(_namespace, name, value) { this.setAttribute(name, value); }
   getAttribute(name) { return this._attributes.get(String(name).toLowerCase()) ?? null; }
@@ -280,7 +334,9 @@ class Element extends BrowserEventTarget {
     } else if (normalized.startsWith("data-")) {
       const key = normalized.slice(5).replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase());
       delete this.dataset[key];
-    } else delete this[name];
+    } else if (["disabled", "required", "checked", "selected", "multiple", "hidden", "autofocus"].includes(normalized)) {
+      this[normalized] = false;
+    } else delete this[normalized];
   }
   removeAttributeNS(_namespace, name) { this.removeAttribute(name); }
   toggleAttribute(name, force) {
@@ -308,22 +364,7 @@ class Element extends BrowserEventTarget {
   get innerHTML() { return this._innerHTML; }
   set innerHTML(value) {
     this._innerHTML = String(value);
-    this.children.length = 0;
-    const stack = [this];
-    for (const match of this._innerHTML.matchAll(/<\s*(\/)?\s*([a-zA-Z][\w:-]*)([^>]*)>/g)) {
-      const closing = Boolean(match[1]);
-      const tag = match[2].toLowerCase();
-      if (closing) {
-        if (stack.length > 1) stack.pop();
-        continue;
-      }
-      const element = this.ownerDocument?.createElementNS?.("http://www.w3.org/2000/svg", tag) ?? new Element(tag);
-      for (const attribute of match[3].matchAll(/([\w:-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g)) {
-        element.setAttribute(attribute[1], attribute[2] ?? attribute[3] ?? attribute[4] ?? "");
-      }
-      stack.at(-1).appendChild(element);
-      if (!/^(?:area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr|path|line|polyline|rect|circle)$/i.test(tag) && !/\/\s*$/.test(match[3])) stack.push(element);
-    }
+    parseHtmlFragment(this, this._innerHTML);
   }
   insertAdjacentHTML(position, value) {
     const where = String(position).toLowerCase();
@@ -366,7 +407,7 @@ class Element extends BrowserEventTarget {
       (!firstChild || element.parentNode?.children[0] === element);
     const result = [];
     const walk = node => {
-      for (const child of node.children) {
+      for (const child of node?.children || []) {
         if (matches(child)) result.push(child);
         walk(child);
       }
@@ -432,9 +473,99 @@ class Element extends BrowserEventTarget {
     this._closedShadowRoot = root.mode === "closed" ? root : null;
     return root;
   }
-  click() { this.dispatchEvent(new Event("click", { bubbles: true, cancelable: true })); }
+  focus() {
+    if (this.disabled) return;
+    const previous = this.ownerDocument?.activeElement;
+    if (previous === this) return;
+    previous?.dispatchEvent?.(new Event("blur", { bubbles: false }));
+    if (this.ownerDocument) this.ownerDocument.activeElement = this;
+    this.dispatchEvent(new Event("focus", { bubbles: false }));
+  }
+  blur() {
+    if (this.ownerDocument?.activeElement !== this) return;
+    this.ownerDocument.activeElement = null;
+    this.dispatchEvent(new Event("blur", { bubbles: false }));
+  }
+  get form() { return this.closest?.("form") ?? null; }
+  requestSubmit(submitter = null) {
+    if (this.tagName !== "FORM") return this.form?.requestSubmit?.(submitter ?? this);
+    const event = new Event("submit", { bubbles: true, cancelable: true });
+    try { Object.defineProperty(event, "submitter", { configurable: true, value: submitter }); } catch {}
+    return this.dispatchEvent(event);
+  }
+  submit() { return this.tagName === "FORM" ? true : this.form?.submit?.(); }
+  click() {
+    if (this.disabled) return false;
+    if (this.tagName === "INPUT" && this.type === "checkbox") this.checked = !this.checked;
+    if (this.tagName === "INPUT" && this.type === "radio") {
+      const name = String(this.name || this.getAttribute("name") || "");
+      if (name) {
+        for (const radio of this.ownerDocument?.querySelectorAll?.("input") || []) {
+          if (radio !== this && radio.type === "radio" && String(radio.name || radio.getAttribute("name") || "") === name) radio.checked = false;
+        }
+      }
+      this.checked = true;
+    }
+    const accepted = this.dispatchEvent(new Event("click", { bubbles: true, cancelable: true }));
+    const type = String(this.type || this.getAttribute("type") || "").toLowerCase();
+    if (accepted && (this.tagName === "BUTTON" || this.tagName === "INPUT") && type === "submit") this.form?.requestSubmit?.(this);
+    return accepted;
+  }
   remove() { if (this.parentNode) this.parentNode.removeChild(this); }
-  requestPointerLock() { return requestNativePointerLock(this); }
+  requestPointerLock(options = undefined) { return requestNativePointerLock(this, options); }
+}
+
+const htmlVoidElements = new Set([
+  "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr",
+]);
+
+function decodeHtmlText(value) {
+  return String(value).replace(/&(#x[\da-f]+|#\d+|amp|lt|gt|quot|apos|nbsp);/gi, (_match, entity) => {
+    const normalized = entity.toLowerCase();
+    if (normalized === "amp") return "&";
+    if (normalized === "lt") return "<";
+    if (normalized === "gt") return ">";
+    if (normalized === "quot") return '"';
+    if (normalized === "apos") return "'";
+    if (normalized === "nbsp") return "\u00a0";
+    const radix = normalized.startsWith("#x") ? 16 : 10;
+    const codePoint = Number.parseInt(normalized.slice(radix === 16 ? 2 : 1), radix);
+    try { return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : _match; } catch { return _match; }
+  });
+}
+
+function parseHtmlFragment(parent, html) {
+  for (const child of parent.children || []) demotePresentedCanvasTree(child);
+  for (const child of parent.children || []) child.parentNode = null;
+  parent.children.length = 0;
+  parent._textContent = "";
+  const stack = [parent];
+  const tokens = String(html).match(/<!--[\s\S]*?-->|<![^>]*>|<\/?[a-zA-Z][^>]*>|[^<]+/g) || [];
+  for (const token of tokens) {
+    if (token.startsWith("<!--") || /^<!/i.test(token)) continue;
+    if (!token.startsWith("<")) {
+      if (!token) continue;
+      const text = stack.at(-1).ownerDocument?.createTextNode?.(decodeHtmlText(token)) ?? new Element("#text");
+      if (text.nodeType === 3 && !text._textContent) text._textContent = decodeHtmlText(token);
+      stack.at(-1).appendChild(text);
+      continue;
+    }
+    const closing = /^<\s*\//.test(token);
+    const name = /^<\s*\/?\s*([a-zA-Z][\w:-]*)/.exec(token)?.[1]?.toLowerCase();
+    if (!name) continue;
+    if (closing) {
+      const index = stack.findLastIndex(node => node.tagName?.toLowerCase() === name);
+      if (index > 0) stack.length = index;
+      continue;
+    }
+    const attributes = token.slice(token.indexOf(name) + name.length, token.lastIndexOf(">"));
+    const element = parent.ownerDocument?.createElement?.(name) ?? new Element(name);
+    for (const match of attributes.matchAll(/([\w:-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g)) {
+      element.setAttribute(match[1], decodeHtmlText(match[2] ?? match[3] ?? match[4] ?? ""));
+    }
+    stack.at(-1).appendChild(element);
+    if (!htmlVoidElements.has(name) && !/\/\s*>$/.test(token)) stack.push(element);
+  }
 }
 
 function completeVirtualResourceTree(node) {
@@ -566,6 +697,7 @@ class Canvas2DContext {
   _resize(width, height) {
     if (this._nativeSurface !== null) native.canvas2dResize(this._nativeSurface, width, height);
     this._resetState();
+    this.canvas._scheduleOverlayPresent?.();
   }
   _setProperty(property, value) {
     let normalized = value;
@@ -594,6 +726,7 @@ class Canvas2DContext {
     while (args.length && args.at(-1) === undefined) args.pop();
     native.canvas2dCall(this._surface(), operation,
       ...args.map(value => typeof value === "boolean" ? (value ? 1 : 0) : value));
+    this.canvas._scheduleOverlayPresent?.();
   }
   _imageSurface(image) {
     if (image instanceof CanvasElement) return image._surface();
@@ -673,9 +806,11 @@ class Canvas2DContext {
       this._surface(), pixels, Math.trunc(imageData.width), Math.trunc(imageData.height),
       Math.trunc(Number(dx) || 0), Math.trunc(Number(dy) || 0), ...dirty.map(value => Math.trunc(Number(value) || 0)),
     );
+    this.canvas._scheduleOverlayPresent?.();
   }
   drawImage(image, ...args) {
     native.canvas2dDrawImage(this._surface(), this._imageSurface(image), ...args.map(Number));
+    this.canvas._scheduleOverlayPresent?.();
   }
   measureText(text) {
     const metrics = native.canvas2dMeasureText(this._surface(), String(text));
@@ -740,6 +875,7 @@ class CanvasElement extends Element {
     this.context2d = null;
     this.contextWebgl = null;
     this.contextWebgl2 = null;
+    this._overlayPresentScheduled = false;
   }
   get width() { return this._canvasWidth; }
   set width(value) {
@@ -765,6 +901,17 @@ class CanvasElement extends Element {
   }
   _surface() {
     return (this.context2d ??= new Canvas2DContext(this))._surface();
+  }
+  _styleChanged() {
+    this._scheduleOverlayPresent();
+  }
+  _scheduleOverlayPresent() {
+    if (!this._overlayMounted || this._overlayPresentScheduled) return;
+    this._overlayPresentScheduled = true;
+    queueMicrotask(() => {
+      this._overlayPresentScheduled = false;
+      presentMountedCanvasOverlay(this);
+    });
   }
   _threeBrowserReadPixels() {
     const length = this.width * this.height * 4;
@@ -1650,13 +1797,64 @@ document.documentElement.append(head, body);
 // for pointerdown on the canvas, then pointermove/pointerup on ownerDocument.
 document.documentElement.parentNode = document;
 
-function requestNativePointerLock(element) {
-  if (native.overlayOpen?.()) native.setOverlay(false);
-  if (!native.setPointerLock(true)) {
+function hydrateDocumentMarkup(html) {
+  const source = String(html ?? "");
+  const bodyMarkup = /<body\b[^>]*>([\s\S]*?)<\/body\s*>/i.exec(source)?.[1] ?? source;
+  // Script execution stays under loadEntry's module/classic-script ordering.
+  // Keeping script text in the virtual DOM would duplicate megabytes of code
+  // as text nodes without making it executable.
+  const inertMarkup = bodyMarkup
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, "")
+    .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript\s*>/gi, "");
+  body.innerHTML = inertMarkup;
+  return body;
+}
+globalThis.__threeBrowserHydrateDocument = hydrateDocumentMarkup;
+
+let pointerLockMotionWarmup = 0;
+let pointerLockSuspendedByRuntimeOverlay = false;
+let runtimeOverlayWasOpen = false;
+
+function resumeRuntimeOverlayPointerLock() {
+  if (!pointerLockSuspendedByRuntimeOverlay) return;
+  pointerLockSuspendedByRuntimeOverlay = false;
+  if (!document.pointerLockElement) return;
+  if (native.setPointerLock(true)) pointerLockMotionWarmup = 1;
+}
+
+export function setRuntimeOverlayVisible(open) {
+  const visible = Boolean(open);
+  if (visible && document.pointerLockElement) {
+    pointerLockSuspendedByRuntimeOverlay = true;
+    // Keep the browser-visible pointer lock intact while the runtime menu is
+    // open. A page must not interpret our own menu as an Escape/pause action.
+    native.setPointerLock(false);
+  }
+  const accepted = native.setOverlay(visible);
+  runtimeOverlayWasOpen = visible && accepted !== false;
+  if (!visible) resumeRuntimeOverlayPointerLock();
+  return accepted;
+}
+
+function syncRuntimeOverlayPointerLock() {
+  const open = Boolean(native.overlayOpen?.());
+  if (runtimeOverlayWasOpen && !open) resumeRuntimeOverlayPointerLock();
+  runtimeOverlayWasOpen = open;
+  return open;
+}
+
+function requestNativePointerLock(element, options = undefined) {
+  if (native.overlayOpen?.()) setRuntimeOverlayVisible(false);
+  const unadjustedMovement = options?.unadjustedMovement === true;
+  if (!native.setPointerLock(true, unadjustedMovement)) {
     document.dispatchEvent(new Event("pointerlockerror"));
     return Promise.reject(new Error("Pointer lock could not be acquired"));
   }
   document.pointerLockElement = element;
+  // Win32 may deliver the cursor-centering/activation delta immediately after
+  // the lock request. Browsers do not expose that synthetic movement to page
+  // controls, so discard exactly the first locked move.
+  pointerLockMotionWarmup = 1;
   document.dispatchEvent(new Event("pointerlockchange"));
   return Promise.resolve();
 }
@@ -1665,10 +1863,12 @@ function releaseNativePointerLock(fromHost = false) {
   if (!fromHost) native.setPointerLock(false);
   if (!document.pointerLockElement) return;
   document.pointerLockElement = null;
+  pointerLockMotionWarmup = 0;
   document.dispatchEvent(new Event("pointerlockchange"));
 }
 
 let currentCanvas = null;
+let currentOverlayCanvas = null;
 const mountedCanvases = new Set();
 function canvasIsConnected(canvas) {
   let node = canvas;
@@ -1687,7 +1887,7 @@ function canvasStackZ(canvas) {
   return z;
 }
 function refreshPresentedCanvas() {
-  const candidates = [...mountedCanvases].filter(canvasIsConnected);
+  const candidates = [...mountedCanvases].filter(canvas => canvasIsConnected(canvas) && canvas.context2d === null);
   currentCanvas = candidates.reduce((best, canvas) => {
     if (!best) return canvas;
     const z = canvasStackZ(canvas);
@@ -1698,6 +1898,64 @@ function refreshPresentedCanvas() {
     return area > bestArea ? canvas : best;
   }, null);
   return currentCanvas;
+}
+function cssCanvasNumber(value, fallback = 0) {
+  const parsed = Number.parseFloat(String(value ?? ""));
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+function canvasOverlayBounds(canvas) {
+  return {
+    left: Math.max(0, Math.round(cssCanvasNumber(canvas.style.left, 0))),
+    top: Math.max(0, Math.round(cssCanvasNumber(canvas.style.top, 0))),
+    width: Math.max(1, Math.round(cssCanvasNumber(canvas.style.width, canvas.width))),
+    height: Math.max(1, Math.round(cssCanvasNumber(canvas.style.height, canvas.height))),
+  };
+}
+function refreshOverlayCanvas() {
+  const candidates = [...mountedCanvases].filter(canvas =>
+    canvasIsConnected(canvas) && canvas.context2d !== null && canvas.style.display !== "none");
+  currentOverlayCanvas = candidates.reduce((best, canvas) =>
+    !best || canvasStackZ(canvas) >= canvasStackZ(best) ? canvas : best, null);
+  return currentOverlayCanvas;
+}
+function sendCanvasOverlayHidden() {
+  if (typeof native.canvasOverlaySet === "function") {
+    native.canvasOverlaySet(false);
+    return;
+  }
+  const command = globalThis.__TB_WGPU_CMD;
+  if (typeof command?.canvasOverlay !== "function") return;
+  command.canvasOverlay({ visible: false });
+  command.submitNow?.();
+}
+function presentMountedCanvasOverlay(canvas) {
+  if (refreshOverlayCanvas() !== canvas) return;
+  const command = globalThis.__TB_WGPU_CMD;
+  if (typeof native.canvasOverlaySet !== "function" && typeof command?.canvasOverlay !== "function") return;
+  const bounds = canvasOverlayBounds(canvas);
+  const pixels = canvas.context2d?._readPixels(0, 0, canvas.width, canvas.height);
+  if (!pixels) return;
+  try {
+    if (typeof native.canvasOverlaySet === "function") {
+      native.canvasOverlaySet(true, bounds.left, bounds.top, bounds.width, bounds.height,
+        canvas.width, canvas.height, pixels, canvas.width * 4);
+      return;
+    }
+    command.canvasOverlay({
+      visible: true,
+      left: bounds.left,
+      top: bounds.top,
+      width: bounds.width,
+      height: bounds.height,
+      sourceWidth: canvas.width,
+      sourceHeight: canvas.height,
+      rowBytes: canvas.width * 4,
+      pixels,
+    });
+    command.submitNow?.();
+  } catch (error) {
+    console.error(`ThreeBrowser Canvas2D overlay rejected: ${error?.message || error}`);
+  }
 }
 globalThis.__threeBrowserIsPresentedCanvas = canvas => refreshPresentedCanvas() === canvas;
 function promotePresentedCanvasTree(node) {
@@ -1713,13 +1971,29 @@ function promotePresentedCanvas(canvas, parent) {
   }
   if (!connected) return;
   mountedCanvases.add(canvas);
+  canvas._overlayMounted = canvas.context2d !== null;
   refreshPresentedCanvas();
+  if (canvas._overlayMounted) canvas._scheduleOverlayPresent();
   if (process.env.THREEBROWSER_TRACE_RENDER) {
     console.error("ThreeBrowser canvas mounted", {
       width: canvas.width, height: canvas.height, parent: parent.tagName, parentId: parent.id,
       zIndex: canvasStackZ(canvas), selected: currentCanvas === canvas,
     });
   }
+}
+function demotePresentedCanvasTree(node) {
+  if (node instanceof CanvasElement) {
+    const wasOverlay = currentOverlayCanvas === node;
+    mountedCanvases.delete(node);
+    node._overlayMounted = false;
+    refreshPresentedCanvas();
+    refreshOverlayCanvas();
+    if (wasOverlay) {
+      if (currentOverlayCanvas) currentOverlayCanvas._scheduleOverlayPresent();
+      else sendCanvasOverlayHidden();
+    }
+  }
+  for (const child of node?.children || []) demotePresentedCanvasTree(child);
 }
 const originalCreateElement = document.createElement.bind(document);
 document.createElement = tag => {
@@ -1730,6 +2004,13 @@ document.createElement = tag => {
   }
   return result;
 };
+
+const htmlInteractionBridge = new HtmlInteractionBridge({
+  document,
+  viewport: () => ({ width: globalThis.innerWidth || 1280, height: globalThis.innerHeight || 720 }),
+  createCanvas: () => document.createElement("canvas"),
+  trace: Boolean(process.env.THREEBROWSER_TRACE_HTML_INTERACTION),
+});
 
 globalThis.window = globalThis;
 globalThis.self = globalThis;
@@ -2707,6 +2988,46 @@ let doubleClickButton = -1;
 const pressedKeys = new Set();
 let overlayChordActive = false;
 
+export function updateRuntimeOverlayChord(state, input) {
+  if (!state?.pressedKeys || !input || (input.type !== "keydown" && input.type !== "keyup")) {
+    return { consume: false, toggle: false };
+  }
+  // A native overlay may consume the previous key-up events. Modifier keys do
+  // not auto-repeat, so a new Shift keydown is a reliable fresh chord boundary.
+  if (input.type === "keydown" && input.code === 16 && state.active === true && state.pressedKeys.has(16)) {
+    state.pressedKeys.clear();
+    state.active = false;
+  }
+  if (input.type === "keydown") state.pressedKeys.add(input.code);
+  const shiftDown = state.pressedKeys.has(16) || (input.code === 9 && input.shiftKey === true);
+  const chordDown = state.pressedKeys.has(9) && shiftDown;
+  const toggle = chordDown && state.active !== true;
+  if (toggle) state.active = true;
+  const consume = state.active === true && (input.code === 9 || input.code === 16);
+  if (input.type === "keyup") {
+    state.pressedKeys.delete(input.code);
+    if (!state.pressedKeys.has(9) && !state.pressedKeys.has(16)) state.active = false;
+  }
+  return { consume, toggle };
+}
+
+const runtimeOverlayChordState = {
+  pressedKeys,
+  get active() { return overlayChordActive; },
+  set active(value) { overlayChordActive = Boolean(value); },
+};
+
+export function consumeRuntimeOverlayInput(input) {
+  if (!native.overlayOpen?.()) return false;
+  if (input.type === "wheel") native.overlayWheel?.(input.code);
+  else if (input.type === "pointermove") native.overlayPointerMove?.(input.x, input.y);
+  else if (input.type === "pointerup") native.overlayClick?.(input.x, input.y);
+  else if (input.type === "keydown" && input.code === 27) setRuntimeOverlayVisible(false);
+  // The native menu is modal. Even input types it does not act on must not
+  // leak through to a virtual-DOM gate, focused element, canvas, or window.
+  return true;
+}
+
 function dispatchToCanvasAndWindow(eventFactory) {
   (currentCanvas || windowEvents).dispatchEvent(eventFactory());
 }
@@ -2719,6 +3040,15 @@ function dispatchNativeInput() {
       releaseNativePointerLock(true);
       continue;
     }
+    const overlayChord = updateRuntimeOverlayChord(runtimeOverlayChordState, input);
+    if (overlayChord.toggle) {
+      const open = !native.overlayOpen();
+      const accepted = setRuntimeOverlayVisible(open);
+      if (process.env.THREEBROWSER_TRACE_INPUT) console.error("overlay chord", { open, accepted, active: native.overlayOpen() });
+    }
+    if (overlayChord.consume) continue;
+    if (consumeRuntimeOverlayInput(input)) continue;
+    if (htmlInteractionBridge.consumeNativeInput(input)) continue;
     if (input.type === "pointerleave") {
       pointerInside = false;
       if (!native.overlayOpen?.()) {
@@ -2771,6 +3101,10 @@ function dispatchNativeInput() {
       const movementY = Number.isFinite(input.movementY) ? input.movementY : input.y - lastMouseY;
       lastMouseX = input.x;
       lastMouseY = input.y;
+      if (pointerType === "pointermove" && document.pointerLockElement && pointerLockMotionWarmup > 0) {
+        pointerLockMotionWarmup--;
+        continue;
+      }
       if (native.overlayOpen?.()) {
         if (pointerType === "pointermove") native.overlayPointerMove?.(input.x, input.y);
         if (pointerType === "pointerup") native.overlayClick(input.x, input.y);
@@ -2814,23 +3148,6 @@ function dispatchNativeInput() {
       }
       continue;
     }
-    if (input.type === "keydown") pressedKeys.add(input.code);
-    const overlayChordDown = pressedKeys.has(9) && pressedKeys.has(16);
-    if (overlayChordDown && !overlayChordActive) {
-      overlayChordActive = true;
-      releaseNativePointerLock();
-      const open = !native.overlayOpen();
-      const accepted = native.setOverlay(open);
-      if (process.env.THREEBROWSER_TRACE_INPUT) console.error("overlay chord", { open, accepted, active: native.overlayOpen() });
-    }
-    const consumeOverlayChord = overlayChordActive && (input.code === 9 || input.code === 16);
-    if (input.type === "keyup") {
-      pressedKeys.delete(input.code);
-      if (!pressedKeys.has(9) && !pressedKeys.has(16)) overlayChordActive = false;
-    }
-    if (consumeOverlayChord) {
-      continue;
-    }
     if (input.type === "keydown" && input.code === 114) {
       native.toggleFpsOverlay();
       continue;
@@ -2841,7 +3158,7 @@ function dispatchNativeInput() {
         continue;
       }
       if (native.overlayOpen?.()) {
-        native.setOverlay(false);
+        setRuntimeOverlayVisible(false);
         continue;
       }
     }
@@ -2926,6 +3243,8 @@ function pump() {
   }
   dispatchNativeInput();
   syncWindowSize();
+  if (syncRuntimeOverlayPointerLock()) htmlInteractionBridge.hide();
+  else htmlInteractionBridge.update(performance.now());
   const callbacks = Array.from(frameCallbacks.values());
   frameCallbacks.clear();
   globalThis.__threeBrowserDisplayFrame = (globalThis.__threeBrowserDisplayFrame || 0) + 1;
@@ -2949,6 +3268,7 @@ export function stop() {
   frameCallbacks.clear();
   for (const worker of activeWorkers) worker.terminate();
   activeWorkers.clear();
+  htmlInteractionBridge.hide();
   releaseNativePointerLock();
   native.shutdown();
 }
@@ -2992,6 +3312,14 @@ export async function loadEntry(entryPath) {
       let manifest;
       try { manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")); }
       catch (error) { throw new Error(`Invalid pull manifest in ${manifestPath}: ${error.message}`); }
+      if (manifest.html) {
+        const projectRoot = path.dirname(absolute);
+        const htmlPath = path.resolve(projectRoot, String(manifest.html));
+        const relativeHtmlPath = path.relative(projectRoot, htmlPath);
+        if (relativeHtmlPath && !relativeHtmlPath.startsWith("..") && !path.isAbsolute(relativeHtmlPath) && fs.existsSync(htmlPath)) {
+          hydrateDocumentMarkup(fs.readFileSync(htmlPath, "utf8"));
+        }
+      }
       pulledSourceURL = applyManifestSearch(manifest.source ? new URL(manifest.source) : null, manifest);
       pulledDirectory = path.dirname(absolute);
       pulledFiles = new Map((manifest.files || []).map(file => [new URL(file.url).href, file.path]));
@@ -3039,6 +3367,7 @@ export async function loadEntry(entryPath) {
     return loaded;
   }
   const html = fs.readFileSync(absolute, "utf8");
+  hydrateDocumentMarkup(html);
   const importMapSource = /<script\s+[^>]*type=["']importmap["'][^>]*>([\s\S]*?)<\/script>/i.exec(html)?.[1];
   let importMap = {};
   if (importMapSource) {

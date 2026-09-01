@@ -76,6 +76,7 @@ export const OP = {
   RTX_DYNAMIC_MESH_REFIT: 93,
   RTX_DYNAMIC_MESH_DESTROY: 94,
   DLSS_NR_EVALUATE: 95,
+  CANVAS_OVERLAY: 96,
 };
 
 // wgpu-native webgpu.h numeric enums (WGPUTextureFormat, …).
@@ -1037,6 +1038,24 @@ function renderEnd(encoder) {
   end(s);
 }
 
+function canvasOverlay({ visible = true, left = 0, top = 0, width = 0, height = 0,
+  sourceWidth = width, sourceHeight = height, rowBytes = 0, pixels } = {}) {
+  const source = visible ? asU8(pixels) : new Uint8Array(0);
+  const start = begin(OP.CANVAS_OVERLAY, 40 + source.byteLength);
+  wu32(1);
+  wu32(visible ? 1 : 0);
+  wu32(left);
+  wu32(top);
+  wu32(width);
+  wu32(height);
+  wu32(sourceWidth);
+  wu32(sourceHeight);
+  wu32(rowBytes);
+  wu32(source.byteLength);
+  wbytes(source);
+  end(start);
+}
+
 // DLSS_EVALUATE is recorded between ENC_BEGIN and SUBMIT. Keeping evaluation
 // in the command stream is required: the native encoder does not exist until
 // the worker replays ENC_BEGIN and is released by SUBMIT.
@@ -1758,6 +1777,7 @@ const cmd = {
   pipeBgl,
   copyBuf,
   copyTex,
+  canvasOverlay,
   ready() {
     return !!host();
   },

@@ -413,6 +413,8 @@ void tn::renderPendingFrame() {
     tn::applyPendingEnvironment();
     const uint32_t sceneHandle = g.drawScene.load();
     const uint32_t cameraHandle = g.drawCamera.load();
+    const uint32_t overlaySceneHandle = g.drawOverlayScene.load();
+    const uint32_t overlayCameraHandle = g.drawOverlayCamera.load();
     if (!g.renderer || sceneHandle == 0 || cameraHandle == 0) {
         if (sceneHandle != 0 || cameraHandle != 0) {
             setError(("render skipped: renderer=" + std::to_string(g.renderer ? 1 : 0) +
@@ -437,6 +439,21 @@ void tn::renderPendingFrame() {
         setError("render skipped: scene/camera type conversion failed");
         g.sceneDirty.store(false, std::memory_order_relaxed);
         return;
+    }
+    Scene* overlayScene = nullptr;
+    Camera* overlayCamera = nullptr;
+    if (overlaySceneHandle != 0 || overlayCameraHandle != 0) {
+        Slot* overlaySceneSlot = getSlot(overlaySceneHandle);
+        Slot* overlayCameraSlot = getSlot(overlayCameraHandle);
+        overlayScene = overlaySceneSlot && overlaySceneSlot->object
+                ? dynamic_cast<Scene*>(overlaySceneSlot->object.get()) : nullptr;
+        overlayCamera = overlayCameraSlot && overlayCameraSlot->object
+                ? dynamic_cast<Camera*>(overlayCameraSlot->object.get()) : nullptr;
+        if (!overlayScene || !overlayCamera) {
+            setError("render composite skipped invalid overlay scene/camera");
+            overlayScene = nullptr;
+            overlayCamera = nullptr;
+        }
     }
     if (!g.sceneDirty.exchange(false, std::memory_order_acq_rel)) {
         return;
@@ -487,6 +504,13 @@ void tn::renderPendingFrame() {
     }
     g.canvas->animateOnce([&] {
         g.renderer->render(*scene, *camera);
+        if (overlayScene && overlayCamera) {
+            const bool previousAutoClear = g.renderer->autoClear;
+            g.renderer->clearDepth();
+            g.renderer->autoClear = false;
+            g.renderer->render(*overlayScene, *overlayCamera);
+            g.renderer->autoClear = previousAutoClear;
+        }
 #if defined(_WIN32)
         renderGlOverlay();
 #endif
@@ -720,6 +744,16 @@ struct RuntimeInputListener final: MouseListener, KeyListener {
         std::lock_guard<std::mutex> lock(inputMutex);
         inputEvents.clear();
     }
+
+    void resetPointerMotion() {
+        lastX = 0;
+        lastY = 0;
+        hasPosition = false;
+        std::lock_guard<std::mutex> lock(inputMutex);
+        std::erase_if(inputEvents, [](const TNInputEvent& event) {
+            return event.type == TN_INPUT_POINTER_MOVE;
+        });
+    }
 };
 
 RuntimeInputListener runtimeInputListener;
@@ -899,6 +933,8 @@ void tn_android_context_destroy(void) {
     tn_android_frame();
     g.drawScene.store(0);
     g.drawCamera.store(0);
+    g.drawOverlayScene.store(0);
+    g.drawOverlayCamera.store(0);
     g.slots.clear();
     g.pendingEnvironment.clear();
     g.envHemi.reset();
@@ -962,6 +998,8 @@ void tn_runtime_set_backend(int vulkan) {
             g.envSun.reset();
             g.drawScene.store(0);
             g.drawCamera.store(0);
+            g.drawOverlayScene.store(0);
+            g.drawOverlayCamera.store(0);
             tn::resetIds();
             return 0;
         });
@@ -976,11 +1014,22 @@ const char* tn_debug_scene(void) {
     result = onWorker([] {
         const auto sceneHandle = g.drawScene.load();
         const auto cameraHandle = g.drawCamera.load();
-        Slot* sceneSlot = getSlot(sceneHandle);
-        Slot* cameraSlot = getSlot(cameraHandle);
+        const auto overlaySceneHandle = g.drawOverlayScene.load();
+        const auto overlayCameraHandle = g.drawOverlayCamera.load();
+        // Debug inspection must not mutate lastError when no frame has been
+        // submitted yet or when an optional overlay is absent.
+        Slot* sceneSlot = findSlot(sceneHandle);
+        Slot* cameraSlot = findSlot(cameraHandle);
+        Slot* overlaySceneSlot = findSlot(overlaySceneHandle);
+        Slot* overlayCameraSlot = findSlot(overlayCameraHandle);
         auto* scene = sceneSlot && sceneSlot->object ? dynamic_cast<Scene*>(sceneSlot->object.get()) : nullptr;
         auto* camera = cameraSlot && cameraSlot->object ? dynamic_cast<Camera*>(cameraSlot->object.get()) : nullptr;
+        auto* overlayScene = overlaySceneSlot && overlaySceneSlot->object
+                ? dynamic_cast<Scene*>(overlaySceneSlot->object.get()) : nullptr;
+        auto* overlayCamera = overlayCameraSlot && overlayCameraSlot->object
+                ? dynamic_cast<Camera*>(overlayCameraSlot->object.get()) : nullptr;
         std::size_t nodes = 0, meshes = 0, visibleMeshes = 0, materials = 0;
+        std::size_t overlayNodes = 0, overlayMeshes = 0, overlayVisibleMeshes = 0;
         if (scene) {
             scene->traverse([&](Object3D& object) {
                 ++nodes;
@@ -991,6 +1040,15 @@ const char* tn_debug_scene(void) {
                 }
             });
         }
+        if (overlayScene) {
+            overlayScene->traverse([&](Object3D& object) {
+                ++overlayNodes;
+                if (auto* mesh = dynamic_cast<Mesh*>(&object)) {
+                    ++overlayMeshes;
+                    if (mesh->visible) ++overlayVisibleMeshes;
+                }
+            });
+        }
         return std::string("scene=") + std::to_string(sceneHandle) +
                " camera=" + std::to_string(cameraHandle) +
                " sceneOk=" + std::to_string(scene != nullptr) +
@@ -998,7 +1056,14 @@ const char* tn_debug_scene(void) {
                " nodes=" + std::to_string(nodes) +
                " meshes=" + std::to_string(meshes) +
                " visibleMeshes=" + std::to_string(visibleMeshes) +
-               " materials=" + std::to_string(materials);
+               " materials=" + std::to_string(materials) +
+               " overlayScene=" + std::to_string(overlaySceneHandle) +
+               " overlayCamera=" + std::to_string(overlayCameraHandle) +
+               " overlaySceneOk=" + std::to_string(overlayScene != nullptr) +
+               " overlayCameraOk=" + std::to_string(overlayCamera != nullptr) +
+               " overlayNodes=" + std::to_string(overlayNodes) +
+               " overlayMeshes=" + std::to_string(overlayMeshes) +
+               " overlayVisibleMeshes=" + std::to_string(overlayVisibleMeshes);
     });
     return result.c_str();
 }
@@ -1341,6 +1406,43 @@ void* tn_runtime_hwnd(void) {
     return g.nativeHwnd.load();
 }
 
+int tn_runtime_set_pointer_lock(int enabled, int unadjusted_movement) {
+#if !defined(__ANDROID__)
+    try {
+        return onWorker([enabled, unadjusted_movement] {
+            if (!g.canvas) return 0;
+            auto* window = static_cast<GLFWwindow*>(g.canvas->windowPtr());
+            if (!window) return 0;
+            runtimeInputListener.resetPointerMotion();
+            if (enabled) {
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                if (glfwRawMouseMotionSupported()) {
+                    // Pointer Lock movement is OS-adjusted by default. Raw
+                    // counts correspond to the browser's explicitly requested
+                    // unadjustedMovement mode and can be dramatically larger
+                    // on high-DPI gaming mice.
+                    glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION,
+                                     unadjusted_movement ? GLFW_TRUE : GLFW_FALSE);
+                }
+                return glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_DISABLED ? 1 : 0;
+            }
+            if (glfwRawMouseMotionSupported()) {
+                glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_FALSE);
+            }
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+            return glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_NORMAL ? 1 : 0;
+        });
+    } catch (const std::exception& ex) {
+        setError(ex.what());
+        return 0;
+    }
+#else
+    (void) enabled;
+    (void) unadjusted_movement;
+    return 0;
+#endif
+}
+
 void tn_runtime_set_loading(int enabled, const char* stage) {
 #if defined(_WIN32)
     tw_set_loading(enabled, stage);
@@ -1430,6 +1532,8 @@ void tn_runtime_reset(void) {
         onWorker([] {
             g.drawScene.store(0);
             g.drawCamera.store(0);
+            g.drawOverlayScene.store(0);
+            g.drawOverlayCamera.store(0);
             g.slots.clear();
             g.pendingEnvironment.clear();
             g.envHemi.reset();

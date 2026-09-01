@@ -278,6 +278,17 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             if (!has(p, end, 8)) return;
             g.drawScene.store(ru32(p));
             g.drawCamera.store(ru32(p + 4));
+            g.drawOverlayScene.store(0);
+            g.drawOverlayCamera.store(0);
+            markDirty();
+            return;
+        }
+        case tn::cmd::OP_RENDER_COMPOSITE: {
+            if (!has(p, end, 16)) return;
+            g.drawScene.store(ru32(p));
+            g.drawCamera.store(ru32(p + 4));
+            g.drawOverlayScene.store(ru32(p + 8));
+            g.drawOverlayCamera.store(ru32(p + 12));
             markDirty();
             return;
         }
@@ -945,6 +956,15 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             object->position.set(rf32(p + 4), rf32(p + 8), rf32(p + 12));
             object->rotation.set(rf32(p + 16), rf32(p + 20), rf32(p + 24));
             object->scale.set(rf32(p + 28), rf32(p + 32), rf32(p + 36));
+            return;
+        }
+        case tn::cmd::OP_SET_POSE_QUAT: {
+            if (!has(p, end, 44)) return;
+            Object3D* object = findObject(ru32(p));
+            if (!object) return;
+            object->position.set(rf32(p + 4), rf32(p + 8), rf32(p + 12));
+            object->quaternion.set(rf32(p + 16), rf32(p + 20), rf32(p + 24), rf32(p + 28));
+            object->scale.set(rf32(p + 32), rf32(p + 36), rf32(p + 40));
             return;
         }
         case tn::cmd::OP_LOOK_AT: {

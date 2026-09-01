@@ -16,6 +16,7 @@ constexpr uint32_t OP_RENDER = 1;
 constexpr uint32_t OP_SET_SIZE = 2;
 constexpr uint32_t OP_CLEAR_COLOR = 3;
 constexpr uint32_t OP_RENDER_PASS = 4;
+constexpr uint32_t OP_RENDER_COMPOSITE = 5; // world scene/camera, overlay scene/camera
 
 constexpr uint32_t OP_SCENE_CREATE = 10;
 constexpr uint32_t OP_SCENE_BG = 11;
@@ -85,6 +86,7 @@ constexpr uint32_t OP_LOOK_FROM = 83;
 constexpr uint32_t OP_SET_VISIBLE = 84;
 constexpr uint32_t OP_OBJECT_REMOVE = 85;
 constexpr uint32_t OP_SLOT_DESTROY = 86;
+constexpr uint32_t OP_SET_POSE_QUAT = 87; // id, position, quaternion, scale
 
 constexpr uint32_t OP_LIGHT_AMBIENT = 90;
 constexpr uint32_t OP_LIGHT_DIR = 91;

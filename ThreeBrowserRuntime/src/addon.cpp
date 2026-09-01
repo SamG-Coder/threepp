@@ -38,8 +38,6 @@ std::atomic_bool runtimeActive{false};
 std::atomic_int runtimeMode{0};
 std::atomic_bool pointerLocked{false};
 std::atomic_int requestedReflexMode{-1};
-POINT pointerRestorePosition{};
-bool pointerRestorePositionValid{false};
 HICON packagedIconBig{};
 HICON packagedIconSmall{};
 
@@ -99,29 +97,16 @@ HWND runtimeHwnd() {
     return static_cast<HWND>(runtimeMode.load(std::memory_order_acquire) == 2 ? tw_hwnd() : tn_runtime_hwnd());
 }
 
-POINT pointerLockCenter(HWND hwnd) {
-    RECT client{};
-    GetClientRect(hwnd, &client);
-    const int contentTop = runtimeMode.load(std::memory_order_acquire) == 2 ? tw_content_offset_y() : 0;
-    POINT center{(client.left + client.right) / 2, (contentTop + client.bottom) / 2};
-    ClientToScreen(hwnd, &center);
-    return center;
-}
-
 void releasePointerLock() {
     if (!pointerLocked.exchange(false, std::memory_order_acq_rel)) return;
     if (runtimeMode.load(std::memory_order_acquire) == 2) {
         tw_set_pointer_lock(0);
-        pointerRestorePositionValid = false;
         return;
     }
-    ClipCursor(nullptr);
-    while (ShowCursor(TRUE) < 0) {}
-    if (pointerRestorePositionValid) SetCursorPos(pointerRestorePosition.x, pointerRestorePosition.y);
-    pointerRestorePositionValid = false;
+    tn_runtime_set_pointer_lock(0, 0);
 }
 
-bool acquirePointerLock() {
+bool acquirePointerLock(bool unadjustedMovement = false) {
     const HWND hwnd = runtimeHwnd();
     if (!hwnd || !IsWindow(hwnd)) return false;
     if (pointerLocked.load(std::memory_order_acquire)) return true;
@@ -131,24 +116,11 @@ bool acquirePointerLock() {
         return locked;
     }
 
-    pointerRestorePositionValid = GetCursorPos(&pointerRestorePosition) != FALSE;
-    RECT clip{};
-    GetClientRect(hwnd, &clip);
-    clip.top += runtimeMode.load(std::memory_order_acquire) == 2 ? tw_content_offset_y() : 0;
-    POINT topLeft{clip.left, clip.top};
-    POINT bottomRight{clip.right, clip.bottom};
-    ClientToScreen(hwnd, &topLeft);
-    ClientToScreen(hwnd, &bottomRight);
-    clip = RECT{topLeft.x, topLeft.y, bottomRight.x, bottomRight.y};
-    if (!ClipCursor(&clip)) return false;
-
     SetForegroundWindow(hwnd);
     SetFocus(hwnd);
-    const POINT center = pointerLockCenter(hwnd);
-    SetCursorPos(center.x, center.y);
-    while (ShowCursor(FALSE) >= 0) {}
-    pointerLocked.store(true, std::memory_order_release);
-    return true;
+    const bool locked = tn_runtime_set_pointer_lock(1, unadjustedMovement ? 1 : 0) != 0;
+    pointerLocked.store(locked, std::memory_order_release);
+    return locked;
 }
 
 napi_value undefined(napi_env env) {
@@ -661,6 +633,43 @@ napi_value canvas2dEncodePng(napi_env env, napi_callback_info info) {
         return nullptr;
     }
 }
+
+napi_value canvasOverlaySet(napi_env env, napi_callback_info info) {
+    std::array<napi_value, 9> argv{};
+    std::size_t argc = argv.size();
+    napi_get_cb_info(env, info, &argc, argv.data(), nullptr, nullptr);
+    bool visible = false;
+    if (argc > 0) napi_get_value_bool(env, argv[0], &visible);
+    if (!visible) return boolean(env, tw_canvas_overlay_set(0, 0, 0, 0, 0, 0, 0, nullptr, 0) != 0);
+    if (argc < argv.size()) {
+        napi_throw_type_error(env, nullptr,
+                              "canvasOverlaySet requires visible, bounds, source dimensions, pixels and row bytes");
+        return nullptr;
+    }
+    int left = 0;
+    int top = 0;
+    int width = 0;
+    int height = 0;
+    int sourceWidth = 0;
+    int sourceHeight = 0;
+    int rowBytes = 0;
+    int* values[] = {&left, &top, &width, &height, &sourceWidth, &sourceHeight};
+    for (std::size_t i = 1; i <= 6; ++i) {
+        if (!canvasInteger(env, argv[i], *values[i - 1])) return nullptr;
+    }
+    const std::uint8_t* pixels = nullptr;
+    std::size_t byteLength = 0;
+    if (!canvasBytes(env, argv[7], pixels, byteLength) || !canvasInteger(env, argv[8], rowBytes)) return nullptr;
+    const std::uint64_t required = static_cast<std::uint64_t>(std::max(0, rowBytes)) *
+                                   static_cast<std::uint64_t>(std::max(0, sourceHeight));
+    if (required > byteLength) {
+        napi_throw_range_error(env, nullptr, "Canvas overlay pixel buffer is smaller than its declared rows");
+        return nullptr;
+    }
+    return boolean(env, tw_canvas_overlay_set(1, left, top, width, height,
+                                               sourceWidth, sourceHeight, pixels, rowBytes) != 0);
+}
+
 napi_value start(napi_env env, napi_callback_info info) {
     std::array<napi_value, 3> argv{};
     std::size_t argc = argv.size();
@@ -1144,16 +1153,18 @@ napi_value shutdown(napi_env env, napi_callback_info) {
 }
 
 napi_value setPointerLock(napi_env env, napi_callback_info info) {
-    napi_value argv[1]{};
-    std::size_t argc = 1;
+    napi_value argv[2]{};
+    std::size_t argc = 2;
     napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
     bool enabled = false;
+    bool unadjustedMovement = false;
     if (argc > 0) napi_get_value_bool(env, argv[0], &enabled);
+    if (argc > 1) napi_get_value_bool(env, argv[1], &unadjustedMovement);
     if (!enabled) {
         releasePointerLock();
         return boolean(env, true);
     }
-    return boolean(env, runtimeActive.load(std::memory_order_acquire) && acquirePointerLock());
+    return boolean(env, runtimeActive.load(std::memory_order_acquire) && acquirePointerLock(unadjustedMovement));
 }
 
 napi_value setOverlay(napi_env env, napi_callback_info info) {
@@ -2177,6 +2188,7 @@ napi_value init(napi_env env, napi_value exports) {
         {"canvas2dDrawImage", nullptr, canvas2dDrawImage, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"canvas2dMeasureText", nullptr, canvas2dMeasureText, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"canvas2dEncodePng", nullptr, canvas2dEncodePng, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"canvasOverlaySet", nullptr, canvasOverlaySet, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"resize", nullptr, resize, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"shutdown", nullptr, shutdown, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"isOpen", nullptr, isOpen, nullptr, nullptr, nullptr, napi_default, nullptr},

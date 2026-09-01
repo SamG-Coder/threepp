@@ -156,6 +156,10 @@ struct Runtime {
     std::atomic<int> overlayScrollPx{0};
     std::atomic<uint64_t> overlayRevision{0};
     std::atomic<void*> overlayWindow{nullptr};
+    // The shared overlay is also rasterized by the OpenGL runtime, whose
+    // viewport is independent of the WebGPU renderer statistics above.
+    std::atomic<int> overlayRenderW{0};
+    std::atomic<int> overlayRenderH{0};
     std::mutex featureControlMu;
     StreamlineDLSSOptions requestedDlssOptions{};
     bool featureRequestValid{false};
@@ -225,6 +229,13 @@ struct Runtime {
     WGPUTextureFormat overlayDepthFormat{WGPUTextureFormat_Undefined};
     int overlayRenderedFps{-1};
     std::vector<uint8_t> overlayPixels;
+    std::mutex canvasOverlayMu;
+    std::vector<uint8_t> canvasOverlayPixels;
+    std::atomic<int> canvasOverlayVisible{0};
+    int canvasOverlayLeft{0};
+    int canvasOverlayTop{0};
+    int canvasOverlayWidth{0};
+    int canvasOverlayHeight{0};
 
     uint32_t gpuVendorId{0};
     uint32_t gpuDeviceId{0};
@@ -1845,7 +1856,7 @@ OverlayLayout overlayLayout(int width, int height) {
     return layout;
 }
 
-RECT overlayRasterRect(int width, int height) {
+RECT builtInOverlayRasterRect(int width, int height) {
     width = std::max(1, width);
     height = std::max(1, height);
     if (g.loading.load(std::memory_order_relaxed) != 0) {
@@ -1862,6 +1873,52 @@ RECT overlayRasterRect(int width, int height) {
         return RECT{left, top, left + badgeWidth, top + badgeHeight};
     }
     return RECT{};
+}
+
+RECT overlayRasterRect(int width, int height) {
+    RECT result = builtInOverlayRasterRect(width, height);
+    if (g.canvasOverlayVisible.load(std::memory_order_acquire) == 0) return result;
+    std::lock_guard<std::mutex> lock(g.canvasOverlayMu);
+    RECT custom{
+        std::clamp(g.canvasOverlayLeft, 0, width),
+        std::clamp(g.canvasOverlayTop, 0, height),
+        std::clamp(g.canvasOverlayLeft + g.canvasOverlayWidth, 0, width),
+        std::clamp(g.canvasOverlayTop + g.canvasOverlayHeight, 0, height),
+    };
+    if (custom.right <= custom.left || custom.bottom <= custom.top) return result;
+    if (result.right <= result.left || result.bottom <= result.top) return custom;
+    return RECT{
+        std::min(result.left, custom.left),
+        std::min(result.top, custom.top),
+        std::max(result.right, custom.right),
+        std::max(result.bottom, custom.bottom),
+    };
+}
+
+void compositeCanvasOverlay(const RECT& rasterRect) {
+    if (g.canvasOverlayVisible.load(std::memory_order_acquire) == 0) return;
+    std::lock_guard<std::mutex> lock(g.canvasOverlayMu);
+    if (g.canvasOverlayPixels.empty() || g.canvasOverlayWidth < 1 || g.canvasOverlayHeight < 1) return;
+    const int rasterWidth = std::max(0L, rasterRect.right - rasterRect.left);
+    const int rasterHeight = std::max(0L, rasterRect.bottom - rasterRect.top);
+    const int destinationStride = (rasterWidth * 4 + 255) & ~255;
+    if (rasterWidth < 1 || rasterHeight < 1 ||
+        g.overlayPixels.size() < static_cast<size_t>(destinationStride) * rasterHeight) return;
+    const int destinationX = g.canvasOverlayLeft - rasterRect.left;
+    const int destinationY = g.canvasOverlayTop - rasterRect.top;
+    for (int y = 0; y < g.canvasOverlayHeight; ++y) {
+        const int targetY = destinationY + y;
+        if (targetY < 0 || targetY >= rasterHeight) continue;
+        const int sourceX = std::max(0, -destinationX);
+        const int targetX = std::max(0, destinationX);
+        const int copyWidth = std::min(g.canvasOverlayWidth - sourceX, rasterWidth - targetX);
+        if (copyWidth <= 0) continue;
+        const auto* source = g.canvasOverlayPixels.data() +
+            (static_cast<size_t>(y) * g.canvasOverlayWidth + sourceX) * 4;
+        auto* destination = g.overlayPixels.data() +
+            static_cast<size_t>(targetY) * destinationStride + targetX * 4;
+        std::memcpy(destination, source, static_cast<size_t>(copyWidth) * 4);
+    }
 }
 
 constexpr int kDropdownVisibleRows = 6;
@@ -2590,7 +2647,8 @@ bool prepareOverlay(int width, int height, uint32_t sampleCount,
                     WGPUTextureFormat depthFormat) {
     const bool visible = g.loading.load(std::memory_order_relaxed) != 0 ||
                          g.overlayOpen.load(std::memory_order_relaxed) != 0 ||
-                         g.fpsOverlay.load(std::memory_order_relaxed) != 0;
+                         g.fpsOverlay.load(std::memory_order_relaxed) != 0 ||
+                         g.canvasOverlayVisible.load(std::memory_order_acquire) != 0;
     if (!visible || !g.currentView || !g.device || !g.queue) return false;
     if (width < 1 || height < 1) return false;
     const bool loading = g.loading.load(std::memory_order_relaxed) != 0;
@@ -2613,12 +2671,16 @@ bool prepareOverlay(int width, int height, uint32_t sampleCount,
          now - lastDiagnosticsRefresh >= std::chrono::seconds(1));
     const bool dirty = g.overlayDirty.exchange(0, std::memory_order_acq_rel) != 0;
     if (loading || dirty || diagnosticsDue) {
-        if (menu) {
+        const bool builtInVisible = loading || menu || fpsOnly;
+        if (builtInVisible) {
             buildOverlayPixels(width, height, false, g.overlayLeft, g.overlayTop,
                                textureWidth, textureHeight);
         } else {
-            buildOverlayPixels(textureWidth, textureHeight, fpsOnly);
+            const int rowBytes = (textureWidth * 4 + 255) & ~255;
+            g.overlayPixels.assign(static_cast<size_t>(rowBytes) * textureHeight, 0);
+            g.overlayRevision.fetch_add(1, std::memory_order_release);
         }
+        compositeCanvasOverlay(rasterRect);
         const int rowBytes = (textureWidth * 4 + 255) & ~255;
         WGPUTexelCopyTextureInfo destination{};
         destination.texture = g.overlayTexture;
@@ -3027,7 +3089,8 @@ bool implPresent() {
     const bool nativeOverlayHidden =
         g.loading.load(std::memory_order_relaxed) == 0 &&
         g.overlayOpen.load(std::memory_order_relaxed) == 0 &&
-        g.fpsOverlay.load(std::memory_order_relaxed) == 0;
+        g.fpsOverlay.load(std::memory_order_relaxed) == 0 &&
+        g.canvasOverlayVisible.load(std::memory_order_acquire) == 0;
     streamlineFrameGenerationBeforePresent(nativeOverlayHidden);
     if (!g.overlayRecordedForCurrentTexture) renderOverlay();
     const bool firstPresent = g.statsPresents.load(std::memory_order_relaxed) == 0;
@@ -5109,6 +5172,30 @@ void execOne(uint32_t op, Reader& r) {
             tw_ray_query_pipeline_destroy(handle);
             return;
         }
+        case OP_CANVAS_OVERLAY: {
+            const uint32_t version = r.u32();
+            const uint32_t visible = r.u32();
+            const int left = static_cast<int>(r.u32());
+            const int top = static_cast<int>(r.u32());
+            const int width = static_cast<int>(r.u32());
+            const int height = static_cast<int>(r.u32());
+            const int sourceWidth = static_cast<int>(r.u32());
+            const int sourceHeight = static_cast<int>(r.u32());
+            const int rowBytes = static_cast<int>(r.u32());
+            const uint32_t byteLength = r.u32();
+            const uint8_t* pixels = byteLength ? r.bytes(byteLength) : nullptr;
+            const uint64_t required = static_cast<uint64_t>(std::max(0, rowBytes)) *
+                                      static_cast<uint64_t>(std::max(0, sourceHeight));
+            if (version != 1 || !r.ok || (visible && byteLength < required)) {
+                setError("invalid canvas overlay command");
+                return;
+            }
+            if (!tw_canvas_overlay_set(visible ? 1 : 0, left, top, width, height,
+                                       sourceWidth, sourceHeight, pixels, rowBytes)) {
+                setError("canvas overlay command rejected");
+            }
+            return;
+        }
         case OP_SUBMIT:
             finishEncoderSubmit();
             return;
@@ -5727,16 +5814,38 @@ int tw_overlay_open(void) {
 static POINT overlayPointFromClient(int x, int y, int renderWidth, int renderHeight) {
     renderWidth = std::max(1, renderWidth);
     renderHeight = std::max(1, renderHeight);
+    int clientWidth = renderWidth;
+    int clientHeight = renderHeight;
+    HWND inputWindow = static_cast<HWND>(g.overlayWindow.load(std::memory_order_acquire));
+    if (!inputWindow) inputWindow = g.hwnd;
+    RECT client{};
+    if (inputWindow && GetClientRect(inputWindow, &client)) {
+        clientWidth = std::max(1L, client.right - client.left);
+        clientHeight = std::max(1L, client.bottom - client.top);
+    }
+    const int clientX = std::clamp(x, 0, clientWidth - 1);
+    const int clientY = std::clamp(y, 0, clientHeight - 1);
     return POINT{
-        std::clamp(x, 0, renderWidth - 1),
-        std::clamp(y, 0, renderHeight - 1),
+        std::clamp(static_cast<int>(
+            static_cast<int64_t>(clientX) * renderWidth / clientWidth), 0, renderWidth - 1),
+        std::clamp(static_cast<int>(
+            static_cast<int64_t>(clientY) * renderHeight / clientHeight), 0, renderHeight - 1),
     };
+}
+
+static SIZE overlayRenderSize() {
+    int width = g.overlayRenderW.load(std::memory_order_acquire);
+    int height = g.overlayRenderH.load(std::memory_order_acquire);
+    if (width <= 0) width = g.statsW.load(std::memory_order_relaxed);
+    if (height <= 0) height = g.statsH.load(std::memory_order_relaxed);
+    return SIZE{std::max(1, width), std::max(1, height)};
 }
 
 void tw_overlay_click(int x, int y) {
     if (!g.overlayOpen.load(std::memory_order_relaxed)) return;
-    const int width = g.statsW.load(std::memory_order_relaxed);
-    const int height = g.statsH.load(std::memory_order_relaxed);
+    const SIZE renderSize = overlayRenderSize();
+    const int width = renderSize.cx;
+    const int height = renderSize.cy;
     POINT point = overlayPointFromClient(x, y, width, height);
     x = point.x;
     y = point.y;
@@ -5878,8 +5987,9 @@ void tw_overlay_click(int x, int y) {
 
 void tw_overlay_pointer_move(int x, int y) {
     if (!g.overlayOpen.load(std::memory_order_relaxed)) return;
-    const int width = g.statsW.load(std::memory_order_relaxed);
-    const int height = g.statsH.load(std::memory_order_relaxed);
+    const SIZE renderSize = overlayRenderSize();
+    const int width = renderSize.cx;
+    const int height = renderSize.cy;
     const OverlayLayout layout = overlayLayout(width, height);
     const POINT point = overlayPointFromClient(x, y, width, height);
     {
@@ -5931,8 +6041,8 @@ void tw_overlay_wheel(int delta) {
             return;
         }
     }
-    const OverlayLayout layout = overlayLayout(g.statsW.load(std::memory_order_relaxed),
-                                               g.statsH.load(std::memory_order_relaxed));
+    const SIZE renderSize = overlayRenderSize();
+    const OverlayLayout layout = overlayLayout(renderSize.cx, renderSize.cy);
     const int current = g.overlayScrollPx.load(std::memory_order_relaxed);
     int pixelDelta = delta / 2;
     if (pixelDelta == 0) pixelDelta = delta > 0 ? 1 : -1;
@@ -5982,7 +6092,8 @@ void tw_toggle_fps_overlay(void) {
 int tw_overlay_visible(void) {
     return g.loading.load(std::memory_order_relaxed) != 0 ||
            g.overlayOpen.load(std::memory_order_relaxed) != 0 ||
-           g.fpsOverlay.load(std::memory_order_relaxed) != 0;
+           g.fpsOverlay.load(std::memory_order_relaxed) != 0 ||
+           g.canvasOverlayVisible.load(std::memory_order_acquire) != 0;
 }
 
 void tw_overlay_bounds(int canvasWidth, int canvasHeight,
@@ -6002,6 +6113,8 @@ const uint8_t* tw_overlay_raster(int width, int height, int fps, int frameUs,
     static auto lastDiagnosticsRefresh = std::chrono::steady_clock::time_point{};
     width = std::max(1, width);
     height = std::max(1, height);
+    g.overlayRenderW.store(width, std::memory_order_relaxed);
+    g.overlayRenderH.store(height, std::memory_order_release);
     g.statsFps.store(fps, std::memory_order_relaxed);
     g.statsFrameUs.store(frameUs, std::memory_order_relaxed);
     g.pendingCommandSubmits.store(backlog, std::memory_order_relaxed);
@@ -6027,12 +6140,15 @@ const uint8_t* tw_overlay_raster(int width, int height, int fps, int frameUs,
          now - lastDiagnosticsRefresh >= std::chrono::seconds(1));
     const bool dirty = g.overlayDirty.exchange(0, std::memory_order_acq_rel) != 0;
     if (loading || dirty || sizeChanged || diagnosticsDue) {
-        if (menu) {
+        const bool builtInVisible = loading || menu || fpsOnly;
+        if (builtInVisible) {
             buildOverlayPixels(width, height, false, rasterRect.left, rasterRect.top,
                                rasterWidth, rasterHeight);
         } else {
-            buildOverlayPixels(rasterWidth, rasterHeight, fpsOnly);
+            g.overlayPixels.assign(static_cast<size_t>(stride) * rasterHeight, 0);
+            g.overlayRevision.fetch_add(1, std::memory_order_release);
         }
+        compositeCanvasOverlay(rasterRect);
         cachedWidth = rasterWidth;
         cachedHeight = rasterHeight;
         if (fpsOnly) lastDiagnosticsRefresh = now;
@@ -6042,6 +6158,49 @@ const uint8_t* tw_overlay_raster(int width, int height, int fps, int frameUs,
 
 uint64_t tw_overlay_revision(void) {
     return g.overlayRevision.load(std::memory_order_acquire);
+}
+
+int tw_canvas_overlay_set(int visible, int left, int top, int displayWidth, int displayHeight,
+                          int sourceWidth, int sourceHeight,
+                          const uint8_t* rgbaPixels, int rowBytes) {
+    if (!visible) {
+        std::lock_guard<std::mutex> lock(g.canvasOverlayMu);
+        g.canvasOverlayPixels.clear();
+        g.canvasOverlayLeft = g.canvasOverlayTop = 0;
+        g.canvasOverlayWidth = g.canvasOverlayHeight = 0;
+        g.canvasOverlayVisible.store(0, std::memory_order_release);
+        g.overlayDirty.store(1, std::memory_order_release);
+        return 1;
+    }
+    constexpr int kMaxCanvasOverlayDimension = 4096;
+    if (!rgbaPixels || displayWidth < 1 || displayHeight < 1 || sourceWidth < 1 || sourceHeight < 1 ||
+        displayWidth > kMaxCanvasOverlayDimension || displayHeight > kMaxCanvasOverlayDimension ||
+        sourceWidth > kMaxCanvasOverlayDimension || sourceHeight > kMaxCanvasOverlayDimension ||
+        rowBytes < sourceWidth * 4) return 0;
+    std::vector<uint8_t> bgra(static_cast<size_t>(displayWidth) * displayHeight * 4);
+    for (int y = 0; y < displayHeight; ++y) {
+        const int sourceY = std::min(sourceHeight - 1, y * sourceHeight / displayHeight);
+        const auto* source = rgbaPixels + static_cast<size_t>(sourceY) * rowBytes;
+        auto* destination = bgra.data() + static_cast<size_t>(y) * displayWidth * 4;
+        for (int x = 0; x < displayWidth; ++x) {
+            const int sourceX = std::min(sourceWidth - 1, x * sourceWidth / displayWidth);
+            destination[x * 4 + 0] = source[sourceX * 4 + 2];
+            destination[x * 4 + 1] = source[sourceX * 4 + 1];
+            destination[x * 4 + 2] = source[sourceX * 4 + 0];
+            destination[x * 4 + 3] = source[sourceX * 4 + 3];
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g.canvasOverlayMu);
+        g.canvasOverlayPixels = std::move(bgra);
+        g.canvasOverlayLeft = std::max(0, left);
+        g.canvasOverlayTop = std::max(0, top);
+        g.canvasOverlayWidth = displayWidth;
+        g.canvasOverlayHeight = displayHeight;
+        g.canvasOverlayVisible.store(1, std::memory_order_release);
+    }
+    g.overlayDirty.store(1, std::memory_order_release);
+    return 1;
 }
 
 int tw_set_pointer_lock(int on) {
@@ -6096,6 +6255,7 @@ int tw_set_fullscreen(int mode, int width, int height, int refreshHz) {
 }
 
 void tw_shutdown(void) {
+    tw_canvas_overlay_set(0, 0, 0, 0, 0, 0, 0, nullptr, 0);
     {
         std::lock_guard<std::mutex> lock(g.mu);
         if (!g.workerStarted) {

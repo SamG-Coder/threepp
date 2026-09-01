@@ -140,6 +140,9 @@ constexpr uint32_t OP_RTX_DYNAMIC_MESH_DESTROY = 94;
 // renderPreset, useAutoMask; f32 skinStructureStrength; u32 performanceMode;
 // then 102x f32 common constants and 7x u32 common-constant flags.
 constexpr uint32_t OP_DLSS_NR_EVALUATE = 95;
+// version, visible, left, top, displayWidth, displayHeight, sourceWidth,
+// sourceHeight, rowBytes, byteLength, RGBA8 bytes
+constexpr uint32_t OP_CANVAS_OVERLAY = 96;
 // DLSS Frame Generation resource tag/options command, replayed after rendering
 // and before OP_SUBMIT/OP_PRESENT. Payload:
 // u32 encoder, viewport; 4x {texture, VkImageLayout, left, top, width, height};

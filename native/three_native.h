@@ -35,6 +35,7 @@ TN_API void tn_runtime_reset(void);
 TN_API float tn_runtime_aspect(void);
 TN_API int tn_runtime_attach_host(void* parent_hwnd, int x, int y, int width, int height);
 TN_API void* tn_runtime_hwnd(void);
+TN_API int tn_runtime_set_pointer_lock(int enabled, int unadjusted_movement);
 TN_API void tn_runtime_set_loading(int enabled, const char* stage);
 TN_API void tn_runtime_set_overlay(int enabled);
 TN_API int tn_runtime_overlay_open(void);
