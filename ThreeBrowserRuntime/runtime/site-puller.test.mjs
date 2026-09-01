@@ -57,6 +57,51 @@ test("inline module references resolve from the document and rewrite from the ex
   }
 });
 
+test("preserves JSON module paths and import attributes", async () => {
+  const server = createServer((request, response) => {
+    if (request.url === "/") {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end('<script type="module" src="./app.js"></script>');
+      return;
+    }
+    if (request.url === "/app.js") {
+      response.writeHead(200, { "content-type": "text/javascript" });
+      response.end('import config from "./config.json" with { type: "json" }; globalThis.config = config;');
+      return;
+    }
+    if (request.url === "/config.json") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end('{"enabled":true}');
+      return;
+    }
+    response.writeHead(404);
+    response.end("not found");
+  });
+
+  const temporaryRoot = await mkdtemp(path.join(tmpdir(), "threebrowser-site-puller-"));
+  const destination = path.join(temporaryRoot, "pull");
+  try {
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    assert.equal(typeof address, "object");
+
+    await execFileAsync(process.execPath, [puller, `http://127.0.0.1:${address.port}/`, destination]);
+
+    const app = await readFile(path.join(destination, "app.mjs"), "utf8");
+    assert.match(app, /from "\.\/config\.json" with \{ type: "json" \}/);
+    assert.equal(await readFile(path.join(destination, "config.json"), "utf8"), '{"enabled":true}');
+    const manifest = JSON.parse(await readFile(path.join(destination, "threebrowser.pull.json"), "utf8"));
+    assert.ok(manifest.files.some(file => file.path === "config.json" && file.type === "json"));
+    assert.ok(!manifest.files.some(file => file.path === "config.json.mjs"));
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
 test("preserves the requested query string after a document redirect", async () => {
   const server = createServer((request, response) => {
     if (request.url === "/?tile=nyc") {

@@ -125,6 +125,13 @@ registerHooks({
     // A browser always treats files reached by an ESM import as modules. Node
     // otherwise interprets .js according to a nearby package.json.
     const filePath = url.startsWith("file:") ? fileURLToPath(url) : "";
+    // Pulls produced before JSON imports retained their real extension contain
+    // raw JSON in a `.json.mjs` file. Honor the import attribute for those
+    // cached projects so they remain launchable without modifying third-party
+    // source or requiring an immediate re-pull.
+    if (filePath && context.importAttributes?.type === "json" && /\.json\.mjs$/i.test(filePath)) {
+      return { format: "json", source: fs.readFileSync(filePath, "utf8"), shortCircuit: true };
+    }
     const dependencyPath = filePath.includes(`${path.sep}node_modules${path.sep}`);
     if (filePath && !dependencyPath && /\.(?:js|jsx)$/i.test(filePath)) {
       return { format: "module", source: fs.readFileSync(filePath, "utf8"), shortCircuit: true };

@@ -119,6 +119,11 @@ function resolveReference(value, baseURL, allowAssetLiteral = false, documentRel
 
 function hintFor(value, fallback = "asset") {
   if (/\.map(?:[?#].*)?$/i.test(value)) return "map";
+  // JSON modules keep their real extension so Node can validate and load
+  // `with { type: "json" }` imports. Treating every static import as a
+  // JavaScript module produces a raw `file.json.mjs` file whose extension is
+  // incompatible with the preserved JSON import attribute.
+  if (/\.json(?:[?#].*)?$/i.test(value)) return "json";
   if (/\.(?:m?js|jsx|ts|tsx)(?:[?#].*)?$/i.test(value)) return "module";
   if (/\.css(?:[?#].*)?$/i.test(value)) return "style";
   return fallback;
