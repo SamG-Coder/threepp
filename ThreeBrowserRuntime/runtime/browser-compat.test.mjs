@@ -246,6 +246,37 @@ test("Web Audio compressor and external ShaderMaterial subclasses follow browser
     assert.equal(submissions, 2);
     bridge.hide();
     assert.equal(document.getElementById("threebrowser-html-interaction-overlay"), null);
+
+    globalThis.__threeBrowserHydrateDocument(`
+      <aside class="water-controls">
+        <div id="settings-header">Water settings</div>
+        <select aria-label="Quality"><option value="high">High</option></select>
+        <input type="range" aria-label="Wind speed">
+      </aside>
+      <div id="hud-overlay"><button id="audio-toggle" aria-label="Toggle audio">Audio</button></div>
+      <div class="fps-counter" aria-label="Frames per second"><span data-fps>72</span><span>FPS</span></div>
+    `);
+    document.getElementById("settings-header").addEventListener("click", () => {});
+    document.getElementById("audio-toggle").addEventListener("click", () => {});
+    assert.equal(interactions.collectHtmlInteractionGate(document), null,
+      "permanent settings controls must not become a page-input gate");
+    assert.equal(interactions.collectHtmlStatusHud(document).value, "72");
+    assert.equal(bridge.update(1, true), true);
+    assert.equal(bridge.mode, "status");
+    assert.equal(bridge.canvas.width, 188);
+    assert.equal(bridge.consumeNativeInput({ type: "pointerdown", code: 1, x: 30, y: 30 }), false,
+      "a status HUD must not capture native input");
+    bridge.hide();
+
+    globalThis.__threeBrowserHydrateDocument(`
+      <div id="title-screen" data-screen="start"><div id="start-anywhere">Start</div></div>
+    `);
+    const startAnywhere = document.getElementById("start-anywhere");
+    startAnywhere.addEventListener("click", () => clicks++);
+    const syntheticGate = interactions.collectHtmlInteractionGate(document);
+    assert.equal(syntheticGate.controls[0].label, "Play");
+    assert.equal(interactions.activateHtmlControl(syntheticGate.controls[0]), true);
+    assert.equal(clicks, 3);
   } finally {
     host.stop();
   }

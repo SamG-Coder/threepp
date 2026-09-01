@@ -47,6 +47,17 @@ function connectedToDocument(element, document) {
   return false;
 }
 
+function elementLooksLikeGate(element) {
+  const role = normalizedText(attribute(element, "role")).toLowerCase();
+  if (element?.dataset?.screen != null || role === "dialog" || role === "alertdialog" ||
+      String(attribute(element, "aria-modal")).toLowerCase() === "true") return true;
+  const identityWords = [normalizedText(element?.id).toLowerCase(), ...classTokens(element)]
+    .flatMap(tokenWords);
+  if (identityWords.some(word => ["hud", "toolbar", "toolbox", "widget"].includes(word))) return false;
+  return identityWords.some(word =>
+    ["blocker", "overlay", "modal", "dialog", "gate", "splash", "screen", "menu"].includes(word));
+}
+
 export function elementIsVisible(element, document = element?.ownerDocument) {
   if (!element || !connectedToDocument(element, document)) return false;
   for (let node = element; node && node !== document; node = node.parentNode) {
@@ -64,14 +75,7 @@ function gateRootFor(element, document) {
   let form = null;
   for (let node = element; node && node !== document; node = node.parentNode) {
     if (node.tagName === "FORM") form = node;
-    const id = normalizedText(node.id).toLowerCase();
-    const role = normalizedText(attribute(node, "role")).toLowerCase();
-    const classes = classTokens(node);
-    const looksLikeGate = node.dataset?.screen != null || role === "dialog" || role === "alertdialog" ||
-      String(attribute(node, "aria-modal")).toLowerCase() === "true" ||
-      /(?:blocker|overlay|modal|dialog|gate|splash|screen|menu)/.test(id) ||
-      classes.some(token => /(?:blocker|overlay|modal|dialog|gate|splash|screen|menu)/.test(token));
-    if (looksLikeGate) return node;
+    if (elementLooksLikeGate(node)) return node;
   }
   return form;
 }
@@ -173,12 +177,36 @@ function descendantControls(document) {
   return result;
 }
 
-function rootAction(root) {
+export function collectHtmlStatusHud(document) {
+  const candidates = [];
+  for (const tag of ["div", "span", "output"]) {
+    for (const element of document?.querySelectorAll?.(tag) || []) {
+      if (!elementIsVisible(element, document) || element.dataset?.threeBrowserOwned) continue;
+      const identity = normalizedText([
+        attribute(element, "aria-label"), element.id, element.className,
+      ].join(" ")).toLowerCase();
+      if (!/(?:\bfps\b|frames? per second)/.test(identity)) continue;
+      const text = normalizedText(element.textContent);
+      const match = text.match(/(?:^|\D)(\d{1,4})(?:\D|$)/);
+      if (!match) continue;
+      candidates.push({ element, kind: "fps", label: "FPS", value: match[1] });
+    }
+  }
+  if (!candidates.length) return null;
+  // Prefer the semantic container over its nested numeric span so labels and
+  // future status styling remain associated with one stable DOM root.
+  return candidates.sort((a, b) =>
+    Number(Boolean(attribute(b.element, "aria-label"))) - Number(Boolean(attribute(a.element, "aria-label"))) ||
+    b.element.children.length - a.element.children.length)[0];
+}
+
+function rootAction(element, root) {
   const active = normalizedText(root?.dataset?.screen).toLowerCase();
-  if (!root || listenerCount(root, "click") < 1 || ["loading", "error"].includes(active)) return null;
+  if (!element || !root || root.tagName === "FORM" || listenerCount(element, "click") < 1 ||
+      ["loading", "error"].includes(active)) return null;
   const label = active === "pause" || active === "paused" ? "Resume" :
     ["title", "start", "home", "welcome", "intro"].includes(active) ? "Play" : "Continue";
-  return { element: root, root, kind: "button", type: "button", label, value: "", checked: false,
+  return { element, root, kind: "button", type: "button", label, value: "", checked: false,
     disabled: false, required: false, options: [], syntheticRootAction: true };
 }
 
@@ -191,9 +219,15 @@ export function collectHtmlInteractionGate(document) {
     if (!groups.has(root)) groups.set(root, []);
     groups.get(root).push(descriptorFor(element, root));
   }
-  for (const root of document?.querySelectorAll?.("div") || []) {
-    if (!elementIsVisible(root, document) || listenerCount(root, "click") < 1) continue;
-    const action = rootAction(root);
+  for (const element of document?.querySelectorAll?.("div") || []) {
+    if (!elementIsVisible(element, document) || listenerCount(element, "click") < 1) continue;
+    // A click listener alone does not make a page-blocking action. Permanent
+    // toolbars, settings panels and collapsible headers routinely listen for
+    // clicks and must remain usable without stopping the native scene. Only
+    // synthesize an action when the listener belongs to an explicit screen,
+    // dialog, modal, overlay, splash or similarly named gate ancestor.
+    const root = gateRootFor(element, document);
+    const action = rootAction(element, root);
     if (!action) continue;
     if (!groups.has(root)) groups.set(root, []);
     groups.get(root).unshift(action);
@@ -302,6 +336,8 @@ export class HtmlInteractionBridge {
     this.trace = trace;
     this.canvas = null;
     this.context = null;
+    this.mode = null;
+    this.status = null;
     this.gate = null;
     this.signature = "";
     this.focusIndex = 0;
@@ -321,14 +357,52 @@ export class HtmlInteractionBridge {
     if (!force && now - this.lastScan < 100) return Boolean(this.gate);
     this.lastScan = now;
     const gate = collectHtmlInteractionGate(this.document);
-    const signature = this.controlSignature(gate);
+    const status = gate ? null : collectHtmlStatusHud(this.document);
+    const signature = gate ? `gate:${this.controlSignature(gate)}` :
+      status ? `status:${status.kind}:${status.value}:${status.label}` : "";
     if (!gate) {
-      this.hide();
-      return false;
+      if (!status) {
+        this.hide();
+        return false;
+      }
+      this.gate = null;
+      this.status = status;
+      this.mode = "status";
+      if (!this.canvas) this.mount();
+      if (signature !== this.signature || this.dirty) {
+        if (this.trace && status.element !== this.tracedStatusElement) {
+          console.error("ThreeBrowser HTML status HUD selected", {
+            kind: status.kind, value: status.value, label: status.label,
+            id: status.element?.id || "", className: status.element?.className || "",
+          });
+          this.tracedStatusElement = status.element;
+        }
+        this.signature = signature;
+        this.render();
+      }
+      return true;
     }
     this.gate = gate;
+    this.status = null;
+    this.mode = "gate";
     if (!this.canvas) this.mount();
     if (signature !== this.signature || this.dirty) {
+      if (this.trace && signature !== this.signature) {
+        console.error("ThreeBrowser HTML interaction gate selected", {
+          root: gate.root?.tagName,
+          id: gate.root?.id || "",
+          className: gate.root?.className || "",
+          screen: gate.screen,
+          controls: gate.controls.map(control => ({
+            tag: control.element?.tagName,
+            id: control.element?.id || "",
+            className: control.element?.className || "",
+            kind: control.kind,
+            label: control.label,
+            synthetic: Boolean(control.syntheticRootAction),
+          })),
+        });
+      }
       this.signature = signature;
       this.focusIndex = Math.max(0, Math.min(this.focusIndex, gate.controls.length - 1));
       this.render();
@@ -344,12 +418,12 @@ export class HtmlInteractionBridge {
     canvas.style.left = "0";
     canvas.style.top = "0";
     canvas.style.zIndex = "2147483647";
-    canvas.style.pointerEvents = "auto";
+    canvas.style.pointerEvents = this.mode === "gate" ? "auto" : "none";
     this.canvas = canvas;
     this.context = canvas.getContext("2d");
     this.document.body.appendChild(canvas);
     canvas.focus?.();
-    if (this.trace) console.error("ThreeBrowser HTML interaction gate mounted");
+    if (this.trace) console.error(`ThreeBrowser HTML ${this.mode || "overlay"} canvas mounted`);
   }
 
   hide() {
@@ -363,9 +437,11 @@ export class HtmlInteractionBridge {
     this.canvas = null;
     this.context = null;
     this.gate = null;
+    this.status = null;
+    this.mode = null;
     this.signature = "";
     this.hitRegions = [];
-    if (this.trace) console.error("ThreeBrowser HTML interaction gate dismissed");
+    if (this.trace) console.error("ThreeBrowser HTML overlay canvas dismissed");
   }
 
   layout() {
@@ -381,7 +457,15 @@ export class HtmlInteractionBridge {
   }
 
   render() {
-    if (!this.context || !this.canvas || !this.gate) return;
+    if (!this.context || !this.canvas) return;
+    if (this.mode === "status") {
+      this.renderStatus();
+      return;
+    }
+    if (!this.gate) return;
+    this.canvas.style.left = "0";
+    this.canvas.style.top = "0";
+    this.canvas.style.pointerEvents = "auto";
     const layout = this.layout();
     this.canvas.width = layout.width;
     this.canvas.height = layout.height;
@@ -441,6 +525,34 @@ export class HtmlInteractionBridge {
       context.font = "12px sans-serif";
       context.fillText("Tab to navigate · Enter to activate", layout.panelX + 28, layout.panelY + layout.panelHeight - 14);
     }
+    this.dirty = false;
+  }
+
+  renderStatus() {
+    if (!this.context || !this.canvas || !this.status) return;
+    const width = 188;
+    const height = 74;
+    this.canvas.width = width;
+    this.canvas.height = height;
+    this.canvas.style.left = "20px";
+    this.canvas.style.top = "20px";
+    this.canvas.style.width = `${width}px`;
+    this.canvas.style.height = `${height}px`;
+    this.canvas.style.pointerEvents = "none";
+    const context = this.context;
+    context.clearRect(0, 0, width, height);
+    context.fillStyle = "rgba(6, 14, 24, 0.88)";
+    roundedRect(context, 0, 0, width, height, 13);
+    context.fillStyle = "rgba(125, 188, 236, 0.4)";
+    context.fillRect(0, height - 1, width, 1);
+    const numeric = Number(this.status.value);
+    context.fillStyle = numeric < 28 ? "#ff6f6f" : numeric < 50 ? "#ffc266" : "#58d6a4";
+    context.font = "600 32px monospace";
+    context.fillText(fitText(this.status.value, 8), 18, 40);
+    context.fillStyle = "rgba(176, 198, 220, 0.9)";
+    context.font = "600 10px sans-serif";
+    context.fillText(this.status.label, 20, 60);
+    this.hitRegions = [];
     this.dirty = false;
   }
 
@@ -541,7 +653,7 @@ export class HtmlInteractionBridge {
   }
 
   consumeNativeInput(input) {
-    if (!this.canvas) return false;
+    if (!this.canvas || this.mode !== "gate") return false;
     if (input.type.startsWith("pointer") || input.type === "wheel" || input.type === "wheelhorizontal") {
       return this.handlePointer(input);
     }
