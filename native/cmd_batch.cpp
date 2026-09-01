@@ -724,6 +724,10 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
                 images.push_back(face->texture->image());
             }
             auto cube = CubeTexture::create(images);
+            // Command-buffer face uploads are RGBA8. CubeTexture's historical
+            // default is RGB, which makes OpenGL advance three bytes per texel
+            // through four-byte face data and produces diagonal/moire garbage.
+            cube->format = Format::RGBA;
             cube->colorSpace = colorSpaceFromJs(ru32(p + 28));
             cube->needsUpdate();
             Slot slot;

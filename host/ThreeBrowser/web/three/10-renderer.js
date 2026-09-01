@@ -3,6 +3,26 @@
     return globalThis.chrome?.webview?.hostObjects?.sync?.native || null;
   }
 
+  function nativeOffscreenDecision(renderer, scene, camera, target, depthClearedOverlay = false) {
+    if (!target) return "present";
+    if (!globalThis.__threeBrowserNativeRuntime) return "evaluate";
+    // A native compatibility frame presents the real perspective scene, not
+    // the EffectComposer's fullscreen shader result. Traverse that scene once
+    // so transforms/materials are synchronized, then discard the browser-only
+    // ping-pong passes. Rendering those targets natively duplicated the whole
+    // map two or more times before the one frame that was actually presented.
+    const displayFrame = globalThis.__threeBrowserDisplayFrame || 0;
+    // First-person weapons/HUDs are commonly rendered as a second perspective
+    // scene after clearDepth(). Preserve that lightweight scene preparation so
+    // the final native composite still receives its overlay handles.
+    if (depthClearedOverlay && camera?.isPerspectiveCamera) return "prepare-overlay";
+    if (!camera?.isPerspectiveCamera || renderer?._nativePreparedFrame === displayFrame) {
+      return "skip";
+    }
+    return "prepare";
+  }
+  TN._nativeOffscreenDecision = nativeOffscreenDecision;
+
   function hex(color) {
     if (color == null) return 0xffffff;
     if (typeof color === "number" && Number.isFinite(color)) return color >>> 0;
@@ -661,6 +681,9 @@
       const activeRenderTarget = arguments.length >= 3
         ? (legacyRenderTarget || null)
         : this._renderTarget;
+      const nativeOffscreen = nativeOffscreenDecision(
+        this, scene, camera, activeRenderTarget, depthClearedOverlay
+      );
       if (globalThis.process?.env?.THREEBROWSER_TRACE_RENDER) {
         globalThis.__threeBrowserRenderTargets ??= { offscreen: 0, backbuffer: 0, command: !!TN.cmd };
         if (activeRenderTarget) globalThis.__threeBrowserRenderTargets.offscreen++;
@@ -670,19 +693,8 @@
           globalThis.__threeBrowserRenderTargets.latestCamera = camera?._h || 0;
         }
       }
-      if (
-        globalThis.__threeBrowserNativeRuntime &&
-        activeRenderTarget &&
-        this._nativeOffscreenToken &&
-        scene === this._lastNativeScene &&
-        camera === this._lastNativeCamera
-      ) {
-        // ManualMSAARenderPass invokes the same full scene many times in one
-        // synchronous composer cycle. Native MSAA is configured on the window;
-        // repeating JS traversal cannot improve it and delays the next input
-        // and animation update.
-        return true;
-      }
+      if (nativeOffscreen === "skip") return true;
+      if (nativeOffscreen === "prepare") this._nativePreparedFrame = displayFrame;
       if (!this._traceRendered && globalThis.process?.env?.THREEBROWSER_TRACE_RENDER) {
         this._traceRendered = true;
         const objects = [];
@@ -913,19 +925,13 @@
         }
 
         // Offscreen passes are still evaluated on the JS side, including
-        // callbacks and transforms above, but are not separate presentable
-        // frames in the native renderer.
+        // callbacks and transforms above. Native-runtime composer passes are
+        // deliberately not rasterized: their custom fullscreen shaders cannot
+        // consume those native targets, and the final pass resolves directly
+        // to the prepared real scene.
         if (activeRenderTarget) {
-          if (hasNativeDraw) {
-            const token = {};
-            this._nativeOffscreenToken = token;
-            const clearToken = () => {
-              if (this._nativeOffscreenToken === token) this._nativeOffscreenToken = null;
-            };
-            if (typeof queueMicrotask === "function") queueMicrotask(clearToken);
-            else Promise.resolve().then(clearToken);
-          }
           if (
+            nativeOffscreen === "evaluate" &&
             hasNativeDraw && activeRenderTarget?._h && scene?._h && camera?._h &&
             TN.cmd && typeof TN.cmd.renderPass === "function"
           ) {

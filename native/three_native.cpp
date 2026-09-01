@@ -7,6 +7,7 @@
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
+#include "threepp/textures/CubeTexture.hpp"
 #ifdef THREEPP_WITH_VULKAN
 #include "threepp/renderers/VulkanRenderer.hpp"
 #endif
@@ -1608,8 +1609,19 @@ void tn_scene_set_background_texture(uint32_t sceneHandle, uint32_t textureHandl
                 return;
             }
             if (auto* scene = dynamic_cast<Scene*>(sceneSlot->object.get())) {
-                textureSlot->texture->mapping = Mapping::EquirectangularReflection;
-                textureSlot->texture->wrapS = TextureWrapping::Repeat;
+                // CubeTextureLoader has already uploaded six discrete faces.
+                // Relabeling that texture as equirectangular makes GLCubeMaps
+                // reinterpret one square face as a 2:1 panorama, producing a
+                // flat/incorrect sky. Only ordinary 2D panoramas need the
+                // equirectangular conversion path.
+                if (dynamic_cast<CubeTexture*>(textureSlot->texture.get())) {
+                    textureSlot->texture->mapping = Mapping::CubeReflection;
+                    textureSlot->texture->wrapS = TextureWrapping::ClampToEdge;
+                    textureSlot->texture->wrapT = TextureWrapping::ClampToEdge;
+                } else {
+                    textureSlot->texture->mapping = Mapping::EquirectangularReflection;
+                    textureSlot->texture->wrapS = TextureWrapping::Repeat;
+                }
                 scene->background = Background(textureSlot->texture);
                 markDirty();
             }

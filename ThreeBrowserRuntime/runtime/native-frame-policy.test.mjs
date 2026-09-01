@@ -42,6 +42,7 @@ test("native runtime skips composer revisits after one city prepare", () => {
   assert.equal(decide(renderer, city, perspective, target), "prepare");
   renderer._nativePreparedFrame = 4;
   assert.equal(decide(renderer, city, perspective, target), "skip");
+  assert.equal(decide(renderer, { children: [1] }, perspective, target, true), "prepare-overlay");
   assert.equal(decide(renderer, { children: [] }, ortho, target), "skip");
   assert.equal(decide(renderer, city, perspective, null), "present");
 });

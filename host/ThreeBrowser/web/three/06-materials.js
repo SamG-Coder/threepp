@@ -251,6 +251,15 @@
       .join(";");
   }
 
+  function nativeShouldFlushShader(mat, displayFrame, definesChanged) {
+    if (definesChanged || mat?._nativeFlushFrame !== displayFrame) {
+      if (mat) mat._nativeFlushFrame = displayFrame;
+      return true;
+    }
+    return false;
+  }
+  TN._nativeShouldFlushShader = nativeShouldFlushShader;
+
   function uniformRawValue(entry) {
     if (entry == null) return undefined;
     if (typeof entry === "object" && "value" in entry) return entry.value;
@@ -862,7 +871,11 @@
         // Three.js applications commonly mutate material.defines directly and
         // only set needsUpdate afterwards. Compare the effective preprocessor
         // state at render time so native ShaderMaterial follows those changes.
-        if (this.__h && this._nativeDefinesSignature !== shaderDefinesSignature(this)) {
+        const definesChanged = !!this.__h &&
+          this._nativeDefinesSignature !== shaderDefinesSignature(this);
+        const displayFrame = globalThis.__threeBrowserDisplayFrame || 0;
+        if (!nativeShouldFlushShader(this, displayFrame, definesChanged)) return;
+        if (definesChanged) {
           pushShaderSource(this);
         }
         flushShaderUniforms(this);
