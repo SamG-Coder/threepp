@@ -546,16 +546,20 @@ export function createWaterMaterial(heightMap, persistentFoamSample = null) {
     vec3(0.93, 0.95, 0.97),
     saturate(young.mul(0.75).add(live.mul(0.45))),
   );
-  const viewDirection = normalize(cameraPosition.sub(positionWorld));
   const waterNormal = normalize(vec3(waves.derivativeX.negate(), float(1), waves.derivativeZ.negate()));
   const foamBump = bumpMap(
     foam.mul(0.42).add(live.mul(0.22)).add(young.mul(mass).mul(0.12)),
     mix(0.22, 0.85, saturate(live.add(young.mul(0.6)))),
   );
-  const fresnel = pow(saturate(float(1).sub(abs(dot(waterNormal, viewDirection)))), 5);
+  const shadedNormal = normalize(mix(waterNormal, foamBump, saturate(foam.mul(0.7).add(live.mul(0.2)))));
+  const toSun = normalize(vec3(-48, 54, 82));
+  const viewDir = normalize(cameraPosition.sub(positionWorld));
+  const sunSpec = pow(saturate(dot(shadedNormal, normalize(toSun.add(viewDir)))), 72)
+    .mul(float(1).sub(foam.mul(0.65)))
+    .mul(0.42);
   const material = new THREE.MeshStandardNodeMaterial({
     metalness: 0,
-    roughness: 0.08,
+    roughness: 0.22,
     transparent: true,
     depthWrite: true,
     side: THREE.FrontSide,
@@ -565,11 +569,12 @@ export function createWaterMaterial(heightMap, persistentFoamSample = null) {
   material.envMapIntensity = 0;
   material.positionNode = positionLocal.add(vec3(waves.chopX, waves.height, waves.chopZ));
   material.colorNode = mix(waterColor, foamColor, foam);
-  material.normalNode = normalize(mix(waterNormal, foamBump, saturate(foam.mul(0.7).add(live.mul(0.2)))));
-  material.roughnessNode = mix(float(0.06), mix(float(0.28), float(0.46), young), foam);
+  material.emissiveNode = vec3(1, 0.9, 0.72).mul(sunSpec);
+  material.normalNode = shadedNormal;
+  material.roughnessNode = mix(float(0.18), mix(float(0.32), float(0.48), young), foam);
   material.opacityNode = saturate(
-    mix(float(0.12), float(0.8), optical).add(fresnel.mul(0.18)).add(foam.mul(0.62)),
-  ).mul(max(coverage, foam.mul(0.9))).mul(planeFade);
+    mix(float(0.2), float(0.84), optical).add(foam.mul(0.4)),
+  ).mul(coverage).mul(planeFade);
   return tag(material, 0, { water: true, rtxIgnore: true });
 }
 
