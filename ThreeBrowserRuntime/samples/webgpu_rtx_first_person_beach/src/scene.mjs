@@ -1,10 +1,14 @@
 import * as THREE from "three/webgpu";
+import { createBeachFoamField } from "./foam-field.mjs";
 import {
+  breakingInjectionNode,
   createBeachTerrainMaterial,
   createFrondMaterial,
   createMappedMaterial,
   createSkyMaterial,
   createWaterMaterial,
+  foamVelocityNode,
+  waterTime,
 } from "./materials.mjs";
 import {
   WATER_LEVEL,
@@ -60,11 +64,12 @@ function createLighting(scene) {
   return { hemi, sun, bounce };
 }
 
-function createWater(scene, heightMap) {
+function createWater(scene, heightMap, foamField) {
   const geometry = new THREE.PlaneGeometry(320, 280, 180, 140);
   geometry.rotateX(-Math.PI * 0.5);
   geometry.translate(0, 0, 78);
-  const water = new THREE.Mesh(geometry, createWaterMaterial(heightMap));
+  const sample = foamField ? point => foamField.sampleNode(point) : null;
+  const water = new THREE.Mesh(geometry, createWaterMaterial(heightMap, sample));
   water.name = "Displaced tropical water";
   water.position.y = WATER_LEVEL;
   water.renderOrder = 4;
@@ -72,6 +77,16 @@ function createWater(scene, heightMap) {
   water.userData.rtxIgnore = true;
   scene.add(water);
   return water;
+}
+
+function preRollFoam(foamField, seconds = 4.2) {
+  const step = 1 / 30;
+  const previous = waterTime.value;
+  for (let elapsed = 0; elapsed < seconds; elapsed += step) {
+    waterTime.value = previous + elapsed;
+    foamField.update(step);
+  }
+  waterTime.value = previous + seconds;
 }
 
 function addPalm(group, maps, x, z, scale, yaw, random) {
@@ -192,7 +207,7 @@ export function createBeachEnvironment(renderer) {
   return target;
 }
 
-export async function buildBeachScene(scene, maps) {
+export async function buildBeachScene(scene, maps, renderer) {
   const sky = createSky(scene);
   const lights = createLighting(scene);
   const heightMap = createTerrainHeightTexture(THREE);
@@ -205,7 +220,20 @@ export async function buildBeachScene(scene, maps) {
   terrain.castShadow = true;
   scene.add(terrain);
 
-  const water = createWater(scene, heightMap);
+  const foamField = createBeachFoamField(renderer, {
+    injectionNode: breakingInjectionNode,
+    velocityNode: foamVelocityNode,
+    size: 512,
+    worldSize: 320,
+    originX: 0,
+    originZ: 78,
+    stepHz: 30,
+    decaySeconds: 6.4,
+    spread: 1.25,
+  });
+  foamField.clear();
+  preRollFoam(foamField);
+  const water = createWater(scene, heightMap, foamField);
   const dressing = new THREE.Group();
   dressing.name = "Beach dressing";
   scene.add(dressing);
@@ -241,6 +269,7 @@ export async function buildBeachScene(scene, maps) {
     lights,
     terrain,
     water,
+    foamField,
     dressing,
     palms,
     rocks,

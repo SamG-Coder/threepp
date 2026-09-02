@@ -261,6 +261,12 @@
       "bytes": 0
     },
     {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/src/foam-field.mjs",
+      "path": "src/foam-field.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
       "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/src/main.mjs",
       "path": "src/main.mjs",
       "type": "module",

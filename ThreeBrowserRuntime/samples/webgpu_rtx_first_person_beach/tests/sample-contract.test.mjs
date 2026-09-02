@@ -28,6 +28,7 @@ test("manifest registers a portable WebGPU first-person beach", async () => {
     "index.html",
     "site-entry.mjs",
     "src/main.mjs",
+    "src/foam-field.mjs",
     "src/tile-relief.mjs",
     "src/native-rtx-renderer.mjs",
     "assets/textures/dry-sand-albedo.png",
@@ -49,6 +50,7 @@ test("main wires first-person controls and hybrid RTX lighting without HTML over
   assert.match(main, /evaluateRayLighting/);
   assert.match(main, /collectStaticBeachScene/);
   assert.match(main, /loadAllTileMaps/);
+  assert.match(main, /foamField\?\.update/);
   assert.match(main, /\.present\(/);
   assert.match(main, /renderRaster\(/);
   assert.doesNotMatch(main, /OrbitControls|PointerLockControls|FlyControls/);
@@ -56,6 +58,28 @@ test("main wires first-person controls and hybrid RTX lighting without HTML over
   assert.doesNotMatch(main, /innerHTML/);
   assert.doesNotMatch(html, /<(?:div|aside|section|header|footer|button|input)\b/i);
   assert.ok((main.match(/\.present\(/g) ?? []).length >= 1);
+});
+
+test("beach water keeps its Gerstner mesh and advects persistent foam", async () => {
+  const [scene, materials, foamField, main] = await Promise.all([
+    load("src/scene.mjs"),
+    load("src/materials.mjs"),
+    load("src/foam-field.mjs"),
+    load("src/main.mjs"),
+  ]);
+  assert.match(scene, /PlaneGeometry\(320, 280, 180, 140\)/);
+  assert.match(scene, /createBeachFoamField/);
+  assert.match(scene, /breakingInjectionNode/);
+  assert.match(scene, /foamVelocityNode/);
+  assert.match(scene, /preRollFoam/);
+  assert.match(materials, /foldingStrain/);
+  assert.match(materials, /foamLaceNode/);
+  assert.match(materials, /foamSourceFromWaves/);
+  assert.match(materials, /createWaterMaterial\(heightMap, persistentFoamSample/);
+  assert.match(foamField, /sampleVelocity/);
+  assert.match(foamField, /resetParcel/);
+  assert.match(main, /buildBeachScene\(scene, maps, renderer\)/);
+  assert.doesNotMatch(scene, /new THREE\.Water|OceanGeometry|WaterMesh/);
 });
 
 test("every tile that needs relief ships albedo, height and normal maps", async () => {

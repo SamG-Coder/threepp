@@ -7,10 +7,14 @@ import {
   dot,
   float,
   floor,
+  fwidth,
+  length,
   max,
+  min,
   mix,
   mx_fractal_noise_float,
   mx_noise_float,
+  mx_worley_noise_vec2,
   normalMap,
   normalize,
   positionLocal,
@@ -23,6 +27,7 @@ import {
   uniform,
   vec2,
   vec3,
+  vec4,
 } from "three/tsl";
 import { HEIGHT_BOUNDS, WATER_LEVEL } from "./terrain.mjs";
 export const waterTime = uniform(0);
@@ -239,18 +244,213 @@ function sampleWaves(point, timeNode) {
   let derivativeZ = float(0);
   let chopX = float(0);
   let chopZ = float(0);
+  let velX = float(0);
+  let velZ = float(0);
+  let horizontalXX = float(0);
+  let horizontalXZ = float(0);
+  let horizontalZZ = float(0);
+  let divergence = float(0);
+  let curvature = float(0);
+  let front = float(0);
   for (const wave of WAVES) {
     const phase = wavePhase(point, wave, timeNode);
     const waveSin = sin(phase);
     const waveCos = cos(phase);
     const amplitude = envelope.mul(wave.amplitude);
+    const k = wave.frequency;
+    const omega = wave.speed;
     height = height.add(waveSin.mul(amplitude));
-    derivativeX = derivativeX.add(waveCos.mul(amplitude).mul(wave.frequency * wave.x));
-    derivativeZ = derivativeZ.add(waveCos.mul(amplitude).mul(wave.frequency * wave.z));
+    derivativeX = derivativeX.add(waveCos.mul(amplitude).mul(k * wave.x));
+    derivativeZ = derivativeZ.add(waveCos.mul(amplitude).mul(k * wave.z));
     chopX = chopX.add(waveCos.mul(amplitude).mul(wave.chop * wave.x));
     chopZ = chopZ.add(waveCos.mul(amplitude).mul(wave.chop * wave.z));
+    velX = velX.add(waveSin.mul(amplitude).mul(-wave.chop * omega * wave.x));
+    velZ = velZ.add(waveSin.mul(amplitude).mul(-wave.chop * omega * wave.z));
+    const compression = waveSin.mul(amplitude).mul(wave.chop * k);
+    horizontalXX = horizontalXX.add(compression.mul(wave.x * wave.x));
+    horizontalXZ = horizontalXZ.add(compression.mul(wave.x * wave.z));
+    horizontalZZ = horizontalZZ.add(compression.mul(wave.z * wave.z));
+    divergence = divergence.add(waveCos.mul(amplitude).mul(-wave.chop * omega * k));
+    curvature = curvature.add(waveSin.mul(amplitude).mul(-k * k));
+    const travelSign = Math.sign(omega) || 1;
+    front = front.add(max(waveCos.mul(travelSign), float(0)).mul(amplitude).mul(k));
   }
-  return { height, derivativeX, derivativeZ, chopX, chopZ, envelope };
+  const jacobianXX = float(1).sub(horizontalXX);
+  const jacobianXZ = horizontalXZ.negate();
+  const jacobianZZ = float(1).sub(horizontalZZ);
+  const eigenGap = jacobianXX.sub(jacobianZZ).mul(jacobianXX.sub(jacobianZZ))
+    .add(jacobianXZ.mul(jacobianXZ).mul(4)).sqrt();
+  const minimumStretch = jacobianXX.add(jacobianZZ).sub(eigenGap).mul(0.5);
+  const foldingStrain = float(1).sub(minimumStretch).max(0);
+  const slope = length(vec2(derivativeX, derivativeZ));
+  return {
+    height,
+    derivativeX,
+    derivativeZ,
+    chopX,
+    chopZ,
+    envelope,
+    velX,
+    velZ,
+    divergence,
+    curvature,
+    foldingStrain,
+    slope,
+    front,
+  };
+}
+
+function streamCurl(point, scale, speed, strength, epsilon) {
+  const psi = (px, pz) => mx_noise_float(vec3(
+    px.mul(scale),
+    waterTime.mul(speed),
+    pz.mul(scale * 0.83),
+  ));
+  const eps = float(epsilon);
+  const dpsidz = psi(point.x, point.z.add(eps)).sub(psi(point.x, point.z.sub(eps)));
+  const dpsidx = psi(point.x.add(eps), point.z).sub(psi(point.x.sub(eps), point.z));
+  const inv = float(strength / (2 * epsilon));
+  return vec2(dpsidz.mul(inv), dpsidx.negate().mul(inv));
+}
+
+export function foamVelocityNode(point) {
+  const waves = sampleWaves(point, waterTime);
+  const particle = vec2(waves.velX, waves.velZ);
+  const curl = streamCurl(point, 0.046, 0.031, 0.36, 0.7)
+    .add(streamCurl(point, 0.11, 0.054, 0.2, 0.4));
+  const residual = vec2(0.02, -0.18).mul(waves.envelope);
+  return particle.add(curl).add(residual);
+}
+
+function crestFrame(point) {
+  const along = point.x.mul(0.94).add(point.z.mul(0.34));
+  const across = point.x.mul(-0.34).add(point.z.mul(0.94));
+  return { along, across };
+}
+
+export function foamSourceFromWaves(point, waves) {
+  const surf = smoothstep(float(4.2), float(9.5), point.z)
+    .mul(float(1).sub(smoothstep(float(17), float(28), point.z)));
+  const shoal = float(1).add(surf.mul(0.55));
+  const foldSignal = smoothstep(0.02, 0.056, waves.foldingStrain.mul(shoal));
+  const steepSignal = smoothstep(0.048, 0.135, waves.slope.mul(shoal));
+  const compressSignal = smoothstep(0.008, 0.042, waves.divergence.negate().mul(shoal));
+  const frontSignal = smoothstep(0.014, 0.08, waves.front.mul(shoal));
+  const crestSignal = smoothstep(0.012, 0.052, waves.curvature.negate().mul(shoal));
+  const breaker = foldSignal.mul(mix(float(0.28), float(1), frontSignal))
+    .add(steepSignal.mul(frontSignal).mul(0.7))
+    .add(compressSignal.mul(frontSignal).mul(0.38))
+    .add(crestSignal.mul(frontSignal).mul(foldSignal).mul(0.45));
+  const { along, across } = crestFrame(point);
+  const warp = mx_fractal_noise_float(
+    vec3(along.mul(0.062), waterTime.mul(0.016), across.mul(0.17))
+      .add(vec3(2.1, 0.4, -1.6)),
+    3,
+    2.05,
+    0.52,
+  );
+  const patch = mx_fractal_noise_float(
+    vec3(
+      along.mul(0.14).add(warp.mul(0.7)),
+      0.22,
+      across.mul(0.042).add(warp.mul(-0.5)),
+    ).add(vec3(waterTime.mul(0.017), 0, waterTime.mul(-0.009))),
+    3,
+    2.07,
+    0.5,
+  ).mul(0.5).add(0.5);
+  const gaps = mx_noise_float(vec3(
+    along.mul(0.23).add(warp.mul(0.42)),
+    1.8,
+    across.mul(0.055).add(waterTime.mul(-0.008)),
+  ));
+  const fatness = mix(
+    float(0.42),
+    float(1.45),
+    mx_noise_float(vec3(along.mul(0.028), 2.4, across.mul(0.08))).mul(0.5).add(0.5),
+  );
+  const chunk = smoothstep(0.4, 0.74, patch).mul(smoothstep(-0.08, 0.38, gaps));
+  const speckle = smoothstep(0.64, 0.9, patch);
+  const entrainment = chunk.mul(0.84).add(speckle.mul(0.38)).saturate();
+  const coverage = min(waves.envelope.mul(0.8).add(surf.mul(0.38)), float(1));
+  return max(
+    breaker.mul(entrainment).mul(fatness).mul(coverage).mul(2.45),
+    float(0),
+  );
+}
+
+export function breakingInjectionNode(point) {
+  return foamSourceFromWaves(point, sampleWaves(point, waterTime));
+}
+
+function foamLaceNode(mass, age, parcel, live) {
+  const warpA = mx_noise_float(vec3(parcel.x.mul(0.052), 0.4, parcel.y.mul(0.047))).mul(0.9);
+  const warpB = mx_noise_float(vec3(parcel.y.mul(0.108), 1.6, parcel.x.mul(0.09))).mul(0.38);
+  const warped = parcel.add(vec2(warpA, warpA.mul(-0.64).add(warpB)));
+  const large = mx_worley_noise_vec2(warped.mul(vec2(0.108, 0.128)), 0.94);
+  const medium = mx_worley_noise_vec2(
+    warped.mul(vec2(0.27, 0.232)).add(vec2(12.2, -7.4)),
+    0.9,
+  );
+  const small = mx_worley_noise_vec2(
+    warped.mul(vec2(0.66, 0.74)).add(vec2(-3.8, 19.1)),
+    0.86,
+  );
+  const ridgeL = saturate(large.y.sub(large.x).mul(3.5));
+  const ridgeM = saturate(medium.y.sub(medium.x).mul(3.9));
+  const ridgeS = saturate(small.y.sub(small.x).mul(4.3));
+  const holeL = smoothstep(0.14, 0.46, large.x);
+  const holeM = smoothstep(0.1, 0.38, medium.x);
+  const grit = mx_fractal_noise_float(
+    vec3(warped.x.mul(1.62), 10.4, warped.y.mul(1.48)),
+    3,
+    2.11,
+    0.48,
+  ).mul(0.5).add(0.5);
+  const tendrils = saturate(
+    float(1).sub(abs(mx_noise_float(vec3(warped.x.mul(0.84), 6.1, warped.y.mul(1.05)))).mul(1.85)),
+  );
+  const branch = saturate(
+    float(1).sub(abs(mx_noise_float(vec3(warped.y.mul(0.66), 8.8, warped.x.mul(0.9)))).mul(2.2)),
+  );
+  const young = float(1).sub(smoothstep(0.0, 0.18, age));
+  const expanding = smoothstep(0.04, 0.2, age).mul(float(1).sub(smoothstep(0.28, 0.48, age)));
+  const cellular = smoothstep(0.14, 0.34, age).mul(float(1).sub(smoothstep(0.5, 0.72, age)));
+  const filament = smoothstep(0.38, 0.58, age).mul(float(1).sub(smoothstep(0.74, 0.92, age)));
+  const remnant = smoothstep(0.66, 0.86, age);
+  const whitewater = mix(ridgeS, float(1), 0.32)
+    .mul(mix(float(0.62), float(1), grit))
+    .mul(float(1).sub(holeM.mul(0.18)));
+  const expanded = mix(ridgeL, float(1).sub(holeL), 0.55)
+    .mul(mix(ridgeM, float(1), 0.22))
+    .mul(mix(float(0.4), float(1), ridgeS));
+  const laceNet = ridgeL.mul(0.46).add(ridgeM.mul(0.54))
+    .mul(float(1).sub(holeL.mul(0.62)))
+    .mul(mix(float(0.22), float(1), ridgeS))
+    .mul(mix(float(0.4), float(1), tendrils));
+  const fil = ridgeM.mul(tendrils).mul(branch.add(ridgeS).mul(0.68))
+    .add(ridgeS.mul(tendrils).mul(0.52));
+  const rem = smoothstep(0.28, 0.72, ridgeM.mul(tendrils).add(ridgeS.mul(0.28)));
+  const structure = whitewater.mul(young)
+    .add(expanded.mul(expanding))
+    .add(laceNet.mul(cellular))
+    .add(fil.mul(filament))
+    .add(rem.mul(remnant));
+  const tip = smoothstep(0.38, 0.82, live);
+  const jagged = mix(float(1), mix(float(0.18), float(1.2), grit), tip.mul(young.add(0.15)));
+  const filled = mix(
+    structure.mul(jagged),
+    mix(structure, float(1), 0.28).mul(jagged),
+    young.mul(tip).mul(smoothstep(0.35, 0.9, mass)),
+  );
+  const coverage = saturate(mass.mul(mix(float(1.12), float(0.48), age)).add(tip.mul(0.5)));
+  const optical = saturate(coverage.mul(filled));
+  const footprint = fwidth(parcel.x).max(fwidth(parcel.y));
+  return mix(
+    saturate(mass.mul(0.52).add(tip.mul(0.22))),
+    optical,
+    float(1).sub(smoothstep(0.08, 0.62, footprint)),
+  );
 }
 
 function shoreWetness(point, ground, waves) {
@@ -313,24 +513,36 @@ export function createBeachTerrainMaterial(maps, heightMap) {
   return tag(material, 0.28, { terrain: true });
 }
 
-export function createWaterMaterial(heightMap) {
+export function createWaterMaterial(heightMap, persistentFoamSample = null) {
   const point = positionWorld;
   const waves = sampleWaves(point, waterTime);
   const ground = sampleGroundHeight(heightMap, point);
   const depth = waterLevel.add(waves.height).sub(ground);
   const optical = smoothstep(float(0.04), float(2.6), depth);
   const coverage = smoothstep(float(-0.03), float(0.045), depth);
-  const foamNoise = mx_fractal_noise_float(point.mul(vec3(0.19, 0.04, 0.17)), 3, 2.07, 0.5).mul(0.5).add(0.5);
-  const shoreFoam = saturate(float(1).sub(smoothstep(float(5), float(13.5), point.z)))
-    .mul(smoothstep(float(2.2), float(7.5), point.z))
-    .mul(mix(float(0.35), float(1), foamNoise));
-  const peakFoam = saturate(waves.height.mul(2.8).add(foamNoise.mul(0.22)));
-  const foam = saturate(shoreFoam.add(peakFoam.mul(waves.envelope).mul(0.35))).mul(coverage);
+  const live = foamSourceFromWaves(point, waves);
+  const field = typeof persistentFoamSample === "function"
+    ? persistentFoamSample(point)
+    : vec4(live, float(0), point.x, point.z);
+  const mass = field.x;
+  const age = field.y;
+  const parcel = field.zw;
+  const foam = foamLaceNode(mass, age, parcel, live).mul(coverage);
   const deep = vec3(0.012, 0.07, 0.12);
   const shallow = vec3(0.08, 0.32, 0.34);
   const waterColor = mix(shallow, deep, optical);
+  const young = float(1).sub(smoothstep(0.0, 0.28, age));
+  const foamColor = mix(
+    vec3(0.7, 0.81, 0.86),
+    vec3(0.93, 0.95, 0.97),
+    saturate(young.mul(0.75).add(live.mul(0.45))),
+  );
   const viewDirection = normalize(cameraPosition.sub(positionWorld));
   const waterNormal = normalize(vec3(waves.derivativeX.negate(), float(1), waves.derivativeZ.negate()));
+  const foamBump = bumpMap(
+    foam.mul(0.42).add(live.mul(0.22)).add(young.mul(mass).mul(0.12)),
+    mix(0.22, 0.85, saturate(live.add(young.mul(0.6)))),
+  );
   const fresnel = pow(saturate(float(1).sub(abs(dot(waterNormal, viewDirection)))), 5);
   const material = new THREE.MeshStandardNodeMaterial({
     metalness: 0,
@@ -343,12 +555,12 @@ export function createWaterMaterial(heightMap) {
   });
   material.envMapIntensity = 0;
   material.positionNode = positionLocal.add(vec3(waves.chopX, waves.height, waves.chopZ));
-  material.colorNode = mix(waterColor, vec3(0.86, 0.91, 0.93), foam.mul(0.82));
-  material.normalNode = waterNormal;
-  material.roughnessNode = mix(float(0.06), float(0.32), foam);
+  material.colorNode = mix(waterColor, foamColor, foam);
+  material.normalNode = normalize(mix(waterNormal, foamBump, saturate(foam.mul(0.7).add(live.mul(0.2)))));
+  material.roughnessNode = mix(float(0.06), mix(float(0.28), float(0.46), young), foam);
   material.opacityNode = saturate(
-    mix(float(0.12), float(0.8), optical).add(fresnel.mul(0.18)),
-  ).mul(coverage);
+    mix(float(0.12), float(0.8), optical).add(fresnel.mul(0.18)).add(foam.mul(0.62)),
+  ).mul(max(coverage, foam.mul(0.9)));
   return tag(material, 0, { water: true, rtxIgnore: true });
 }
 

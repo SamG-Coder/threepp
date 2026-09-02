@@ -79,7 +79,7 @@ scene.environment = environment.texture;
 scene.environmentIntensity = 0.62;
 
 const maps = await loadAllTileMaps();
-const world = await buildBeachScene(scene, maps);
+const world = await buildBeachScene(scene, maps, renderer);
 prepareRtxGuideMaterials(scene);
 
 const view = createViewState(0, -18, Math.PI, -0.05);
@@ -193,6 +193,7 @@ renderer.setAnimationLoop(() => {
   applyCamera();
   world.sky.position.copy(camera.position);
   waterTime.value += dt;
+  world.foamField?.update(dt);
 
   world.sun.updateWorldMatrix(true, false);
   world.sun.target.updateWorldMatrix(true, false);
@@ -245,5 +246,6 @@ addEventListener("resize", () => {
 });
 
 addEventListener("beforeunload", () => {
+  world.foamField?.dispose();
   rtxRenderer.dispose();
 });
