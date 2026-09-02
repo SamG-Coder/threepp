@@ -1,11 +1,14 @@
 import * as THREE from "three/webgpu";
 import {
   abs,
+  bumpMap,
   cameraPosition,
   cos,
   dot,
   float,
+  floor,
   max,
+  min,
   mix,
   mx_fractal_noise_float,
   mx_noise_float,
@@ -82,6 +85,84 @@ export async function loadAllTileMaps() {
 
 function worldUv(repeat) {
   return positionWorld.xz.mul(vec2(repeat, repeat));
+}
+
+function noise01(point, scale, seed) {
+  return mx_fractal_noise_float(
+    point.add(vec3(seed * 13.17, seed * 0.4, seed * -8.03)).mul(vec3(scale, scale * 0.18, scale * 0.94)),
+    4,
+    2.07,
+    0.51,
+  ).mul(0.5).add(0.5);
+}
+
+function rotateQuarter(uv, turns) {
+  const angle = turns.mul(1.57079632679);
+  const c = cos(angle);
+  const s = sin(angle);
+  const p = uv.sub(vec2(0.5));
+  return vec2(p.x.mul(c).sub(p.y.mul(s)), p.x.mul(s).add(p.y.mul(c))).add(vec2(0.5));
+}
+
+function variedUv(baseUv, point, cells) {
+  const cell = floor(point.xz.mul(cells));
+  const hashA = mx_noise_float(vec3(cell.x, 2.1, cell.y));
+  const hashB = mx_noise_float(vec3(cell.x.add(19.4), 5.8, cell.y.add(7.2)));
+  const turns = floor(hashA.mul(0.5).add(0.5).mul(3.99));
+  return rotateQuarter(baseUv, turns).add(vec2(hashA, hashB).mul(0.19));
+}
+
+function tileEdgeWeight(uv, width) {
+  const wrapped = uv.sub(floor(uv));
+  const edgeX = min(wrapped.x, float(1).sub(wrapped.x));
+  const edgeY = min(wrapped.y, float(1).sub(wrapped.y));
+  return float(1).sub(smoothstep(float(0), float(width), min(edgeX, edgeY)));
+}
+
+function terrainVariation(point) {
+  const patch = noise01(point, 0.021, 1);
+  const blotch = noise01(point, 0.062, 3);
+  const grain = noise01(point, 0.21, 6);
+  const blend = smoothstep(0.34, 0.66, blotch);
+  const blur = smoothstep(0.42, 0.88, noise01(point, 0.028, 8));
+  const darken = mix(float(0.74), float(1.07), patch.mul(0.7).add(grain.mul(0.3)));
+  return { patch, blotch, grain, blend, blur, darken };
+}
+
+function sampleVariedRgb(map, baseUv, point, variation, cells = 0.086) {
+  const uvA = variedUv(baseUv, point, cells);
+  const uvB = rotateQuarter(uvA, float(1)).add(vec2(0.29, 0.61));
+  const uvC = rotateQuarter(uvA, float(2)).add(vec2(0.53, 0.17));
+  const sharp = mix(texture(map, uvA).rgb, texture(map, uvB).rgb, variation.blend);
+  const rotated = mix(texture(map, uvB).rgb, texture(map, uvC).rgb, variation.blotch);
+  const soft = texture(map, baseUv.mul(0.34).add(vec2(0.11, 0.17))).rgb;
+  const interior = mix(sharp, mix(sharp, soft, 0.45), variation.blur);
+  const seam = tileEdgeWeight(uvA, 0.16);
+  return mix(interior, mix(rotated, soft, 0.62), seam);
+}
+
+function sampleVariedNormal(map, baseUv, point, variation, strength, cells = 0.086) {
+  const uvA = variedUv(baseUv, point, cells);
+  const uvB = rotateQuarter(uvA, float(1)).add(vec2(0.29, 0.61));
+  const uvC = rotateQuarter(uvA, float(2)).add(vec2(0.53, 0.17));
+  const nA = normalMap(texture(map, uvA).rgb, vec2(strength, strength));
+  const nB = normalMap(texture(map, uvB).rgb, vec2(strength, strength));
+  const nC = normalMap(texture(map, uvC).rgb, vec2(strength, strength));
+  const sharp = normalize(mix(nA, nB, variation.blend));
+  const rotated = normalize(mix(nB, nC, variation.blotch));
+  const nSoft = normalMap(
+    texture(map, baseUv.mul(0.34).add(vec2(0.11, 0.17))).rgb,
+    vec2(strength * 0.4, strength * 0.4),
+  );
+  const interior = normalize(mix(sharp, nSoft, variation.blur.mul(0.5)));
+  const seam = tileEdgeWeight(uvA, 0.16);
+  const edge = normalize(mix(rotated, nSoft, 0.6));
+  const blended = normalize(mix(interior, edge, seam));
+  const macro = bumpMap(
+    variation.patch.mul(0.16).add(variation.blotch.mul(0.07)),
+    0.48,
+  );
+  return normalize(mix(blended, macro, 0.2));
 }
 
 export function createMappedMaterial(maps, options = {}) {
@@ -191,17 +272,19 @@ export function createBeachTerrainMaterial(maps, heightMap) {
   const ground = sampleGroundHeight(heightMap, point);
   const waves = sampleWaves(point, waterTime);
   const wetness = shoreWetness(point, ground, waves).mul(float(1).sub(grassW));
-  const dryAlbedo = texture(maps["dry-sand"].albedo, dryUv).rgb;
-  const wetAlbedo = texture(maps["wet-sand"].albedo, wetUv).rgb;
-  const pebbleAlbedo = texture(maps["pebble-hash"].albedo, pebbleUv).rgb;
-  const grassAlbedo = texture(maps["dune-grass"].albedo, grassUv).rgb;
-  const dryNormal = normalMap(texture(maps["dry-sand"].normal, dryUv).rgb, vec2(0.85, 0.85));
-  const wetNormal = normalMap(texture(maps["wet-sand"].normal, wetUv).rgb, vec2(1.15, 1.15));
-  const pebbleNormal = normalMap(texture(maps["pebble-hash"].normal, pebbleUv).rgb, vec2(1.35, 1.35));
-  const grassNormal = normalMap(texture(maps["dune-grass"].normal, grassUv).rgb, vec2(0.7, 0.7));
+  const variation = terrainVariation(point);
+  const dryAlbedo = sampleVariedRgb(maps["dry-sand"].albedo, dryUv, point, variation);
+  const wetAlbedo = sampleVariedRgb(maps["wet-sand"].albedo, wetUv, point, variation);
+  const pebbleAlbedo = sampleVariedRgb(maps["pebble-hash"].albedo, pebbleUv, point, variation, 0.15);
+  const grassAlbedo = sampleVariedRgb(maps["dune-grass"].albedo, grassUv, point, variation);
+  const dryNormal = sampleVariedNormal(maps["dry-sand"].normal, dryUv, point, variation, 0.85);
+  const wetNormal = sampleVariedNormal(maps["wet-sand"].normal, wetUv, point, variation, 1.15);
+  const pebbleNormal = sampleVariedNormal(maps["pebble-hash"].normal, pebbleUv, point, variation, 1.35, 0.15);
+  const grassNormal = sampleVariedNormal(maps["dune-grass"].normal, grassUv, point, variation, 0.7);
   let albedo = mix(dryAlbedo, grassAlbedo, grassW);
   albedo = mix(albedo, wetAlbedo.mul(0.82), wetness);
   albedo = mix(albedo, pebbleAlbedo, pebbleW);
+  albedo = albedo.mul(variation.darken);
   let mappedNormal = mix(dryNormal, grassNormal, grassW);
   mappedNormal = mix(mappedNormal, wetNormal, wetness);
   mappedNormal = mix(mappedNormal, pebbleNormal, pebbleW);
@@ -210,7 +293,11 @@ export function createBeachTerrainMaterial(maps, heightMap) {
     float(0.13),
     wetness,
   );
-  const pebbleRough = mix(roughness, float(0.46), pebbleW);
+  const pebbleRough = mix(
+    mix(roughness, roughness.add(0.07), float(1).sub(variation.patch)),
+    float(0.46),
+    pebbleW,
+  );
   const material = new THREE.MeshStandardNodeMaterial({
     metalness: 0,
     roughness: 0.7,
