@@ -1,0 +1,249 @@
+import * as THREE from "three/webgpu";
+import WebGPU from "three/addons/capabilities/WebGPU.js";
+import { createViewState, stepFirstPerson, cameraOrientation } from "./first-person.mjs";
+import { loadAllTileMaps, waterTime } from "./materials.mjs";
+import {
+  NativeRtxRenderer,
+  prepareRtxGuideMaterials,
+} from "./native-rtx-renderer.mjs";
+import { collectStaticBeachScene } from "./rtx-scene.mjs";
+import { buildBeachScene, createBeachEnvironment, WATER_LEVEL, WORLD } from "./scene.mjs";
+import { terrainHeight } from "./terrain.mjs";
+
+document.title = "RTX First-Person Beach — ThreeBrowser Runtime";
+
+const MAX_INTERNAL_PIXELS = 5_300_000;
+const MAX_INTERNAL_RATIO = 2.25;
+
+function chooseInternalRatio(width, height) {
+  const budgetRatio = Math.sqrt(MAX_INTERNAL_PIXELS / Math.max(1, width * height));
+  return Math.min(MAX_INTERNAL_RATIO, budgetRatio);
+}
+
+function reportBridge(rtx) {
+  if (!rtx) {
+    console.warn("[First-Person Beach] RTX bridge unavailable; WebGPU raster remains active.");
+    return;
+  }
+  const capabilities = rtx.capabilities ?? {};
+  console.log(
+    `[First-Person Beach] adapter=${capabilities.adapterName || "unknown"}` +
+    ` · RTX=${Boolean(capabilities.rtx)}` +
+    ` · rayLighting=${typeof rtx.evaluateRayLighting === "function"}` +
+    ` · rayReflections=${typeof rtx.evaluateRayReflections === "function"}`,
+  );
+}
+
+if (!WebGPU.isAvailable()) {
+  throw new Error("First-person beach requires native WebGPU; there is no WebGL path.");
+}
+
+const renderer = new THREE.WebGPURenderer({
+  antialias: true,
+  powerPreference: "high-performance",
+  trackTimestamp: false,
+});
+const displayPixelRatio = Math.max(1, Number(globalThis.devicePixelRatio || 1));
+let internalRatio = chooseInternalRatio(innerWidth, innerHeight);
+renderer.setPixelRatio(displayPixelRatio);
+renderer.setSize(Math.max(1, innerWidth), Math.max(1, innerHeight));
+renderer.setClearColor(0x87b0d2, 1);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.12;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.autoClear = false;
+renderer.domElement.style.touchAction = "none";
+document.body.appendChild(renderer.domElement);
+await renderer.init();
+if (!renderer.backend?.isWebGPUBackend) {
+  throw new Error("WebGPURenderer did not initialize its WebGPU backend.");
+}
+renderer.backend.device?.addEventListener?.("uncapturederror", event => {
+  console.error("[Beach WebGPU]", event.error?.message || event.error || event);
+});
+
+const rtx = navigator.gpu?.threeBrowserRTX ?? null;
+reportBridge(rtx);
+console.log("[First-Person Beach] Click to lock the cursor · WASD walk · Shift sprint · X RTX");
+
+const scene = new THREE.Scene();
+scene.name = "First-person tropical beach";
+scene.background = new THREE.Color(0x87b0d2);
+scene.fog = new THREE.FogExp2(0x9ec0dc, 0.0088);
+
+const camera = new THREE.PerspectiveCamera(72, innerWidth / Math.max(1, innerHeight), 0.08, 4000);
+const environment = createBeachEnvironment(renderer);
+scene.environment = environment.texture;
+scene.environmentIntensity = 0.62;
+
+const maps = await loadAllTileMaps();
+const world = await buildBeachScene(scene, maps);
+prepareRtxGuideMaterials(scene);
+
+const view = createViewState(0, -18, Math.PI, -0.05);
+view.y = terrainHeight(view.x, view.z) + 1.64;
+camera.position.set(view.x, view.y, view.z);
+
+const keys = new Set();
+const look = { x: 0, y: 0 };
+let nativeRequested = true;
+let looking = false;
+let lastPathLabel = "";
+
+const rtxRenderer = new NativeRtxRenderer(renderer, camera, rtx);
+let nativeReady = false;
+const sunDirection = new THREE.Vector3();
+const sunTarget = new THREE.Vector3();
+
+function internalSize() {
+  return new THREE.Vector2(
+    Math.max(1, Math.round(innerWidth * internalRatio)),
+    Math.max(1, Math.round(innerHeight * internalRatio)),
+  );
+}
+
+async function configureNative() {
+  const size = internalSize();
+  rtxRenderer.resize(size.x, size.y);
+  nativeReady = false;
+  const hasRays = typeof rtx?.evaluateRayLighting === "function"
+    || typeof rtx?.evaluateRayReflections === "function";
+  if (!nativeRequested || !hasRays) return false;
+  try {
+    world.terrain.updateWorldMatrix(true, true);
+    world.dressing.updateWorldMatrix(true, true);
+    const staticScene = collectStaticBeachScene(world.staticRoots, []);
+    nativeReady = await rtxRenderer.configure(size.x, size.y, staticScene);
+  } catch (error) {
+    console.warn(`[First-Person Beach] RTX setup failed: ${error?.message || error}`);
+    nativeReady = false;
+  }
+  return nativeReady;
+}
+
+await configureNative();
+
+function applyCamera() {
+  const pose = cameraOrientation(view);
+  camera.rotation.order = "YXZ";
+  camera.rotation.x = pose.pitch;
+  camera.rotation.y = pose.yaw;
+  camera.position.set(pose.position.x, pose.position.y, pose.position.z);
+}
+
+function clampToWorld(state) {
+  state.x = THREE.MathUtils.clamp(state.x, WORLD.minX + 4, WORLD.maxX - 4);
+  state.z = THREE.MathUtils.clamp(state.z, WORLD.minZ + 4, 18);
+}
+
+const canvas = renderer.domElement;
+canvas.addEventListener("pointerdown", event => {
+  if (event.button !== 0) return;
+  looking = true;
+  canvas.setPointerCapture?.(event.pointerId);
+  canvas.requestPointerLock?.();
+});
+canvas.addEventListener("pointerup", event => {
+  looking = false;
+  canvas.releasePointerCapture?.(event.pointerId);
+});
+canvas.addEventListener("pointercancel", () => {
+  looking = false;
+});
+canvas.addEventListener("pointermove", event => {
+  const locked = document.pointerLockElement === canvas;
+  if (!looking && !locked) return;
+  look.x += event.movementX || 0;
+  look.y += event.movementY || 0;
+});
+document.addEventListener("pointerlockchange", () => {
+  if (document.pointerLockElement !== canvas) looking = false;
+});
+addEventListener("keydown", event => {
+  keys.add(event.code);
+  if (event.code === "KeyX") {
+    nativeRequested = !nativeRequested;
+    if (nativeRequested) configureNative();
+    else nativeReady = false;
+    console.log(`[First-Person Beach] RTX requested=${nativeRequested}`);
+  }
+});
+addEventListener("keyup", event => keys.delete(event.code));
+
+let previous = performance.now();
+renderer.setAnimationLoop(() => {
+  const now = performance.now();
+  const dt = Math.min(0.05, (now - previous) / 1000);
+  previous = now;
+  stepFirstPerson(view, {
+    forward: Number(keys.has("KeyW") || keys.has("ArrowUp")),
+    back: Number(keys.has("KeyS") || keys.has("ArrowDown")),
+    left: Number(keys.has("KeyA") || keys.has("ArrowLeft")),
+    right: Number(keys.has("KeyD") || keys.has("ArrowRight")),
+    sprint: keys.has("ShiftLeft") || keys.has("ShiftRight"),
+    lookX: look.x,
+    lookY: look.y,
+  }, terrainHeight, WATER_LEVEL, dt);
+  look.x = 0;
+  look.y = 0;
+  clampToWorld(view);
+  view.y = terrainHeight(view.x, view.z) + 1.64;
+  applyCamera();
+  world.sky.position.copy(camera.position);
+  waterTime.value += dt;
+
+  world.sun.updateWorldMatrix(true, false);
+  world.sun.target.updateWorldMatrix(true, false);
+  world.sun.getWorldPosition(sunDirection);
+  world.sun.target.getWorldPosition(sunTarget);
+  sunDirection.sub(sunTarget).normalize();
+
+  const frameOptions = {
+    sunDirection,
+    sunIntensity: 3.4,
+    shadowStrength: 0.26,
+    aoStrength: 0.1,
+    aoRadius: 1.15,
+    maxDistance: 180,
+    rayBias: 0.022,
+    reflectionStrength: 0.7,
+    environmentColor: [0.47, 0.69, 0.92],
+    environmentIntensity: 0.8,
+  };
+
+  let rendered = false;
+  if (nativeRequested && nativeReady) {
+    rendered = rtxRenderer.render(scene, camera, frameOptions);
+  }
+  if (!rendered) {
+    nativeReady = false;
+    rendered = rtxRenderer.renderRaster(scene, camera);
+  }
+  if (!rtxRenderer.present(null)) {
+    renderer.setRenderTarget(null);
+    renderer.setMRT(null);
+    renderer.render(scene, camera);
+  }
+
+  const pathLabel = nativeReady ? rtxRenderer.rayPathLabel : "WEBGPU RASTER FALLBACK";
+  if (pathLabel !== lastPathLabel) {
+    lastPathLabel = pathLabel;
+    console.log(`[First-Person Beach] path=${pathLabel}`);
+  }
+});
+
+addEventListener("resize", () => {
+  camera.aspect = innerWidth / Math.max(1, innerHeight);
+  camera.updateProjectionMatrix();
+  internalRatio = chooseInternalRatio(innerWidth, innerHeight);
+  renderer.setSize(Math.max(1, innerWidth), Math.max(1, innerHeight));
+  const size = internalSize();
+  const resized = rtxRenderer.resize(size.x, size.y);
+  if (nativeReady) nativeReady = resized;
+});
+
+addEventListener("beforeunload", () => {
+  rtxRenderer.dispose();
+});

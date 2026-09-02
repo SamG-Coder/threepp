@@ -1,0 +1,367 @@
+{
+  "format": 2,
+  "projectId": "b4e0c18a7d592f31",
+  "virtualURL": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/",
+  "source": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/",
+  "pulledAt": "2026-09-03T00:00:00.000Z",
+  "entry": "site-entry.mjs",
+  "html": "index.html",
+  "requiresWebGPU": true,
+  "files": [
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/README.md",
+      "path": "README.md",
+      "type": "text",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/TEXTURES.md",
+      "path": "assets/TEXTURES.md",
+      "type": "text",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/source/coastal-rock.jpg",
+      "path": "assets/source/coastal-rock.jpg",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/source/coastal-rock.png",
+      "path": "assets/source/coastal-rock.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/source/dry-sand.jpg",
+      "path": "assets/source/dry-sand.jpg",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/source/dry-sand.png",
+      "path": "assets/source/dry-sand.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/source/dune-grass.jpg",
+      "path": "assets/source/dune-grass.jpg",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/source/dune-grass.png",
+      "path": "assets/source/dune-grass.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/source/palm-bark.jpg",
+      "path": "assets/source/palm-bark.jpg",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/source/palm-bark.png",
+      "path": "assets/source/palm-bark.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/source/pebble-hash.jpg",
+      "path": "assets/source/pebble-hash.jpg",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/source/pebble-hash.png",
+      "path": "assets/source/pebble-hash.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/source/wet-sand.jpg",
+      "path": "assets/source/wet-sand.jpg",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/source/wet-sand.png",
+      "path": "assets/source/wet-sand.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/coastal-rock-albedo.png",
+      "path": "assets/textures/coastal-rock-albedo.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/coastal-rock-height.png",
+      "path": "assets/textures/coastal-rock-height.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/coastal-rock-normal.png",
+      "path": "assets/textures/coastal-rock-normal.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/coastal-rock-tile-preview.png",
+      "path": "assets/textures/coastal-rock-tile-preview.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/dry-sand-albedo.png",
+      "path": "assets/textures/dry-sand-albedo.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/dry-sand-height.png",
+      "path": "assets/textures/dry-sand-height.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/dry-sand-normal.png",
+      "path": "assets/textures/dry-sand-normal.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/dry-sand-tile-preview.png",
+      "path": "assets/textures/dry-sand-tile-preview.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/dune-grass-albedo.png",
+      "path": "assets/textures/dune-grass-albedo.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/dune-grass-height.png",
+      "path": "assets/textures/dune-grass-height.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/dune-grass-normal.png",
+      "path": "assets/textures/dune-grass-normal.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/dune-grass-tile-preview.png",
+      "path": "assets/textures/dune-grass-tile-preview.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/palm-bark-albedo.png",
+      "path": "assets/textures/palm-bark-albedo.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/palm-bark-height.png",
+      "path": "assets/textures/palm-bark-height.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/palm-bark-normal.png",
+      "path": "assets/textures/palm-bark-normal.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/palm-bark-tile-preview.png",
+      "path": "assets/textures/palm-bark-tile-preview.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/pebble-hash-albedo.png",
+      "path": "assets/textures/pebble-hash-albedo.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/pebble-hash-height.png",
+      "path": "assets/textures/pebble-hash-height.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/pebble-hash-normal.png",
+      "path": "assets/textures/pebble-hash-normal.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/pebble-hash-tile-preview.png",
+      "path": "assets/textures/pebble-hash-tile-preview.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/wet-sand-albedo.png",
+      "path": "assets/textures/wet-sand-albedo.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/wet-sand-height.png",
+      "path": "assets/textures/wet-sand-height.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/wet-sand-normal.png",
+      "path": "assets/textures/wet-sand-normal.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/wet-sand-tile-preview.png",
+      "path": "assets/textures/wet-sand-tile-preview.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/",
+      "path": "index.html",
+      "type": "html",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/play.ps1",
+      "path": "play.ps1",
+      "type": "text",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/site-entry.mjs",
+      "path": "site-entry.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/src/first-person.mjs",
+      "path": "src/first-person.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/src/main.mjs",
+      "path": "src/main.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/src/materials.mjs",
+      "path": "src/materials.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/src/native-rtx-renderer.mjs",
+      "path": "src/native-rtx-renderer.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/src/rtx-scene.mjs",
+      "path": "src/rtx-scene.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/src/scene.mjs",
+      "path": "src/scene.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/src/terrain.mjs",
+      "path": "src/terrain.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/src/tile-png.mjs",
+      "path": "src/tile-png.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/src/tile-relief.mjs",
+      "path": "src/tile-relief.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/tests/first-person.test.mjs",
+      "path": "tests/first-person.test.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/tests/generated-assets.test.mjs",
+      "path": "tests/generated-assets.test.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/tests/sample-contract.test.mjs",
+      "path": "tests/sample-contract.test.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/tests/tile-relief.test.mjs",
+      "path": "tests/tile-relief.test.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/threebrowser.pull.json",
+      "path": "threebrowser.pull.json",
+      "type": "json",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/tools/bake-tile-maps.mjs",
+      "path": "tools/bake-tile-maps.mjs",
+      "type": "module",
+      "bytes": 0
+    }
+  ],
+  "compatibility": {
+    "threeImportable": true,
+    "bundledThree": false,
+    "rendererCandidates": [
+      "webgpu"
+    ],
+    "canvasOnly": true,
+    "htmlOverlay": false,
+    "domRequired": false,
+    "notes": [
+      "First-person tropical beach with canvas pointer-look walking, wading and late-afternoon sun.",
+      "Six generated seamless albedo tiles are baked to height and normal maps by a JavaScript port of FakeDepthTrick MakeSeamless and BakeRoadMaps.",
+      "Hybrid real-time WebGPU/RTX sample, not a full path tracer: WebGPU owns primary visibility, Gerstner water, foam and tiled PBR, while native ray queries add sun visibility, contact shadow, ambient occlusion and reflections.",
+      "Displaced water, sky dome and palm fronds are excluded from BLAS construction.",
+      "RTX and raster fallback work remains offscreen and shares exactly one tone-mapped swapchain presentation per frame.",
+      "Hold the mouse to look, WASD walks, Shift sprints, X compares RTX and raster. Status is stdout only; there is no HTML overlay.",
+      "No sample-specific C++, downloaded model or third-party texture library is required at runtime."
+    ]
+  }
+}
