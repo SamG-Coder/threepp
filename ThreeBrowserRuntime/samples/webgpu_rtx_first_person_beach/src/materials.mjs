@@ -8,7 +8,6 @@ import {
   float,
   floor,
   max,
-  min,
   mix,
   mx_fractal_noise_float,
   mx_noise_float,
@@ -96,73 +95,78 @@ function noise01(point, scale, seed) {
   ).mul(0.5).add(0.5);
 }
 
-function rotateQuarter(uv, turns) {
-  const angle = turns.mul(1.57079632679);
+function rotateUv(uv, angle) {
   const c = cos(angle);
   const s = sin(angle);
   const p = uv.sub(vec2(0.5));
   return vec2(p.x.mul(c).sub(p.y.mul(s)), p.x.mul(s).add(p.y.mul(c))).add(vec2(0.5));
 }
 
-function variedUv(baseUv, point, cells) {
+function hashedSpin(point, cells, seed) {
   const cell = floor(point.xz.mul(cells));
-  const hashA = mx_noise_float(vec3(cell.x, 2.1, cell.y));
-  const hashB = mx_noise_float(vec3(cell.x.add(19.4), 5.8, cell.y.add(7.2)));
-  const turns = floor(hashA.mul(0.5).add(0.5).mul(3.99));
-  return rotateQuarter(baseUv, turns).add(vec2(hashA, hashB).mul(0.19));
+  const h1 = mx_noise_float(vec3(cell.x.add(seed * 2.13), seed * 0.37, cell.y.add(seed * 5.71)));
+  const h2 = mx_noise_float(vec3(cell.x.add(8.4 + seed), seed * 1.9, cell.y.add(3.2)));
+  return h1.mul(3.883).add(h2.mul(2.399));
 }
 
-function tileEdgeWeight(uv, width) {
-  const wrapped = uv.sub(floor(uv));
-  const edgeX = min(wrapped.x, float(1).sub(wrapped.x));
-  const edgeY = min(wrapped.y, float(1).sub(wrapped.y));
-  return float(1).sub(smoothstep(float(0), float(width), min(edgeX, edgeY)));
+function stochasticUv(baseUv, point, cells, seed) {
+  const cell = floor(point.xz.mul(cells));
+  const h1 = mx_noise_float(vec3(cell.x, seed, cell.y));
+  const h2 = mx_noise_float(vec3(cell.x.add(4.7 + seed), seed + 2.2, cell.y.add(9.1)));
+  const angle = hashedSpin(point, cells, seed);
+  const scale = mix(float(0.78), float(1.24), h2.mul(0.5).add(0.5));
+  const skew = vec2(cos(angle.mul(0.35)), sin(angle.mul(0.51))).mul(0.08);
+  return rotateUv(baseUv.mul(scale).add(skew), angle).add(vec2(h1, h2).mul(0.33));
 }
 
 function terrainVariation(point) {
   const patch = noise01(point, 0.021, 1);
   const blotch = noise01(point, 0.062, 3);
   const grain = noise01(point, 0.21, 6);
-  const blend = smoothstep(0.34, 0.66, blotch);
-  const blur = smoothstep(0.42, 0.88, noise01(point, 0.028, 8));
+  const warp = point.x.mul(0.071).add(point.z.mul(0.053));
+  const diagonal = mx_noise_float(vec3(
+    warp.mul(cos(float(1.17))),
+    0.4,
+    point.z.mul(0.067).add(point.x.mul(sin(float(0.83)))),
+  )).mul(0.5).add(0.5);
+  const blend = smoothstep(0.28, 0.72, blotch.mul(0.55).add(diagonal.mul(0.45)));
+  const blur = smoothstep(0.38, 0.9, noise01(point, 0.024, 8).mul(0.65).add(diagonal.mul(0.35)));
   const darken = mix(float(0.74), float(1.07), patch.mul(0.7).add(grain.mul(0.3)));
   return { patch, blotch, grain, blend, blur, darken };
 }
 
 function sampleVariedRgb(map, baseUv, point, variation, cells = 0.086) {
-  const uvA = variedUv(baseUv, point, cells);
-  const uvB = rotateQuarter(uvA, float(1)).add(vec2(0.29, 0.61));
-  const uvC = rotateQuarter(uvA, float(2)).add(vec2(0.53, 0.17));
-  const sharp = mix(texture(map, uvA).rgb, texture(map, uvB).rgb, variation.blend);
-  const rotated = mix(texture(map, uvB).rgb, texture(map, uvC).rgb, variation.blotch);
-  const soft = texture(map, baseUv.mul(0.34).add(vec2(0.11, 0.17))).rgb;
-  const interior = mix(sharp, mix(sharp, soft, 0.45), variation.blur);
-  const seam = tileEdgeWeight(uvA, 0.16);
-  return mix(interior, mix(rotated, soft, 0.62), seam);
+  const uvA = stochasticUv(baseUv, point, cells, 1.0);
+  const uvB = stochasticUv(baseUv, point.add(vec3(7.2, 0, -5.8)), cells * 0.83, 4.6);
+  const uvC = stochasticUv(baseUv.mul(0.91), point.add(vec3(-4.1, 0, 9.3)), cells * 1.17, 8.2);
+  const a = texture(map, uvA).rgb;
+  const b = texture(map, uvB).rgb;
+  const c = texture(map, uvC).rgb;
+  const soft = texture(map, rotateUv(baseUv.mul(0.37), variation.patch.mul(2.2)).add(vec2(0.13, 0.21))).rgb;
+  const ab = mix(a, b, variation.blend);
+  const abc = mix(ab, c, variation.blotch.mul(0.55));
+  return mix(abc, mix(abc, soft, 0.5), variation.blur);
 }
 
 function sampleVariedNormal(map, baseUv, point, variation, strength, cells = 0.086) {
-  const uvA = variedUv(baseUv, point, cells);
-  const uvB = rotateQuarter(uvA, float(1)).add(vec2(0.29, 0.61));
-  const uvC = rotateQuarter(uvA, float(2)).add(vec2(0.53, 0.17));
+  const uvA = stochasticUv(baseUv, point, cells, 1.0);
+  const uvB = stochasticUv(baseUv, point.add(vec3(7.2, 0, -5.8)), cells * 0.83, 4.6);
+  const uvC = stochasticUv(baseUv.mul(0.91), point.add(vec3(-4.1, 0, 9.3)), cells * 1.17, 8.2);
   const nA = normalMap(texture(map, uvA).rgb, vec2(strength, strength));
   const nB = normalMap(texture(map, uvB).rgb, vec2(strength, strength));
   const nC = normalMap(texture(map, uvC).rgb, vec2(strength, strength));
-  const sharp = normalize(mix(nA, nB, variation.blend));
-  const rotated = normalize(mix(nB, nC, variation.blotch));
   const nSoft = normalMap(
-    texture(map, baseUv.mul(0.34).add(vec2(0.11, 0.17))).rgb,
+    texture(map, rotateUv(baseUv.mul(0.37), variation.patch.mul(2.2)).add(vec2(0.13, 0.21))).rgb,
     vec2(strength * 0.4, strength * 0.4),
   );
-  const interior = normalize(mix(sharp, nSoft, variation.blur.mul(0.5)));
-  const seam = tileEdgeWeight(uvA, 0.16);
-  const edge = normalize(mix(rotated, nSoft, 0.6));
-  const blended = normalize(mix(interior, edge, seam));
+  const ab = normalize(mix(nA, nB, variation.blend));
+  const abc = normalize(mix(ab, nC, variation.blotch.mul(0.55)));
+  const blurred = normalize(mix(abc, nSoft, variation.blur.mul(0.48)));
   const macro = bumpMap(
     variation.patch.mul(0.16).add(variation.blotch.mul(0.07)),
     0.48,
   );
-  return normalize(mix(blended, macro, 0.2));
+  return normalize(mix(blurred, macro, 0.2));
 }
 
 export function createMappedMaterial(maps, options = {}) {
