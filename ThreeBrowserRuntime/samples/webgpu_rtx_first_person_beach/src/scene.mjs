@@ -11,6 +11,7 @@ import {
   waterTime,
 } from "./materials.mjs";
 import {
+  HEIGHT_BOUNDS,
   WATER_LEVEL,
   createHeightfieldGeometry,
   createTerrainHeightTexture,
@@ -212,7 +213,15 @@ export async function buildBeachScene(scene, maps, renderer) {
   const lights = createLighting(scene);
   const heightMap = createTerrainHeightTexture(THREE);
   const terrain = new THREE.Mesh(
-    createHeightfieldGeometry(THREE, { columns: 210, rows: 186, uvScale: 0.24 }),
+    createHeightfieldGeometry(THREE, {
+      columns: 300,
+      rows: 260,
+      uvScale: 0.24,
+      minX: HEIGHT_BOUNDS.minX,
+      maxX: HEIGHT_BOUNDS.maxX,
+      minZ: HEIGHT_BOUNDS.minZ,
+      maxZ: HEIGHT_BOUNDS.maxZ,
+    }),
     createBeachTerrainMaterial(maps, heightMap),
   );
   terrain.name = "Beach heightfield";
@@ -221,7 +230,7 @@ export async function buildBeachScene(scene, maps, renderer) {
   scene.add(terrain);
 
   const foamField = createBeachFoamField(renderer, {
-    injectionNode: breakingInjectionNode,
+    injectionNode: point => breakingInjectionNode(point, heightMap),
     velocityNode: foamVelocityNode,
     size: 512,
     worldSize: 320,

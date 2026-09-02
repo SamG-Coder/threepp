@@ -328,9 +328,12 @@ function crestFrame(point) {
   return { along, across };
 }
 
-export function foamSourceFromWaves(point, waves) {
-  const surf = smoothstep(float(4.2), float(9.5), point.z)
-    .mul(float(1).sub(smoothstep(float(17), float(28), point.z)));
+export function foamSourceFromWaves(point, waves, ground = null) {
+  const depth = ground
+    ? waterLevel.add(waves.height).sub(ground)
+    : waves.envelope.mul(2.2);
+  const surf = smoothstep(float(0.05), float(0.4), depth)
+    .mul(float(1).sub(smoothstep(float(1.05), float(2.75), depth)));
   const shoal = float(1).add(surf.mul(0.55));
   const foldSignal = smoothstep(0.02, 0.056, waves.foldingStrain.mul(shoal));
   const steepSignal = smoothstep(0.048, 0.135, waves.slope.mul(shoal));
@@ -379,8 +382,10 @@ export function foamSourceFromWaves(point, waves) {
   );
 }
 
-export function breakingInjectionNode(point) {
-  return foamSourceFromWaves(point, sampleWaves(point, waterTime));
+export function breakingInjectionNode(point, heightMap = null) {
+  const waves = sampleWaves(point, waterTime);
+  const ground = heightMap ? sampleGroundHeight(heightMap, point) : null;
+  return foamSourceFromWaves(point, waves, ground);
 }
 
 function foamLaceNode(mass, age, parcel, live) {
@@ -520,14 +525,18 @@ export function createWaterMaterial(heightMap, persistentFoamSample = null) {
   const depth = waterLevel.add(waves.height).sub(ground);
   const optical = smoothstep(float(0.04), float(2.6), depth);
   const coverage = smoothstep(float(-0.03), float(0.045), depth);
-  const live = foamSourceFromWaves(point, waves);
+  const live = foamSourceFromWaves(point, waves, ground);
   const field = typeof persistentFoamSample === "function"
     ? persistentFoamSample(point)
     : vec4(live, float(0), point.x, point.z);
   const mass = field.x;
   const age = field.y;
   const parcel = field.zw;
-  const foam = foamLaceNode(mass, age, parcel, live).mul(coverage);
+  const rimX = smoothstep(float(HEIGHT_BOUNDS.maxX - 24), float(HEIGHT_BOUNDS.maxX - 5), abs(point.x));
+  const rimFar = smoothstep(float(HEIGHT_BOUNDS.maxZ - 32), float(HEIGHT_BOUNDS.maxZ - 6), point.z);
+  const rimNear = float(1).sub(smoothstep(float(HEIGHT_BOUNDS.minZ + 10), float(HEIGHT_BOUNDS.minZ + 28), point.z));
+  const planeFade = float(1).sub(max(rimX, max(rimFar, rimNear)));
+  const foam = foamLaceNode(mass, age, parcel, live).mul(coverage).mul(planeFade);
   const deep = vec3(0.012, 0.07, 0.12);
   const shallow = vec3(0.08, 0.32, 0.34);
   const waterColor = mix(shallow, deep, optical);
@@ -560,7 +569,7 @@ export function createWaterMaterial(heightMap, persistentFoamSample = null) {
   material.roughnessNode = mix(float(0.06), mix(float(0.28), float(0.46), young), foam);
   material.opacityNode = saturate(
     mix(float(0.12), float(0.8), optical).add(fresnel.mul(0.18)).add(foam.mul(0.62)),
-  ).mul(max(coverage, foam.mul(0.9)));
+  ).mul(max(coverage, foam.mul(0.9))).mul(planeFade);
   return tag(material, 0, { water: true, rtxIgnore: true });
 }
 

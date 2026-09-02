@@ -68,6 +68,7 @@ test("beach water keeps its Gerstner mesh and advects persistent foam", async ()
     load("src/main.mjs"),
   ]);
   assert.match(scene, /PlaneGeometry\(320, 280, 180, 140\)/);
+  assert.match(scene, /HEIGHT_BOUNDS/);
   assert.match(scene, /createBeachFoamField/);
   assert.match(scene, /breakingInjectionNode/);
   assert.match(scene, /foamVelocityNode/);

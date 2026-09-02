@@ -1,7 +1,7 @@
 import {
+  ClampToEdgeWrapping,
   HalfFloatType,
   LinearFilter,
-  RepeatWrapping,
   StorageTexture,
 } from "three/webgpu";
 import {
@@ -48,8 +48,8 @@ function makeHistoryTexture(size, name) {
   const result = new StorageTexture(size, size);
   result.name = name;
   result.type = HalfFloatType;
-  result.wrapS = RepeatWrapping;
-  result.wrapT = RepeatWrapping;
+  result.wrapS = ClampToEdgeWrapping;
+  result.wrapT = ClampToEdgeWrapping;
   result.minFilter = LinearFilter;
   result.magFilter = LinearFilter;
   result.generateMipmaps = false;
@@ -174,7 +174,12 @@ export function createBeachFoamField(renderer, {
       .mul(exp(stepDelta.negate().mul(dissolveRate)))
       .mul(fragment)
       .mul(pinch);
-    const foaminess = min(max(injected, dissolved), float(MAX_FOAMINESS));
+    const border = min(
+      min(uv.x, uv.y),
+      min(float(1).sub(uv.x), float(1).sub(uv.y)),
+    );
+    const inField = smoothstep(0.0, 0.04, border);
+    const foaminess = min(max(injected, dissolved), float(MAX_FOAMINESS)).mul(inField);
     const packed = vec4(foaminess, aged, resetParcel.x, resetParcel.y);
 
     textureStore(history[writeIndex], coord, packed).toWriteOnly();

@@ -61,8 +61,9 @@ export function terrainHeight(x, z) {
     * (1 - smoothstep(6, 16, z));
   const grain = (fbm(x * 0.37, z * 0.34, 61) - 0.5) * 0.045 * inland;
   const shelf = -smoothstep(10, 46, z) * (2.4 + fbm(x * 0.02, z * 0.018, 9) * 0.85);
+  const basin = -smoothstep(38, 125, z) * (1.2 + fbm(x * 0.013, z * 0.011, 13) * 0.4);
   const cove = -0.22 * Math.exp(-((x - 18) * (x - 18)) / 420) * smoothstep(-4, 14, z);
-  return duneLift + berm + swash + grain + shelf + cove;
+  return duneLift + berm + swash + grain + shelf + basin + cove;
 }
 
 export function createHeightfieldGeometry(THREE, options = {}) {
