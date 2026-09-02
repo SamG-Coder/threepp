@@ -5,13 +5,15 @@ import {
   createBeachTerrainMaterial,
   createFrondMaterial,
   createMappedMaterial,
+  createMoonMaterial,
   createSkyMaterial,
   createWaterMaterial,
   foamVelocityNode,
+  loadMoonMaps,
   skyNight,
   waterTime,
 } from "./materials.mjs";
-import { createMoonDisc, createStarField } from "./sky-cycle.mjs";
+import { createMoonGlobe, createStarField } from "./sky-cycle.mjs";
 import {
   HEIGHT_BOUNDS,
   WATER_LEVEL,
@@ -254,7 +256,8 @@ export async function buildBeachScene(scene, maps, renderer) {
   const water = createWater(scene, heightMap, foamField);
   const stars = createStarField(THREE);
   stars.material.opacityNode = skyNight;
-  const moon = createMoonDisc(THREE);
+  const moonMaps = await loadMoonMaps();
+  const moon = createMoonGlobe(THREE, createMoonMaterial(moonMaps));
   scene.add(stars, moon);
   const dressing = new THREE.Group();
   dressing.name = "Beach dressing";

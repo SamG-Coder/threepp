@@ -14,6 +14,7 @@ They come from `src/tile-relief.mjs`, a JavaScript port of FakeDepthTrick
 | coastal-rock | quilt | 2.7 | 9.2 | Horizontal bedding |
 | dune-grass | quilt | 1.45 | 5.4 | Top-down thatch |
 | palm-bark | wrap | 2.85 | 11.2 | Periodic diamond scars; not quilted |
+| lunar-surface | keep | 2.4 | 8.5 | Generated lunar albedo; height/normals baked, not quilted |
 
 Grok corner marks are patched, then excluded by the 5/8 centre crop on quilted
 tiles. Palm bark keeps its grid and only wrap-blends the edges.

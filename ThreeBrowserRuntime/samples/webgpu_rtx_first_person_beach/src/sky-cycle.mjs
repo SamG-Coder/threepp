@@ -1,4 +1,5 @@
 import * as THREE from "three/webgpu";
+import { moonShadeDir } from "./materials.mjs";
 
 /** One real second advances one game minute. A full day lasts 24 real minutes. */
 export const GAME_MINUTES_PER_REAL_SECOND = 1;
@@ -6,7 +7,7 @@ export const MINUTES_PER_DAY = 24 * 60;
 export const DEFAULT_START_HOUR = 16.5;
 
 const SUN_DISTANCE = 140;
-const MOON_DISTANCE = 420;
+const MOON_DISTANCE = 720;
 const STAR_RADIUS = 520;
 
 function clamp01(value) {
@@ -203,12 +204,9 @@ export function applySkyCycle(sample, {
     );
     moon.lookAt(camera.position);
     moon.visible = sample.moon.elevation > -0.12;
-    const disc = 0.22 + sample.night * 0.78;
-    moon.traverse(child => {
-      if (child.material?.opacity != null && child.userData?.moonLayer === "halo") {
-        child.material.opacity = child.userData.baseOpacity * disc;
-      }
-    });
+    if (sun) {
+      moonShadeDir.value.copy(sun.position).sub(moon.position).normalize();
+    }
   }
   if (camera && stars) {
     stars.position.copy(camera.position);
@@ -267,7 +265,7 @@ export function createStarField(THREERef = THREE) {
     opacity: 1,
     vertexColors: true,
     depthWrite: false,
-    depthTest: false,
+    depthTest: true,
     fog: false,
     blending: THREERef.AdditiveBlending,
   });
@@ -280,50 +278,16 @@ export function createStarField(THREERef = THREE) {
   return stars;
 }
 
-export function createMoonDisc(THREERef = THREE) {
-  const moon = new THREERef.Group();
-  moon.name = "Moon disc";
-  const makeDisc = (radius, color, opacity, layer) => {
-    const material = new THREERef.MeshBasicNodeMaterial({
-      color,
-      transparent: opacity < 1,
-      opacity,
-      depthTest: false,
-      depthWrite: false,
-      fog: false,
-      side: THREERef.DoubleSide,
-    });
-    material.toneMapped = false;
-    const mesh = new THREERef.Mesh(new THREERef.CircleGeometry(radius, 64), material);
-    mesh.userData.rtxIgnore = true;
-    mesh.userData.moonLayer = layer;
-    mesh.userData.baseOpacity = opacity;
-    return mesh;
-  };
-  const halo = makeDisc(18, 0x8fb4d2, 0.045, "halo");
-  const inner = makeDisc(8.5, 0xd7e7f4, 0.08, "halo");
-  const disk = makeDisc(5.4, 0xfff4dd, 1, "disk");
-  halo.position.z = -0.8;
-  inner.position.z = -0.4;
-  moon.add(halo, inner, disk);
-  const craterMat = makeDisc(1, 0x8a9098, 0.22, "crater").material;
-  const craters = [
-    [-1.4, 1.1, 0.9],
-    [1.2, 1.4, 0.7],
-    [1.5, -1.1, 1.05],
-    [-0.9, -1.5, 0.6],
-    [0.1, 0.15, 0.45],
-  ];
-  for (const [x, y, radius] of craters) {
-    const crater = new THREERef.Mesh(new THREERef.CircleGeometry(radius, 20), craterMat);
-    crater.position.set(x, y, 0.12);
-    crater.userData.rtxIgnore = true;
-    moon.add(crater);
-  }
-  moon.traverse(object => {
-    object.userData.rtxIgnore = true;
-  });
+export function createMoonGlobe(THREERef, material) {
+  const moon = new THREERef.Mesh(
+    new THREERef.SphereGeometry(9.2, 64, 48),
+    material,
+  );
+  moon.name = "Textured moon";
+  moon.userData.rtxIgnore = true;
   moon.renderOrder = -800;
   moon.frustumCulled = false;
+  moon.castShadow = false;
+  moon.receiveShadow = false;
   return moon;
 }

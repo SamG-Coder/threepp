@@ -16,6 +16,7 @@ import {
   mx_noise_float,
   mx_worley_noise_vec2,
   normalMap,
+  normalWorld,
   normalize,
   positionLocal,
   positionWorld,
@@ -41,6 +42,7 @@ export const skyMoonColor = uniform(new THREE.Vector3(0.72, 0.8, 0.92));
 export const skyNight = uniform(0);
 export const skySunGlow = uniform(1);
 export const celestialLightDir = uniform(new THREE.Vector3(-0.42, 0.55, 0.72).normalize());
+export const moonShadeDir = uniform(new THREE.Vector3(-0.42, 0.55, 0.72).normalize());
 export const TILE_NAMES = Object.freeze([
   "dry-sand",
   "wet-sand",
@@ -94,6 +96,30 @@ export async function loadTileMaps(name) {
 export async function loadAllTileMaps() {
   const entries = await Promise.all(TILE_NAMES.map(async name => [name, await loadTileMaps(name)]));
   return Object.fromEntries(entries);
+}
+
+export async function loadMoonMaps() {
+  return loadTileMaps("lunar-surface");
+}
+
+export function createMoonMaterial(maps) {
+  const albedo = texture(maps.albedo);
+  const crater = texture(maps.normal).rgb.sub(0.5).mul(2);
+  const n = normalize(normalWorld.add(crater.mul(0.22)));
+  const lit = saturate(dot(n, normalize(moonShadeDir)));
+  const wrap = lit.mul(0.55).add(0.45);
+  const shade = wrap.mul(1.15).add(0.22);
+  const material = new THREE.MeshBasicNodeMaterial({
+    depthTest: true,
+    depthWrite: true,
+    fog: false,
+    side: THREE.FrontSide,
+  });
+  material.toneMapped = false;
+  const pale = mix(albedo.rgb, vec3(0.92, 0.93, 0.9), 0.55);
+  material.colorNode = pale.mul(shade);
+  material.userData.rtxIgnore = true;
+  return material;
 }
 
 function worldUv(repeat) {
@@ -602,20 +628,19 @@ export function syncSkyUniforms(sample) {
   } else {
     celestialLightDir.value.set(sample.moon.x, sample.moon.y, sample.moon.z);
   }
+  moonShadeDir.value.set(sample.sun.x, sample.sun.y, sample.sun.z);
 }
 
 export function createSkyMaterial() {
   const dir = normalize(positionLocal);
   const elevation = saturate(dir.y.mul(0.5).add(0.5));
   const sunDot = saturate(dot(dir, normalize(skySunDirection)));
-  const moonDot = saturate(dot(dir, normalize(skyMoonDirection)));
   const sunCore = pow(sunDot, mix(float(28), float(220), saturate(skySunDirection.y)));
   const sunHalo = pow(sunDot, 8).mul(0.18);
-  const moonCore = pow(moonDot, 900).mul(skyNight);
-  const moonHalo = pow(moonDot, 40).mul(skyNight.mul(0.12));
   const scatter = pow(saturate(float(1).sub(abs(dir.y))), 3)
     .mul(skySunGlow)
     .mul(0.22);
+  const dither = mx_noise_float(dir.mul(1600)).mul(0.0035);
   const material = new THREE.MeshBasicNodeMaterial({
     side: THREE.BackSide,
     fog: false,
@@ -623,10 +648,10 @@ export function createSkyMaterial() {
     depthTest: false,
   });
   material.toneMapped = false;
-  material.colorNode = mix(skyHorizon, skyZenith, pow(elevation, 1.35))
+  material.colorNode = mix(skyHorizon, skyZenith, pow(elevation, 1.2))
     .add(skySunColor.mul(sunCore.add(sunHalo).mul(skySunGlow.mul(1.7))))
-    .add(skyMoonColor.mul(moonCore.add(moonHalo)))
-    .add(skySunColor.mul(scatter));
+    .add(skySunColor.mul(scatter))
+    .add(dither);
   material.userData.rtxIgnore = true;
   return material;
 }

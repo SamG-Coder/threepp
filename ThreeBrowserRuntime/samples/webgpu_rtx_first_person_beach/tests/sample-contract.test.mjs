@@ -35,6 +35,9 @@ test("manifest registers a portable WebGPU first-person beach", async () => {
     "assets/textures/dry-sand-albedo.png",
     "assets/textures/dry-sand-height.png",
     "assets/textures/dry-sand-normal.png",
+    "assets/textures/lunar-surface-albedo.png",
+    "assets/textures/lunar-surface-height.png",
+    "assets/textures/lunar-surface-normal.png",
   ]) {
     assert.ok(manifest.files.some(entry => entry.path === file), `${file} missing from manifest`);
     assert.ok((await stat(path.join(root, file))).isFile());

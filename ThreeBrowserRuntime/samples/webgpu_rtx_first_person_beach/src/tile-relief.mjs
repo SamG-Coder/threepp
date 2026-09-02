@@ -196,6 +196,9 @@ export function makeSeamless(rgba, width, height, options = {}) {
   const size = options.size ?? Math.min(width, height);
   let rgb = rgbaToRgb(rgba, width, height);
   patchCornerMark(rgb, width, height);
+  if (mode === "keep") {
+    return { width, height, rgb };
+  }
   if (mode === "wrap") {
     const copy = rgb.slice();
     const radius = Math.max(2, Math.min(options.highPassTile ?? 10, Math.floor(Math.min(width, height) / 8)));
@@ -351,6 +354,12 @@ export const TILE_SPECS = Object.freeze({
     wrapBlend: 24,
     heightGain: 2.85,
     normalStrength: 11.2,
+  }),
+  "lunar-surface": Object.freeze({
+    needsRelief: true,
+    mode: "keep",
+    heightGain: 2.4,
+    normalStrength: 8.5,
   }),
 });
 

@@ -189,6 +189,30 @@
       "bytes": 0
     },
     {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/source/lunar-surface.png",
+      "path": "assets/source/lunar-surface.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/lunar-surface-albedo.png",
+      "path": "assets/textures/lunar-surface-albedo.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/lunar-surface-height.png",
+      "path": "assets/textures/lunar-surface-height.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/lunar-surface-normal.png",
+      "path": "assets/textures/lunar-surface-normal.png",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
       "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/pebble-hash-albedo.png",
       "path": "assets/textures/pebble-hash-albedo.png",
       "type": "asset",
