@@ -1,7 +1,8 @@
 import * as THREE from "three/webgpu";
 import WebGPU from "three/addons/capabilities/WebGPU.js";
 import { createViewState, stepFirstPerson, cameraOrientation } from "./first-person.mjs";
-import { loadAllTileMaps, waterTime } from "./materials.mjs";
+import { loadAllTileMaps, syncSkyUniforms, waterTime } from "./materials.mjs";
+import { applySkyCycle, createSkyClock } from "./sky-cycle.mjs";
 import {
   NativeRtxRenderer,
   prepareRtxGuideMaterials,
@@ -96,6 +97,7 @@ const rtxRenderer = new NativeRtxRenderer(renderer, camera, rtx);
 let nativeReady = false;
 const sunDirection = new THREE.Vector3();
 const sunTarget = new THREE.Vector3();
+const skyClock = createSkyClock();
 
 function internalSize() {
   return new THREE.Vector2(
@@ -194,24 +196,44 @@ renderer.setAnimationLoop(() => {
   world.sky.position.copy(camera.position);
   waterTime.value += dt;
   world.foamField?.update(dt);
+  const sky = skyClock.advance(dt);
+  syncSkyUniforms(sky);
+  applySkyCycle(sky, {
+    sun: world.sun,
+    moonLight: world.moonLight,
+    hemi: world.lights.hemi,
+    bounce: world.lights.bounce,
+    moon: world.moon,
+    stars: world.stars,
+    camera,
+    scene,
+    renderer,
+  });
 
   world.sun.updateWorldMatrix(true, false);
   world.sun.target.updateWorldMatrix(true, false);
-  world.sun.getWorldPosition(sunDirection);
-  world.sun.target.getWorldPosition(sunTarget);
+  if (sky.keyIsSun) {
+    world.sun.getWorldPosition(sunDirection);
+    world.sun.target.getWorldPosition(sunTarget);
+  } else {
+    world.moonLight.updateWorldMatrix(true, false);
+    world.moonLight.target.updateWorldMatrix(true, false);
+    world.moonLight.getWorldPosition(sunDirection);
+    world.moonLight.target.getWorldPosition(sunTarget);
+  }
   sunDirection.sub(sunTarget).normalize();
 
   const frameOptions = {
     sunDirection,
-    sunIntensity: 3.4,
-    shadowStrength: 0.26,
-    aoStrength: 0.1,
+    sunIntensity: sky.rtxSunIntensity,
+    shadowStrength: sky.shadowStrength,
+    aoStrength: sky.day * 0.1 + 0.04,
     aoRadius: 1.15,
     maxDistance: 180,
     rayBias: 0.022,
-    reflectionStrength: 0.7,
-    environmentColor: [0.47, 0.69, 0.92],
-    environmentIntensity: 0.8,
+    reflectionStrength: 0.35 + sky.day * 0.35,
+    environmentColor: sky.horizon,
+    environmentIntensity: 0.18 + sky.day * 0.62,
   };
 
   let rendered = false;

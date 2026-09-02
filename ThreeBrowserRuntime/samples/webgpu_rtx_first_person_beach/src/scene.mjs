@@ -8,8 +8,10 @@ import {
   createSkyMaterial,
   createWaterMaterial,
   foamVelocityNode,
+  skyNight,
   waterTime,
 } from "./materials.mjs";
+import { createMoonDisc, createStarField } from "./sky-cycle.mjs";
 import {
   HEIGHT_BOUNDS,
   WATER_LEVEL,
@@ -62,7 +64,14 @@ function createLighting(scene) {
   bounce.position.set(30, 18, -40);
   bounce.userData.rtxIgnore = true;
   scene.add(bounce);
-  return { hemi, sun, bounce };
+  const moonLight = new THREE.DirectionalLight(0xc5d4ea, 0);
+  moonLight.name = "Moon fill";
+  moonLight.position.set(40, 36, -70);
+  moonLight.target.position.set(0, 0, 4);
+  moonLight.userData.rtxIgnore = true;
+  scene.add(moonLight);
+  scene.add(moonLight.target);
+  return { hemi, sun, bounce, moonLight };
 }
 
 function createWater(scene, heightMap, foamField) {
@@ -243,6 +252,10 @@ export async function buildBeachScene(scene, maps, renderer) {
   foamField.clear();
   preRollFoam(foamField);
   const water = createWater(scene, heightMap, foamField);
+  const stars = createStarField(THREE);
+  stars.material.opacityNode = skyNight;
+  const moon = createMoonDisc(THREE);
+  scene.add(stars, moon);
   const dressing = new THREE.Group();
   dressing.name = "Beach dressing";
   scene.add(dressing);
@@ -284,6 +297,9 @@ export async function buildBeachScene(scene, maps, renderer) {
     rocks,
     staticRoots: [terrain, dressing],
     sun: lights.sun,
+    moonLight: lights.moonLight,
+    stars,
+    moon,
   };
 }
 

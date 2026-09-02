@@ -297,6 +297,12 @@
       "bytes": 0
     },
     {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/src/sky-cycle.mjs",
+      "path": "src/sky-cycle.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
       "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/src/terrain.mjs",
       "path": "src/terrain.mjs",
       "type": "module",
@@ -329,6 +335,12 @@
     {
       "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/tests/sample-contract.test.mjs",
       "path": "tests/sample-contract.test.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/tests/sky-cycle.test.mjs",
+      "path": "tests/sky-cycle.test.mjs",
       "type": "module",
       "bytes": 0
     },

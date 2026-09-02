@@ -29,6 +29,7 @@ test("manifest registers a portable WebGPU first-person beach", async () => {
     "site-entry.mjs",
     "src/main.mjs",
     "src/foam-field.mjs",
+    "src/sky-cycle.mjs",
     "src/tile-relief.mjs",
     "src/native-rtx-renderer.mjs",
     "assets/textures/dry-sand-albedo.png",
@@ -80,6 +81,8 @@ test("beach water keeps its Gerstner mesh and advects persistent foam", async ()
   assert.match(foamField, /sampleVelocity/);
   assert.match(foamField, /resetParcel/);
   assert.match(main, /buildBeachScene\(scene, maps, renderer\)/);
+  assert.match(main, /createSkyClock/);
+  assert.match(main, /syncSkyUniforms/);
   assert.doesNotMatch(scene, /new THREE\.Water|OceanGeometry|WaterMesh/);
 });
 

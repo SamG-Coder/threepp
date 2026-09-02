@@ -32,6 +32,15 @@ import {
 import { HEIGHT_BOUNDS, WATER_LEVEL } from "./terrain.mjs";
 export const waterTime = uniform(0);
 export const waterLevel = uniform(WATER_LEVEL);
+export const skySunDirection = uniform(new THREE.Vector3(-0.42, 0.46, 0.78).normalize());
+export const skyMoonDirection = uniform(new THREE.Vector3(0.42, -0.2, -0.78).normalize());
+export const skyZenith = uniform(new THREE.Vector3(0.23, 0.52, 0.86));
+export const skyHorizon = uniform(new THREE.Vector3(0.78, 0.86, 0.94));
+export const skySunColor = uniform(new THREE.Vector3(1.0, 0.78, 0.48));
+export const skyMoonColor = uniform(new THREE.Vector3(0.72, 0.8, 0.92));
+export const skyNight = uniform(0);
+export const skySunGlow = uniform(1);
+export const celestialLightDir = uniform(new THREE.Vector3(-0.42, 0.55, 0.72).normalize());
 export const TILE_NAMES = Object.freeze([
   "dry-sand",
   "wet-sand",
@@ -552,10 +561,11 @@ export function createWaterMaterial(heightMap, persistentFoamSample = null) {
     mix(0.22, 0.85, saturate(live.add(young.mul(0.6)))),
   );
   const shadedNormal = normalize(mix(waterNormal, foamBump, saturate(foam.mul(0.7).add(live.mul(0.2)))));
-  const toSun = normalize(vec3(-48, 54, 82));
+  const toSun = normalize(celestialLightDir);
   const viewDir = normalize(cameraPosition.sub(positionWorld));
   const sunSpec = pow(saturate(dot(shadedNormal, normalize(toSun.add(viewDir)))), 72)
     .mul(float(1).sub(foam.mul(0.65)))
+    .mul(skySunGlow.add(skyNight.mul(0.2)))
     .mul(0.42);
   const material = new THREE.MeshStandardNodeMaterial({
     metalness: 0,
@@ -578,14 +588,34 @@ export function createWaterMaterial(heightMap, persistentFoamSample = null) {
   return tag(material, 0, { water: true, rtxIgnore: true });
 }
 
+export function syncSkyUniforms(sample) {
+  skySunDirection.value.set(sample.sun.x, sample.sun.y, sample.sun.z);
+  skyMoonDirection.value.set(sample.moon.x, sample.moon.y, sample.moon.z);
+  skyZenith.value.set(sample.zenith[0], sample.zenith[1], sample.zenith[2]);
+  skyHorizon.value.set(sample.horizon[0], sample.horizon[1], sample.horizon[2]);
+  skySunColor.value.set(sample.sun.color[0], sample.sun.color[1], sample.sun.color[2]);
+  skyMoonColor.value.set(sample.moon.color[0], sample.moon.color[1], sample.moon.color[2]);
+  skyNight.value = sample.night;
+  skySunGlow.value = sample.sun.intensity > 0.05 ? Math.min(1, sample.sun.intensity / 3.2) : 0;
+  if (sample.keyIsSun) {
+    celestialLightDir.value.set(sample.sun.x, sample.sun.y, sample.sun.z);
+  } else {
+    celestialLightDir.value.set(sample.moon.x, sample.moon.y, sample.moon.z);
+  }
+}
+
 export function createSkyMaterial() {
-  const zenith = vec3(0.23, 0.52, 0.86);
-  const horizon = vec3(0.78, 0.86, 0.94);
-  const sunBloom = vec3(1.0, 0.78, 0.48);
   const dir = normalize(positionLocal);
   const elevation = saturate(dir.y.mul(0.5).add(0.5));
-  const sunDir = normalize(vec3(-0.42, 0.46, 0.78));
-  const sun = pow(saturate(dot(dir, sunDir)), 48);
+  const sunDot = saturate(dot(dir, normalize(skySunDirection)));
+  const moonDot = saturate(dot(dir, normalize(skyMoonDirection)));
+  const sunCore = pow(sunDot, mix(float(28), float(220), saturate(skySunDirection.y)));
+  const sunHalo = pow(sunDot, 8).mul(0.18);
+  const moonCore = pow(moonDot, 900).mul(skyNight);
+  const moonHalo = pow(moonDot, 40).mul(skyNight.mul(0.12));
+  const scatter = pow(saturate(float(1).sub(abs(dir.y))), 3)
+    .mul(skySunGlow)
+    .mul(0.22);
   const material = new THREE.MeshBasicNodeMaterial({
     side: THREE.BackSide,
     fog: false,
@@ -593,7 +623,10 @@ export function createSkyMaterial() {
     depthTest: false,
   });
   material.toneMapped = false;
-  material.colorNode = mix(horizon, zenith, pow(elevation, 1.35)).add(sunBloom.mul(sun.mul(1.6)));
+  material.colorNode = mix(skyHorizon, skyZenith, pow(elevation, 1.35))
+    .add(skySunColor.mul(sunCore.add(sunHalo).mul(skySunGlow.mul(1.7))))
+    .add(skyMoonColor.mul(moonCore.add(moonHalo)))
+    .add(skySunColor.mul(scatter));
   material.userData.rtxIgnore = true;
   return material;
 }
