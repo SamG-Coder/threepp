@@ -81,6 +81,9 @@ test("beach water keeps its Gerstner mesh and advects persistent foam", async ()
   assert.match(materials, /foamLaceNode/);
   assert.match(materials, /foamSourceFromWaves/);
   assert.match(materials, /createWaterMaterial\(heightMap, persistentFoamSample/);
+  assert.match(materials, /transformDirection\(cameraViewMatrix\)/);
+  assert.match(materials, /dot\(normalWorld, normalize\(toSun\.add\(viewDir\)\)\)/);
+  assert.doesNotMatch(materials, /dot\(shadedNormalView, normalize\(toSunView/);
   assert.match(foamField, /sampleVelocity/);
   assert.match(foamField, /resetParcel/);
   assert.match(main, /buildBeachScene\(scene, maps, renderer\)/);

@@ -3,6 +3,7 @@ import {
   abs,
   bumpMap,
   cameraPosition,
+  cameraViewMatrix,
   cos,
   dot,
   float,
@@ -581,15 +582,30 @@ export function createWaterMaterial(heightMap, persistentFoamSample = null) {
     vec3(0.93, 0.95, 0.97),
     saturate(young.mul(0.75).add(live.mul(0.45))),
   );
-  const waterNormal = normalize(vec3(waves.derivativeX.negate(), float(1), waves.derivativeZ.negate()));
+  // Gerstner derivatives are evaluated from positionWorld, so this normal is
+  // world-space. NodeMaterial.normalNode and bumpMap() both operate in view
+  // space; transform it before combining the two or the normal will appear to
+  // rotate with the camera.
+  const waterNormalView = normalize(
+    vec3(waves.derivativeX.negate(), float(1), waves.derivativeZ.negate())
+      .transformDirection(cameraViewMatrix),
+  );
   const foamBump = bumpMap(
     foam.mul(0.42).add(live.mul(0.22)).add(young.mul(mass).mul(0.12)),
     mix(0.22, 0.85, saturate(live.add(young.mul(0.6)))),
   );
-  const shadedNormal = normalize(mix(waterNormal, foamBump, saturate(foam.mul(0.7).add(live.mul(0.2)))));
+  const shadedNormalView = normalize(
+    mix(waterNormalView, foamBump, saturate(foam.mul(0.7).add(live.mul(0.2)))),
+  );
+  // normalWorld resolves the material's final view-space normal back into
+  // world space. Keep the hand-authored sun lobe entirely in world space so
+  // camera yaw cannot rotate the highlight across the water surface.
   const toSun = normalize(celestialLightDir);
   const viewDir = normalize(cameraPosition.sub(positionWorld));
-  const sunSpec = pow(saturate(dot(shadedNormal, normalize(toSun.add(viewDir)))), 72)
+  const sunSpec = pow(
+    saturate(dot(normalWorld, normalize(toSun.add(viewDir)))),
+    72,
+  )
     .mul(float(1).sub(foam.mul(0.65)))
     .mul(skySunGlow.add(skyNight.mul(0.2)))
     .mul(0.42);
@@ -606,7 +622,7 @@ export function createWaterMaterial(heightMap, persistentFoamSample = null) {
   material.positionNode = positionLocal.add(vec3(waves.chopX, waves.height, waves.chopZ));
   material.colorNode = mix(waterColor, foamColor, foam);
   material.emissiveNode = vec3(1, 0.9, 0.72).mul(sunSpec);
-  material.normalNode = shadedNormal;
+  material.normalNode = shadedNormalView;
   material.roughnessNode = mix(float(0.18), mix(float(0.32), float(0.48), young), foam);
   material.opacityNode = saturate(
     mix(float(0.2), float(0.84), optical).add(foam.mul(0.4)),
@@ -667,4 +683,3 @@ export function createFrondMaterial() {
   material.colorNode = mix(vec3(0.14, 0.32, 0.16), vec3(0.27, 0.48, 0.18), noise);
   return tag(material, 0.04, { rtxIgnore: true });
 }
-
