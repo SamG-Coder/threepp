@@ -29,6 +29,7 @@ test("manifest registers a portable WebGPU first-person beach", async () => {
     "site-entry.mjs",
     "src/main.mjs",
     "src/foam-field.mjs",
+    "src/weather.mjs",
     "src/sky-cycle.mjs",
     "src/tile-relief.mjs",
     "src/native-rtx-renderer.mjs",
@@ -55,6 +56,8 @@ test("main wires first-person controls and hybrid RTX lighting without HTML over
   assert.match(main, /collectStaticBeachScene/);
   assert.match(main, /loadAllTileMaps/);
   assert.match(main, /foamField\?\.update/);
+  assert.match(main, /createBeachWeather/);
+  assert.match(main, /weather\.update/);
   assert.match(main, /\.present\(/);
   assert.match(main, /renderRaster\(/);
   assert.doesNotMatch(main, /OrbitControls|PointerLockControls|FlyControls/);
@@ -62,6 +65,26 @@ test("main wires first-person controls and hybrid RTX lighting without HTML over
   assert.doesNotMatch(main, /innerHTML/);
   assert.doesNotMatch(html, /<(?:div|aside|section|header|footer|button|input)\b/i);
   assert.ok((main.match(/\.present\(/g) ?? []).length >= 1);
+});
+
+test("volumetric clouds drive rain from the same world-space storm field", async () => {
+  const weather = await load("src/weather.mjs");
+  assert.match(weather, /const CLOUD_BASE = 140/);
+  assert.match(weather, /const CLOUD_TOP = 260/);
+  assert.match(weather, /RaymarchingBox\(32/);
+  assert.match(weather, /new THREE\.NodeMaterial/);
+  assert.match(weather, /material\.colorNode = cloudRaymarch\(\)/);
+  assert.match(weather, /new THREE\.BoxGeometry\(1, 1, 1\)/);
+  assert.match(weather, /volume\.scale\.set\(760, CLOUD_SPAN_Y, 760\)/);
+  assert.match(weather, /cloudFieldNode\(point\)/);
+  assert.match(weather, /cloudDensityNode\(point\.add\(cloudKeyDirection\.mul\(16\)\)\)/);
+  assert.match(weather, /lightTransmission/);
+  assert.match(weather, /silverLining/);
+  assert.match(weather, /cloudCellDensity\(x, z, seconds\)/);
+  assert.match(weather, /rainPotentialAt\(x, z, elapsed/);
+  assert.match(weather, /CLOUD_BASE \+ 2 \+ random\(\) \* 18/);
+  assert.match(weather, /world\.sun\.intensity \*=/);
+  assert.match(weather, /scene\.fog\.density/);
 });
 
 test("beach water keeps its Gerstner mesh and advects persistent foam", async () => {

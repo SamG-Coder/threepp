@@ -10,6 +10,7 @@ import {
 import { collectStaticBeachScene } from "./rtx-scene.mjs";
 import { buildBeachScene, createBeachEnvironment, WATER_LEVEL, WORLD } from "./scene.mjs";
 import { terrainHeight } from "./terrain.mjs";
+import { createBeachWeather } from "./weather.mjs";
 
 document.title = "RTX First-Person Beach — ThreeBrowser Runtime";
 
@@ -81,6 +82,7 @@ scene.environmentIntensity = 0.62;
 
 const maps = await loadAllTileMaps();
 const world = await buildBeachScene(scene, maps, renderer);
+const weather = createBeachWeather(scene, camera);
 prepareRtxGuideMaterials(scene);
 
 const view = createViewState(0, -18, Math.PI, -0.05);
@@ -209,6 +211,7 @@ renderer.setAnimationLoop(() => {
     scene,
     renderer,
   });
+  const weatherFrame = weather.update(dt, sky, world);
 
   world.sun.updateWorldMatrix(true, false);
   world.sun.target.updateWorldMatrix(true, false);
@@ -225,15 +228,15 @@ renderer.setAnimationLoop(() => {
 
   const frameOptions = {
     sunDirection,
-    sunIntensity: sky.rtxSunIntensity,
-    shadowStrength: sky.shadowStrength,
+    sunIntensity: sky.rtxSunIntensity * (1 - weatherFrame.cloudShadow * 0.62),
+    shadowStrength: Math.min(0.9, sky.shadowStrength + weatherFrame.cloudShadow * 0.42),
     aoStrength: sky.day * 0.1 + 0.04,
     aoRadius: 1.15,
     maxDistance: 180,
     rayBias: 0.022,
     reflectionStrength: 0.35 + sky.day * 0.35,
     environmentColor: sky.horizon,
-    environmentIntensity: 0.18 + sky.day * 0.62,
+    environmentIntensity: (0.18 + sky.day * 0.62) * (1 - weatherFrame.cloudShadow * 0.48),
   };
 
   let rendered = false;
@@ -269,5 +272,6 @@ addEventListener("resize", () => {
 
 addEventListener("beforeunload", () => {
   world.foamField?.dispose();
+  weather.dispose();
   rtxRenderer.dispose();
 });

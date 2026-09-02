@@ -291,6 +291,12 @@
       "bytes": 0
     },
     {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/src/weather.mjs",
+      "path": "src/weather.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
       "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/src/main.mjs",
       "path": "src/main.mjs",
       "type": "module",
