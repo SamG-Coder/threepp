@@ -70,7 +70,7 @@ renderer.backend.device?.addEventListener?.("uncapturederror", event => {
 
 const rtx = navigator.gpu?.threeBrowserRTX ?? null;
 reportBridge(rtx);
-console.log("[First-Person Beach] Click to lock · WASD walk · Shift sprint · Space jump · E carry/drop · X RTX");
+console.log("[First-Person Beach] Click/dig · WASD walk · Shift sprint · Space jump · E carry/drop · X RTX");
 
 const scene = new THREE.Scene();
 scene.name = "First-person tropical beach";
@@ -175,6 +175,7 @@ const canvas = renderer.domElement;
 canvas.addEventListener("pointerdown", event => {
   if (event.button !== 0) return;
   footsteps.arm();
+  if (shovel.carried) shovel.dig();
   looking = true;
   canvas.setPointerCapture?.(event.pointerId);
   canvas.requestPointerLock?.();

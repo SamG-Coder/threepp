@@ -82,6 +82,7 @@ test("main wires first-person controls and hybrid RTX lighting without HTML over
   assert.match(main, /createBeachCollisionWorld/);
   assert.match(main, /createBeachShovel/);
   assert.match(main, /event\.code === "KeyE"/);
+  assert.match(main, /if \(shovel\.carried\) shovel\.dig\(\)/);
   assert.match(main, /shovel\.update\(dt\)/);
   assert.match(main, /footsteps\.update\(dt, view\)/);
   assert.match(main, /jump: jumpQueued/);

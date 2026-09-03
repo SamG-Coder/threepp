@@ -35,6 +35,7 @@ controls and RTX path are reported on stdout.
 | `W` `A` `S` `D` | Walk |
 | Shift | Sprint |
 | `Space` | Jump |
+| Primary click | Dig while carrying the shovel |
 | `X` | Toggle native RTX lighting/reflections |
 
 Wade into the shallows; chest-deep water stops the stride. There is no swim
@@ -75,6 +76,17 @@ adds restrained movement sway, and removes/rebuilds their solid world collider
 across pickup and drop. While carried, the shovel hovers in a low diagonal
 ready-to-dig pose without covering the centre of the view. Character hands are
 intentionally deferred until a proper first-person character rig is available.
+Primary click casts the centre of the current view into the shared collision
+world and plays a deliberately simple first-person shovel gesture: a short
+wind-up places the shovel on the right, the blade swings low from right to
+left, and the follow-through lifts it over the left shoulder before returning
+to the ready pose.
+Looking down therefore digs in the viewed direction, with horizontal reach
+capped at 0.55 world units so the strike stays immediately in front of the
+player even at a shallow viewing angle.
+A closer rock, log, palm or carryable stops the action after the low swing
+instead of allowing the terrain-only shoulder follow-through. The aim ray is
+swept continuously through the collision world so thin geometry is not skipped.
 
 ## Run and test
 

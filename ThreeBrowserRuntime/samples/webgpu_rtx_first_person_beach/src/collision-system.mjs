@@ -3,6 +3,7 @@ import { terrainHeight } from "./terrain.mjs";
 
 export const PLAYER_RADIUS = 0.31;
 const STEP_CLEARANCE = 0.08;
+const MAX_TOOL_SWEEP_STEPS = 64;
 
 function circleIntersectsBox(x, z, radius, box) {
   const closestX = THREE.MathUtils.clamp(x, box.min.x, box.max.x);
@@ -80,6 +81,43 @@ export function createBeachCollisionWorld(world) {
     return { height, kind };
   }
 
+  function pointContact(x, y, z, radius = 0.055) {
+    for (const collider of colliders) {
+      if (y + radius < collider.minY || y - radius > collider.maxY) continue;
+      if (collider.shape === "cylinder") {
+        if (Math.hypot(x - collider.x, z - collider.z) <= collider.radius + radius) {
+          return { kind: collider.kind, collider, x, y, z };
+        }
+        continue;
+      }
+      const box = collider.box;
+      if (x >= box.min.x - radius && x <= box.max.x + radius
+        && z >= box.min.z - radius && z <= box.max.z + radius) {
+        return { kind: collider.kind, collider, x, y, z };
+      }
+    }
+    const groundY = terrainHeight(x, z);
+    if (y - radius <= groundY) return { kind: "terrain", collider: null, x, y: groundY, z };
+    return null;
+  }
+
+  function sweepPoint(from, to, radius = 0.055) {
+    const distance = Math.hypot(to.x - from.x, to.y - from.y, to.z - from.z);
+    const stepLength = Math.max(0.018, radius * 0.6);
+    const steps = Math.min(MAX_TOOL_SWEEP_STEPS, Math.max(1, Math.ceil(distance / stepLength)));
+    for (let index = 0; index <= steps; index += 1) {
+      const alpha = index / steps;
+      const hit = pointContact(
+        THREE.MathUtils.lerp(from.x, to.x, alpha),
+        THREE.MathUtils.lerp(from.y, to.y, alpha),
+        THREE.MathUtils.lerp(from.z, to.z, alpha),
+        radius,
+      );
+      if (hit) return { ...hit, alpha };
+    }
+    return null;
+  }
+
   return {
     colliders,
     groundHeightAt(x, z) {
@@ -88,6 +126,8 @@ export function createBeachCollisionWorld(world) {
     surfaceAt(x, z) {
       return supportAt(x, z);
     },
+    pointContact,
+    sweepPoint,
     resolveMovement(fromX, fromZ, toX, toZ, feetY) {
       let x = fromX;
       let z = fromZ;
