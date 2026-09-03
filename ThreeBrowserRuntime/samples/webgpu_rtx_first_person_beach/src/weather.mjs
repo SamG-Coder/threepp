@@ -3,36 +3,43 @@ import {
   Break,
   Fn,
   If,
+  Loop,
   cameraPosition,
   cos,
   dot,
   exp,
   float,
   mix,
+  mx_noise_float,
   normalize,
+  positionWorld,
   pow,
   saturate,
   sin,
   smoothstep,
+  step,
   uniform,
   vec3,
   vec4,
 } from "three/tsl";
-import { RaymarchingBox } from "three/addons/tsl/utils/Raymarching.js";
 import { createSurfaceWaterSystem } from "./surface-water.mjs";
 import { WATER_LEVEL, terrainHeight } from "./terrain.mjs";
 
-const CLOUD_BASE = 140;
-const CLOUD_TOP = 260;
-const CLOUD_CENTRE_Y = (CLOUD_BASE + CLOUD_TOP) * 0.5;
+// World units are metres. Keep the tropical low-cloud deck well above every
+// prop and terrain feature instead of letting it read as ground fog.
+const CLOUD_BASE = 650;
+const CLOUD_TOP = 950;
 const CLOUD_SPAN_Y = CLOUD_TOP - CLOUD_BASE;
+const CLOUD_SHELL_RADIUS = 3900;
+const CLOUD_VIEW_STEPS = 48;
+const CLOUD_MAX_DISTANCE = 3800;
 const RAIN_COUNT = 1800;
 const RAIN_RADIUS_X = 92;
 const RAIN_RADIUS_Z = 118;
 
 export const weatherTime = uniform(0);
 export const stormAmount = uniform(0);
-export const cloudWind = uniform(new THREE.Vector2(3.2, 0.82));
+export const cloudWind = uniform(new THREE.Vector2(12, 3.5));
 export const cloudDaylight = uniform(1);
 export const cloudKeyDirection = uniform(new THREE.Vector3(0.2, 0.8, 0.5).normalize());
 export const cloudKeyColor = uniform(new THREE.Color(1, 0.9, 0.72));
@@ -59,11 +66,11 @@ export function stormEnvelope(seconds) {
  * The waves deliberately match cloudFieldNode() below.
  */
 export function cloudCellDensity(x, z, seconds) {
-  const px = x + seconds * 3.2;
-  const pz = z + seconds * 0.82;
-  const a = 0.5 + 0.5 * Math.sin(px * 0.019 + Math.sin(pz * 0.013) * 1.4);
-  const b = 0.5 + 0.5 * Math.cos(pz * 0.023 - px * 0.011);
-  const c = 0.5 + 0.5 * Math.sin((px + pz) * 0.008 + seconds * 0.07);
+  const px = x + seconds * 12;
+  const pz = z + seconds * 3.5;
+  const a = 0.5 + 0.5 * Math.sin(px * 0.0011 + Math.sin(pz * 0.0007) * 1.4);
+  const b = 0.5 + 0.5 * Math.cos(pz * 0.0014 - px * 0.00065);
+  const c = 0.5 + 0.5 * Math.sin((px + pz) * 0.00048 + seconds * 0.015);
   return clamp01(a * 0.48 + b * 0.32 + c * 0.2);
 }
 
@@ -75,42 +82,35 @@ export function rainPotentialAt(x, z, seconds, storm = stormEnvelope(seconds)) {
 
 function cloudFieldNode(point) {
   const advected = point.xz.add(cloudWind.mul(weatherTime));
-  const a = sin(advected.x.mul(0.019).add(sin(advected.y.mul(0.013)).mul(1.4)))
+  const a = sin(advected.x.mul(0.0011).add(sin(advected.y.mul(0.0007)).mul(1.4)))
     .mul(0.5).add(0.5);
-  const b = cos(advected.y.mul(0.023).sub(advected.x.mul(0.011)))
+  const b = cos(advected.y.mul(0.0014).sub(advected.x.mul(0.00065)))
     .mul(0.5).add(0.5);
   const c = sin(
-    advected.x.add(advected.y).mul(0.008).add(weatherTime.mul(0.07)),
+    advected.x.add(advected.y).mul(0.00048).add(weatherTime.mul(0.015)),
   ).mul(0.5).add(0.5);
   return a.mul(0.48).add(b.mul(0.32)).add(c.mul(0.2));
 }
 
 function cloudDensityNode(point) {
   const wind = cloudWind.mul(weatherTime);
-  const advected = vec3(point.x.add(wind.x), point.y, point.z.add(wind.y));
+  const deckHeight = point.y.sub(CLOUD_BASE);
+  const advected = vec3(
+    point.x.add(wind.x),
+    deckHeight,
+    point.z.add(wind.y),
+  );
   const broad = cloudFieldNode(point);
 
-  // Differently oriented 3D waves create changing cauliflower-scale lobes
-  // instead of extruding a flat weather map through the whole cloud layer.
-  const lobeA = sin(
-    advected.x.mul(0.033)
-      .add(advected.y.mul(0.057))
-      .add(sin(advected.z.mul(0.027)).mul(1.8)),
+  // True 3D coherent noise replaces the stacked sine sheets used by the old
+  // finite box. A coarse body plus a higher-frequency erosion octave produces
+  // kilometre-scale banks with soft, irregular cauliflower edges.
+  const coarseCoord = advected.mul(vec3(0.00105, 0.0021, 0.00105));
+  const coarse = mx_noise_float(coarseCoord).mul(0.5).add(0.5);
+  const erosion = mx_noise_float(
+    coarseCoord.mul(3.17).add(vec3(7.3, -2.1, 11.7)),
   ).mul(0.5).add(0.5);
-  const lobeB = cos(
-    advected.z.mul(0.052)
-      .sub(advected.y.mul(0.071))
-      .add(sin(advected.x.mul(0.041)).mul(1.35)),
-  ).mul(0.5).add(0.5);
-  const erosion = sin(
-    advected.x.add(advected.z).mul(0.113)
-      .add(advected.y.mul(0.137))
-      .sub(weatherTime.mul(0.16)),
-  ).mul(0.5).add(0.5);
-  const shape = broad.mul(0.55)
-    .add(lobeA.mul(0.24))
-    .add(lobeB.mul(0.15))
-    .add(erosion.mul(0.06));
+  const shape = coarse.mul(0.72).add(broad.mul(0.4)).sub(erosion.mul(0.16));
 
   const height = point.y.sub(CLOUD_BASE).div(CLOUD_SPAN_Y);
   const flatRainBase = smoothstep(0, 0.075, height);
@@ -118,11 +118,9 @@ function cloudDensityNode(point) {
   const anvil = float(1).sub(smoothstep(0.76, 1, height))
     .mul(mix(0.76, 1, stormAmount));
   const verticalProfile = flatRainBase.mul(softTops).mul(anvil);
-  const threshold = float(0.47)
-    .sub(stormAmount.mul(0.13))
-    .add(height.mul(0.055));
-  const body = smoothstep(threshold, 0.75, shape);
-  const wispyErosion = smoothstep(0.08, 0.82, erosion.add(body.mul(0.64)));
+  const threshold = float(0.49).sub(stormAmount.mul(0.14));
+  const body = smoothstep(threshold, threshold.add(0.16), shape);
+  const wispyErosion = smoothstep(0.12, 0.88, erosion.add(body.mul(0.7)));
 
   return body
     .mul(wispyErosion)
@@ -132,24 +130,25 @@ function cloudDensityNode(point) {
 
 function createCloudVolume() {
   const cloudRaymarch = Fn(() => {
+    const ray = normalize(positionWorld.sub(cameraPosition));
+    const safeUp = ray.y.max(0.001);
+    const entry = float(CLOUD_BASE).sub(cameraPosition.y).div(safeUp).max(0);
+    const exit = float(CLOUD_TOP).sub(cameraPosition.y).div(safeUp)
+      .max(0).min(CLOUD_MAX_DISTANCE);
+    const segmentLength = exit.sub(entry).max(0).mul(step(0.001, ray.y));
+    const stepLength = segmentLength.div(CLOUD_VIEW_STEPS);
     const finalColor = vec4(0).toVar();
-    RaymarchingBox(32, ({ positionRay }) => {
-      // RaymarchingBox works in the mesh's unit-box coordinates. Reconstruct
-      // the same absolute world field sampled by rainPotentialAt().
-      const point = vec3(
-        positionRay.x.mul(760),
-        positionRay.y.mul(CLOUD_SPAN_Y).add(CLOUD_CENTRE_Y),
-        positionRay.z.mul(760).add(54),
-      );
+    Loop(CLOUD_VIEW_STEPS, ({ i }) => {
+      const distance = entry.add(float(i).add(0.5).mul(stepLength));
+      const point = cameraPosition.add(ray.mul(distance));
       const density = cloudDensityNode(point);
-      const sampleAlpha = density.mul(0.105);
+      const sampleAlpha = float(1).sub(exp(density.mul(stepLength).mul(-0.0065)));
 
       // A forward density probe approximates Beer-Lambert self-shadowing.
       // It creates dark rain-bearing cores while sun-facing edges stay bright.
       const lightProbe = cloudDensityNode(point.add(cloudKeyDirection.mul(16)));
       const lightTransmission = exp(lightProbe.mul(-2.8));
-      const viewToCamera = normalize(cameraPosition.sub(point));
-      const phase = pow(saturate(dot(viewToCamera, cloudKeyDirection)), 10);
+      const phase = pow(saturate(dot(ray.negate(), cloudKeyDirection)), 10);
       const edge = pow(float(1).sub(saturate(density)), 2);
       const ambient = mix(
         vec3(0.055, 0.075, 0.12),
@@ -183,19 +182,17 @@ function createCloudVolume() {
   material.side = THREE.BackSide;
   material.transparent = true;
   material.depthWrite = false;
-  material.depthTest = false;
+  // The box's back faces are behind normal scene geometry. Depth testing them
+  // keeps the accumulated cloud colour behind palms, rocks and terrain while
+  // retaining the pre-multiplied ray-marched result.
+  material.depthTest = true;
   material.fog = false;
 
   const volume = new THREE.Mesh(
-    // RaymarchingBox intersects the canonical local cube [-0.5, 0.5]. Keep
-    // that geometry canonical and put the world dimensions on the object's
-    // transform so modelWorldMatrixInverse maps the camera into the same box.
-    new THREE.BoxGeometry(1, 1, 1),
+    new THREE.SphereGeometry(CLOUD_SHELL_RADIUS, 48, 24),
     material,
   );
-  volume.name = "Ray-marched coastal storm clouds";
-  volume.position.set(0, CLOUD_CENTRE_Y, 54);
-  volume.scale.set(760, CLOUD_SPAN_Y, 760);
+  volume.name = "Atmospheric-shell coastal storm clouds";
   volume.renderOrder = -850;
   volume.frustumCulled = false;
   volume.userData.rtxIgnore = true;
@@ -284,6 +281,10 @@ export function createBeachWeather(scene, camera, world) {
     update(dt, sky, world) {
       elapsed += Math.max(0, Math.min(0.05, Number(dt) || 0));
       weatherTime.value = elapsed;
+      // The shell is only a depth-aware screen surface. Density is evaluated
+      // from cameraPosition along an analytic world-space cloud-layer segment,
+      // so there are no box walls, seams, or camera-relative cloud motion.
+      clouds.position.copy(camera.position);
       const storm = stormEnvelope(elapsed);
       stormAmount.value = storm;
       cloudDaylight.value = sky?.day ?? 1;

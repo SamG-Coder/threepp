@@ -76,13 +76,19 @@ test("main wires first-person controls and hybrid RTX lighting without HTML over
 
 test("volumetric clouds drive rain from the same world-space storm field", async () => {
   const weather = await load("src/weather.mjs");
-  assert.match(weather, /const CLOUD_BASE = 140/);
-  assert.match(weather, /const CLOUD_TOP = 260/);
-  assert.match(weather, /RaymarchingBox\(32/);
+  assert.match(weather, /const CLOUD_BASE = 650/);
+  assert.match(weather, /const CLOUD_TOP = 950/);
+  assert.match(weather, /const CLOUD_SHELL_RADIUS = 3900/);
+  assert.match(weather, /Loop\(CLOUD_VIEW_STEPS/);
+  assert.match(weather, /const deckHeight = point\.y\.sub\(CLOUD_BASE\)/);
+  assert.match(weather, /mx_noise_float\(coarseCoord\)/);
+  assert.match(weather, /new THREE\.SphereGeometry\(CLOUD_SHELL_RADIUS, 48, 24\)/);
+  assert.match(weather, /clouds\.position\.copy\(camera\.position\)/);
   assert.match(weather, /new THREE\.NodeMaterial/);
   assert.match(weather, /material\.colorNode = cloudRaymarch\(\)/);
-  assert.match(weather, /new THREE\.BoxGeometry\(1, 1, 1\)/);
-  assert.match(weather, /volume\.scale\.set\(760, CLOUD_SPAN_Y, 760\)/);
+  assert.doesNotMatch(weather, /new THREE\.BoxGeometry/);
+  assert.doesNotMatch(weather, /RaymarchingBox/);
+  assert.match(weather, /material\.depthTest = true/);
   assert.match(weather, /cloudFieldNode\(point\)/);
   assert.match(weather, /cloudDensityNode\(point\.add\(cloudKeyDirection\.mul\(16\)\)\)/);
   assert.match(weather, /lightTransmission/);
