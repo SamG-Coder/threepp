@@ -289,6 +289,7 @@ export async function buildBeachScene(scene, maps, renderer) {
     sky,
     lights,
     terrain,
+    heightMap,
     water,
     foamField,
     dressing,

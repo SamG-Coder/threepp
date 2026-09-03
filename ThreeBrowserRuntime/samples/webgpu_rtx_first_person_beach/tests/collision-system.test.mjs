@@ -43,6 +43,19 @@ test("palm trunks block and boxes support or slide a player capsule", () => {
   );
   assert.equal(terrainHit.kind, "terrain");
   assert.ok(terrainHit.alpha > 0 && terrainHit.alpha < 1);
+  const originalHeight = collision.groundHeightAt(-4, -18);
+  collision.setTerrainDepression(0, {
+    x: -4,
+    z: -18,
+    forwardX: 0,
+    forwardZ: 1,
+    rightX: 1,
+    rightZ: 0,
+    radiusX: 0.2,
+    radiusZ: 0.26,
+    depth: 0.16,
+  });
+  assert.ok(collision.groundHeightAt(-4, -18) < originalHeight - 0.15);
 
   const rockHit = collision.sweepPoint(
     new THREE.Vector3(rockX - 2, support.height - 0.25, rockZ),

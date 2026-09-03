@@ -82,8 +82,21 @@ wind-up places the shovel on the right, the blade swings low from right to
 left, and the follow-through lifts it over the left shoulder before returning
 to the ready pose.
 Looking down therefore digs in the viewed direction, with horizontal reach
-capped at 0.55 world units so the strike stays immediately in front of the
-player even at a shallow viewing angle.
+capped at 1.5 world units. A successful terrain swing removes a persistent,
+spade-sized sand volume rather than placing a decal. Digging rebuilds the
+affected heightfield cells at higher local resolution, and every new vertex
+samples the same depression data used by collision. Overlapping and repeated
+cuts merge into one continuous, still-diggable terrain mesh; there are no
+per-hole sand overlays that can intersect into vertical shards. Repeated digs
+in the same cut deepen it to a bounded 0.3 world units.
+
+Each cut is also registered in the rain/runoff height field. Existing standing
+water is drawn into the new low point, rainfall gradually accumulates in it,
+and overlapping cuts exchange water so a chain of shovel cuts acts as a small
+drainage channel. Cuts whose bottoms reach the shoreline water table become
+sea-connected and fill toward the global water level; the retained surface is
+kept inside the cut boundary to avoid the blue edge seam previously seen on
+footprints.
 A closer rock, log, palm or carryable stops the action after the low swing
 instead of allowing the terrain-only shoulder follow-through. The aim ray is
 swept continuously through the collision world so thin geometry is not skipped.

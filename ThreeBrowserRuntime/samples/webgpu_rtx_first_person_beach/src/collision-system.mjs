@@ -18,6 +18,7 @@ function containsTop(box, x, z, margin = 0) {
 
 export function createBeachCollisionWorld(world) {
   const colliders = [];
+  const terrainDepressions = [];
   world.dressing?.updateWorldMatrix?.(true, true);
 
   for (const palm of world.palms ?? []) {
@@ -64,8 +65,25 @@ export function createBeachCollisionWorld(world) {
     return false;
   }
 
+  function terrainSurfaceHeight(x, z) {
+    let depression = 0;
+    for (const record of terrainDepressions) {
+      if (!record) continue;
+      const dx = x - record.x;
+      const dz = z - record.z;
+      const localX = dx * record.rightX + dz * record.rightZ;
+      const localZ = dx * record.forwardX + dz * record.forwardZ;
+      const q = Math.pow(Math.abs(localX) / record.radiusX, 3)
+        + Math.pow(Math.abs(localZ) / record.radiusZ, 3);
+      if (q >= 1) continue;
+      const edge = THREE.MathUtils.smoothstep(q, 0.32, 1);
+      depression = Math.max(depression, record.depth * (1 - edge));
+    }
+    return terrainHeight(x, z) - depression;
+  }
+
   function supportAt(x, z) {
-    let height = terrainHeight(x, z);
+    let height = terrainSurfaceHeight(x, z);
     let kind = "terrain";
     for (const collider of colliders) {
       // Palm trunks are walls, not walkable columns. Rock and driftwood tops
@@ -96,7 +114,7 @@ export function createBeachCollisionWorld(world) {
         return { kind: collider.kind, collider, x, y, z };
       }
     }
-    const groundY = terrainHeight(x, z);
+    const groundY = terrainSurfaceHeight(x, z);
     if (y - radius <= groundY) return { kind: "terrain", collider: null, x, y: groundY, z };
     return null;
   }
@@ -125,6 +143,10 @@ export function createBeachCollisionWorld(world) {
     },
     surfaceAt(x, z) {
       return supportAt(x, z);
+    },
+    terrainHeightAt: terrainSurfaceHeight,
+    setTerrainDepression(index, depression) {
+      terrainDepressions[index] = { ...depression };
     },
     pointContact,
     sweepPoint,

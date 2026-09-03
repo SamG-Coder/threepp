@@ -101,6 +101,39 @@ function createAccumulationField(world) {
     return clamp01(memory[index] + water[index] * 3.8);
   }
 
+  function standingWaterDepthAt(x, z) {
+    const cell = fieldIndex(x, z);
+    return Math.max(0, water[cell.z * FIELD_SIZE + cell.x] * 0.42);
+  }
+
+  function registerDepression(x, z, radius, depth) {
+    const centre = fieldIndex(x, z);
+    const cellRadiusX = Math.max(1, Math.ceil(radius / (spanX / FIELD_SIZE)));
+    const cellRadiusZ = Math.max(1, Math.ceil(radius / (spanZ / FIELD_SIZE)));
+    for (let dz = -cellRadiusZ; dz <= cellRadiusZ; dz += 1) {
+      for (let dx = -cellRadiusX; dx <= cellRadiusX; dx += 1) {
+        const px = centre.x + dx;
+        const pz = centre.z + dz;
+        if (px < 1 || pz < 1 || px >= FIELD_SIZE - 1 || pz >= FIELD_SIZE - 1) continue;
+        const distance = Math.hypot(dx / cellRadiusX, dz / cellRadiusZ);
+        if (distance > 1.42) continue;
+        const weight = 1 - THREE.MathUtils.smoothstep(distance, 0.25, 1.42);
+        const index = pz * FIELD_SIZE + px;
+        const wx = HEIGHT_BOUNDS.minX + (px + 0.5) / FIELD_SIZE * spanX;
+        const wz = HEIGHT_BOUNDS.minZ + (pz + 0.5) / FIELD_SIZE * spanZ;
+        heights[index] = Math.min(heights[index], terrainHeight(wx, wz) - depth * weight);
+      }
+    }
+  }
+
+  function removeStandingWater(x, z, amount) {
+    const cell = fieldIndex(x, z);
+    const index = cell.z * FIELD_SIZE + cell.x;
+    const removed = Math.min(water[index], Math.max(0, amount));
+    water[index] -= removed;
+    return removed * 0.42;
+  }
+
   const neighbours = [
     [-1, 0], [1, 0], [0, -1], [0, 1],
     [-1, -1], [1, -1], [-1, 1], [1, 1],
@@ -159,6 +192,9 @@ function createAccumulationField(world) {
     texture: wetnessTexture,
     deposit,
     wetnessAt,
+    standingWaterDepthAt,
+    registerDepression,
+    removeStandingWater,
     update(dt) {
       accumulator += Math.min(0.05, Math.max(0, dt));
       let steps = 0;
@@ -378,6 +414,9 @@ export function createSurfaceWaterSystem(scene, world, random = Math.random) {
     findObjectImpact,
     impact,
     wetnessAt: accumulation.wetnessAt,
+    standingWaterDepthAt: accumulation.standingWaterDepthAt,
+    registerDepression: accumulation.registerDepression,
+    removeStandingWater: accumulation.removeStandingWater,
     update(dt) {
       accumulation.update(dt);
       ripples.update(dt);

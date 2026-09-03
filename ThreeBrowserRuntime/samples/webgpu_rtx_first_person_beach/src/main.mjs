@@ -93,7 +93,13 @@ const footsteps = createBeachFootstepSystem(scene, world, weather.surfaceWater, 
 const view = createViewState(0, -18, Math.PI, -0.05);
 view.y = collisionWorld.groundHeightAt(view.x, view.z) + 1.64;
 camera.position.set(view.x, view.y, view.z);
-const shovel = await createBeachShovel(scene, camera, view, collisionWorld);
+const shovel = await createBeachShovel(
+  scene,
+  camera,
+  view,
+  collisionWorld,
+  hit => footsteps.dig(hit),
+);
 prepareRtxGuideMaterials(scene);
 
 const keys = new Set();

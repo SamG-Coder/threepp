@@ -14,7 +14,7 @@ const SHOULDER_ROTATION = new THREE.Euler(-0.42, 0.18, -2.68, "XYZ");
 // Trace far enough to learn which patch of ground the player is looking at,
 // then constrain the actual strike to a believable first-person shovel reach.
 const DIG_AIM_TRACE = 12;
-const MAX_DIG_HORIZONTAL_REACH = 0.55;
+const MAX_DIG_HORIZONTAL_REACH = 1.5;
 
 const WINDUP_SECONDS = 0.2;
 const SWING_SECONDS = 0.34;
@@ -27,7 +27,7 @@ function smoothstep01(value) {
   return t * t * (3 - 2 * t);
 }
 
-function createDigAnimation(object, camera, collisionWorld, isCarried) {
+function createDigAnimation(object, camera, collisionWorld, isCarried, onDig) {
   const startPosition = new THREE.Vector3();
   const phaseStartPosition = new THREE.Vector3();
   const readyPosition = new THREE.Vector3();
@@ -133,8 +133,17 @@ function createDigAnimation(object, camera, collisionWorld, isCarried) {
         object.position.y -= Math.sin(t * Math.PI) * 0.09;
         if (phaseTime >= SWING_SECONDS) {
           console.log(`[First-Person Beach] Shovel struck ${targetKind}`);
-          if (targetKind === "terrain") beginPhase("shoulder");
-          else beginPhase("recover");
+          if (targetKind === "terrain") {
+            const horizontalLength = Math.hypot(aimDirection.x, aimDirection.z) || 1;
+            onDig?.({
+              x: targetWorld.x,
+              y: targetWorld.y,
+              z: targetWorld.z,
+              forwardX: aimDirection.x / horizontalLength,
+              forwardZ: aimDirection.z / horizontalLength,
+            });
+            beginPhase("shoulder");
+          } else beginPhase("recover");
         }
         return;
       }
@@ -160,7 +169,7 @@ function createDigAnimation(object, camera, collisionWorld, isCarried) {
   };
 }
 
-export async function createBeachShovel(scene, camera, view, collisionWorld) {
+export async function createBeachShovel(scene, camera, view, collisionWorld, onDig = null) {
   const loader = new GLTFLoader();
   const url = new URL("../assets/models/detailed-beach-shovel.glb", import.meta.url).href;
   const gltf = await loader.loadAsync(url);
@@ -198,7 +207,13 @@ export async function createBeachShovel(scene, camera, view, collisionWorld) {
     heldRotation: [READY_ROTATION.x, READY_ROTATION.y, READY_ROTATION.z],
     label: "shovel",
   });
-  const digAnimation = createDigAnimation(anchor, camera, collisionWorld, () => carryable.carried);
+  const digAnimation = createDigAnimation(
+    anchor,
+    camera,
+    collisionWorld,
+    () => carryable.carried,
+    onDig,
+  );
   return {
     object: carryable.object,
     get carried() {

@@ -118,6 +118,16 @@ test("walking has native surface audio and pooled sand impressions", async () =>
   assert.match(footsteps, /These are real vertices below the surrounding terrain surface/);
   assert.match(footsteps, /world\.terrain\.material\.clone\(\)/);
   assert.match(footsteps, /Dynamic terrain footprint openings/);
+  assert.match(footsteps, /Refined editable beach heightfield/);
+  assert.match(footsteps, /function createEditedTerrainGeometry/);
+  assert.match(footsteps, /Locally editable beach terrain cells/);
+  assert.match(footsteps, /originalTerrainGeometry\.setIndex\(createUneditedTerrainIndex/);
+  assert.doesNotMatch(footsteps, /Persistent shovel-sized terrain cuts/);
+  assert.match(footsteps, /Water retained inside shovel cuts/);
+  assert.match(footsteps, /function digSand\(hit\)/);
+  assert.match(footsteps, /surfaceWater\?\.registerDepression/);
+  assert.match(footsteps, /surfaceWater\?\.removeStandingWater/);
+  assert.match(footsteps, /refreshTerrainHeightTexture\(world\.heightMap/);
   assert.match(footsteps, /terrainMaterial\.alphaTestNode/);
   assert.doesNotMatch(footsteps, /MeshPhysicalMaterial|fillMesh|WaterFill/);
   assert.match(footsteps, /surfaceWater\?\.impact/);
