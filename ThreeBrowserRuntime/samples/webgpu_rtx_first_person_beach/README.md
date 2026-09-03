@@ -88,7 +88,10 @@ affected heightfield cells at higher local resolution, and every new vertex
 samples the same depression data used by collision. Overlapping and repeated
 cuts merge into one continuous, still-diggable terrain mesh; there are no
 per-hole sand overlays that can intersect into vertical shards. Repeated digs
-in the same cut deepen it to a bounded 0.3 world units.
+in the same cut deepen it to a bounded 0.3 world units. A cut that overlaps an
+existing footprint removes that entire sole impression from both the pooled
+geometry and the terrain-opening mask, so digging cannot leave a floating or
+partially exposed footprint behind.
 
 Each cut is also registered in the rain/runoff height field. Existing standing
 water is drawn into the new low point, rainfall gradually accumulates in it,

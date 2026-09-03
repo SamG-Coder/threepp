@@ -526,6 +526,34 @@ export function createBeachFootstepSystem(scene, world, surfaceWater = null, col
     if (!editableTerrain.parent) scene.add(editableTerrain);
   }
 
+  function eraseFootprintsNearDig(record) {
+    let erased = 0;
+    for (let index = 0; index < pool.records.length; index += 1) {
+      const footprint = pool.records[index];
+      if (footprint.life <= 0) continue;
+      const dx = footprint.x - record.x;
+      const dz = footprint.z - record.z;
+      // Treat each sole as a compact swept area rather than testing only its
+      // centre. A shovel cut that clips the heel or toe must remove the whole
+      // impression; leaving half of the alpha opening would expose the sky or
+      // water underneath the edited terrain cell.
+      const soleReach = 0.13 * footprint.planarScale;
+      const localX = dx * record.rightX + dz * record.rightZ;
+      const localZ = dx * record.forwardX + dz * record.forwardZ;
+      const overlap = Math.pow(Math.abs(localX) / (DIG_RADIUS_X + soleReach), 3)
+        + Math.pow(Math.abs(localZ) / (DIG_RADIUS_Z + soleReach), 3);
+      if (overlap > 1) continue;
+      footprint.life = 0;
+      pool.mesh.setMatrixAt(index, pool.hidden);
+      erased += 1;
+    }
+    if (erased > 0) {
+      pool.mesh.instanceMatrix.needsUpdate = true;
+      maskDirty = true;
+    }
+    return erased;
+  }
+
   function digSand(hit) {
     const x = Number(hit.x);
     const z = Number(hit.z);
@@ -555,6 +583,7 @@ export function createBeachFootstepSystem(scene, world, surfaceWater = null, col
       && record.rimHeight - record.depth < WATER_LEVEL;
     const captured = surfaceWater?.removeStandingWater?.(x, z, 0.2) ?? 0;
     record.waterDepth = Math.min(record.depth - 0.008, record.waterDepth + captured);
+    const erasedFootprints = eraseFootprintsNearDig(record);
     collisionWorld?.setTerrainDepression?.(record.index, {
       x: record.x,
       z: record.z,
@@ -568,7 +597,8 @@ export function createBeachFootstepSystem(scene, world, surfaceWater = null, col
     });
     digs.lastEdited = record;
     rebuildTerrainGeometry();
-    console.log(`[First-Person Beach] Removed shovel-sized sand chunk at ${x.toFixed(2)}, ${z.toFixed(2)}`);
+    const erasedLabel = erasedFootprints > 0 ? ` · erased ${erasedFootprints} footprint(s)` : "";
+    console.log(`[First-Person Beach] Removed shovel-sized sand chunk at ${x.toFixed(2)}, ${z.toFixed(2)}${erasedLabel}`);
     return true;
   }
 
