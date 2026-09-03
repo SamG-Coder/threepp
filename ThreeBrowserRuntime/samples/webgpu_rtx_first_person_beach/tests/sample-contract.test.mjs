@@ -28,12 +28,18 @@ test("manifest registers a portable WebGPU first-person beach", async () => {
     "index.html",
     "site-entry.mjs",
     "src/main.mjs",
+    "src/palm-model.mjs",
     "src/foam-field.mjs",
     "src/weather.mjs",
     "src/surface-water.mjs",
     "src/sky-cycle.mjs",
     "src/tile-relief.mjs",
     "src/native-rtx-renderer.mjs",
+    "assets/models/realistic-beach-palm.glb",
+    "assets/source/palm-leaf.png",
+    "assets/textures/palm-leaf-albedo.png",
+    "assets/textures/palm-leaf-height.png",
+    "assets/textures/palm-leaf-normal.png",
     "assets/textures/dry-sand-albedo.png",
     "assets/textures/dry-sand-height.png",
     "assets/textures/dry-sand-normal.png",
@@ -131,6 +137,27 @@ test("beach water keeps its Gerstner mesh and advects persistent foam", async ()
   assert.match(main, /createSkyClock/);
   assert.match(main, /syncSkyUniforms/);
   assert.doesNotMatch(scene, /new THREE\.Water|OceanGeometry|WaterMesh/);
+});
+
+test("Studio-authored palms load as reusable GLB instances", async () => {
+  const [scene, palm, materials, html] = await Promise.all([
+    load("src/scene.mjs"),
+    load("src/palm-model.mjs"),
+    load("src/materials.mjs"),
+    load("index.html"),
+  ]);
+  assert.match(scene, /GLTFLoader/);
+  assert.match(scene, /realistic-beach-palm\.glb/);
+  assert.match(scene, /template\.clone\(true\)/);
+  assert.match(scene, /prepareStudioPalm/);
+  assert.match(palm, /studioMaterialId/);
+  assert.match(palm, /createCylindricalTrunkUvs/);
+  assert.match(palm, /generatedPalmUv = "cylindrical-z-seam-safe"/);
+  assert.match(palm, /material\.transparent = false/);
+  assert.match(palm, /material\.depthWrite = true/);
+  assert.match(palm, /maps\[profile\.tile\]/);
+  assert.match(materials, /uv\(\)\.mul\(vec2\(uvScale\[0\], uvScale\[1\]\)\)/);
+  assert.match(html, /"three": "\.\.\/\.\.\/node_modules\/three\/build\/three\.webgpu\.js"/);
 });
 
 test("every tile that needs relief ships albedo, height and normal maps", async () => {

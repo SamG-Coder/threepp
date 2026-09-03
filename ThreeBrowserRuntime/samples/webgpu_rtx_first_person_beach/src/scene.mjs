@@ -1,9 +1,9 @@
 import * as THREE from "three/webgpu";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { createBeachFoamField } from "./foam-field.mjs";
 import {
   breakingInjectionNode,
   createBeachTerrainMaterial,
-  createFrondMaterial,
   createMappedMaterial,
   createMoonMaterial,
   createSkyMaterial,
@@ -14,6 +14,7 @@ import {
   waterTime,
 } from "./materials.mjs";
 import { createMoonGlobe, createStarField } from "./sky-cycle.mjs";
+import { prepareStudioPalm } from "./palm-model.mjs";
 import {
   HEIGHT_BOUNDS,
   WATER_LEVEL,
@@ -101,44 +102,20 @@ function preRollFoam(foamField, seconds = 4.2) {
   waterTime.value = previous + seconds;
 }
 
-function addPalm(group, maps, x, z, scale, yaw, random) {
+async function loadPalmTemplate(maps) {
+  const loader = new GLTFLoader();
+  const url = new URL("../assets/models/realistic-beach-palm.glb", import.meta.url).href;
+  const gltf = await loader.loadAsync(url);
+  return prepareStudioPalm(gltf.scene, maps);
+}
+
+function addPalm(group, template, x, z, scale, yaw) {
   const ground = terrainHeight(x, z);
-  const palm = new THREE.Group();
+  const palm = template.clone(true);
   palm.name = "Coconut palm";
   palm.position.set(x, ground, z);
   palm.rotation.y = yaw;
   palm.scale.setScalar(scale);
-
-  const trunk = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.18, 0.28, 7.4, 10, 6),
-    createMappedMaterial(maps["palm-bark"], {
-      name: "palm-bark",
-      objectUv: true,
-      repeat: 1,
-      roughness: 0.78,
-      normalScale: 1.2,
-      reflectionMask: 0.06,
-    }),
-  );
-  trunk.position.y = 3.7;
-  trunk.castShadow = true;
-  trunk.receiveShadow = true;
-  palm.add(trunk);
-
-  const crown = new THREE.Group();
-  crown.position.y = 7.15;
-  const frondMaterial = createFrondMaterial();
-  for (let i = 0; i < 9; i += 1) {
-    const frond = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 3.4), frondMaterial);
-    frond.position.y = 0.2;
-    frond.rotation.x = 0.72 + random() * 0.35;
-    frond.rotation.z = (i / 9) * Math.PI * 2;
-    frond.geometry.translate(0, -1.55, 0);
-    frond.castShadow = true;
-    frond.userData.rtxIgnore = true;
-    crown.add(frond);
-  }
-  palm.add(crown);
   group.add(palm);
   return palm;
 }
@@ -264,6 +241,7 @@ export async function buildBeachScene(scene, maps, renderer) {
   scene.add(dressing);
 
   const random = mulberry32(0xbec4a11);
+  const palmTemplate = await loadPalmTemplate(maps);
   const palms = [];
   const palmSites = [
     [-18, -28, 1.05, 0.4],
@@ -276,7 +254,7 @@ export async function buildBeachScene(scene, maps, renderer) {
     [33, -29, 1.08, 4.4],
   ];
   for (const [x, z, scale, yaw] of palmSites) {
-    palms.push(addPalm(dressing, maps, x, z, scale, yaw, random));
+    palms.push(addPalm(dressing, palmTemplate, x, z, scale, yaw));
   }
 
   const rocks = [];

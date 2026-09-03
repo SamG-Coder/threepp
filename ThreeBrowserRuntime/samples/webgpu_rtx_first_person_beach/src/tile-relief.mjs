@@ -355,6 +355,15 @@ export const TILE_SPECS = Object.freeze({
     heightGain: 2.85,
     normalStrength: 11.2,
   }),
+  "palm-leaf": Object.freeze({
+    needsRelief: true,
+    mode: "wrap",
+    outputSize: 1024,
+    highPassTile: 6,
+    wrapBlend: 32,
+    heightGain: 0.9,
+    normalStrength: 3.2,
+  }),
   "lunar-surface": Object.freeze({
     needsRelief: true,
     mode: "keep",

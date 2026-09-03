@@ -69,6 +69,12 @@
       "bytes": 0
     },
     {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/source/palm-leaf.png",
+      "path": "assets/source/palm-leaf.png",
+      "type": "asset",
+      "bytes": 2433482
+    },
+    {
       "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/source/pebble-hash.jpg",
       "path": "assets/source/pebble-hash.jpg",
       "type": "asset",
@@ -189,6 +195,30 @@
       "bytes": 0
     },
     {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/palm-leaf-albedo.png",
+      "path": "assets/textures/palm-leaf-albedo.png",
+      "type": "asset",
+      "bytes": 2175112
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/palm-leaf-height.png",
+      "path": "assets/textures/palm-leaf-height.png",
+      "type": "asset",
+      "bytes": 658185
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/palm-leaf-normal.png",
+      "path": "assets/textures/palm-leaf-normal.png",
+      "type": "asset",
+      "bytes": 1824658
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/textures/palm-leaf-tile-preview.png",
+      "path": "assets/textures/palm-leaf-tile-preview.png",
+      "type": "asset",
+      "bytes": 4612208
+    },
+    {
       "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/source/lunar-surface.png",
       "path": "assets/source/lunar-surface.png",
       "type": "asset",
@@ -261,6 +291,12 @@
       "bytes": 0
     },
     {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/models/realistic-beach-palm.glb",
+      "path": "assets/models/realistic-beach-palm.glb",
+      "type": "asset",
+      "bytes": 1002740
+    },
+    {
       "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/",
       "path": "index.html",
       "type": "html",
@@ -329,6 +365,12 @@
     {
       "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/src/scene.mjs",
       "path": "src/scene.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/src/palm-model.mjs",
+      "path": "src/palm-model.mjs",
       "type": "module",
       "bytes": 0
     },
@@ -415,7 +457,7 @@
       "Displaced water, sky dome and palm fronds are excluded from BLAS construction.",
       "RTX and raster fallback work remains offscreen and shares exactly one tone-mapped swapchain presentation per frame.",
       "Hold the mouse to look, WASD walks, Shift sprints, X compares RTX and raster. Status is stdout only; there is no HTML overlay.",
-      "No sample-specific C++, downloaded model or third-party texture library is required at runtime."
+      "The reusable palm model is authored and validated in ThreeBrowser Studio, then shipped locally as GLB; no network asset download is required at runtime."
     ]
   }
 }

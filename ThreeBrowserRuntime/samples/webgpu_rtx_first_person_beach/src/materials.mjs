@@ -27,6 +27,7 @@ import {
   smoothstep,
   texture,
   uniform,
+  uv,
   vec2,
   vec3,
   vec4,
@@ -51,6 +52,7 @@ export const TILE_NAMES = Object.freeze([
   "coastal-rock",
   "dune-grass",
   "palm-bark",
+  "palm-leaf",
 ]);
 
 const WAVES = Object.freeze([
@@ -212,14 +214,16 @@ function sampleVariedNormal(map, baseUv, point, variation, strength, cells = 0.0
 
 export function createMappedMaterial(maps, options = {}) {
   const repeat = options.repeat ?? 0.28;
-  const uvNode = options.objectUv ? null : worldUv(repeat);
-  const albedoSample = uvNode ? texture(maps.albedo, uvNode) : texture(maps.albedo);
-  const heightSample = (uvNode ? texture(maps.heightMap, uvNode) : texture(maps.heightMap)).r;
+  const uvScale = options.uvScale ?? [repeat, repeat];
+  const uvNode = options.objectUv ? uv().mul(vec2(uvScale[0], uvScale[1])) : worldUv(repeat);
+  const albedoSample = texture(maps.albedo, uvNode);
+  const heightSample = texture(maps.heightMap, uvNode).r;
   const mappedNormal = normalMap(
-    (uvNode ? texture(maps.normal, uvNode) : texture(maps.normal)).rgb,
+    texture(maps.normal, uvNode).rgb,
     vec2(options.normalScale ?? 1, options.normalScale ?? 1),
   );
-  const colorNode = albedoSample.rgb.mul(options.tint ?? vec3(1, 1, 1));
+  const tintNode = Array.isArray(options.tint) ? vec3(...options.tint) : options.tint ?? vec3(1, 1, 1);
+  const colorNode = albedoSample.rgb.mul(tintNode);
   if (options.clearcoat) {
     const physical = new THREE.MeshPhysicalNodeMaterial({
       metalness: 0,
