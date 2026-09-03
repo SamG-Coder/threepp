@@ -15,6 +15,7 @@ import {
 } from "./materials.mjs";
 import { createMoonGlobe, createStarField } from "./sky-cycle.mjs";
 import { prepareStudioPalm } from "./palm-model.mjs";
+import { prepareStudioRockSet } from "./rock-model.mjs";
 import {
   HEIGHT_BOUNDS,
   WATER_LEVEL,
@@ -109,6 +110,13 @@ async function loadPalmTemplate(maps) {
   return prepareStudioPalm(gltf.scene, maps);
 }
 
+async function loadRockTemplates(maps) {
+  const loader = new GLTFLoader();
+  const url = new URL("../assets/models/coastal-rock-set.glb", import.meta.url).href;
+  const gltf = await loader.loadAsync(url);
+  return prepareStudioRockSet(gltf.scene, maps);
+}
+
 function addPalm(group, template, x, z, scale, yaw) {
   const ground = terrainHeight(x, z);
   const palm = template.clone(true);
@@ -120,25 +128,22 @@ function addPalm(group, template, x, z, scale, yaw) {
   return palm;
 }
 
-function addRock(group, maps, x, z, scale, yaw, stretch) {
+function addRock(group, templates, variant, x, z, scale, yaw, stretch) {
   const ground = terrainHeight(x, z);
-  const rock = new THREE.Mesh(
-    new THREE.IcosahedronGeometry(1, 1),
-    createMappedMaterial(maps["coastal-rock"], {
-      name: "coastal-rock",
-      repeat: 0.55,
-      roughness: 0.74,
-      normalScale: 1.25,
-      roughnessFromHeight: true,
-      reflectionMask: 0.12,
-    }),
-  );
-  rock.name = "Shore rock";
-  rock.position.set(x, ground + scale * 0.35, z);
-  rock.rotation.set(0.18, yaw, 0.11);
+  const template = templates[variant % templates.length];
+  const rock = template.clone(false);
+  rock.name = `Shore rock - ${template.name}`;
+  const bounds = rock.geometry.boundingBox;
+  const height = Math.max(0.01, bounds.max.y - bounds.min.y);
+  const burial = height * scale * (template.userData.burialFraction ?? 0.38);
+  rock.position.set(x, ground - burial, z);
   rock.scale.set(scale * stretch, scale, scale / stretch);
-  rock.castShadow = true;
-  rock.receiveShadow = true;
+  const sampleRadius = 0.65;
+  const slopeX = (terrainHeight(x + sampleRadius, z) - terrainHeight(x - sampleRadius, z)) / (sampleRadius * 2);
+  const slopeZ = (terrainHeight(x, z + sampleRadius) - terrainHeight(x, z - sampleRadius)) / (sampleRadius * 2);
+  const groundNormal = new THREE.Vector3(-slopeX, 1, -slopeZ).normalize();
+  rock.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), groundNormal);
+  rock.rotateOnWorldAxis(groundNormal, yaw);
   group.add(rock);
   return rock;
 }
@@ -241,7 +246,10 @@ export async function buildBeachScene(scene, maps, renderer) {
   scene.add(dressing);
 
   const random = mulberry32(0xbec4a11);
-  const palmTemplate = await loadPalmTemplate(maps);
+  const [palmTemplate, rockTemplates] = await Promise.all([
+    loadPalmTemplate(maps),
+    loadRockTemplates(maps),
+  ]);
   const palms = [];
   const palmSites = [
     [-18, -28, 1.05, 0.4],
@@ -258,10 +266,20 @@ export async function buildBeachScene(scene, maps, renderer) {
   }
 
   const rocks = [];
-  for (let i = 0; i < 14; i += 1) {
-    const x = -48 + random() * 96;
-    const z = -6 + random() * 18;
-    rocks.push(addRock(dressing, maps, x, z, 0.45 + random() * 1.1, random() * Math.PI, 0.7 + random() * 0.5));
+  const rockRandom = mulberry32(0x51a7c0de);
+  for (let i = 0; i < 11; i += 1) {
+    const x = -46 + rockRandom() * 92;
+    const z = -4 + rockRandom() * 17;
+    rocks.push(addRock(
+      dressing,
+      rockTemplates,
+      i % rockTemplates.length,
+      x,
+      z,
+      0.3 + rockRandom() * 0.52,
+      rockRandom() * Math.PI * 2,
+      0.82 + rockRandom() * 0.28,
+    ));
   }
   for (let i = 0; i < 6; i += 1) {
     addDriftwood(dressing, maps, -20 + random() * 40, -4 + random() * 10, 1.6 + random() * 1.8, random() * Math.PI);

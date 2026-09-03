@@ -11,7 +11,7 @@ They come from `src/tile-relief.mjs`, a JavaScript port of FakeDepthTrick
 | dry-sand | quilt | 1.85 | 6.4 | Rotation-safe grain |
 | wet-sand | quilt | 2.35 | 8.6 | Diagonal ripples encode direction |
 | pebble-hash | quilt | 3.15 | 10.4 | High-contrast stones; residual 2×2 plus is faint |
-| coastal-rock | quilt | 2.7 | 9.2 | Horizontal bedding |
+| coastal-rock | wrap | 3.2 | 11 | Cracked coastal greywacke |
 | dune-grass | quilt | 1.45 | 5.4 | Top-down thatch |
 | palm-bark | wrap | 2.85 | 11.2 | Periodic diamond scars; not quilted |
 | lunar-surface | keep | 2.4 | 8.5 | Generated lunar albedo; height/normals baked, not quilted |

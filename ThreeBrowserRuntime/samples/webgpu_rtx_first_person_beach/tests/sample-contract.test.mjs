@@ -29,6 +29,7 @@ test("manifest registers a portable WebGPU first-person beach", async () => {
     "site-entry.mjs",
     "src/main.mjs",
     "src/palm-model.mjs",
+    "src/rock-model.mjs",
     "src/foam-field.mjs",
     "src/weather.mjs",
     "src/surface-water.mjs",
@@ -36,6 +37,7 @@ test("manifest registers a portable WebGPU first-person beach", async () => {
     "src/tile-relief.mjs",
     "src/native-rtx-renderer.mjs",
     "assets/models/realistic-beach-palm.glb",
+    "assets/models/coastal-rock-set.glb",
     "assets/source/palm-leaf.png",
     "assets/textures/palm-leaf-albedo.png",
     "assets/textures/palm-leaf-height.png",
@@ -178,6 +180,31 @@ test("Studio-authored palms load as reusable GLB instances", async () => {
   assert.match(palm, /maps\[profile\.tile\]/);
   assert.match(materials, /uv\(\)\.mul\(vec2\(uvScale\[0\], uvScale\[1\]\)\)/);
   assert.match(html, /"three": "\.\.\/\.\.\/node_modules\/three\/build\/three\.webgpu\.js"/);
+});
+
+test("Studio-authored rock variants replace procedural ball geometry", async () => {
+  const [scene, rocks] = await Promise.all([
+    load("src/scene.mjs"),
+    load("src/rock-model.mjs"),
+  ]);
+  assert.match(scene, /coastal-rock-set\.glb/);
+  assert.match(scene, /prepareStudioRockSet/);
+  assert.match(scene, /i % rockTemplates\.length/);
+  assert.doesNotMatch(scene, /IcosahedronGeometry/);
+  assert.match(rocks, /Wave Worn Slab/);
+  assert.match(rocks, /Fractured Boulder/);
+  assert.match(rocks, /Embedded Shore Wedge/);
+  assert.match(rocks, /geometry\.applyMatrix4\(mesh\.matrixWorld\)/);
+  assert.match(rocks, /coastal-rock-slab/);
+  assert.match(rocks, /coastal-rock-boulder/);
+  assert.match(rocks, /coastal-rock-wedge/);
+  assert.match(rocks, /maps\[profile\.tile\] \?\? maps\["coastal-rock"\]/);
+  assert.match(rocks, /applyBoxProjectedUvs/);
+  assert.match(rocks, /boxProjectedUvs/);
+  assert.match(rocks, /deleteAttribute\("tangent"\)/);
+  assert.match(scene, /burialFraction/);
+  assert.match(scene, /setFromUnitVectors/);
+  assert.match(rocks, /material\.transparent = false/);
 });
 
 test("every tile that needs relief ships albedo, height and normal maps", async () => {
