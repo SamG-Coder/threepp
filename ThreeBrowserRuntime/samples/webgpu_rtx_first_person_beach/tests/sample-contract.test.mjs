@@ -103,6 +103,10 @@ test("walking has native surface audio and pooled sand impressions", async () =>
   assert.match(footsteps, /new Audio\(source\)/);
   assert.match(footsteps, /new THREE\.InstancedMesh/);
   assert.match(footsteps, /createDepressedFootprintGeometry/);
+  assert.match(footsteps, /const SEAM_COLLAR = 0\.035/);
+  assert.match(footsteps, /const HOLE_SIDE_INSET = 0\.014/);
+  assert.match(footsteps, /const HOLE_END_INSET = 0\.02/);
+  assert.match(footsteps, /surrounding collar remains level/);
   assert.match(footsteps, /These are real vertices below the surrounding terrain surface/);
   assert.match(footsteps, /world\.terrain\.material\.clone\(\)/);
   assert.match(footsteps, /Dynamic terrain footprint openings/);

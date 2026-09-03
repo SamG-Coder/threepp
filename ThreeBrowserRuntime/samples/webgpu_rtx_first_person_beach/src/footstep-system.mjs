@@ -14,6 +14,9 @@ const MASK_SIZE = 1024;
 const MASK_WORLD_SIZE = 42;
 const SOLE_MIN_Z = -0.142;
 const SOLE_MAX_Z = 0.145;
+const SEAM_COLLAR = 0.035;
+const HOLE_SIDE_INSET = 0.014;
+const HOLE_END_INSET = 0.02;
 const SOLE_PROFILE = [
   [SOLE_MIN_Z, 0.004], [-0.13, 0.035], [-0.085, 0.062], [-0.02, 0.07],
   [0.06, 0.059], [0.125, 0.04], [SOLE_MAX_Z, 0.004],
@@ -39,8 +42,11 @@ function treadDepth(across, along, row, column) {
 }
 
 function createDepressedFootprintGeometry() {
-  const rows = 29;
-  const columns = 13;
+  // The level collar is wider than the filtered terrain opening. It carries
+  // the exact terrain material and overlaps the uncut ground, preventing the
+  // water/sky below the terrain from appearing as a coloured fringe.
+  const rows = 33;
+  const columns = 17;
   const positions = new Float32Array(rows * columns * 3);
   const uvs = new Float32Array(rows * columns * 2);
   const indices = [];
@@ -48,17 +54,31 @@ function createDepressedFootprintGeometry() {
   let q = 0;
   for (let row = 0; row < rows; row += 1) {
     const along = row / (rows - 1);
-    const z = THREE.MathUtils.lerp(SOLE_MIN_Z, SOLE_MAX_Z, along);
-    const width = soleHalfWidth(z);
+    const z = THREE.MathUtils.lerp(
+      SOLE_MIN_Z - SEAM_COLLAR,
+      SOLE_MAX_Z + SEAM_COLLAR,
+      along,
+    );
+    const soleZ = THREE.MathUtils.clamp(z, SOLE_MIN_Z, SOLE_MAX_Z);
+    const soleWidth = soleHalfWidth(soleZ);
+    const patchWidth = soleWidth + SEAM_COLLAR;
     for (let column = 0; column < columns; column += 1) {
       const across = column / (columns - 1) * 2 - 1;
-      const x = width * across;
-      const edge = Math.pow(Math.abs(across), 3.2);
-      const endFade = Math.pow(Math.sin(Math.PI * along), 0.38);
+      const x = patchWidth * across;
+      const soleAcross = x / Math.max(0.001, soleWidth);
+      const soleAlong = (z - SOLE_MIN_Z) / (SOLE_MAX_Z - SOLE_MIN_Z);
+      const insideSole = z >= SOLE_MIN_Z && z <= SOLE_MAX_Z && Math.abs(soleAcross) <= 1;
+      const edge = Math.pow(Math.min(1, Math.abs(soleAcross)), 3.2);
+      const endFade = insideSole
+        ? Math.pow(Math.sin(Math.PI * soleAlong), 0.38)
+        : 0;
       // These are real vertices below the surrounding terrain surface. Tread
-      // blocks press slightly deeper than the already concave sole bed.
-      const depression = 0.021 * (1 - edge) * endFade
-        + treadDepth(across, along, row, column) * (1 - edge);
+      // blocks press slightly deeper than the already concave sole bed. The
+      // surrounding collar remains level to close the terrain-mask seam.
+      const depression = insideSole
+        ? 0.021 * (1 - edge) * endFade
+          + treadDepth(soleAcross, soleAlong, row, column) * (1 - edge) * endFade
+        : 0;
       positions[p++] = x;
       positions[p++] = 0.002 - depression;
       positions[p++] = z;
@@ -135,11 +155,22 @@ function createTerrainHoleMask(terrainMaterial) {
           const dz = worldZ - record.z;
           const localX = (dx * record.rightX + dz * record.rightZ) / record.planarScale;
           const localZ = (dx * record.forwardX + dz * record.forwardZ) / record.planarScale;
-          if (localZ < SOLE_MIN_Z || localZ > SOLE_MAX_Z) continue;
-          const width = soleHalfWidth(localZ);
-          const signedEdge = Math.abs(localX) / Math.max(0.001, width);
-          if (signedEdge <= 1.02) {
-            const feather = THREE.MathUtils.clamp((1.05 - signedEdge) * 18, 0, 1);
+          if (
+            localZ < SOLE_MIN_Z + HOLE_END_INSET
+            || localZ > SOLE_MAX_Z - HOLE_END_INSET
+          ) continue;
+          const width = soleHalfWidth(localZ) - HOLE_SIDE_INSET;
+          if (width <= 0 || Math.abs(localX) >= width) continue;
+          const edgeDistance = Math.min(
+            width - Math.abs(localX),
+            localZ - (SOLE_MIN_Z + HOLE_END_INSET),
+            (SOLE_MAX_Z - HOLE_END_INSET) - localZ,
+          );
+          if (edgeDistance > 0) {
+            // Keep the alpha-tested opening safely inside both the depressed
+            // sole and its level collar. The short feather only anti-aliases
+            // inward, so a filtered texel can never expose the background.
+            const feather = THREE.MathUtils.clamp(edgeDistance * 110, 0, 1);
             pixels[pz * MASK_SIZE + px] = Math.max(
               pixels[pz * MASK_SIZE + px],
               Math.round(feather * 255),

@@ -6,7 +6,7 @@ const SAMPLE_RATE = 32_000;
 const PROFILES = {
   "dry-sand": { duration: 0.23, thump: 88, noise: 0.46, cutoff: 0.19, decay: 18, grit: 0.18 },
   "wet-sand": { duration: 0.3, thump: 64, noise: 0.3, cutoff: 0.075, decay: 13, grit: 0.08 },
-  "shallow-water": { duration: 0.36, thump: 48, noise: 0.5, cutoff: 0.12, decay: 10, grit: 0.24 },
+  "shallow-water": { duration: 0.46, thump: 42, noise: 0.32, cutoff: 0.035, decay: 7.2, grit: 0.045 },
   rock: { duration: 0.18, thump: 172, noise: 0.24, cutoff: 0.32, decay: 27, grit: 0.1 },
   wood: { duration: 0.28, thump: 118, noise: 0.17, cutoff: 0.22, decay: 17, grit: 0.07 },
 };
@@ -43,6 +43,8 @@ for (const [name, profile] of Object.entries(PROFILES)) {
     const frames = Math.round(profile.duration * SAMPLE_RATE);
     const samples = new Float32Array(frames);
     let low = 0;
+    let waterLow = 0;
+    let waterMid = 0;
     let phase = variant * 0.37;
     for (let frame = 0; frame < frames; frame += 1) {
       const t = frame / SAMPLE_RATE;
@@ -57,8 +59,15 @@ for (const [name, profile] of Object.entries(PROFILES)) {
       if (name === "rock") body += Math.sin(phase * 2.71) * 0.19;
       if (name === "wood") body += Math.sin(Math.PI * 2 * 286 * t) * 0.14;
       if (name === "shallow-water") {
-        const splashEnvelope = Math.exp(-Math.max(0, t - 0.018) * 16);
-        body += (white - low) * splashEnvelope * 0.24;
+        // A foot entering shallow water produces a rounded displacement and
+        // a quiet, filtered wash—not the bright white-noise crack of a large
+        // splash. Two differently filtered layers make the tail slosh.
+        waterLow += (white - waterLow) * 0.018;
+        waterMid += (white - waterMid) * 0.065;
+        const entry = Math.exp(-Math.pow((t - 0.055) / 0.052, 2));
+        const wash = Math.exp(-Math.max(0, t - 0.035) * (5.1 + variant * 0.25));
+        const slosh = waterLow * 0.62 + (waterMid - waterLow) * 0.28;
+        body = Math.sin(phase) * 0.16 + slosh * wash * 0.78 + waterMid * entry * 0.2;
       }
       const envelope = Math.exp(-t * profile.decay) * attack * tail;
       samples[frame] = Math.tanh((body + granular) * envelope * 1.35) * 0.72;

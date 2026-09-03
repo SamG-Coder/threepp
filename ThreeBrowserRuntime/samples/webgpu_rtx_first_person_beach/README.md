@@ -57,7 +57,9 @@ landed on after a jump. Footprints are locally tessellated terrain patches:
 their sole/tread vertices are physically depressed and retain the exact ground
 albedo, normal, roughness, shoreline wash, cloud shadow and rain/runoff
 wetness. A dynamic terrain mask exposes that real depth; no decal texture or
-second footprint-water mesh is layered over the beach.
+second footprint-water mesh is layered over the beach. Each replacement patch
+also has a level terrain-material collar outside the depression, preventing
+the filtered cutout from exposing water or sky as a coloured edge seam.
 
 Landing impact speed is carried out of the jump solver. A sand landing stamps
 both feet and scales both the contact area and physical depression depth with
