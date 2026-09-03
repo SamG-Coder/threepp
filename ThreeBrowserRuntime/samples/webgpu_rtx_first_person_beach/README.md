@@ -39,6 +39,17 @@ controls and RTX path are reported on stdout.
 Wade into the shallows; chest-deep water stops the stride. There is no swim
 controller.
 
+Footfalls are distance-driven rather than timer-driven. Dry sand, wet sand,
+shallow water, coastal rock and driftwood each use a distinct two-variation
+native WAV set. Alternating feet leave pooled, slope-aligned concave
+impressions in dry or wet sand; shallow-water steps feed the existing ripple
+and splash simulation. Rain accumulation also changes dry footsteps and marks
+to wet ones. Regenerate the deterministic local sounds with:
+
+```powershell
+node .\samples\webgpu_rtx_first_person_beach\tools\generate-footstep-audio.mjs
+```
+
 ## Run and test
 
 ```powershell

@@ -301,6 +301,7 @@ export function createBeachWeather(scene, camera, world) {
   return {
     clouds,
     rain: rain.lines,
+    surfaceWater,
     get storm() {
       return stormAmount.value;
     },

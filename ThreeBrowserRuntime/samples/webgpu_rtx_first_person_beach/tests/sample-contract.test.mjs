@@ -33,11 +33,18 @@ test("manifest registers a portable WebGPU first-person beach", async () => {
     "src/foam-field.mjs",
     "src/weather.mjs",
     "src/surface-water.mjs",
+    "src/footstep-logic.mjs",
+    "src/footstep-system.mjs",
     "src/sky-cycle.mjs",
     "src/tile-relief.mjs",
     "src/native-rtx-renderer.mjs",
     "assets/models/realistic-beach-palm.glb",
     "assets/models/coastal-rock-set.glb",
+    "assets/audio/footstep-dry-sand-1.wav",
+    "assets/audio/footstep-wet-sand-1.wav",
+    "assets/audio/footstep-shallow-water-1.wav",
+    "assets/audio/footstep-rock-1.wav",
+    "assets/audio/footstep-wood-1.wav",
     "assets/source/palm-leaf.png",
     "assets/textures/palm-leaf-albedo.png",
     "assets/textures/palm-leaf-height.png",
@@ -66,6 +73,8 @@ test("main wires first-person controls and hybrid RTX lighting without HTML over
   assert.match(main, /loadAllTileMaps/);
   assert.match(main, /foamField\?\.update/);
   assert.match(main, /createBeachWeather/);
+  assert.match(main, /createBeachFootstepSystem/);
+  assert.match(main, /footsteps\.update\(dt, view\)/);
   assert.match(main, /camera\.lookAt\(0, 6, -38\)/);
   assert.match(main, /rtxRenderer\.render\(scene, camera/);
   assert.match(main, /warmScenePipelines\(\)/);
@@ -77,6 +86,24 @@ test("main wires first-person controls and hybrid RTX lighting without HTML over
   assert.doesNotMatch(main, /innerHTML/);
   assert.doesNotMatch(html, /<(?:div|aside|section|header|footer|button|input)\b/i);
   assert.ok((main.match(/\.present\(/g) ?? []).length >= 1);
+});
+
+test("walking has native surface audio and pooled sand impressions", async () => {
+  const [main, footsteps, logic, weather] = await Promise.all([
+    load("src/main.mjs"),
+    load("src/footstep-system.mjs"),
+    load("src/footstep-logic.mjs"),
+    load("src/weather.mjs"),
+  ]);
+  assert.match(main, /footsteps\.arm\(\)/);
+  assert.match(weather, /surfaceWater,/);
+  assert.match(footsteps, /new Audio\(source\)/);
+  assert.match(footsteps, /Wet sand footprint impressions/);
+  assert.match(footsteps, /Dry sand footprint impressions/);
+  assert.match(footsteps, /new THREE\.InstancedMesh/);
+  assert.match(footsteps, /surfaceWater\?\.impact/);
+  assert.match(logic, /"shallow-water"/);
+  assert.doesNotMatch(footsteps, /AudioContext|createOscillator|createBufferSource/);
 });
 
 test("day-night transitions retain stable WebGPU shadow and celestial render graphs", async () => {

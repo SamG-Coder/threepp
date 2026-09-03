@@ -9,6 +9,96 @@
   "requiresWebGPU": true,
   "files": [
     {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/src/footstep-logic.mjs",
+      "path": "src/footstep-logic.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/src/footstep-system.mjs",
+      "path": "src/footstep-system.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/tools/generate-footstep-audio.mjs",
+      "path": "tools/generate-footstep-audio.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/tests/footstep-logic.test.mjs",
+      "path": "tests/footstep-logic.test.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/tests/footstep-audio.test.mjs",
+      "path": "tests/footstep-audio.test.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/audio/footstep-dry-sand-1.wav",
+      "path": "assets/audio/footstep-dry-sand-1.wav",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/audio/footstep-dry-sand-2.wav",
+      "path": "assets/audio/footstep-dry-sand-2.wav",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/audio/footstep-wet-sand-1.wav",
+      "path": "assets/audio/footstep-wet-sand-1.wav",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/audio/footstep-wet-sand-2.wav",
+      "path": "assets/audio/footstep-wet-sand-2.wav",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/audio/footstep-shallow-water-1.wav",
+      "path": "assets/audio/footstep-shallow-water-1.wav",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/audio/footstep-shallow-water-2.wav",
+      "path": "assets/audio/footstep-shallow-water-2.wav",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/audio/footstep-rock-1.wav",
+      "path": "assets/audio/footstep-rock-1.wav",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/audio/footstep-rock-2.wav",
+      "path": "assets/audio/footstep-rock-2.wav",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/audio/footstep-wood-1.wav",
+      "path": "assets/audio/footstep-wood-1.wav",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/audio/footstep-wood-2.wav",
+      "path": "assets/audio/footstep-wood-2.wav",
+      "type": "asset",
+      "bytes": 0
+    },
+    {
       "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/README.md",
       "path": "README.md",
       "type": "text",

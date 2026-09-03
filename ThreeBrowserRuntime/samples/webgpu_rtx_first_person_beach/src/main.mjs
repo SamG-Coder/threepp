@@ -1,6 +1,7 @@
 import * as THREE from "three/webgpu";
 import WebGPU from "three/addons/capabilities/WebGPU.js";
 import { createViewState, stepFirstPerson, cameraOrientation } from "./first-person.mjs";
+import { createBeachFootstepSystem } from "./footstep-system.mjs";
 import { loadAllTileMaps, syncSkyUniforms, waterTime } from "./materials.mjs";
 import { applySkyCycle, createSkyClock } from "./sky-cycle.mjs";
 import {
@@ -83,6 +84,7 @@ scene.environmentIntensity = 0.62;
 const maps = await loadAllTileMaps();
 const world = await buildBeachScene(scene, maps, renderer);
 const weather = createBeachWeather(scene, camera, world);
+const footsteps = createBeachFootstepSystem(scene, world, weather.surfaceWater);
 prepareRtxGuideMaterials(scene);
 
 const view = createViewState(0, -18, Math.PI, -0.05);
@@ -166,6 +168,7 @@ function clampToWorld(state) {
 const canvas = renderer.domElement;
 canvas.addEventListener("pointerdown", event => {
   if (event.button !== 0) return;
+  footsteps.arm();
   looking = true;
   canvas.setPointerCapture?.(event.pointerId);
   canvas.requestPointerLock?.();
@@ -187,6 +190,7 @@ document.addEventListener("pointerlockchange", () => {
   if (document.pointerLockElement !== canvas) looking = false;
 });
 addEventListener("keydown", event => {
+  footsteps.arm();
   keys.add(event.code);
   if (event.code === "KeyX") {
     nativeRequested = !nativeRequested;
@@ -233,6 +237,7 @@ renderer.setAnimationLoop(() => {
     renderer,
   });
   const weatherFrame = weather.update(dt, sky, world);
+  footsteps.update(dt, view);
 
   world.sun.updateWorldMatrix(true, false);
   world.sun.target.updateWorldMatrix(true, false);
@@ -294,5 +299,6 @@ addEventListener("resize", () => {
 addEventListener("beforeunload", () => {
   world.foamField?.dispose();
   weather.dispose();
+  footsteps.dispose();
   rtxRenderer.dispose();
 });
