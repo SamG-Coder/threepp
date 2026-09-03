@@ -1,6 +1,7 @@
 import * as THREE from "three/webgpu";
 import WebGPU from "three/addons/capabilities/WebGPU.js";
 import { createViewState, stepFirstPerson, cameraOrientation } from "./first-person.mjs";
+import { createBeachCollisionWorld } from "./collision-system.mjs";
 import { createBeachFootstepSystem } from "./footstep-system.mjs";
 import { loadAllTileMaps, syncSkyUniforms, waterTime } from "./materials.mjs";
 import { applySkyCycle, createSkyClock } from "./sky-cycle.mjs";
@@ -10,7 +11,6 @@ import {
 } from "./native-rtx-renderer.mjs";
 import { collectStaticBeachScene } from "./rtx-scene.mjs";
 import { buildBeachScene, createBeachEnvironment, WATER_LEVEL, WORLD } from "./scene.mjs";
-import { terrainHeight } from "./terrain.mjs";
 import { createBeachWeather } from "./weather.mjs";
 
 document.title = "RTX First-Person Beach — ThreeBrowser Runtime";
@@ -69,7 +69,7 @@ renderer.backend.device?.addEventListener?.("uncapturederror", event => {
 
 const rtx = navigator.gpu?.threeBrowserRTX ?? null;
 reportBridge(rtx);
-console.log("[First-Person Beach] Click to lock the cursor · WASD walk · Shift sprint · X RTX");
+console.log("[First-Person Beach] Click to lock · WASD walk · Shift sprint · Space jump · X RTX");
 
 const scene = new THREE.Scene();
 scene.name = "First-person tropical beach";
@@ -83,18 +83,20 @@ scene.environmentIntensity = 0.62;
 
 const maps = await loadAllTileMaps();
 const world = await buildBeachScene(scene, maps, renderer);
+const collisionWorld = createBeachCollisionWorld(world);
 const weather = createBeachWeather(scene, camera, world);
-const footsteps = createBeachFootstepSystem(scene, world, weather.surfaceWater);
+const footsteps = createBeachFootstepSystem(scene, world, weather.surfaceWater, collisionWorld);
 prepareRtxGuideMaterials(scene);
 
 const view = createViewState(0, -18, Math.PI, -0.05);
-view.y = terrainHeight(view.x, view.z) + 1.64;
+view.y = collisionWorld.groundHeightAt(view.x, view.z) + 1.64;
 camera.position.set(view.x, view.y, view.z);
 
 const keys = new Set();
 const look = { x: 0, y: 0 };
 let nativeRequested = true;
 let looking = false;
+let jumpQueued = false;
 let lastPathLabel = "";
 
 const rtxRenderer = new NativeRtxRenderer(renderer, camera, rtx);
@@ -192,6 +194,10 @@ document.addEventListener("pointerlockchange", () => {
 addEventListener("keydown", event => {
   footsteps.arm();
   keys.add(event.code);
+  if (event.code === "Space" && !event.repeat) {
+    jumpQueued = true;
+    event.preventDefault?.();
+  }
   if (event.code === "KeyX") {
     nativeRequested = !nativeRequested;
     if (nativeRequested) configureNative();
@@ -212,13 +218,14 @@ renderer.setAnimationLoop(() => {
     left: Number(keys.has("KeyA") || keys.has("ArrowLeft")),
     right: Number(keys.has("KeyD") || keys.has("ArrowRight")),
     sprint: keys.has("ShiftLeft") || keys.has("ShiftRight"),
+    jump: jumpQueued,
     lookX: look.x,
     lookY: look.y,
-  }, terrainHeight, WATER_LEVEL, dt);
+  }, collisionWorld.groundHeightAt, WATER_LEVEL, dt, collisionWorld);
+  jumpQueued = false;
   look.x = 0;
   look.y = 0;
   clampToWorld(view);
-  view.y = terrainHeight(view.x, view.z) + 1.64;
   applyCamera();
   world.sky.position.copy(camera.position);
   waterTime.value += dt;

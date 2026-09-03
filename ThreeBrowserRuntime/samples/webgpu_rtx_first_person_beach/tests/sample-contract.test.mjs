@@ -35,6 +35,7 @@ test("manifest registers a portable WebGPU first-person beach", async () => {
     "src/surface-water.mjs",
     "src/footstep-logic.mjs",
     "src/footstep-system.mjs",
+    "src/collision-system.mjs",
     "src/sky-cycle.mjs",
     "src/tile-relief.mjs",
     "src/native-rtx-renderer.mjs",
@@ -74,7 +75,9 @@ test("main wires first-person controls and hybrid RTX lighting without HTML over
   assert.match(main, /foamField\?\.update/);
   assert.match(main, /createBeachWeather/);
   assert.match(main, /createBeachFootstepSystem/);
+  assert.match(main, /createBeachCollisionWorld/);
   assert.match(main, /footsteps\.update\(dt, view\)/);
+  assert.match(main, /jump: jumpQueued/);
   assert.match(main, /camera\.lookAt\(0, 6, -38\)/);
   assert.match(main, /rtxRenderer\.render\(scene, camera/);
   assert.match(main, /warmScenePipelines\(\)/);
@@ -98,12 +101,31 @@ test("walking has native surface audio and pooled sand impressions", async () =>
   assert.match(main, /footsteps\.arm\(\)/);
   assert.match(weather, /surfaceWater,/);
   assert.match(footsteps, /new Audio\(source\)/);
-  assert.match(footsteps, /Wet sand footprint impressions/);
-  assert.match(footsteps, /Dry sand footprint impressions/);
   assert.match(footsteps, /new THREE\.InstancedMesh/);
+  assert.match(footsteps, /createDepressedFootprintGeometry/);
+  assert.match(footsteps, /These are real vertices below the surrounding terrain surface/);
+  assert.match(footsteps, /world\.terrain\.material\.clone\(\)/);
+  assert.match(footsteps, /Dynamic terrain footprint openings/);
+  assert.match(footsteps, /terrainMaterial\.alphaTestNode/);
+  assert.doesNotMatch(footsteps, /MeshPhysicalMaterial|fillMesh|WaterFill/);
   assert.match(footsteps, /surfaceWater\?\.impact/);
   assert.match(logic, /"shallow-water"/);
   assert.doesNotMatch(footsteps, /AudioContext|createOscillator|createBufferSource/);
+});
+
+test("player gravity and solid dressing collisions remain runtime-owned", async () => {
+  const [controller, collision] = await Promise.all([
+    load("src/first-person.mjs"),
+    load("src/collision-system.mjs"),
+  ]);
+  assert.match(controller, /JUMP_SPEED/);
+  assert.match(controller, /GRAVITY/);
+  assert.match(controller, /collisionWorld\.resolveMovement/);
+  assert.match(collision, /PLAYER_RADIUS/);
+  assert.match(collision, /kind: "palm"/);
+  assert.match(collision, /name\.includes\("rock"\)/);
+  assert.match(collision, /name\.includes\("driftwood"\)/);
+  assert.match(collision, /Axis-separated resolution/);
 });
 
 test("day-night transitions retain stable WebGPU shadow and celestial render graphs", async () => {

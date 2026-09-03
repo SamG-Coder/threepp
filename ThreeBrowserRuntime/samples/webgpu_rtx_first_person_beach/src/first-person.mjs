@@ -3,9 +3,17 @@ export const WALK_SPEED = 3.25;
 export const SPRINT_SPEED = 5.7;
 export const LOOK_SENSITIVITY = 0.00215;
 export const MAX_WADE_DEPTH = 0.92;
+export const JUMP_SPEED = 5.25;
+export const GRAVITY = 14.8;
 
 export function createViewState(x = 0, z = -18, yaw = Math.PI, pitch = -0.06) {
-  return { x, y: 0, z, yaw, pitch, grounded: true, wading: false, speed: 0 };
+  return {
+    x, y: 0, z, yaw, pitch,
+    grounded: true,
+    wading: false,
+    speed: 0,
+    verticalVelocity: 0,
+  };
 }
 
 export function applyLook(state, dx, dy, sensitivity = LOOK_SENSITIVITY) {
@@ -29,7 +37,7 @@ export function wadeFactor(waterDepth) {
   return Math.max(0.28, 1 - waterDepth * 0.72);
 }
 
-export function stepFirstPerson(state, input, heightAt, waterLevel, dt) {
+export function stepFirstPerson(state, input, heightAt, waterLevel, dt, collisionWorld = null) {
   const delta = Math.max(0, Math.min(0.05, Number(dt) || 0));
   applyLook(state, input.lookX || 0, input.lookY || 0, input.sensitivity);
   const forward = (input.forward || 0) - (input.back || 0);
@@ -50,12 +58,37 @@ export function stepFirstPerson(state, input, heightAt, waterLevel, dt) {
     const nextGround = heightAt(nextX, nextZ);
     const nextDepth = Math.max(0, waterLevel - nextGround);
     if (nextDepth < MAX_WADE_DEPTH) {
-      state.x = nextX;
-      state.z = nextZ;
+      const resolved = collisionWorld?.resolveMovement
+        ? collisionWorld.resolveMovement(
+          state.x,
+          state.z,
+          nextX,
+          nextZ,
+          state.y - EYE_HEIGHT,
+        )
+        : { x: nextX, z: nextZ };
+      state.x = resolved.x;
+      state.z = resolved.z;
     }
   }
-  state.y = heightAt(state.x, state.z) + EYE_HEIGHT;
-  state.grounded = true;
+  const floorY = heightAt(state.x, state.z) + EYE_HEIGHT;
+  if (state.grounded) {
+    state.y = floorY;
+    state.verticalVelocity = 0;
+    if (input.jump && !state.wading) {
+      state.grounded = false;
+      state.verticalVelocity = JUMP_SPEED;
+    }
+  }
+  if (!state.grounded) {
+    state.verticalVelocity -= GRAVITY * delta;
+    state.y += state.verticalVelocity * delta;
+    if (state.y <= floorY && state.verticalVelocity <= 0) {
+      state.y = floorY;
+      state.verticalVelocity = 0;
+      state.grounded = true;
+    }
+  }
   return state;
 }
 

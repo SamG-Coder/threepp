@@ -24,7 +24,7 @@ export function createStrideTracker(x = 0, z = 0) {
   return {
     previousX: Number(x) || 0,
     previousZ: Number(z) || 0,
-    distance: 0.31,
+    distance: 0.38,
     leftFoot: true,
   };
 }
@@ -39,7 +39,7 @@ export function advanceStride(tracker, x, z, speed) {
   tracker.previousZ = nextZ;
   if (travelled > 2.5 || Number(speed) < 0.08) return null;
   tracker.distance += travelled;
-  const stride = Number(speed) > 4.35 ? 0.91 : 0.7;
+  const stride = Number(speed) > 4.35 ? 1.12 : 0.78;
   if (tracker.distance < stride) return null;
   tracker.distance %= stride;
   const event = {

@@ -1,4 +1,5 @@
 import * as THREE from "three/webgpu";
+import { float, positionWorld, texture, uniform, vec2 } from "three/tsl";
 import {
   FOOTSTEP_SURFACES,
   advanceStride,
@@ -8,65 +9,188 @@ import {
 import { WATER_LEVEL, terrainHeight } from "./terrain.mjs";
 
 const IMPRESSION_COUNT = 64;
-const UP = new THREE.Vector3(0, 1, 0);
+const MASK_SIZE = 1024;
+const MASK_WORLD_SIZE = 42;
+const SOLE_MIN_Z = -0.142;
+const SOLE_MAX_Z = 0.145;
+const SOLE_PROFILE = [
+  [SOLE_MIN_Z, 0.004], [-0.13, 0.035], [-0.085, 0.062], [-0.02, 0.07],
+  [0.06, 0.059], [0.125, 0.04], [SOLE_MAX_Z, 0.004],
+];
 
-function createFootprintGeometry() {
-  // A tapered, asymmetric bare-foot/sole outline with a shallow concave bed.
-  // The raised perimeter catches light while the darker centre reads as an
-  // impression without modifying the large terrain heightfield every step.
-  const outline = [
-    [-0.105, -0.26], [-0.145, -0.17], [-0.15, -0.04], [-0.125, 0.12],
-    [-0.08, 0.25], [0, 0.29], [0.085, 0.25], [0.13, 0.12],
-    [0.14, -0.04], [0.125, -0.17], [0.075, -0.265], [0, -0.285],
-  ];
-  const positions = [];
+function soleHalfWidth(z) {
+  for (let i = 1; i < SOLE_PROFILE.length; i += 1) {
+    const previous = SOLE_PROFILE[i - 1];
+    const next = SOLE_PROFILE[i];
+    if (z <= next[0]) {
+      const amount = (z - previous[0]) / Math.max(1e-6, next[0] - previous[0]);
+      return THREE.MathUtils.lerp(previous[1], next[1], THREE.MathUtils.clamp(amount, 0, 1));
+    }
+  }
+  return 0;
+}
+
+function treadDepth(across, along, row, column) {
+  const transverse = row % 5 === 1 ? 0.0024 : 0;
+  const staggeredLug = (row + Math.floor(column / 2)) % 4 === 0 ? 0.0017 : 0;
+  const centreGroove = Math.abs(across) < 0.22 && along > 0.18 && along < 0.82 ? 0.0015 : 0;
+  return transverse + staggeredLug + centreGroove;
+}
+
+function createDepressedFootprintGeometry() {
+  const rows = 29;
+  const columns = 13;
+  const positions = new Float32Array(rows * columns * 3);
+  const uvs = new Float32Array(rows * columns * 2);
   const indices = [];
-  for (const [x, z] of outline) positions.push(x, 0.012, z);
-  for (const [x, z] of outline) positions.push(x * 0.73, -0.006, z * 0.77 + 0.008);
-  positions.push(0, -0.009, 0.012);
-  const count = outline.length;
-  for (let i = 0; i < count; i += 1) {
-    const next = (i + 1) % count;
-    indices.push(i, next, count + i, next, count + next, count + i);
-    indices.push(count * 2, count + i, count + next);
+  let p = 0;
+  let q = 0;
+  for (let row = 0; row < rows; row += 1) {
+    const along = row / (rows - 1);
+    const z = THREE.MathUtils.lerp(SOLE_MIN_Z, SOLE_MAX_Z, along);
+    const width = soleHalfWidth(z);
+    for (let column = 0; column < columns; column += 1) {
+      const across = column / (columns - 1) * 2 - 1;
+      const x = width * across;
+      const edge = Math.pow(Math.abs(across), 3.2);
+      const endFade = Math.pow(Math.sin(Math.PI * along), 0.38);
+      // These are real vertices below the surrounding terrain surface. Tread
+      // blocks press slightly deeper than the already concave sole bed.
+      const depression = 0.021 * (1 - edge) * endFade
+        + treadDepth(across, along, row, column) * (1 - edge);
+      positions[p++] = x;
+      positions[p++] = 0.002 - depression;
+      positions[p++] = z;
+      uvs[q++] = column / (columns - 1);
+      uvs[q++] = along;
+    }
+  }
+  for (let row = 0; row < rows - 1; row += 1) {
+    for (let column = 0; column < columns - 1; column += 1) {
+      const a = row * columns + column;
+      const b = a + columns;
+      indices.push(a, b, a + 1, a + 1, b, b + 1);
+    }
   }
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
   geometry.setIndex(indices);
   geometry.computeVertexNormals();
   geometry.computeBoundingSphere();
   return geometry;
 }
 
-function createImpressionPool(scene, wet) {
-  const geometry = createFootprintGeometry();
-  const material = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    roughness: wet ? 0.3 : 0.96,
-    metalness: 0,
-    depthWrite: true,
-    polygonOffset: true,
-    polygonOffsetFactor: -2,
-    polygonOffsetUnits: -2,
-    vertexColors: true,
-  });
+function createTerrainHoleMask(terrainMaterial) {
+  const pixels = new Uint8Array(MASK_SIZE * MASK_SIZE);
+  const maskTexture = new THREE.DataTexture(
+    pixels,
+    MASK_SIZE,
+    MASK_SIZE,
+    THREE.RedFormat,
+    THREE.UnsignedByteType,
+  );
+  maskTexture.name = "Dynamic terrain footprint openings";
+  maskTexture.colorSpace = THREE.NoColorSpace;
+  maskTexture.minFilter = THREE.LinearFilter;
+  maskTexture.magFilter = THREE.LinearFilter;
+  maskTexture.wrapS = THREE.ClampToEdgeWrapping;
+  maskTexture.wrapT = THREE.ClampToEdgeWrapping;
+  maskTexture.generateMipmaps = false;
+  maskTexture.needsUpdate = true;
+
+  const origin = new THREE.Vector2(-MASK_WORLD_SIZE * 0.5, -MASK_WORLD_SIZE * 0.5);
+  const originNode = uniform(origin);
+  const maskUv = vec2(
+    positionWorld.x.sub(originNode.x).div(MASK_WORLD_SIZE),
+    positionWorld.z.sub(originNode.y).div(MASK_WORLD_SIZE),
+  );
+  const hole = texture(maskTexture, maskUv).r;
+  terrainMaterial.opacityNode = float(1).sub(hole);
+  terrainMaterial.alphaTestNode = float(0.5);
+  terrainMaterial.needsUpdate = true;
+
+  function redraw(records, centreX, centreZ) {
+    origin.set(
+      Math.floor((centreX - MASK_WORLD_SIZE * 0.5) * 4) / 4,
+      Math.floor((centreZ - MASK_WORLD_SIZE * 0.5) * 4) / 4,
+    );
+    pixels.fill(0);
+    const pixelsPerWorld = MASK_SIZE / MASK_WORLD_SIZE;
+    for (const record of records) {
+      if (record.life <= 0) continue;
+      const centrePixelX = (record.x - origin.x) * pixelsPerWorld;
+      const centrePixelZ = (record.z - origin.y) * pixelsPerWorld;
+      const radiusPixels = Math.ceil(0.17 * pixelsPerWorld);
+      const minX = Math.max(1, Math.floor(centrePixelX - radiusPixels));
+      const maxX = Math.min(MASK_SIZE - 2, Math.ceil(centrePixelX + radiusPixels));
+      const minZ = Math.max(1, Math.floor(centrePixelZ - radiusPixels));
+      const maxZ = Math.min(MASK_SIZE - 2, Math.ceil(centrePixelZ + radiusPixels));
+      for (let pz = minZ; pz <= maxZ; pz += 1) {
+        const worldZ = origin.y + (pz + 0.5) / pixelsPerWorld;
+        for (let px = minX; px <= maxX; px += 1) {
+          const worldX = origin.x + (px + 0.5) / pixelsPerWorld;
+          const dx = worldX - record.x;
+          const dz = worldZ - record.z;
+          const localX = dx * record.rightX + dz * record.rightZ;
+          const localZ = dx * record.forwardX + dz * record.forwardZ;
+          if (localZ < SOLE_MIN_Z || localZ > SOLE_MAX_Z) continue;
+          const width = soleHalfWidth(localZ);
+          const signedEdge = Math.abs(localX) / Math.max(0.001, width);
+          if (signedEdge <= 1.02) {
+            const feather = THREE.MathUtils.clamp((1.05 - signedEdge) * 18, 0, 1);
+            pixels[pz * MASK_SIZE + px] = Math.max(
+              pixels[pz * MASK_SIZE + px],
+              Math.round(feather * 255),
+            );
+          }
+        }
+      }
+    }
+    originNode.value.copy(origin);
+    maskTexture.needsUpdate = true;
+  }
+
+  return { texture: maskTexture, origin, redraw };
+}
+
+function createImpressionPool(scene, world) {
+  // Clone after the weather system has attached its wetness/runoff nodes. The
+  // patch therefore evaluates the exact same dry/wet sand maps, normals,
+  // roughness, cloud shadows, shoreline wash and accumulated rain as terrain.
+  const material = world.terrain.material.clone();
+  material.name = "Terrain-owned depressed footprint material";
+  material.alphaTestNode = null;
+  material.alphaTest = 0;
+  material.opacityNode = null;
+  material.depthWrite = true;
+  material.polygonOffset = true;
+  material.polygonOffsetFactor = -1;
+  material.polygonOffsetUnits = -1;
+  material.needsUpdate = true;
+  const geometry = createDepressedFootprintGeometry();
   const mesh = new THREE.InstancedMesh(geometry, material, IMPRESSION_COUNT);
-  mesh.name = wet ? "Wet sand footprint impressions" : "Dry sand footprint impressions";
+  mesh.name = "Vertex-depressed terrain footprint impressions";
   mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   mesh.frustumCulled = false;
   mesh.receiveShadow = true;
   mesh.renderOrder = 3;
   mesh.userData.rtxIgnore = true;
-  const instances = Array.from({ length: IMPRESSION_COUNT }, () => ({ life: 0, lifetime: 1 }));
-  const transform = new THREE.Object3D();
   const hidden = new THREE.Matrix4().makeScale(0, 0, 0);
-  const color = new THREE.Color();
-  for (let i = 0; i < IMPRESSION_COUNT; i += 1) {
-    mesh.setMatrixAt(i, hidden);
-    mesh.setColorAt(i, color.setRGB(0, 0, 0));
-  }
+  const records = Array.from({ length: IMPRESSION_COUNT }, () => ({
+    life: 0,
+    lifetime: 1,
+    x: 0,
+    z: 0,
+    forwardX: 0,
+    forwardZ: 1,
+    rightX: 1,
+    rightZ: 0,
+    matrix: new THREE.Matrix4(),
+  }));
+  for (let i = 0; i < IMPRESSION_COUNT; i += 1) mesh.setMatrixAt(i, hidden);
   scene.add(mesh);
-  return { mesh, geometry, material, instances, cursor: 0, transform };
+  return { mesh, geometry, material, hidden, records, cursor: 0 };
 }
 
 function createNativeAudioBank() {
@@ -115,31 +239,6 @@ function createNativeAudioBank() {
   };
 }
 
-function createWalkableColliders(world) {
-  const colliders = [];
-  world.dressing?.updateWorldMatrix?.(true, true);
-  for (const object of world.dressing?.children ?? []) {
-    const name = String(object.name || "").toLowerCase();
-    if (!name.includes("rock") && !name.includes("driftwood")) continue;
-    const bounds = new THREE.Box3().setFromObject(object);
-    if (!bounds.isEmpty()) colliders.push({ bounds, kind: name.includes("driftwood") ? "wood" : "rock" });
-  }
-  return colliders;
-}
-
-function objectSurfaceAt(colliders, x, z, ground) {
-  let hit = null;
-  for (const collider of colliders) {
-    const bounds = collider.bounds;
-    if (x < bounds.min.x || x > bounds.max.x || z < bounds.min.z || z > bounds.max.z) continue;
-    // Ignore tall intersections that the terrain-only player is actually
-    // walking through rather than standing on.
-    if (bounds.max.y < ground - 0.04 || bounds.max.y > ground + 0.72) continue;
-    if (!hit || bounds.max.y > hit.height) hit = { kind: collider.kind, height: bounds.max.y };
-  }
-  return hit;
-}
-
 function terrainNormalAt(x, z, target) {
   const radius = 0.11;
   const dx = terrainHeight(x + radius, z) - terrainHeight(x - radius, z);
@@ -147,67 +246,80 @@ function terrainNormalAt(x, z, target) {
   return target.set(-dx / (radius * 2), 1, -dz / (radius * 2)).normalize();
 }
 
-export function createBeachFootstepSystem(scene, world, surfaceWater = null) {
+export function createBeachFootstepSystem(scene, world, surfaceWater = null, collisionWorld = null) {
   const audio = createNativeAudioBank();
-  const colliders = createWalkableColliders(world);
-  const dryPool = createImpressionPool(scene, false);
-  const wetPool = createImpressionPool(scene, true);
+  const pool = createImpressionPool(scene, world);
+  const holes = createTerrainHoleMask(world.terrain.material);
   const tracker = createStrideTracker();
   const normal = new THREE.Vector3();
   const forward = new THREE.Vector3();
   const right = new THREE.Vector3();
   const basis = new THREE.Matrix4();
-  const color = new THREE.Color();
+  let maskCentreX = 0;
+  let maskCentreZ = 0;
+  let maskDirty = true;
 
   function leaveImpression(surface, step, ground) {
-    const pool = surface === "wet-sand" ? wetPool : dryPool;
     const side = step.leftFoot ? -1 : 1;
     forward.set(step.directionX, 0, step.directionZ).normalize();
     terrainNormalAt(step.x, step.z, normal);
     forward.addScaledVector(normal, -forward.dot(normal)).normalize();
     right.crossVectors(normal, forward).normalize();
-    const x = step.x + right.x * side * 0.105;
-    const z = step.z + right.z * side * 0.105;
+    const x = step.x + right.x * side * 0.09;
+    const z = step.z + right.z * side * 0.09;
     const index = pool.cursor++ % IMPRESSION_COUNT;
-    const record = pool.instances[index];
+    const record = pool.records[index];
     record.life = record.lifetime = surface === "wet-sand" ? 34 : 72;
+    record.x = x;
+    record.z = z;
+    record.forwardX = forward.x;
+    record.forwardZ = forward.z;
+    record.rightX = right.x;
+    record.rightZ = right.z;
     basis.makeBasis(right, normal, forward);
-    basis.setPosition(x, ground + 0.012, z);
+    basis.setPosition(x, ground + 0.0015, z);
+    record.matrix.copy(basis);
     pool.mesh.setMatrixAt(index, basis);
-    const shade = surface === "wet-sand" ? 0.19 : 0.43;
-    pool.mesh.setColorAt(index, color.setRGB(shade * 0.82, shade * 0.72, shade * 0.55));
     pool.mesh.instanceMatrix.needsUpdate = true;
-    if (pool.mesh.instanceColor) pool.mesh.instanceColor.needsUpdate = true;
+    maskDirty = true;
   }
 
-  function updatePool(pool, dt) {
+  function updateImpressions(dt, view) {
     let matricesChanged = false;
-    for (let index = 0; index < pool.instances.length; index += 1) {
-      const record = pool.instances[index];
+    for (let index = 0; index < pool.records.length; index += 1) {
+      const record = pool.records[index];
       if (record.life <= 0) continue;
       record.life -= dt;
       if (record.life <= 0) {
-        pool.mesh.setMatrixAt(index, new THREE.Matrix4().makeScale(0, 0, 0));
+        pool.mesh.setMatrixAt(index, pool.hidden);
         matricesChanged = true;
+        maskDirty = true;
       }
     }
     if (matricesChanged) pool.mesh.instanceMatrix.needsUpdate = true;
+    if (Math.hypot(view.x - maskCentreX, view.z - maskCentreZ) > 4) maskDirty = true;
+    if (maskDirty) {
+      maskCentreX = view.x;
+      maskCentreZ = view.z;
+      holes.redraw(pool.records, maskCentreX, maskCentreZ);
+      maskDirty = false;
+    }
   }
 
   return {
     arm: audio.arm,
     update(dt, view) {
-      updatePool(dryPool, dt);
-      updatePool(wetPool, dt);
-      const step = advanceStride(tracker, view.x, view.z, view.speed);
+      updateImpressions(dt, view);
+      const step = advanceStride(tracker, view.x, view.z, view.grounded ? view.speed : 0);
       if (!step) return null;
-      const ground = terrainHeight(step.x, step.z);
-      const objectHit = objectSurfaceAt(colliders, step.x, step.z, ground);
+      const support = collisionWorld?.surfaceAt?.(step.x, step.z)
+        ?? { height: terrainHeight(step.x, step.z), kind: "terrain" };
+      const ground = support.height;
       const surface = classifyBeachSurface({
         groundHeight: ground,
         waterLevel: WATER_LEVEL,
         wetness: surfaceWater?.wetnessAt?.(step.x, step.z) ?? 0,
-        objectKind: objectHit?.kind,
+        objectKind: support.kind === "terrain" ? null : support.kind,
       });
       audio.play(surface, step.intensity);
       if (surface === "dry-sand" || surface === "wet-sand") {
@@ -225,11 +337,10 @@ export function createBeachFootstepSystem(scene, world, surfaceWater = null) {
     },
     dispose() {
       audio.dispose();
-      for (const pool of [dryPool, wetPool]) {
-        scene.remove(pool.mesh);
-        pool.geometry.dispose();
-        pool.material.dispose();
-      }
+      scene.remove(pool.mesh);
+      pool.geometry.dispose();
+      pool.material.dispose();
+      holes.texture.dispose();
     },
   };
 }

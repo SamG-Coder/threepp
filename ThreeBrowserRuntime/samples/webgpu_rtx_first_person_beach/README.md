@@ -34,6 +34,7 @@ controls and RTX path are reported on stdout.
 | Click | Lock the cursor and look |
 | `W` `A` `S` `D` | Walk |
 | Shift | Sprint |
+| `Space` | Jump |
 | `X` | Toggle native RTX lighting/reflections |
 
 Wade into the shallows; chest-deep water stops the stride. There is no swim
@@ -49,6 +50,14 @@ to wet ones. Regenerate the deterministic local sounds with:
 ```powershell
 node .\samples\webgpu_rtx_first_person_beach\tools\generate-footstep-audio.mjs
 ```
+
+The player uses a solid capsule-sized horizontal footprint. Palm trunks,
+Studio rocks and driftwood block and slide the player; low prop tops can be
+landed on after a jump. Footprints are locally tessellated terrain patches:
+their sole/tread vertices are physically depressed and retain the exact ground
+albedo, normal, roughness, shoreline wash, cloud shadow and rain/runoff
+wetness. A dynamic terrain mask exposes that real depth; no decal texture or
+second footprint-water mesh is layered over the beach.
 
 ## Run and test
 

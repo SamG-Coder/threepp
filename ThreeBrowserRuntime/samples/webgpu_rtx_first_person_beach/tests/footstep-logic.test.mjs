@@ -23,7 +23,7 @@ test("stride tracker alternates feet based on actual travelled distance", () => 
   assert.equal(left.leftFoot, true);
   assert.ok(left.directionZ > 0.99);
   assert.equal(advanceStride(tracker, 0, 0.8, 3.25), null);
-  const right = advanceStride(tracker, 0, 1.1, 3.25);
+  const right = advanceStride(tracker, 0, 1.2, 3.25);
   assert.equal(right.leftFoot, false);
 });
 

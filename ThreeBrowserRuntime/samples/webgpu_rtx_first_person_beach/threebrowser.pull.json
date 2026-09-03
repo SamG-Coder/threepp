@@ -9,6 +9,18 @@
   "requiresWebGPU": true,
   "files": [
     {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/src/collision-system.mjs",
+      "path": "src/collision-system.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/tests/collision-system.test.mjs",
+      "path": "tests/collision-system.test.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
       "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/src/footstep-logic.mjs",
       "path": "src/footstep-logic.mjs",
       "type": "module",

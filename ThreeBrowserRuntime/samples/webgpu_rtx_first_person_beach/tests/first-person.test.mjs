@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   EYE_HEIGHT,
+  GRAVITY,
+  JUMP_SPEED,
   MAX_WADE_DEPTH,
   applyLook,
   createViewState,
@@ -59,6 +61,42 @@ test("deep water blocks the stride instead of swimming", () => {
   assert.equal(state.x, startX);
   assert.equal(state.speed, 0);
   assert.ok(wadeFactor(MAX_WADE_DEPTH) === 0);
+});
+
+test("Space launches a grounded player and gravity returns them to the beach", () => {
+  const state = createViewState(0, -18, Math.PI, 0);
+  const input = {
+    forward: 0, back: 0, left: 0, right: 0,
+    sprint: false, jump: true, lookX: 0, lookY: 0,
+  };
+  stepFirstPerson(state, input, terrainHeight, WATER_LEVEL, 0.016);
+  assert.equal(state.grounded, false);
+  assert.ok(state.verticalVelocity > 0 && state.verticalVelocity < JUMP_SPEED);
+  const launchHeight = state.y;
+  input.jump = false;
+  for (let i = 0; i < 180; i += 1) {
+    stepFirstPerson(state, input, terrainHeight, WATER_LEVEL, 1 / 60);
+  }
+  assert.equal(state.grounded, true);
+  assert.equal(state.verticalVelocity, 0);
+  assert.equal(state.y, terrainHeight(state.x, state.z) + EYE_HEIGHT);
+  assert.ok(GRAVITY > JUMP_SPEED);
+  assert.ok(launchHeight > terrainHeight(0, -18) + EYE_HEIGHT);
+});
+
+test("movement delegates to the solid collision world and preserves sliding", () => {
+  const state = createViewState(0, -18, Math.PI, 0);
+  const collisionWorld = {
+    resolveMovement(fromX, fromZ, toX, toZ) {
+      return { x: fromX, z: toZ };
+    },
+  };
+  stepFirstPerson(state, {
+    forward: 1, back: 0, left: 1, right: 0,
+    sprint: false, jump: false, lookX: 0, lookY: 0,
+  }, terrainHeight, WATER_LEVEL, 0.05, collisionWorld);
+  assert.equal(state.x, 0, "blocked axis remains fixed");
+  assert.ok(state.z > -18, "unblocked axis still slides");
 });
 
 test("shore is shallower than the packed height span and ocean is deeper", () => {
