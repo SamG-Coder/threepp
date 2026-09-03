@@ -12,6 +12,7 @@ import {
 import { collectStaticBeachScene } from "./rtx-scene.mjs";
 import { buildBeachScene, createBeachEnvironment, WATER_LEVEL, WORLD } from "./scene.mjs";
 import { createBeachWeather } from "./weather.mjs";
+import { createBeachShovel } from "./shovel-system.mjs";
 
 document.title = "RTX First-Person Beach — ThreeBrowser Runtime";
 
@@ -69,7 +70,7 @@ renderer.backend.device?.addEventListener?.("uncapturederror", event => {
 
 const rtx = navigator.gpu?.threeBrowserRTX ?? null;
 reportBridge(rtx);
-console.log("[First-Person Beach] Click to lock · WASD walk · Shift sprint · Space jump · X RTX");
+console.log("[First-Person Beach] Click to lock · WASD walk · Shift sprint · Space jump · E carry/drop · X RTX");
 
 const scene = new THREE.Scene();
 scene.name = "First-person tropical beach";
@@ -86,11 +87,11 @@ const world = await buildBeachScene(scene, maps, renderer);
 const collisionWorld = createBeachCollisionWorld(world);
 const weather = createBeachWeather(scene, camera, world);
 const footsteps = createBeachFootstepSystem(scene, world, weather.surfaceWater, collisionWorld);
-prepareRtxGuideMaterials(scene);
-
 const view = createViewState(0, -18, Math.PI, -0.05);
 view.y = collisionWorld.groundHeightAt(view.x, view.z) + 1.64;
 camera.position.set(view.x, view.y, view.z);
+const shovel = await createBeachShovel(scene, camera, view, collisionWorld);
+prepareRtxGuideMaterials(scene);
 
 const keys = new Set();
 const look = { x: 0, y: 0 };
@@ -198,6 +199,7 @@ addEventListener("keydown", event => {
     jumpQueued = true;
     event.preventDefault?.();
   }
+  if (event.code === "KeyE" && !event.repeat) shovel.interact();
   if (event.code === "KeyX") {
     nativeRequested = !nativeRequested;
     if (nativeRequested) configureNative();
@@ -245,6 +247,7 @@ renderer.setAnimationLoop(() => {
   });
   const weatherFrame = weather.update(dt, sky, world);
   footsteps.update(dt, view);
+  shovel.update(dt);
 
   world.sun.updateWorldMatrix(true, false);
   world.sun.target.updateWorldMatrix(true, false);
@@ -307,5 +310,6 @@ addEventListener("beforeunload", () => {
   world.foamField?.dispose();
   weather.dispose();
   footsteps.dispose();
+  shovel.dispose();
   rtxRenderer.dispose();
 });

@@ -15,6 +15,30 @@
       "bytes": 0
     },
     {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/src/carryable-system.mjs",
+      "path": "src/carryable-system.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/src/first-person-hands.mjs",
+      "path": "src/first-person-hands.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/src/shovel-system.mjs",
+      "path": "src/shovel-system.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/tests/shovel-system.test.mjs",
+      "path": "tests/shovel-system.test.mjs",
+      "type": "module",
+      "bytes": 0
+    },
+    {
       "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/tests/collision-system.test.mjs",
       "path": "tests/collision-system.test.mjs",
       "type": "module",
@@ -405,6 +429,12 @@
       "bytes": 73024
     },
     {
+      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/assets/models/detailed-beach-shovel.glb",
+      "path": "assets/models/detailed-beach-shovel.glb",
+      "type": "asset",
+      "bytes": 268620
+    },
+    {
       "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/",
       "path": "index.html",
       "type": "html",
@@ -570,7 +600,7 @@
       "Hybrid real-time WebGPU/RTX sample, not a full path tracer: WebGPU owns primary visibility, Gerstner water, foam and tiled PBR, while native ray queries add sun visibility, contact shadow, ambient occlusion and reflections.",
       "Displaced water, sky dome and palm fronds are excluded from BLAS construction.",
       "RTX and raster fallback work remains offscreen and shares exactly one tone-mapped swapchain presentation per frame.",
-      "Hold the mouse to look, WASD walks, Shift sprints, X compares RTX and raster. Status is stdout only; there is no HTML overlay.",
+      "Hold the mouse to look, WASD walks, Shift sprints, Space jumps, E carries or drops the shovel, and X compares RTX and raster. Status is stdout only; there is no HTML overlay.",
       "The reusable palm and three coastal rock variants are authored and validated in ThreeBrowser Studio, then shipped locally as GLB; no network asset download is required at runtime."
     ]
   }

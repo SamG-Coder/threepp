@@ -68,6 +68,14 @@ ripple/splash event. Normal and landing prints use the player's facing axis,
 so A/D strafing shifts each contact sideways without turning the toes toward
 the strafe direction.
 
+A Studio-authored forged-steel and ash-wood shovel starts near the player.
+Face it and press `E` to pick it up; press `E` again to place it upright on the
+terrain ahead. The reusable carryable controller keeps held props camera-local,
+adds restrained movement sway, and removes/rebuilds their solid world collider
+across pickup and drop. While carried, a paired first-person work-glove rig
+holds the shaft at two separated grip points and follows the exact prop sway;
+the arms disappear when the shovel is returned to the world.
+
 ## Run and test
 
 ```powershell

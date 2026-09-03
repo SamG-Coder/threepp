@@ -36,11 +36,15 @@ test("manifest registers a portable WebGPU first-person beach", async () => {
     "src/footstep-logic.mjs",
     "src/footstep-system.mjs",
     "src/collision-system.mjs",
+    "src/carryable-system.mjs",
+    "src/first-person-hands.mjs",
+    "src/shovel-system.mjs",
     "src/sky-cycle.mjs",
     "src/tile-relief.mjs",
     "src/native-rtx-renderer.mjs",
     "assets/models/realistic-beach-palm.glb",
     "assets/models/coastal-rock-set.glb",
+    "assets/models/detailed-beach-shovel.glb",
     "assets/audio/footstep-dry-sand-1.wav",
     "assets/audio/footstep-wet-sand-1.wav",
     "assets/audio/footstep-shallow-water-1.wav",
@@ -76,6 +80,9 @@ test("main wires first-person controls and hybrid RTX lighting without HTML over
   assert.match(main, /createBeachWeather/);
   assert.match(main, /createBeachFootstepSystem/);
   assert.match(main, /createBeachCollisionWorld/);
+  assert.match(main, /createBeachShovel/);
+  assert.match(main, /event\.code === "KeyE"/);
+  assert.match(main, /shovel\.update\(dt\)/);
   assert.match(main, /footsteps\.update\(dt, view\)/);
   assert.match(main, /jump: jumpQueued/);
   assert.match(main, /camera\.lookAt\(0, 6, -38\)/);
