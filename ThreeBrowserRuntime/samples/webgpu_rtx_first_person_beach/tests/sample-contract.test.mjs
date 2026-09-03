@@ -91,6 +91,8 @@ test("volumetric clouds drive rain from the same world-space storm field", async
   assert.match(weather, /material\.depthTest = true/);
   assert.match(weather, /cloudFieldNode\(point\)/);
   assert.match(weather, /cloudDensityNode\(point\.add\(cloudKeyDirection\.mul\(16\)\)\)/);
+  assert.match(weather, /export function cloudShadowNode\(point\)/);
+  assert.match(weather, /projected = point\.add\(cloudKeyDirection\.mul\(travel\)\)/);
   assert.match(weather, /lightTransmission/);
   assert.match(weather, /silverLining/);
   assert.match(weather, /cloudCellDensity\(x, z, seconds\)/);
@@ -134,6 +136,9 @@ test("beach water keeps its Gerstner mesh and advects persistent foam", async ()
   assert.match(materials, /foamLaceNode/);
   assert.match(materials, /foamSourceFromWaves/);
   assert.match(materials, /createWaterMaterial\(heightMap, persistentFoamSample/);
+  assert.match(materials, /import \{ cloudShadowNode \} from "\.\/weather\.mjs"/);
+  assert.match(materials, /applyCloudShadow\(albedo, point, 0\.56\)/);
+  assert.match(materials, /applyCloudShadow\(mix\(waterColor, foamColor, foam\), point, 0\.34\)/);
   assert.match(materials, /transformDirection\(cameraViewMatrix\)/);
   assert.match(materials, /dot\(normalWorld, normalize\(toSun\.add\(viewDir\)\)\)/);
   assert.doesNotMatch(materials, /dot\(shadedNormalView, normalize\(toSunView/);

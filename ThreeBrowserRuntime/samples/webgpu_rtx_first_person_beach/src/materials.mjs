@@ -33,6 +33,7 @@ import {
   vec4,
 } from "three/tsl";
 import { HEIGHT_BOUNDS, WATER_LEVEL } from "./terrain.mjs";
+import { cloudShadowNode } from "./weather.mjs";
 export const waterTime = uniform(0);
 export const waterLevel = uniform(WATER_LEVEL);
 export const skySunDirection = uniform(new THREE.Vector3(-0.42, 0.46, 0.78).normalize());
@@ -129,6 +130,12 @@ function worldUv(repeat) {
   return positionWorld.xz.mul(vec2(repeat, repeat));
 }
 
+function applyCloudShadow(baseColor, point = positionWorld, strength = 1) {
+  const shadow = cloudShadowNode(point).mul(strength);
+  const coolShade = vec3(0.52, 0.61, 0.72);
+  return baseColor.mul(mix(vec3(1), coolShade, shadow));
+}
+
 function noise01(point, scale, seed) {
   return mx_fractal_noise_float(
     point.add(vec3(seed * 13.17, seed * 0.4, seed * -8.03)).mul(vec3(scale, scale * 0.18, scale * 0.94)),
@@ -223,7 +230,7 @@ export function createMappedMaterial(maps, options = {}) {
     vec2(options.normalScale ?? 1, options.normalScale ?? 1),
   );
   const tintNode = Array.isArray(options.tint) ? vec3(...options.tint) : options.tint ?? vec3(1, 1, 1);
-  const colorNode = albedoSample.rgb.mul(tintNode);
+  const colorNode = applyCloudShadow(albedoSample.rgb.mul(tintNode), positionWorld, 0.48);
   if (options.clearcoat) {
     const physical = new THREE.MeshPhysicalNodeMaterial({
       metalness: 0,
@@ -552,7 +559,7 @@ export function createBeachTerrainMaterial(maps, heightMap) {
     roughness: 0.7,
     color: 0xc4a574,
   });
-  material.colorNode = albedo;
+  material.colorNode = applyCloudShadow(albedo, point, 0.56);
   material.normalNode = normalize(mappedNormal);
   material.roughnessNode = pebbleRough;
   return tag(material, 0.28, { terrain: true });
@@ -624,7 +631,7 @@ export function createWaterMaterial(heightMap, persistentFoamSample = null) {
   });
   material.envMapIntensity = 0;
   material.positionNode = positionLocal.add(vec3(waves.chopX, waves.height, waves.chopZ));
-  material.colorNode = mix(waterColor, foamColor, foam);
+  material.colorNode = applyCloudShadow(mix(waterColor, foamColor, foam), point, 0.34);
   material.emissiveNode = vec3(1, 0.9, 0.72).mul(sunSpec);
   material.normalNode = shadedNormalView;
   material.roughnessNode = mix(float(0.18), mix(float(0.32), float(0.48), young), foam);

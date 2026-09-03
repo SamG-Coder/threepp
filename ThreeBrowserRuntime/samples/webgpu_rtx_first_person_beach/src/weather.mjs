@@ -128,6 +128,32 @@ function cloudDensityNode(point) {
     .mul(mix(0.68, 1.38, stormAmount));
 }
 
+/**
+ * Low-cost spatial transmittance for surface materials. Project the receiving
+ * world point into the cloud deck along the current key-light direction, then
+ * sample the same advected regional weather map used by cloud density and rain.
+ */
+export function cloudShadowNode(point) {
+  const shadowHeight = float(CLOUD_BASE + CLOUD_SPAN_Y * 0.34);
+  const travel = shadowHeight.sub(point.y).max(0)
+    .div(cloudKeyDirection.y.max(0.08));
+  const projected = point.add(cloudKeyDirection.mul(travel));
+  const regional = cloudFieldNode(projected);
+  const softDetail = mx_noise_float(vec3(
+    projected.x.mul(0.00135).add(weatherTime.mul(0.016)),
+    3.7,
+    projected.z.mul(0.00135).add(weatherTime.mul(0.0045)),
+  )).mul(0.5).add(0.5);
+  const structure = regional.mul(0.76).add(softDetail.mul(0.24));
+  const coverage = smoothstep(
+    float(0.51).sub(stormAmount.mul(0.13)),
+    0.72,
+    structure,
+  );
+  const daylightStrength = mix(0.16, 1, cloudDaylight);
+  return coverage.mul(stormAmount).mul(daylightStrength).saturate();
+}
+
 function createCloudVolume() {
   const cloudRaymarch = Fn(() => {
     const ray = normalize(positionWorld.sub(cameraPosition));
@@ -351,7 +377,9 @@ export function createBeachWeather(scene, camera, world) {
 
       // Weather acts on the lighting after the day/night cycle has established
       // its physically meaningful baseline.
-      const cloudShadow = clamp01(localRain * 0.68 + storm * 0.22);
+      // Spatial shadows are evaluated per surface by cloudShadowNode(). This
+      // residual term represents only broad atmospheric loss above the scene.
+      const cloudShadow = clamp01(storm * 0.12);
       if (world?.sun) world.sun.intensity *= 1 - cloudShadow * 0.62;
       if (world?.moonLight) world.moonLight.intensity *= 1 - cloudShadow * 0.3;
       if (world?.lights?.hemi) world.lights.hemi.intensity *= 1 - cloudShadow * 0.34;
