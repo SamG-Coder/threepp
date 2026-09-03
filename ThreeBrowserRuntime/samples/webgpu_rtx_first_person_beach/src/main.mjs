@@ -78,6 +78,9 @@ scene.background = new THREE.Color(0x87b0d2);
 scene.fog = new THREE.FogExp2(0x9ec0dc, 0.0088);
 
 const camera = new THREE.PerspectiveCamera(72, innerWidth / Math.max(1, innerHeight), 0.08, 4000);
+// Held props are camera children, so the camera must be part of the rendered
+// scene graph even though it is also passed directly to render().
+scene.add(camera);
 const environment = createBeachEnvironment(renderer);
 scene.environment = environment.texture;
 scene.environmentIntensity = 0.62;

@@ -72,9 +72,9 @@ A Studio-authored forged-steel and ash-wood shovel starts near the player.
 Face it and press `E` to pick it up; press `E` again to place it upright on the
 terrain ahead. The reusable carryable controller keeps held props camera-local,
 adds restrained movement sway, and removes/rebuilds their solid world collider
-across pickup and drop. While carried, a paired first-person work-glove rig
-holds the shaft at two separated grip points and follows the exact prop sway;
-the arms disappear when the shovel is returned to the world.
+across pickup and drop. While carried, the shovel hovers in a low diagonal
+ready-to-dig pose without covering the centre of the view. Character hands are
+intentionally deferred until a proper first-person character rig is available.
 
 ## Run and test
 

@@ -1,7 +1,6 @@
 import * as THREE from "three/webgpu";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { createCarryableObject } from "./carryable-system.mjs";
-import { createFirstPersonShovelHands } from "./first-person-hands.mjs";
 
 export async function createBeachShovel(scene, camera, view, collisionWorld) {
   const loader = new GLTFLoader();
@@ -27,7 +26,6 @@ export async function createBeachShovel(scene, camera, view, collisionWorld) {
       material.needsUpdate = true;
     }
   });
-  const hands = createFirstPersonShovelHands();
   return createCarryableObject({
     scene,
     camera,
@@ -35,10 +33,11 @@ export async function createBeachShovel(scene, camera, view, collisionWorld) {
     view,
     collisionWorld,
     spawn: { x: 1, z: -16.3, yaw: -0.2 },
-    heldPosition: [0.46, -1.1, -1.18],
-    heldScale: 0.7,
-    heldRotation: [-0.07, 0.03, -0.2],
-    heldVisual: hands,
+    // Ready-to-dig pose: blade close at the left, shaft receding across the
+    // lower view, and the handle clear of the aiming centre.
+    heldPosition: [-0.58, 0.06, -0.68],
+    heldScale: 0.82,
+    heldRotation: [-0.18, 0.12, -2.02],
     label: "shovel",
   });
 }

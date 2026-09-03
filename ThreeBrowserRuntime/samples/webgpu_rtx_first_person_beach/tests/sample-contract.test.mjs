@@ -37,7 +37,6 @@ test("manifest registers a portable WebGPU first-person beach", async () => {
     "src/footstep-system.mjs",
     "src/collision-system.mjs",
     "src/carryable-system.mjs",
-    "src/first-person-hands.mjs",
     "src/shovel-system.mjs",
     "src/sky-cycle.mjs",
     "src/tile-relief.mjs",
@@ -69,6 +68,7 @@ test("manifest registers a portable WebGPU first-person beach", async () => {
 test("main wires first-person controls and hybrid RTX lighting without HTML overlay", async () => {
   const [main, html] = await Promise.all([load("src/main.mjs"), load("index.html")]);
   assert.match(main, /new THREE\.WebGPURenderer/);
+  assert.match(main, /scene\.add\(camera\)/);
   assert.match(main, /stepFirstPerson/);
   assert.match(main, /pointermove/);
   assert.match(main, /requestPointerLock/);

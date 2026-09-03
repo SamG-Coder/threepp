@@ -34,21 +34,17 @@ test("Studio shovel GLB preserves its detailed assembly and PBR material roles",
   ]));
 });
 
-test("carrying the shovel presents a synchronised two-hand first-person grip", async () => {
-  const [carryable, shovel, hands] = await Promise.all([
+test("carrying the shovel presents an unobstructed ready-to-dig pose", async () => {
+  const [carryable, shovel] = await Promise.all([
     readFile(join(sampleRoot, "src", "carryable-system.mjs"), "utf8"),
     readFile(join(sampleRoot, "src", "shovel-system.mjs"), "utf8"),
-    readFile(join(sampleRoot, "src", "first-person-hands.mjs"), "utf8"),
   ]);
-  assert.match(carryable, /heldVisual\.visible = true/);
-  assert.match(carryable, /syncHeldVisual\(\)/);
-  assert.match(carryable, /heldVisual\.visible = false/);
-  assert.match(shovel, /createFirstPersonShovelHands/);
+  assert.match(carryable, /camera\.add\(object\)/);
   assert.match(shovel, /object\.userData\.studioVisible === false/);
-  assert.match(hands, /First-person two-hand shovel grip/);
-  assert.match(hands, /gripping palm/);
-  assert.match(hands, /side: 1/);
-  assert.match(hands, /side: -1/);
+  assert.match(shovel, /heldPosition: \[-0\.58, 0\.06, -0\.68\]/);
+  assert.match(shovel, /heldScale: 0\.82/);
+  assert.match(shovel, /heldRotation: \[-0\.18, 0\.12, -2\.02\]/);
+  assert.doesNotMatch(shovel, /FirstPersonShovelHands|first-person-hands|heldVisual/);
 });
 
 test("carryable interaction requires reach and facing while drop follows view yaw", () => {

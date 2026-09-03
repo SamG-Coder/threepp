@@ -21,12 +21,6 @@
       "bytes": 0
     },
     {
-      "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/src/first-person-hands.mjs",
-      "path": "src/first-person-hands.mjs",
-      "type": "module",
-      "bytes": 0
-    },
-    {
       "url": "https://webgpu-rtx-first-person-beach.runtime.threebrowser.local/src/shovel-system.mjs",
       "path": "src/shovel-system.mjs",
       "type": "module",
