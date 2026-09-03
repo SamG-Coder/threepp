@@ -30,6 +30,7 @@ test("manifest registers a portable WebGPU first-person beach", async () => {
     "src/main.mjs",
     "src/foam-field.mjs",
     "src/weather.mjs",
+    "src/surface-water.mjs",
     "src/sky-cycle.mjs",
     "src/tile-relief.mjs",
     "src/native-rtx-renderer.mjs",
@@ -85,6 +86,23 @@ test("volumetric clouds drive rain from the same world-space storm field", async
   assert.match(weather, /CLOUD_BASE \+ 2 \+ random\(\) \* 18/);
   assert.match(weather, /world\.sun\.intensity \*=/);
   assert.match(weather, /scene\.fog\.density/);
+});
+
+test("rain impacts accumulate, run downhill, and react by surface type", async () => {
+  const [weather, surfaceWater] = await Promise.all([
+    load("src/weather.mjs"),
+    load("src/surface-water.mjs"),
+  ]);
+  assert.match(weather, /createSurfaceWaterSystem/);
+  assert.match(weather, /kind: overWater \? "water" : "terrain"/);
+  assert.match(weather, /findObjectImpact/);
+  assert.match(surfaceWater, /Rain accumulation and downhill runoff/);
+  assert.match(surfaceWater, /lowestHead/);
+  assert.match(surfaceWater, /transfer/);
+  assert.match(surfaceWater, /rainWetnessTexture/);
+  assert.match(surfaceWater, /Rain impact water ripples/);
+  assert.match(surfaceWater, /Rain impact splash droplets/);
+  assert.match(surfaceWater, /Rain beads on wet surfaces/);
 });
 
 test("beach water keeps its Gerstner mesh and advects persistent foam", async () => {

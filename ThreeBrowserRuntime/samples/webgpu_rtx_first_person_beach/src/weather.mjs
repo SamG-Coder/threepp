@@ -19,7 +19,8 @@ import {
   vec4,
 } from "three/tsl";
 import { RaymarchingBox } from "three/addons/tsl/utils/Raymarching.js";
-import { terrainHeight } from "./terrain.mjs";
+import { createSurfaceWaterSystem } from "./surface-water.mjs";
+import { WATER_LEVEL, terrainHeight } from "./terrain.mjs";
 
 const CLOUD_BASE = 140;
 const CLOUD_TOP = 260;
@@ -243,11 +244,12 @@ function mulberry32(seed) {
   };
 }
 
-export function createBeachWeather(scene, camera) {
+export function createBeachWeather(scene, camera, world) {
   const random = mulberry32(0xc10d5eed);
   const clouds = createCloudVolume();
   const rain = createRain(random);
   scene.add(clouds, rain.lines);
+  const surfaceWater = createSurfaceWaterSystem(scene, world, random);
 
   let elapsed = 0;
   let cursor = 0;
@@ -306,11 +308,27 @@ export function createBeachWeather(scene, camera) {
           rain.positions[index + 2] = rain.positions[index + 5] = camera.position.z;
           continue;
         }
+        const previousY = drop.y;
         drop.y -= drop.speed * dt;
         drop.x += drop.drift * dt;
         drop.z += 0.82 * dt;
         const ground = terrainHeight(drop.x, drop.z);
-        if (drop.y < ground || Math.abs(drop.x - camera.position.x) > RAIN_RADIUS_X * 1.15
+        const objectHit = surfaceWater.findObjectImpact(drop.x, drop.z, previousY, drop.y);
+        const overWater = ground < WATER_LEVEL - 0.025;
+        const surfaceY = overWater ? WATER_LEVEL : ground;
+        if (objectHit) {
+          surfaceWater.impact({ ...objectHit, intensity: drop.speed / 34 });
+          respawn(drop);
+        } else if (drop.y < surfaceY) {
+          surfaceWater.impact({
+            x: drop.x,
+            y: surfaceY + 0.025,
+            z: drop.z,
+            kind: overWater ? "water" : "terrain",
+            intensity: drop.speed / 34,
+          });
+          respawn(drop);
+        } else if (Math.abs(drop.x - camera.position.x) > RAIN_RADIUS_X * 1.15
           || Math.abs(drop.z - camera.position.z) > RAIN_RADIUS_Z * 1.15) {
           respawn(drop);
         }
@@ -328,6 +346,7 @@ export function createBeachWeather(scene, camera) {
       rain.attribute.needsUpdate = true;
       rain.material.opacity = 0.08 + localRain * 0.62;
       rain.lines.visible = localRain > 0.025 || storm > 0.38;
+      surfaceWater.update(dt);
 
       // Weather acts on the lighting after the day/night cycle has established
       // its physically meaningful baseline.
@@ -346,6 +365,7 @@ export function createBeachWeather(scene, camera) {
       clouds.material.dispose();
       rain.lines.geometry.dispose();
       rain.material.dispose();
+      surfaceWater.dispose();
     },
   };
 }

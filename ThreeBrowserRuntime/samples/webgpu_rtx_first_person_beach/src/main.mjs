@@ -82,7 +82,7 @@ scene.environmentIntensity = 0.62;
 
 const maps = await loadAllTileMaps();
 const world = await buildBeachScene(scene, maps, renderer);
-const weather = createBeachWeather(scene, camera);
+const weather = createBeachWeather(scene, camera, world);
 prepareRtxGuideMaterials(scene);
 
 const view = createViewState(0, -18, Math.PI, -0.05);
