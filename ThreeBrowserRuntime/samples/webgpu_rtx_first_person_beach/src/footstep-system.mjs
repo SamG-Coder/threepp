@@ -5,6 +5,7 @@ import {
   advanceStride,
   classifyBeachSurface,
   createStrideTracker,
+  footprintFacing,
 } from "./footstep-logic.mjs";
 import { WATER_LEVEL, terrainHeight } from "./terrain.mjs";
 
@@ -121,7 +122,7 @@ function createTerrainHoleMask(terrainMaterial) {
       if (record.life <= 0) continue;
       const centrePixelX = (record.x - origin.x) * pixelsPerWorld;
       const centrePixelZ = (record.z - origin.y) * pixelsPerWorld;
-      const radiusPixels = Math.ceil(0.17 * pixelsPerWorld);
+      const radiusPixels = Math.ceil(0.17 * record.planarScale * pixelsPerWorld);
       const minX = Math.max(1, Math.floor(centrePixelX - radiusPixels));
       const maxX = Math.min(MASK_SIZE - 2, Math.ceil(centrePixelX + radiusPixels));
       const minZ = Math.max(1, Math.floor(centrePixelZ - radiusPixels));
@@ -132,8 +133,8 @@ function createTerrainHoleMask(terrainMaterial) {
           const worldX = origin.x + (px + 0.5) / pixelsPerWorld;
           const dx = worldX - record.x;
           const dz = worldZ - record.z;
-          const localX = dx * record.rightX + dz * record.rightZ;
-          const localZ = dx * record.forwardX + dz * record.forwardZ;
+          const localX = (dx * record.rightX + dz * record.rightZ) / record.planarScale;
+          const localZ = (dx * record.forwardX + dz * record.forwardZ) / record.planarScale;
           if (localZ < SOLE_MIN_Z || localZ > SOLE_MAX_Z) continue;
           const width = soleHalfWidth(localZ);
           const signedEdge = Math.abs(localX) / Math.max(0.001, width);
@@ -186,6 +187,7 @@ function createImpressionPool(scene, world) {
     forwardZ: 1,
     rightX: 1,
     rightZ: 0,
+    planarScale: 1,
     matrix: new THREE.Matrix4(),
   }));
   for (let i = 0; i < IMPRESSION_COUNT; i += 1) mesh.setMatrixAt(i, hidden);
@@ -254,12 +256,15 @@ export function createBeachFootstepSystem(scene, world, surfaceWater = null, col
   const normal = new THREE.Vector3();
   const forward = new THREE.Vector3();
   const right = new THREE.Vector3();
+  const scaledForward = new THREE.Vector3();
+  const scaledRight = new THREE.Vector3();
+  const scaledNormal = new THREE.Vector3();
   const basis = new THREE.Matrix4();
   let maskCentreX = 0;
   let maskCentreZ = 0;
   let maskDirty = true;
 
-  function leaveImpression(surface, step, ground) {
+  function leaveImpression(surface, step, ground, planarScale = 1, depthScale = 1) {
     const side = step.leftFoot ? -1 : 1;
     forward.set(step.directionX, 0, step.directionZ).normalize();
     terrainNormalAt(step.x, step.z, normal);
@@ -276,12 +281,63 @@ export function createBeachFootstepSystem(scene, world, surfaceWater = null, col
     record.forwardZ = forward.z;
     record.rightX = right.x;
     record.rightZ = right.z;
-    basis.makeBasis(right, normal, forward);
+    record.planarScale = planarScale;
+    scaledRight.copy(right).multiplyScalar(planarScale);
+    scaledForward.copy(forward).multiplyScalar(planarScale);
+    scaledNormal.copy(normal).multiplyScalar(depthScale);
+    basis.makeBasis(scaledRight, scaledNormal, scaledForward);
     basis.setPosition(x, ground + 0.0015, z);
     record.matrix.copy(basis);
     pool.mesh.setMatrixAt(index, basis);
     pool.mesh.instanceMatrix.needsUpdate = true;
     maskDirty = true;
+  }
+
+  function surfaceAt(x, z) {
+    const support = collisionWorld?.surfaceAt?.(x, z)
+      ?? { height: terrainHeight(x, z), kind: "terrain" };
+    return {
+      support,
+      surface: classifyBeachSurface({
+        groundHeight: support.height,
+        waterLevel: WATER_LEVEL,
+        wetness: surfaceWater?.wetnessAt?.(x, z) ?? 0,
+        objectKind: support.kind === "terrain" ? null : support.kind,
+      }),
+    };
+  }
+
+  function handleLanding(view) {
+    const impactSpeed = Number(view.landingImpact) || 0;
+    if (impactSpeed <= 0.5) return null;
+    const { directionX, directionZ } = footprintFacing(view.yaw);
+    const response = surfaceAt(view.x, view.z);
+    const force = THREE.MathUtils.clamp((impactSpeed - 2.5) / 5, 0, 1);
+    const intensity = THREE.MathUtils.clamp(impactSpeed / 6.5, 0.55, 1);
+    audio.play(response.surface, intensity);
+    if (response.surface === "dry-sand" || response.surface === "wet-sand") {
+      const landingStep = {
+        x: view.x,
+        z: view.z,
+        directionX,
+        directionZ,
+        leftFoot: true,
+      };
+      const planarScale = 1.08 + force * 0.3;
+      const depthScale = 1.3 + force * 1.05;
+      leaveImpression(response.surface, landingStep, response.support.height, planarScale, depthScale);
+      landingStep.leftFoot = false;
+      leaveImpression(response.surface, landingStep, response.support.height, planarScale, depthScale);
+    } else if (response.surface === "shallow-water") {
+      surfaceWater?.impact?.({
+        x: view.x,
+        y: WATER_LEVEL + 0.025,
+        z: view.z,
+        kind: "water",
+        intensity: 0.8 + force * 0.9,
+      });
+    }
+    return response.surface;
   }
 
   function updateImpressions(dt, view) {
@@ -310,21 +366,22 @@ export function createBeachFootstepSystem(scene, world, surfaceWater = null, col
     arm: audio.arm,
     update(dt, view) {
       updateImpressions(dt, view);
+      const landingSurface = handleLanding(view);
+      if (landingSurface) {
+        advanceStride(tracker, view.x, view.z, 0);
+        return landingSurface;
+      }
       const step = advanceStride(tracker, view.x, view.z, view.grounded ? view.speed : 0);
       if (!step) return null;
-      const support = collisionWorld?.surfaceAt?.(step.x, step.z)
-        ?? { height: terrainHeight(step.x, step.z), kind: "terrain" };
-      const ground = support.height;
-      const surface = classifyBeachSurface({
-        groundHeight: ground,
-        waterLevel: WATER_LEVEL,
-        wetness: surfaceWater?.wetnessAt?.(step.x, step.z) ?? 0,
-        objectKind: support.kind === "terrain" ? null : support.kind,
-      });
-      audio.play(surface, step.intensity);
-      if (surface === "dry-sand" || surface === "wet-sand") {
-        leaveImpression(surface, step, ground);
-      } else if (surface === "shallow-water") {
+      // A footprint belongs to the player, not the velocity vector. In
+      // particular, A/D strafing moves the next contact sideways while the
+      // heel-to-toe axis continues to follow the direction the player faces.
+      Object.assign(step, footprintFacing(view.yaw));
+      const response = surfaceAt(step.x, step.z);
+      audio.play(response.surface, step.intensity);
+      if (response.surface === "dry-sand" || response.surface === "wet-sand") {
+        leaveImpression(response.surface, step, response.support.height);
+      } else if (response.surface === "shallow-water") {
         surfaceWater?.impact?.({
           x: step.x,
           y: WATER_LEVEL + 0.025,
@@ -333,7 +390,7 @@ export function createBeachFootstepSystem(scene, world, surfaceWater = null, col
           intensity: 0.55 + step.intensity * 0.35,
         });
       }
-      return surface;
+      return response.surface;
     },
     dispose() {
       audio.dispose();

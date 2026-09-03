@@ -4,6 +4,7 @@ import {
   advanceStride,
   classifyBeachSurface,
   createStrideTracker,
+  footprintFacing,
 } from "../src/footstep-logic.mjs";
 
 test("surface classification prioritises props, water depth, and accumulated wetness", () => {
@@ -31,4 +32,14 @@ test("teleports and stationary frames do not emit footfalls", () => {
   const tracker = createStrideTracker(0, 0);
   assert.equal(advanceStride(tracker, 8, 8, 3.25), null);
   assert.equal(advanceStride(tracker, 8, 8, 0), null);
+});
+
+test("stride travel can be sideways while the footprint follows player facing", () => {
+  const tracker = createStrideTracker(0, 0);
+  const step = advanceStride(tracker, 0.4, 0, 3.25);
+  assert.ok(step.directionX > 0.99);
+  assert.ok(Math.abs(step.directionZ) < 1e-6);
+  const facing = footprintFacing(0);
+  assert.ok(Math.abs(facing.directionX) < 1e-6);
+  assert.ok(facing.directionZ < -0.99);
 });

@@ -59,6 +59,13 @@ albedo, normal, roughness, shoreline wash, cloud shadow and rain/runoff
 wetness. A dynamic terrain mask exposes that real depth; no decal texture or
 second footprint-water mesh is layered over the beach.
 
+Landing impact speed is carried out of the jump solver. A sand landing stamps
+both feet and scales both the contact area and physical depression depth with
+force; a shallow-water landing drives a proportionally larger existing
+ripple/splash event. Normal and landing prints use the player's facing axis,
+so A/D strafing shifts each contact sideways without turning the toes toward
+the strafe direction.
+
 ## Run and test
 
 ```powershell

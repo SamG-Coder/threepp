@@ -73,15 +73,18 @@ test("Space launches a grounded player and gravity returns them to the beach", (
   assert.equal(state.grounded, false);
   assert.ok(state.verticalVelocity > 0 && state.verticalVelocity < JUMP_SPEED);
   const launchHeight = state.y;
+  let landingImpact = 0;
   input.jump = false;
   for (let i = 0; i < 180; i += 1) {
     stepFirstPerson(state, input, terrainHeight, WATER_LEVEL, 1 / 60);
+    landingImpact = Math.max(landingImpact, state.landingImpact);
   }
   assert.equal(state.grounded, true);
   assert.equal(state.verticalVelocity, 0);
   assert.equal(state.y, terrainHeight(state.x, state.z) + EYE_HEIGHT);
   assert.ok(GRAVITY > JUMP_SPEED);
   assert.ok(launchHeight > terrainHeight(0, -18) + EYE_HEIGHT);
+  assert.ok(landingImpact > 4, "landing exposes the downward impact speed");
 });
 
 test("movement delegates to the solid collision world and preserves sliding", () => {

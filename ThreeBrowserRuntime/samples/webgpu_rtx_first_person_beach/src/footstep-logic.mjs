@@ -29,6 +29,14 @@ export function createStrideTracker(x = 0, z = 0) {
   };
 }
 
+export function footprintFacing(yaw) {
+  const angle = Number(yaw) || 0;
+  return {
+    directionX: -Math.sin(angle),
+    directionZ: -Math.cos(angle),
+  };
+}
+
 export function advanceStride(tracker, x, z, speed) {
   const nextX = Number(x) || 0;
   const nextZ = Number(z) || 0;

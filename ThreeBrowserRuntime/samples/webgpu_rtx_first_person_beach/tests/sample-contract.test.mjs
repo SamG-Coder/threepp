@@ -109,6 +109,13 @@ test("walking has native surface audio and pooled sand impressions", async () =>
   assert.match(footsteps, /terrainMaterial\.alphaTestNode/);
   assert.doesNotMatch(footsteps, /MeshPhysicalMaterial|fillMesh|WaterFill/);
   assert.match(footsteps, /surfaceWater\?\.impact/);
+  assert.match(footsteps, /handleLanding\(view\)/);
+  assert.match(footsteps, /view\.landingImpact/);
+  assert.match(footsteps, /const planarScale = 1\.08 \+ force \* 0\.3/);
+  assert.match(footsteps, /const depthScale = 1\.3 \+ force \* 1\.05/);
+  assert.match(footsteps, /Object\.assign\(step, footprintFacing\(view\.yaw\)\)/);
+  assert.match(footsteps, /const \{ directionX, directionZ \} = footprintFacing\(view\.yaw\)/);
+  assert.match(footsteps, /landingStep\.leftFoot = false/);
   assert.match(logic, /"shallow-water"/);
   assert.doesNotMatch(footsteps, /AudioContext|createOscillator|createBufferSource/);
 });

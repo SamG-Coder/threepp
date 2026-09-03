@@ -13,6 +13,7 @@ export function createViewState(x = 0, z = -18, yaw = Math.PI, pitch = -0.06) {
     wading: false,
     speed: 0,
     verticalVelocity: 0,
+    landingImpact: 0,
   };
 }
 
@@ -39,6 +40,7 @@ export function wadeFactor(waterDepth) {
 
 export function stepFirstPerson(state, input, heightAt, waterLevel, dt, collisionWorld = null) {
   const delta = Math.max(0, Math.min(0.05, Number(dt) || 0));
+  state.landingImpact = 0;
   applyLook(state, input.lookX || 0, input.lookY || 0, input.sensitivity);
   const forward = (input.forward || 0) - (input.back || 0);
   const strafe = (input.right || 0) - (input.left || 0);
@@ -84,6 +86,7 @@ export function stepFirstPerson(state, input, heightAt, waterLevel, dt, collisio
     state.verticalVelocity -= GRAVITY * delta;
     state.y += state.verticalVelocity * delta;
     if (state.y <= floorY && state.verticalVelocity <= 0) {
+      state.landingImpact = Math.max(0, -state.verticalVelocity);
       state.y = floorY;
       state.verticalVelocity = 0;
       state.grounded = true;
