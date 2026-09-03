@@ -66,6 +66,9 @@ test("main wires first-person controls and hybrid RTX lighting without HTML over
   assert.match(main, /loadAllTileMaps/);
   assert.match(main, /foamField\?\.update/);
   assert.match(main, /createBeachWeather/);
+  assert.match(main, /camera\.lookAt\(0, 6, -38\)/);
+  assert.match(main, /rtxRenderer\.render\(scene, camera/);
+  assert.match(main, /warmScenePipelines\(\)/);
   assert.match(main, /weather\.update/);
   assert.match(main, /\.present\(/);
   assert.match(main, /renderRaster\(/);
@@ -178,6 +181,9 @@ test("Studio-authored palms load as reusable GLB instances", async () => {
   assert.match(palm, /material\.transparent = false/);
   assert.match(palm, /material\.depthWrite = true/);
   assert.match(palm, /maps\[profile\.tile\]/);
+  assert.match(palm, /mergeGeometries/);
+  assert.match(palm, /baked\.applyMatrix4\(object\.matrixWorld\)/);
+  assert.match(palm, /mergedPartCount/);
   assert.match(materials, /uv\(\)\.mul\(vec2\(uvScale\[0\], uvScale\[1\]\)\)/);
   assert.match(html, /"three": "\.\.\/\.\.\/node_modules\/three\/build\/three\.webgpu\.js"/);
 });

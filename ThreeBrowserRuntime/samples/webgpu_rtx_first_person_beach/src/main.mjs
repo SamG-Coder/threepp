@@ -101,6 +101,26 @@ const sunDirection = new THREE.Vector3();
 const sunTarget = new THREE.Vector3();
 const skyClock = createSkyClock();
 
+function warmScenePipelines() {
+  const savedPosition = camera.position.clone();
+  const savedQuaternion = camera.quaternion.clone();
+  try {
+    camera.position.set(0, 5.5, -10);
+    camera.lookAt(0, 6, -38);
+    camera.updateMatrixWorld(true);
+    const warmed = nativeReady
+      ? rtxRenderer.render(scene, camera, { maxDistance: 180, rayBias: 0.022 })
+      : rtxRenderer.renderRaster(scene, camera);
+    if (warmed) console.log("[First-Person Beach] WebGPU palm and shadow pipelines warmed");
+  } catch (error) {
+    console.warn(`[First-Person Beach] Pipeline warm-up skipped: ${error?.message || error}`);
+  } finally {
+    camera.position.copy(savedPosition);
+    camera.quaternion.copy(savedQuaternion);
+    camera.updateMatrixWorld(true);
+  }
+}
+
 function internalSize() {
   return new THREE.Vector2(
     Math.max(1, Math.round(innerWidth * internalRatio)),
@@ -128,6 +148,7 @@ async function configureNative() {
 }
 
 await configureNative();
+warmScenePipelines();
 
 function applyCamera() {
   const pose = cameraOrientation(view);

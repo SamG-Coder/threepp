@@ -1,4 +1,5 @@
 import * as THREE from "three/webgpu";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { createMappedMaterial } from "./materials.mjs";
 
 const MATERIAL_PROFILES = Object.freeze({
@@ -133,19 +134,43 @@ export function prepareStudioPalm(template, maps) {
     materialId,
     mappedPalmMaterial(maps, materialId, profile),
   ]));
-  template.name = "Studio realistic beach palm";
+  const geometries = new Map(Object.keys(MATERIAL_PROFILES).map(materialId => [materialId, []]));
+  template.updateMatrixWorld(true);
   template.traverse(object => {
     if (!object.isMesh) return;
-    object.castShadow = true;
-    object.receiveShadow = true;
     const imported = Array.isArray(object.material) ? object.material[0] : object.material;
     const materialId = studioMaterialId(imported);
-    const replacement = materials.get(materialId);
-    if (replacement) object.material = replacement;
+    if (!materials.has(materialId)) return;
+    let geometry = object.geometry;
     if (materialId === "material/palm-bark" && !object.geometry.getAttribute("uv")) {
-      object.geometry = createCylindricalTrunkUvs(orientTrunkOutward(object.geometry));
+      geometry = createCylindricalTrunkUvs(orientTrunkOutward(object.geometry));
     }
-    if (MATERIAL_PROFILES[materialId]?.foliage) object.userData.rtxIgnore = true;
+    const baked = geometry.clone();
+    baked.applyMatrix4(object.matrixWorld);
+    geometries.get(materialId).push(baked);
   });
-  return template;
+
+  const mergedPalm = new THREE.Group();
+  mergedPalm.name = "Studio realistic beach palm";
+  for (const [materialId, parts] of geometries) {
+    if (parts.length === 0) continue;
+    const merged = mergeGeometries(parts, false);
+    for (const part of parts) part.dispose();
+    if (!merged) throw new Error(`Unable to merge Studio palm geometry for ${materialId}`);
+    merged.computeBoundingBox();
+    merged.computeBoundingSphere();
+    merged.userData.studioMaterialId = materialId;
+    merged.userData.mergedPartCount = parts.length;
+    const mesh = new THREE.Mesh(merged, materials.get(materialId));
+    mesh.name = `Palm ${materialId.slice("material/palm-".length)}`;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.userData.studioMaterialId = materialId;
+    mesh.userData.mergedPartCount = parts.length;
+    if (MATERIAL_PROFILES[materialId]?.foliage) mesh.userData.rtxIgnore = true;
+    mergedPalm.add(mesh);
+  }
+  mergedPalm.userData.sourceMeshCount = 205;
+  mergedPalm.userData.mergedMeshCount = mergedPalm.children.length;
+  return mergedPalm;
 }
