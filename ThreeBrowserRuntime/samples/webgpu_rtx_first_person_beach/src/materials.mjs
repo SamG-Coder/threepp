@@ -565,14 +565,18 @@ export function createBeachTerrainMaterial(maps, heightMap) {
   return tag(material, 0.28, { terrain: true });
 }
 
-export function createWaterMaterial(heightMap, persistentFoamSample = null) {
+export function createWaterMaterial(heightMap, persistentFoamSample = null, options = {}) {
   const point = positionWorld;
   const waves = sampleWaves(point, waterTime);
   const ground = sampleGroundHeight(heightMap, point);
-  const depth = waterLevel.add(waves.height).sub(ground);
+  const localPool = options.localPool === true;
+  const waveScale = float(localPool ? 0.055 : 1);
+  const depth = localPool
+    ? float(options.depth ?? 0.12)
+    : waterLevel.add(waves.height).sub(ground);
   const optical = smoothstep(float(0.04), float(2.6), depth);
-  const coverage = smoothstep(float(-0.03), float(0.045), depth);
-  const live = foamSourceFromWaves(point, waves, ground);
+  const coverage = localPool ? float(1) : smoothstep(float(-0.03), float(0.045), depth);
+  const live = localPool ? float(0) : foamSourceFromWaves(point, waves, ground);
   const field = typeof persistentFoamSample === "function"
     ? persistentFoamSample(point)
     : vec4(live, float(0), point.x, point.z);
@@ -582,7 +586,7 @@ export function createWaterMaterial(heightMap, persistentFoamSample = null) {
   const rimX = smoothstep(float(HEIGHT_BOUNDS.maxX - 24), float(HEIGHT_BOUNDS.maxX - 5), abs(point.x));
   const rimFar = smoothstep(float(HEIGHT_BOUNDS.maxZ - 32), float(HEIGHT_BOUNDS.maxZ - 6), point.z);
   const rimNear = float(1).sub(smoothstep(float(HEIGHT_BOUNDS.minZ + 10), float(HEIGHT_BOUNDS.minZ + 28), point.z));
-  const planeFade = float(1).sub(max(rimX, max(rimFar, rimNear)));
+  const planeFade = localPool ? float(1) : float(1).sub(max(rimX, max(rimFar, rimNear)));
   const foam = foamLaceNode(mass, age, parcel, live).mul(coverage).mul(planeFade);
   const deep = vec3(0.012, 0.07, 0.12);
   const shallow = vec3(0.08, 0.32, 0.34);
@@ -598,7 +602,11 @@ export function createWaterMaterial(heightMap, persistentFoamSample = null) {
   // space; transform it before combining the two or the normal will appear to
   // rotate with the camera.
   const waterNormalView = normalize(
-    vec3(waves.derivativeX.negate(), float(1), waves.derivativeZ.negate())
+    vec3(
+      waves.derivativeX.mul(waveScale).negate(),
+      float(1),
+      waves.derivativeZ.mul(waveScale).negate(),
+    )
       .transformDirection(cameraViewMatrix),
   );
   const foamBump = bumpMap(
@@ -630,7 +638,11 @@ export function createWaterMaterial(heightMap, persistentFoamSample = null) {
     fog: true,
   });
   material.envMapIntensity = 0;
-  material.positionNode = positionLocal.add(vec3(waves.chopX, waves.height, waves.chopZ));
+  material.positionNode = positionLocal.add(vec3(
+    waves.chopX.mul(waveScale),
+    waves.height.mul(waveScale),
+    waves.chopZ.mul(waveScale),
+  ));
   material.colorNode = applyCloudShadow(mix(waterColor, foamColor, foam), point, 0.34);
   material.emissiveNode = vec3(1, 0.9, 0.72).mul(sunSpec);
   material.normalNode = shadedNormalView;

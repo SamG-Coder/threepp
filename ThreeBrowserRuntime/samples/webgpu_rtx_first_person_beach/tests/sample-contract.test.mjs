@@ -125,9 +125,9 @@ test("walking has native surface audio and pooled sand impressions", async () =>
   assert.doesNotMatch(footsteps, /Persistent shovel-sized terrain cuts/);
   assert.match(footsteps, /Water retained inside shovel cuts/);
   assert.match(footsteps, /function digSand\(hit\)/);
-  assert.match(footsteps, /surfaceWater\?\.registerDepression/);
+  assert.doesNotMatch(footsteps, /surfaceWater\?\.registerDepression/);
   assert.match(footsteps, /surfaceWater\?\.removeStandingWater/);
-  assert.match(footsteps, /refreshTerrainHeightTexture\(world\.heightMap/);
+  assert.match(footsteps, /createWaterMaterial\(heightMap, null/);
   assert.match(footsteps, /terrainMaterial\.alphaTestNode/);
   assert.doesNotMatch(footsteps, /MeshPhysicalMaterial|fillMesh|WaterFill/);
   assert.match(footsteps, /surfaceWater\?\.impact/);
