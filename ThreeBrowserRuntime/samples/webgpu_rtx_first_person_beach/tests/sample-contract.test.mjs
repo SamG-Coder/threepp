@@ -74,6 +74,15 @@ test("main wires first-person controls and hybrid RTX lighting without HTML over
   assert.ok((main.match(/\.present\(/g) ?? []).length >= 1);
 });
 
+test("day-night transitions retain stable WebGPU shadow and celestial render graphs", async () => {
+  const skyCycle = await load("src/sky-cycle.mjs");
+  assert.match(skyCycle, /sun\.castShadow = true/);
+  assert.doesNotMatch(skyCycle, /sun\.castShadow = sample\./);
+  assert.match(skyCycle, /moon\.visible = true/);
+  assert.match(skyCycle, /stars\.visible = true/);
+  assert.doesNotMatch(skyCycle, /stars\.visible = sample\./);
+});
+
 test("volumetric clouds drive rain from the same world-space storm field", async () => {
   const weather = await load("src/weather.mjs");
   assert.match(weather, /const CLOUD_BASE = 650/);

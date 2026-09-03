@@ -179,7 +179,12 @@ export function applySkyCycle(sample, {
     );
     sun.color.setRGB(sample.sun.color[0], sample.sun.color[1], sample.sun.color[2]);
     sun.intensity = sample.sun.intensity;
-    sun.castShadow = sample.sun.elevation > 0.05;
+    // Keep the shadow render graph stable across sunrise and sunset. Toggling
+    // castShadow here destroys/recreates WebGPU shadow attachments while an
+    // offscreen MRT frame is active and can leave ShadowNode without a depth
+    // texture. The smoothly fading light intensity already disables its visual
+    // contribution below the horizon.
+    sun.castShadow = true;
   }
   if (moonLight) {
     moonLight.position.set(
@@ -203,14 +208,18 @@ export function applySkyCycle(sample, {
       camera.position.z + sample.moon.z * MOON_DISTANCE,
     );
     moon.lookAt(camera.position);
-    moon.visible = sample.moon.elevation > -0.12;
+    // Keep the moon shader warm; its world position naturally moves it below
+    // the horizon instead of lazily compiling it during the transition.
+    moon.visible = true;
     if (sun) {
       moonShadeDir.value.copy(sun.position).sub(moon.position).normalize();
     }
   }
   if (camera && stars) {
     stars.position.copy(camera.position);
-    stars.visible = sample.starVisibility > 0.02;
+    // opacityNode performs the daylight fade. Persistent visibility prevents
+    // the star shader from compiling on the first twilight frame.
+    stars.visible = true;
   }
   if (scene?.fog?.color) {
     scene.fog.color.setRGB(sample.fogColor[0], sample.fogColor[1], sample.fogColor[2]);
