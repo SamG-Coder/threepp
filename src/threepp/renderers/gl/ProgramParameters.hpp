@@ -122,6 +122,7 @@ namespace threepp {
             bool useLegacyLights{};
 
             bool premultipliedAlpha{};
+            bool alphaToCoverage{};
 
             float alphaTest{};
             bool doubleSided{};

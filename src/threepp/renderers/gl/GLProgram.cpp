@@ -724,6 +724,7 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
                     parameters->shadowMapEnabled ? "#define " + shadowMapTypeDefine : "",
 
                     parameters->premultipliedAlpha ? "#define PREMULTIPLIED_ALPHA" : "",
+                    parameters->alphaToCoverage ? "#define ALPHA_TO_COVERAGE" : "",
 
                     parameters->useLegacyLights ? "#define USE_LEGACY_LIGHTS" : "",
 

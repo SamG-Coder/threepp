@@ -66,16 +66,42 @@ test('GPU command uploads do not present stale scenes and overlays preserve scen
     const transparent = new T.DataTexture(new Uint8Array([255, 255, 255, 0]), 1, 1); transparent.needsUpdate = true;
     const caster = new T.Mesh(new T.PlaneGeometry(1, 1), new T.MeshStandardMaterial({ map: transparent, alphaTest: .5, side: T.DoubleSide }));
     caster.position.z = 1;
+    caster.position.x = 1;
     caster.customDepthMaterial = new T.MeshDepthMaterial({ depthPacking: T.RGBADepthPacking });
     shadowScene.add(caster);
-    const sun = new T.DirectionalLight(0xffffff, 3); sun.position.set(0, 0, 3); sun.castShadow = true;
+    const sun = new T.DirectionalLight(0xffffff, 3); sun.position.set(3, 0, 3); sun.castShadow = true;
+    Object.assign(sun.shadow.camera, { left: -10, right: 10, top: 10, bottom: -10, near: 1, far: 250 });
     shadowScene.add(sun, new T.AmbientLight(0xffffff, .2));
     camera.position.z = 4;
     renderer.shadowMap.enabled = true;
     const shadowDraw = async () => { renderer.render(shadowScene, camera); cmd.submit(); await new Promise(r => setTimeout(r, 60)); return pixel(); };
+    renderer.shadowMap.autoUpdate = false;
     caster.castShadow = false; const unobstructed = await shadowDraw();
+    assert.ok(!host.native.debugScene().includes(`shadowProjection[${sun._h}]=`), 'renderer autoUpdate=false must not allocate a shadow map');
+    renderer.shadowMap.autoUpdate = true;
+    const cutoutMaterial = caster.material;
+    caster.castShadow = true; caster.material = new T.MeshStandardMaterial({ color: 0xffffff, side: T.DoubleSide });
+    const opaqueShadow = await shadowDraw();
+    assert.ok(opaqueShadow[0] < unobstructed[0] - 30, `a shadow map allocated after a no-update pass must bind to the receiver: ${opaqueShadow} vs ${unobstructed}`);
+    camera.position.x = .7; camera.lookAt(0, 0, 0);
+    const movedShadow = await shadowDraw();
+    assert.ok(movedShadow[0] < unobstructed[0] - 30, `camera motion must retain the shadow at the same world point: ${movedShadow}`);
+    camera.position.x = 0; camera.lookAt(0, 0, 0);
+    caster.material = cutoutMaterial;
     caster.castShadow = true; const cutout = await shadowDraw();
     assert.deepEqual(cutout, unobstructed, 'transparent source pixels must remain transparent in a custom depth material');
+    const checkShadowProjection = () => {
+      const metadata = host.native.debugScene();
+      const projection = metadata.split(`shadowProjection[${sun._h}]=`)[1]?.split(',').slice(0, 16).map(Number);
+      assert.ok(projection, 'native shadow map must be allocated');
+      for (let i = 0; i < 16; ++i) assert.ok(Math.abs(projection[i] - sun.shadow.camera.projectionMatrix.elements[i]) < 1e-5,
+        `shadow projection component ${i}: native ${projection[i]}, JS ${sun.shadow.camera.projectionMatrix.elements[i]}`);
+    };
+    checkShadowProjection();
+    Object.assign(sun.shadow.camera, { left: -44, right: 44, top: 44, bottom: -44 });
+    sun.shadow.mapSize.set(256, 256);
+    await shadowDraw();
+    checkShadowProjection();
     const intermediate = new T.WebGLRenderTarget(4, 4);
     const intermediateScene = new T.Scene();
     intermediateScene.add(new T.Mesh(new T.PlaneGeometry(4, 4), new T.MeshBasicMaterial({ color: 0x808080 })));
@@ -124,5 +150,18 @@ test('GPU command uploads do not present stale scenes and overlays preserve scen
     assert.ok(covered > 40 && covered < 220, `MSAA resolve must preserve partial alpha coverage, got ${covered}`);
     coverageTarget.samples = 0;
     assert.equal(readCoverage(), 255, 'changing samples must recreate the native target without alpha-to-coverage');
-  } finally { globalThis.__threeBrowserInAnimationFrame = false; host.stop(); }
+    const foliage = new T.MeshBasicMaterial({ color: 0xffffff, alphaTest: .475, alphaToCoverage: true, toneMapped: false });
+    foliage.onBeforeCompile = shader => {
+      shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>',
+        '#include <color_fragment>\ndiffuseColor.a = .5 + .1 * (gl_FragCoord.x - .5);');
+    };
+    coverageScene.children[0].material = foliage;
+    coverageTarget.samples = 4;
+    const smoothCoverage = readCoverage();
+    assert.ok(smoothCoverage > 0 && smoothCoverage < 100, `built-in alpha test must smooth coverage at the cutoff, got ${smoothCoverage}`);
+    foliage.alphaToCoverage = false;
+    assert.equal(readCoverage(), 255, 'disabling coverage must restore the built-in hard alpha test');
+  } finally {
+    globalThis.__threeBrowserInAnimationFrame = false; host.stop();
+  }
 });

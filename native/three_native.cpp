@@ -1102,6 +1102,13 @@ const char* tn_debug_scene(void) {
                 }
             });
         }
+        std::string shadowProjections;
+        for (const auto& [id, slot] : g.slots) {
+            auto* light = slot.object ? dynamic_cast<LightWithShadow*>(slot.object.get()) : nullptr;
+            if (!light || !light->shadow || !light->shadow->map) continue;
+            shadowProjections += " shadowProjection[" + std::to_string(id) + "]=";
+            for (auto value : light->shadow->camera->projectionMatrix.elements) shadowProjections += std::to_string(value) + ",";
+        }
         return std::string("scene=") + std::to_string(sceneHandle) +
                " camera=" + std::to_string(cameraHandle) +
                " sceneOk=" + std::to_string(scene != nullptr) +
@@ -1116,7 +1123,7 @@ const char* tn_debug_scene(void) {
                " overlayCameraOk=" + std::to_string(overlayCamera != nullptr) +
                " overlayNodes=" + std::to_string(overlayNodes) +
                " overlayMeshes=" + std::to_string(overlayMeshes) +
-               " overlayVisibleMeshes=" + std::to_string(overlayVisibleMeshes);
+               " overlayVisibleMeshes=" + std::to_string(overlayVisibleMeshes) + shadowProjections;
     });
     return result.c_str();
 }

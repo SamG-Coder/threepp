@@ -944,6 +944,13 @@
               obj._nativeLightState = signature;
             }
             if (obj.castShadow && obj.shadow?.camera && TN.cmd?.lightShadow) {
+              // Shadow allocation refreshes projection in Three.js. Mirror that
+              // before computing the JS shadow matrix used by custom shaders.
+              const allocation = `${obj.shadow.mapSize.x},${obj.shadow.mapSize.y}`;
+              if (obj.shadow._nativeProjectionAllocation !== allocation) {
+                obj.shadow.camera.updateProjectionMatrix();
+                obj.shadow._nativeProjectionAllocation = allocation;
+              }
               obj.shadow.updateMatrices(obj);
               if (obj.shadow.map?.texture && !obj.shadow.map.texture._h) {
                 obj.shadow.map.texture._h = TN.cmd.alloc();

@@ -1210,6 +1210,15 @@ struct GLRenderer::Impl {
 
             if (materialProperties->needsLights) {
 
+                // Three.js uniforms reference live light-state arrays. Native
+                // uniforms store vector values, so refresh texture snapshots:
+                // reflection passes can prepare a program before shadows exist,
+                // and subsequent shadow allocations do not change light counts.
+                const auto& lightState = lights.state;
+                m_uniforms["directionalShadowMap"].setValue(lightState.directionalShadowMap);
+                m_uniforms["spotShadowMap"].setValue(lightState.spotShadowMap);
+                m_uniforms["pointShadowMap"].setValue(lightState.pointShadowMap);
+
                 // the current material requires lighting info
 
                 // note: all lighting uniforms are always set correctly

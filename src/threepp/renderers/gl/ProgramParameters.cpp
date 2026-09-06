@@ -232,6 +232,7 @@ ProgramParameters::ProgramParameters(
     useLegacyLights = renderer.useLegacyLights;
 
     premultipliedAlpha = material->premultipliedAlpha;
+    alphaToCoverage = material->alphaToCoverage;
 
     alphaTest = material->alphaTest;
     doubleSided = material->side == Side::Double;
@@ -336,6 +337,7 @@ std::string ProgramParameters::hash() const {
     s << std::to_string(useLegacyLights) << '\n';
 
     s << std::to_string(premultipliedAlpha) << '\n';
+    s << std::to_string(alphaToCoverage) << '\n';
 
     s << std::to_string(alphaTest) << '\n';
     s << std::to_string(doubleSided) << '\n';

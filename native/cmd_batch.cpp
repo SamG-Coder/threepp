@@ -1234,6 +1234,7 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             if(!has(p,end,8)||!g.renderer) return;
             auto& shadow=g.renderer->shadowMap(); const auto flags=ru32(p);
             shadow.enabled=(flags&1u)!=0; shadow.autoUpdate=(flags&2u)!=0; shadow.needsUpdate=(flags&4u)!=0;
+            g.renderer->shadowMapAutoUpdate = shadow.autoUpdate;
             shadow.type=static_cast<ShadowMap>(std::min(3u,ru32(p+4))); return;
         }
         case tn::cmd::OP_LIGHT_SHADOW: {
@@ -1241,12 +1242,27 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             auto* light=dynamic_cast<LightWithShadow*>(findObject(ru32(p))); if(!light||!light->shadow) return;
             auto& shadow=*light->shadow;
             const Vector2 size(std::clamp(rf32(p+8),1.f,8192.f),std::clamp(rf32(p+12),1.f,8192.f));
-            if(shadow.mapSize!=size) shadow.dispose();
+            if(shadow.mapSize!=size) {
+                shadow.dispose();
+                shadow.map.reset();
+                shadow.mapPass.reset();
+            }
             shadow.mapSize.copy(size);
             const auto flags=ru32(p+4); shadow.autoUpdate=(flags&1u)!=0; shadow.needsUpdate=(flags&2u)!=0;
             shadow.bias=rf32(p+16); shadow.normalBias=rf32(p+20); shadow.radius=rf32(p+24);
             shadow.intensity=has(p,end,104)?rf32(p+100):1.f;
             shadow.camera->nearPlane=rf32(p+28); shadow.camera->farPlane=rf32(p+32);
+            // Map allocation regenerates projection from camera parameters.
+            // Preserve those parameters as well as the current explicit matrix.
+            if (has(p,end,136)) {
+                if (auto* camera=dynamic_cast<OrthographicCamera*>(shadow.camera.get())) {
+                    camera->zoom=rf32(p+108);
+                    camera->left=rf32(p+112); camera->right=rf32(p+116);
+                    camera->top=rf32(p+120); camera->bottom=rf32(p+124);
+                } else if (auto* camera=dynamic_cast<PerspectiveCamera*>(shadow.camera.get())) {
+                    camera->zoom=rf32(p+108); camera->fov=rf32(p+128); camera->aspect=rf32(p+132);
+                }
+            }
             std::array<float,16> values{}; for(size_t i=0;i<16;++i) values[i]=rf32(p+36+i*4);
             shadow.camera->projectionMatrix.fromArray(values);
             shadow.camera->projectionMatrixInverse.copy(shadow.camera->projectionMatrix).invert();

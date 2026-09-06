@@ -522,9 +522,12 @@
       const s=begin(OP.SHADOW_STATE,8); wu32((shadow.enabled?1:0)|(shadow.autoUpdate?2:0)|(shadow.needsUpdate?4:0)); wu32(shadow.type); end(s);
     },
     lightShadow(id, shadow) {
-      const s=begin(OP.LIGHT_SHADOW,104); wu32(id); wu32((shadow.autoUpdate?1:0)|(shadow.needsUpdate?2:0));
+      const s=begin(OP.LIGHT_SHADOW,136); wu32(id); wu32((shadow.autoUpdate?1:0)|(shadow.needsUpdate?2:0));
       for(const v of [shadow.mapSize.x,shadow.mapSize.y,shadow.bias,shadow.normalBias,shadow.radius,shadow.camera.near,shadow.camera.far,...shadow.camera.projectionMatrix.elements]) wf32(v);
       wf32(shadow.intensity ?? 1);
+      const camera = shadow.camera;
+      wu32(camera.isOrthographicCamera ? 1 : 2);
+      for (const value of [camera.zoom ?? 1, camera.left ?? 0, camera.right ?? 0, camera.top ?? 0, camera.bottom ?? 0, camera.fov ?? 50, camera.aspect ?? 1]) wf32(value);
       end(s);
     },
     shadowTexture(id, texture) { const s=begin(OP.SHADOW_TEXTURE,8); wu32(id); wu32(texture); end(s); },
