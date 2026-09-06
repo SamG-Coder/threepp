@@ -1118,6 +1118,7 @@
       wrapS: texture && texture.wrapS != null ? texture.wrapS : TN.RepeatWrapping ?? 1000,
       wrapT: texture && texture.wrapT != null ? texture.wrapT : TN.RepeatWrapping ?? 1000,
       colorSpace: linear ? 0xffffffff : 3001,
+      anisotropy: Math.max(1, Math.min(64, texture?.anisotropy || 1)),
       mag: texture && texture.magFilter != null ? texture.magFilter : TN.LinearFilter ?? 1006,
       min:
         texture && texture.minFilter != null
@@ -1135,6 +1136,8 @@
     if (!texture || !texture._h) return;
     if (!TN.cmd || typeof TN.cmd.texParams !== "function") return;
     const p = textureParams(texture);
+    const signature = [texture._h,p.wrapS,p.wrapT,p.colorSpace,p.mag,p.min,p.channel,p.ox,p.oy,p.rx,p.ry,p.anisotropy].join(':');
+    if (texture._nativeParamsSignature === signature) return;
     TN.cmd.texParams(
       texture._h,
       p.wrapS,
@@ -1146,8 +1149,10 @@
       p.ox,
       p.oy,
       p.rx,
-      p.ry
+      p.ry,
+      p.anisotropy
     );
+    texture._nativeParamsSignature = signature;
   }
 
   function uploadTextureNative(texture) {
@@ -1167,7 +1172,9 @@
     }
     texture._uploadingNative = true;
     try {
+      texture._nativeParamsSignature = null;
       uploadTextureNativeBody(texture, flip, ver);
+      applyNativeTexParams(texture);
     } finally {
       texture._uploadingNative = false;
     }
@@ -1196,17 +1203,34 @@
       return;
     }
     const dataImage = texture?.image;
+    const halfFloat = dataImage?.data instanceof Uint16Array && texture.type === (TN.HalfFloatType ?? 1016);
     if (
-      dataImage?.data instanceof Float32Array &&
+      (dataImage?.data instanceof Float32Array || halfFloat) &&
       dataImage.width > 0 && dataImage.height > 0 &&
-      dataImage.data.length >= dataImage.width * dataImage.height * 4 &&
       TN.cmd && typeof TN.cmd.uploadFloat === "function"
     ) {
+      const channels = texture.format === (TN.RedFormat ?? 1028) ? 1 :
+        texture.format === (TN.RGFormat ?? 1030) ? 2 : texture.format === (TN.RGBFormat ?? 1022) ? 3 : 4;
+      const count = dataImage.width * dataImage.height;
+      if (dataImage.data.length < count * channels) throw new Error('DataTexture has insufficient channel data');
+      let pixels = dataImage.data;
+      if (channels !== 4 || halfFloat || flip) {
+        pixels = new Float32Array(count * 4);
+        const decode = halfFloat ? value => {
+          const sign = value & 0x8000 ? -1 : 1, exponent = (value >> 10) & 31, fraction = value & 1023;
+          return exponent === 0 ? sign * 2 ** -24 * fraction : exponent === 31 ? (fraction ? NaN : sign * Infinity) : sign * 2 ** (exponent - 15) * (1 + fraction / 1024);
+        } : value => value;
+        for (let i = 0; i < count; i++) {
+          const destination = flip ? ((dataImage.height - 1 - Math.floor(i / dataImage.width)) * dataImage.width + i % dataImage.width) * 4 : i * 4;
+          pixels[destination + 3] = 1;
+          for (let channel = 0; channel < channels; channel++) pixels[destination + channel] = decode(dataImage.data[i * channels + channel]);
+        }
+      }
       const id = texture._h || TN.cmd.alloc();
       const params = textureParams(texture);
-      if (TN.cmd.uploadFloat(id, dataImage.width, dataImage.height, dataImage.data, params)) {
+      if (TN.cmd.uploadFloat(id, dataImage.width, dataImage.height, pixels, params)) {
         texture._h = id;
-        texture._nativeFlipY = false;
+        texture._nativeFlipY = flip;
         texture._nativeVersion = ver;
         bindWaitingMaterials(texture);
       }

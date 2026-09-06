@@ -182,11 +182,15 @@ struct GLShadowMap::Impl {
         return _distanceMaterials[index].get();
     }
 
-    Material* getDepthMaterial(GLRenderer& _renderer, Object3D* /*object*/, BufferGeometry* /*geometry*/, Material* material, Light* light, float shadowCameraNear, float shadowCameraFar) {
+    Material* getDepthMaterial(GLRenderer& _renderer, Object3D* object, BufferGeometry* /*geometry*/, Material* material, Light* light, float shadowCameraNear, float shadowCameraFar) {
 
         Material* result;
 
-        if (light->type() == "PointLight") {
+        auto* mesh = dynamic_cast<Mesh*>(object);
+        auto custom = mesh ? (light->type() == "PointLight" ? mesh->customDistanceMaterial : mesh->customDepthMaterial) : nullptr;
+        if (custom) {
+            result = custom.get();
+        } else if (light->type() == "PointLight") {
 
             // MeshDistanceMaterial has no cutout path here — point-light shadows
             // from alpha-tested casters still write the full quad.
@@ -250,7 +254,7 @@ struct GLShadowMap::Impl {
         }
 
         if (light->type() == "PointLight") {
-            if (auto distanceMaterial = material->as<MeshDistanceMaterial>()) {
+            if (auto distanceMaterial = result->as<MeshDistanceMaterial>()) {
                 distanceMaterial->referencePosition.setFromMatrixPosition(*light->matrixWorld);
                 distanceMaterial->nearDistance = shadowCameraNear;
                 distanceMaterial->farDistance = shadowCameraFar;

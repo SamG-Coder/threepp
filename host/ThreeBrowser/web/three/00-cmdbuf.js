@@ -70,7 +70,14 @@
     OBJECT_REMOVE: 85,
     SLOT_DESTROY: 86,
     SET_POSE_QUAT: 87,
+    SCENE_STATE: 14,
+    COMPILE_SCENE: 15,
+    INIT_TEXTURE: 16,
+    MAT_DEPTH: 17,
+    MAT_DISTANCE: 18,
+    SCENE_ENVIRONMENT: 19,
     OBJECT_FLAGS: 88,
+    OBJECT_SHADOW_MATERIALS: 89,
     LIGHT_AMBIENT: 90,
     LIGHT_DIR: 91,
     LIGHT_HEMI: 92,
@@ -170,6 +177,12 @@
     if (off <= 0) return;
     const n = host();
     const used = off;
+    if (preferAsync && TN.hostHas(n, "CmdSubmitFrame")) {
+      n.CmdSubmitFrame(u8.subarray(0, used));
+      off = 0;
+      pendingSubmit = false;
+      return;
+    }
     // SharedBuffer may arrive after the page's first fromScene/Sky mesh.
     // COM CmdSubmit reads the C# mapping, not this JS heap — copy the
     // pending bytes so geometry/mesh exist before PMREM captures them.
@@ -424,6 +437,9 @@
       appendRender(scene, camera);
     },
     renderPass(scene, camera, target, overrideMaterial = 0, face = 0, mip = 0, flags = 0, viewport, scissor, scissorTest = false) {
+      // Pose commands must precede the draw that consumes them, including
+      // intermediate reflection and postprocessing passes in the same batch.
+      flushPoses();
       const s = begin(OP.RENDER_PASS, viewport && scissor ? 64 : 28);
       wu32(scene);
       wu32(camera);
@@ -458,18 +474,42 @@
     objectFlags(id, cast, receive, layers) {
       const s=begin(OP.OBJECT_FLAGS,12); wu32(id); wu32((cast?1:0)|(receive?2:0)); wu32(layers); end(s);
     },
+    objectShadowMaterials(id, depth, distance) {
+      const s = begin(OP.OBJECT_SHADOW_MATERIALS, 12);
+      wu32(id); wu32(depth); wu32(distance); end(s);
+    },
+    sceneState(id, intensity, rotation, fog) {
+      const s = begin(OP.SCENE_STATE, 68);
+      wu32(id); wf32(intensity);
+      for (const value of rotation.elements) wf32(value);
+      wu32(fog?.isFogExp2 ? 2 : fog?.isFog ? 1 : 0);
+      for (const value of [fog?.color?.r || 0, fog?.color?.g || 0, fog?.color?.b || 0,
+        fog?.isFogExp2 ? fog.density : fog?.near || 0, fog?.far || 0]) wf32(value);
+      end(s);
+    },
+    compileScene(scene, camera) {
+      flushPoses();
+      const s=begin(OP.COMPILE_SCENE,8); wu32(scene); wu32(camera); end(s);
+    },
+    initTexture(texture) {
+      const s=begin(OP.INIT_TEXTURE,4); wu32(texture); end(s);
+    },
+    matDepth(id, packing) { const s=begin(OP.MAT_DEPTH,8); wu32(id); wu32(packing); end(s); },
+    matDistance(id) { const s=begin(OP.MAT_DISTANCE,4); wu32(id); end(s); },
+    sceneEnvironment(scene, texture) { const s=begin(OP.SCENE_ENVIRONMENT,8); wu32(scene); wu32(texture); end(s); },
     shadowState(shadow) {
       const s=begin(OP.SHADOW_STATE,8); wu32((shadow.enabled?1:0)|(shadow.autoUpdate?2:0)|(shadow.needsUpdate?4:0)); wu32(shadow.type); end(s);
     },
     lightShadow(id, shadow) {
-      const s=begin(OP.LIGHT_SHADOW,100); wu32(id); wu32((shadow.autoUpdate?1:0)|(shadow.needsUpdate?2:0));
+      const s=begin(OP.LIGHT_SHADOW,104); wu32(id); wu32((shadow.autoUpdate?1:0)|(shadow.needsUpdate?2:0));
       for(const v of [shadow.mapSize.x,shadow.mapSize.y,shadow.bias,shadow.normalBias,shadow.radius,shadow.camera.near,shadow.camera.far,...shadow.camera.projectionMatrix.elements]) wf32(v);
+      wf32(shadow.intensity ?? 1);
       end(s);
     },
     shadowTexture(id, texture) { const s=begin(OP.SHADOW_TEXTURE,8); wu32(id); wu32(texture); end(s); },
-    matRenderState(id, blending, depthTest, premultipliedAlpha) {
+    matRenderState(id, blending, depthTest, premultipliedAlpha, alphaToCoverage) {
       const s = begin(OP.MAT_RENDER_STATE, 12);
-      wu32(id); wu32(blending); wu32((depthTest ? 1 : 0) | (premultipliedAlpha ? 2 : 0));
+      wu32(id); wu32(blending); wu32((depthTest ? 1 : 0) | (premultipliedAlpha ? 2 : 0) | (alphaToCoverage ? 4 : 0));
       end(s);
     },
     setSize(w, h) {
@@ -630,7 +670,7 @@
     },
     // OP_TEX_PARAMS: u32 id, wrapS, wrapT, colorSpace, mag, min, channel, pad,
     //                f32 ox, oy, repeatX, repeatY
-    texParams(id, wrapS, wrapT, colorSpace, mag, min, channel, ox, oy, rx, ry) {
+    texParams(id, wrapS, wrapT, colorSpace, mag, min, channel, ox, oy, rx, ry, anisotropy = 1) {
       const s = begin(OP.TEX_PARAMS, 48);
       wu32(id);
       wu32(wrapS);
@@ -639,7 +679,7 @@
       wu32(mag);
       wu32(min);
       wu32(channel);
-      wu32(0);
+      wu32(anisotropy);
       wf32(ox);
       wf32(oy);
       wf32(rx);
@@ -721,7 +761,7 @@
       const count = w * h * 4;
       if (w <= 0 || h <= 0 || !pixels || pixels.length < count) return false;
       const payload = 16 + count * 4;
-      if (!canFit(payload)) return false;
+      need(8 + payload);
       const s = begin(OP.TEX_FLOAT, payload);
       wu32(id);
       wu32(w);
@@ -729,7 +769,7 @@
       wu32(0);
       copyBytes(new Uint8Array(pixels.buffer, pixels.byteOffset, count * 4));
       end(s);
-      if (params) this.texParams(id, params.wrapS, params.wrapT, params.colorSpace, params.mag, params.min, params.channel, params.ox, params.oy, params.rx, params.ry);
+      if (params) this.texParams(id, params.wrapS, params.wrapT, params.colorSpace, params.mag, params.min, params.channel, params.ox, params.oy, params.rx, params.ry, params.anisotropy);
       return true;
     },
     matBasic(id, hex) {

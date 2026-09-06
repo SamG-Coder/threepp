@@ -512,6 +512,8 @@
     if (TN.cmd && nativeKind !== "shader") {
       handle = TN.cmd.alloc();
       if (nativeKind === "basic") TN.cmd.matBasic(handle, color);
+      else if (nativeKind === "depth") TN.cmd.matDepth(handle, mat.depthPacking);
+      else if (nativeKind === "distance") TN.cmd.matDistance(handle);
       else if (nativeKind === "lambert") TN.cmd.matLambert(handle, color);
       else if (nativeKind === "normal") TN.cmd.matNormal(handle);
       else if (nativeKind === "line") TN.cmd.matLine(handle, color, mat.linewidth ?? 1);
@@ -922,18 +924,26 @@
     }
 
     flushNative(renderer) {
-      const renderState = `${this.blending}:${this.depthTest}:${this.premultipliedAlpha}`;
+      const renderState = `${this.blending}:${this.depthTest}:${this.premultipliedAlpha}:${this.alphaToCoverage}`;
       if (this._nativeRenderState !== renderState && TN.cmd?.matRenderState) {
-        TN.cmd.matRenderState(this._h, this.blending, this.depthTest !== false, !!this.premultipliedAlpha);
+        TN.cmd.matRenderState(this._h, this.blending, this.depthTest !== false, !!this.premultipliedAlpha, !!this.alphaToCoverage);
         this._nativeRenderState = renderState;
       }
       if (this._nativeKind !== "shader" && this.onBeforeCompile !== defaultOnBeforeCompile && TN.hostHas(native(), "MaterialShaderTemplate")) {
-        const key = this.customProgramCacheKey();
-        if (this._nativeHookKey !== key) {
+        // Like Three.js, rebuild hooks when material state is invalidated.
+        // Computing large callback cache keys for every shared mesh on every
+        // pass otherwise repeats work unrelated to changing uniforms.
+        if (this._nativeHookVersion !== this.version || this._nativeHookFunction !== this.onBeforeCompile) {
+          const key = this.customProgramCacheKey();
           const type = this.isMeshStandardMaterial ? "standard" : this.isMeshLambertMaterial ? "lambert" :
-            this.isMeshPhongMaterial ? "phong" : this.isMeshDepthMaterial ? "depth" : "basic";
+            this.isMeshPhongMaterial ? "phong" : this.isMeshDepthMaterial ? "depth" : this.isMeshDistanceMaterial ? "distanceRGBA" : "basic";
           const shader = { ...native().MaterialShaderTemplate(type), uniforms: {} };
+          // Expose the modern hook marker before user callbacks run. Restore
+          // the native output operation afterwards so older chunks remain valid.
+          const nativeOutput = 'gl_FragColor = vec4( outgoingLight, diffuseColor.a );';
+          shader.fragmentShader = shader.fragmentShader.replace(nativeOutput, '#include <opaque_fragment>');
           this.onBeforeCompile(shader, renderer);
+          shader.fragmentShader = shader.fragmentShader.replaceAll('#include <opaque_fragment>', nativeOutput);
           // Bridge newer public chunk symbols to the native built-in shader
           // library without embedding any application's shader bodies.
           shader.fragmentShader = `
@@ -970,7 +980,7 @@ vec3 getLightProbeIndirectRadiance(const in vec3 viewDir, const in vec3 normal, 
             shader.fragmentShader = shader.fragmentShader.replace(/void\s+main\s*\(/, `${aliases}\nvoid main(`);
           }
           if (/\benvMapRotation\b/.test(shader.fragmentShader) && !/uniform\s+mat3\s+envMapRotation\b/.test(shader.fragmentShader)) {
-            shader.fragmentShader = `uniform mat3 envMapRotation;\n${shader.fragmentShader}`;
+            shader.fragmentShader = `#ifndef THREEBROWSER_ENVMAP_ROTATION_DECLARED\n#define THREEBROWSER_ENVMAP_ROTATION_DECLARED\nuniform mat3 envMapRotation;\n#endif\n${shader.fragmentShader}`;
             shader.uniforms.envMapRotation = { value: new TN.Matrix3() };
           }
           if (/\bnonPerturbedNormal\b/.test(shader.fragmentShader) && !/vec3\s+nonPerturbedNormal\b/.test(shader.fragmentShader)) {
@@ -980,11 +990,13 @@ vec3 getLightProbeIndirectRadiance(const in vec3 viewDir, const in vec3 normal, 
           native().ShaderMaterialSetSource(this._h, shader.vertexShader, shader.fragmentShader);
           this._nativeHookShader = shader;
           this._nativeHookKey = key;
+          this._nativeHookVersion = this.version;
+          this._nativeHookFunction = this.onBeforeCompile;
         }
         if (this._nativeHookShader && nativeShouldFlushShader(this, TN._renderFrame || 0, false)) {
           if (this._nativeHookShader.uniforms.envMapRotation && renderer?._nativeCurrentScene?.environmentRotation) {
             const matrix = new TN.Matrix4().makeRotationFromEuler(renderer._nativeCurrentScene.environmentRotation);
-            this._nativeHookShader.uniforms.envMapRotation.value.setFromMatrix4(matrix);
+            this._nativeHookShader.uniforms.envMapRotation.value.setFromMatrix4(matrix).transpose();
           }
           for (const [name, entry] of Object.entries(this._nativeHookShader.uniforms)) {
             pushShaderUniform(native(), this._h, name, uniformRawValue(entry), this._nativeHookShader);
@@ -1197,6 +1209,7 @@ vec3 getLightProbeIndirectRadiance(const in vec3 viewDir, const in vec3 normal, 
     constructor(params) {
       super();
       this.isMeshDepthMaterial = true;
+      this._nativeKind = "depth";
       this.type = "MeshDepthMaterial";
       this.depthPacking = BasicDepthPacking;
       addNormalMaps(this);
@@ -1209,6 +1222,7 @@ vec3 getLightProbeIndirectRadiance(const in vec3 viewDir, const in vec3 normal, 
     constructor(params) {
       super();
       this.isMeshDistanceMaterial = true;
+      this._nativeKind = "distance";
       this.type = "MeshDistanceMaterial";
       this.referencePosition = makeVec3(0, 0, 0);
       this.nearDistance = 1;

@@ -7,6 +7,7 @@
 
 #include "threepp/scenes/Fog.hpp"
 #include "threepp/scenes/FogExp2.hpp"
+#include "threepp/math/Matrix3.hpp"
 
 #include <memory>
 #include <variant>
@@ -47,6 +48,8 @@ namespace threepp {
     public:
         Background background;
         std::shared_ptr<Texture> environment;
+        float environmentIntensity = 1.f;
+        Matrix3 environmentRotation;
         std::optional<FogVariant> fog;
 
         std::shared_ptr<Material> overrideMaterial;

@@ -80,7 +80,7 @@ void Lights::setup(std::vector<Light*>& lights) {
 
                 auto shadowUniforms = shadowCache_.get(*light);
 
-                shadowUniforms->at("shadowBias") = shadow->bias;
+                shadowUniforms->at("shadowIntensity") = shadow->intensity; shadowUniforms->at("shadowBias") = shadow->bias;
                 shadowUniforms->at("shadowNormalBias") = shadow->normalBias;
                 shadowUniforms->at("shadowRadius") = shadow->radius;
                 std::get<Vector2>(shadowUniforms->at("shadowMapSize")).copy(shadow->mapSize);
@@ -118,7 +118,7 @@ void Lights::setup(std::vector<Light*>& lights) {
                 const auto& shadow = spotLight->shadow;
                 const auto shadowUniforms = shadowCache_.get(*light);
 
-                shadowUniforms->at("shadowBias") = shadow->bias;
+                shadowUniforms->at("shadowIntensity") = shadow->intensity; shadowUniforms->at("shadowBias") = shadow->bias;
                 shadowUniforms->at("shadowNormalBias") = shadow->normalBias;
                 shadowUniforms->at("shadowRadius") = shadow->radius;
                 std::get<Vector2>(shadowUniforms->at("shadowMapSize")).copy(shadow->mapSize);
@@ -151,7 +151,7 @@ void Lights::setup(std::vector<Light*>& lights) {
                 const auto& shadow = pointLight->shadow;
                 LightUniforms* shadowUniforms = shadowCache_.get(*light);
 
-                shadowUniforms->at("shadowBias") = shadow->bias;
+                shadowUniforms->at("shadowIntensity") = shadow->intensity; shadowUniforms->at("shadowBias") = shadow->bias;
                 shadowUniforms->at("shadowNormalBias") = shadow->normalBias;
                 shadowUniforms->at("shadowRadius") = shadow->radius;
                 std::get<Vector2>(shadowUniforms->at("shadowMapSize")).copy(shadow->mapSize);

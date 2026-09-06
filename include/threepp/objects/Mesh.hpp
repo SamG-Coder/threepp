@@ -16,6 +16,8 @@ namespace threepp {
     class Mesh: public virtual Object3D, public ObjectWithMorphTargetInfluences, public ObjectWithMaterials {
 
     public:
+        std::shared_ptr<Material> customDepthMaterial;
+        std::shared_ptr<Material> customDistanceMaterial;
         explicit Mesh(std::shared_ptr<BufferGeometry> geometry = nullptr, std::shared_ptr<Material> material = nullptr);
         Mesh(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr<Material>> materials);
 

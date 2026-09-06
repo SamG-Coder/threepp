@@ -65,6 +65,8 @@ typedef struct TNInputEvent {
 TN_API int tn_poll_input(TNInputEvent* events, int capacity);
 TN_API int tn_cmd_submit(const uint8_t* data, int nbytes);
 TN_API int tn_cmd_submit_async(const uint8_t* data, int nbytes);
+TN_API int tn_cmd_submit_frame_async(const uint8_t* data, int nbytes);
+TN_API int tn_cmd_pending_frames(void);
 TN_API int tn_frame_info(int* width, int* height, uint64_t* generation);
 TN_API int tn_frame_copy(uint8_t* dst, int max_bytes, int* width, int* height, uint64_t* generation);
 
@@ -157,6 +159,7 @@ TN_API uint32_t tn_render_target_create(
     int count, int type, int format, int min_filter, int mag_filter, uint32_t depth_texture_id, int generate_mipmaps);
 TN_API int tn_render_target_set(uint32_t id, int active_cube_face, int active_mipmap_level);
 TN_API int tn_render_target_read_pixels(uint32_t id, int x, int y, int width, int height, void* data, int floating_point);
+TN_API int tn_renderer_read_presented_pixels(int width, int height, unsigned char* data);
 TN_API void tn_render_target_resize(uint32_t id, int width, int height);
 
 TN_API uint32_t tn_axes_helper_create(float size);

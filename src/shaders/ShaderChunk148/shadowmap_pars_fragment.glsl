@@ -18,7 +18,7 @@
 		varying vec4 vDirectionalShadowCoord[ NUM_DIR_LIGHT_SHADOWS ];
 
 		struct DirectionalLightShadow {
-			float shadowBias;
+			float shadowIntensity; float shadowBias;
 			float shadowNormalBias;
 			float shadowRadius;
 			vec2 shadowMapSize;
@@ -33,7 +33,7 @@
 		uniform sampler2D spotShadowMap[ NUM_SPOT_LIGHT_SHADOWS ];
 
 		struct SpotLightShadow {
-			float shadowBias;
+			float shadowIntensity; float shadowBias;
 			float shadowNormalBias;
 			float shadowRadius;
 			vec2 shadowMapSize;
@@ -49,7 +49,7 @@
 		varying vec4 vPointShadowCoord[ NUM_POINT_LIGHT_SHADOWS ];
 
 		struct PointLightShadow {
-			float shadowBias;
+			float shadowIntensity; float shadowBias;
 			float shadowNormalBias;
 			float shadowRadius;
 			vec2 shadowMapSize;
@@ -309,4 +309,13 @@
 
 	}
 
+#endif
+
+#ifdef USE_SHADOWMAP
+float getShadow(sampler2D map, vec2 size, float intensity, float bias, float radius, vec4 coord) {
+    return mix(1.0, getShadow(map, size, bias, radius, coord), intensity);
+}
+float getPointShadow(sampler2D map, vec2 size, float intensity, float bias, float radius, vec4 coord, float nearPlane, float farPlane) {
+    return mix(1.0, getPointShadow(map, size, bias, radius, coord, nearPlane, farPlane), intensity);
+}
 #endif

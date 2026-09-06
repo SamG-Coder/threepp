@@ -617,6 +617,31 @@ napi_value canvas2dMeasureText(napi_env env, napi_callback_info info) {
     return result;
 }
 
+napi_value rendererCapturePng(napi_env env, napi_callback_info info) {
+    napi_value argv[2]{};
+    std::size_t argc = 2;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    const int width = argc > 0 ? static_cast<int>(argNumber(env, argv[0], 0)) : 0;
+    const int height = argc > 1 ? static_cast<int>(argNumber(env, argv[1], 0)) : 0;
+    if (width <= 0 || height <= 0 || static_cast<uint64_t>(width) * height > 16777216) {
+        napi_throw_range_error(env, nullptr, "Invalid capture dimensions");
+        return nullptr;
+    }
+    try {
+        std::vector<std::uint8_t> pixels(static_cast<size_t>(width) * height * 4);
+        if (!tn_renderer_read_presented_pixels(width, height, pixels.data())) throw std::runtime_error("Native framebuffer unavailable");
+        const size_t stride = static_cast<size_t>(width) * 4;
+        for (int y = 0; y < height / 2; ++y)
+            std::swap_ranges(pixels.begin() + y * stride, pixels.begin() + (y + 1) * stride, pixels.begin() + (height - 1 - y) * stride);
+        threebrowser::canvas2d::CanvasSurface surface(width, height);
+        surface.writePixels(0, 0, width, height, pixels);
+        return canvasByteArray(env, surface.encodePng(), napi_uint8_array);
+    } catch (const std::exception& error) {
+        napi_throw_error(env, nullptr, error.what());
+        return nullptr;
+    }
+}
+
 napi_value canvas2dEncodePng(napi_env env, napi_callback_info info) {
     napi_value argv[1]{};
     std::size_t argc = 1;
@@ -737,7 +762,8 @@ napi_value submit(napi_env env, napi_callback_info info) {
     if (!runtimeActive.load(std::memory_order_acquire)) return boolean(env, false);
     napi_value argv[1]{};
     std::size_t argc = 1;
-    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    void* asyncFrame = nullptr;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, &asyncFrame);
     if (argc == 0) return boolean(env, false);
     void* data = nullptr;
     std::size_t size = 0;
@@ -758,7 +784,9 @@ napi_value submit(napi_env env, napi_callback_info info) {
         else if (type == napi_uint32_array || type == napi_int32_array || type == napi_float32_array) size *= 4;
         else if (type == napi_float64_array || type == napi_bigint64_array || type == napi_biguint64_array) size *= 8;
     }
-    return boolean(env, tn_cmd_submit(static_cast<const std::uint8_t*>(data), static_cast<int>(size)) != 0);
+    return boolean(env, (asyncFrame
+        ? tn_cmd_submit_frame_async(static_cast<const std::uint8_t*>(data), static_cast<int>(size))
+        : tn_cmd_submit(static_cast<const std::uint8_t*>(data), static_cast<int>(size))) != 0);
 }
 
 napi_value render(napi_env env, napi_callback_info info) {
@@ -1260,7 +1288,7 @@ napi_value waitFrame(napi_env env, napi_callback_info) {
 }
 
 napi_value pressure(napi_env env, napi_callback_info) {
-    return number(env, runtimeMode.load(std::memory_order_acquire) == 2 ? tw_backlog() : 0);
+    return number(env, runtimeMode.load(std::memory_order_acquire) == 2 ? tw_backlog() : tn_cmd_pending_frames());
 }
 
 napi_value backendName(napi_env env, napi_callback_info) {
@@ -2198,6 +2226,7 @@ napi_value init(napi_env env, napi_value exports) {
         {"webGpuSubmit", nullptr, webGpuSubmit, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"webGpuMapRead", nullptr, webGpuMapRead, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"submit", nullptr, submit, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"submitFrame", nullptr, submit, nullptr, nullptr, nullptr, napi_default, reinterpret_cast<void*>(1)},
         {"render", nullptr, render, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"decodeImage", nullptr, decodeImage, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"cameraDevices", nullptr, cameraDevices, nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -2257,6 +2286,7 @@ napi_value init(napi_env env, napi_value exports) {
         {"pmremFromObject", nullptr, pmremFromObject, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"renderTargetCreate", nullptr, renderTargetCreate, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"renderTargetReadPixels", nullptr, renderTargetReadPixels, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"rendererCapturePng", nullptr, rendererCapturePng, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"renderTargetSet", nullptr, renderTargetSet, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"renderTargetResize", nullptr, renderTargetResize, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"boneCreate", nullptr, boneCreate, nullptr, nullptr, nullptr, napi_default, nullptr},

@@ -20,6 +20,7 @@ namespace threepp {
         std::unique_ptr<Camera> camera;
 
         float bias = 0;
+        float intensity = 1;
         float normalBias = 0;
         float radius = 1;
 

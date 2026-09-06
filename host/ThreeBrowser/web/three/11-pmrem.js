@@ -142,7 +142,14 @@
       if (!texture._environmentScenes) texture._environmentScenes = new Set();
       texture._environmentScenes.add(scene);
     }
+    if (scene._nativeEnvironmentScene === sceneH && scene._nativeEnvironmentTexture === texH) return;
     try {
+      if (TN.cmd?.sceneEnvironment) {
+        TN.cmd.sceneEnvironment(sceneH, texH);
+        scene._nativeEnvironmentScene = sceneH;
+        scene._nativeEnvironmentTexture = texH;
+        return;
+      }
       if (TN.cmd && typeof TN.cmd.submit === "function") TN.cmd.submit();
       const n = native();
       if (TN.hostHas?.(n, "SceneSetEnvironment")) {
@@ -220,6 +227,7 @@
         return this[ENV_KEY] ?? null;
       },
       set(value) {
+        this[ENV_KEY]?._environmentScenes?.delete(this);
         this[ENV_KEY] = value ?? null;
         pushEnvironment(this, this[ENV_KEY]);
       },

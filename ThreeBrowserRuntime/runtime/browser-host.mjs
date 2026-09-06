@@ -941,11 +941,23 @@ class CanvasElement extends Element {
   }
   toDataURL() {
     if (!this.width || !this.height) return "data:,";
-    const png = Buffer.from(native.canvas2dEncodePng(this._surface()));
+    const png = this.toBuffer();
     return "data:image/png;base64," + png.toString("base64");
   }
   toBuffer() {
+    if (this._threeBrowserNativeRenderer) {
+      globalThis.__TN?.cmd?.submit();
+      return Buffer.from(native.rendererCapturePng(this.width, this.height));
+    }
     return Buffer.from(native.canvas2dEncodePng(this._surface()));
+  }
+  toBlob(callback, _type = "image/png", _quality) {
+    if (typeof callback !== "function") throw new TypeError("toBlob requires a callback");
+    let blob = null;
+    if (this.width && this.height) {
+      try { blob = new Blob([this.toBuffer()], {type:"image/png"}); } catch { /* encoding failure reports null */ }
+    }
+    setTimeout(() => callback(blob), 0);
   }
   async convertToBlob() {
     return new Blob([this.toBuffer()], { type: "image/png" });
@@ -2868,7 +2880,8 @@ globalThis.removeEventListener = windowEvents.removeEventListener.bind(windowEve
 globalThis.dispatchEvent = windowEvents.dispatchEvent.bind(windowEvents);
 
 const pendingNativeCommands = [];
-function submitNativeCommands(data) {
+function submitNativeCommands(data, frame = false) {
+  if (native.isOpen()) return frame && process.env.THREEBROWSER_SYNC_FRAMES !== "1" ? native.submitFrame(data) : native.submit(data);
   const copy = data instanceof ArrayBuffer
     ? new Uint8Array(data.slice(0))
     : new Uint8Array(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength));
@@ -2905,6 +2918,7 @@ function hostObject() {
       return globalThis.__TN_SHARED;
     },
     CmdSubmitBuffer: submitNativeCommands,
+    CmdSubmitFrame: data => submitNativeCommands(data, true),
     RendererSetToneMapping: (mode, exposure) => native.setToneMapping(mode, exposure),
     ShaderMaterialCreate: (vertex, fragment, raw = 0) => native.shaderMaterialCreate(vertex, fragment, raw),
     ShaderMaterialSetSource: (material, vertex, fragment) => native.shaderMaterialSetSource(material, vertex, fragment),
@@ -3268,7 +3282,7 @@ function pump() {
     }
     nextWebGpuFrame = Math.max(nextWebGpuFrame + webGpuFrameInterval, now);
   }
-  if (webGpuEnabled && native.pressure() > 1) {
+  if (native.pressure() > 1) {
     setTimeout(pump, 1);
     return;
   }

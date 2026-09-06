@@ -235,9 +235,86 @@ test("Web Audio compressor and external ShaderMaterial subclasses follow browser
     renderer.readRenderTargetPixels(readbackTarget,2,2,1,1,floatPixel);
     assert.deepEqual([...floatPixel],[.25,.5,.75,1], 'float readback must return the GPU values, not a zero-filled probe');
     const bytePixel = new Uint8Array(4);
+    const scalarTexture=new THREE.DataTexture(new Float32Array([-1.75]),1,1,THREE.RedFormat,THREE.FloatType);
+    scalarTexture.needsUpdate=true;
+    const scalarMaterial=new THREE.ShaderMaterial({depthTest:false,depthWrite:false,
+      uniforms:{data:{value:scalarTexture}},vertexShader:'void main(){gl_Position=vec4(position.xy,0.,1.);}',
+      fragmentShader:'uniform sampler2D data;void main(){gl_FragColor=texture2D(data,vec2(.5));}'});
+    const initialMaterial=readbackQuad.material;
+    readbackQuad.material=scalarMaterial;
+    renderer.render(readbackQuad,new THREE.OrthographicCamera(-1,1,1,-1,0,1));
+    renderer.readRenderTargetPixels(readbackTarget,2,2,1,1,floatPixel);
+    assert.deepEqual([...floatPixel],[-1.75,0,0,1],'single-channel simulation textures must preserve negative floating-point values');
+    const halfTexture=new THREE.DataTexture(new Uint16Array([0xbe00,0x4200]),1,1,THREE.RGFormat,THREE.HalfFloatType);
+    halfTexture.needsUpdate=true;
+    scalarMaterial.uniforms.data.value=halfTexture;
+    renderer.render(readbackQuad,new THREE.OrthographicCamera(-1,1,1,-1,0,1));
+    renderer.readRenderTargetPixels(readbackTarget,2,2,1,1,floatPixel);
+    assert.deepEqual([...floatPixel],[-1.5,3,0,1],'half-float channels must not be tone-mapped into display bytes');
+    const largePixels=new Float32Array(1024*513*4).fill(-.625);
+    const largeTexture=new THREE.DataTexture(largePixels,1024,513,THREE.RGBAFormat,THREE.FloatType);
+    largeTexture.needsUpdate=true;
+    scalarMaterial.uniforms.data.value=largeTexture;
+    renderer.render(readbackQuad,new THREE.OrthographicCamera(-1,1,1,-1,0,1));
+    renderer.readRenderTargetPixels(readbackTarget,2,2,1,1,floatPixel);
+    assert.ok(largeTexture._h,'an upload larger than the initial command buffer must create a native texture');
+    assert.deepEqual([...floatPixel],[-.625,-.625,-.625,-.625],'oversized float uploads must reach the GPU intact');
+    halfTexture.dispose();largeTexture.dispose();
+    readbackQuad.material=initialMaterial;
+    scalarMaterial.dispose();scalarTexture.dispose();
+    const originalReadbackMaterial=readbackQuad.material;
+    const simulationTargets=[0,1].map(()=>new THREE.WebGLRenderTarget(8,8,{count:2,type:THREE.HalfFloatType,depthBuffer:false}));
+    const simulationMaterial=new THREE.ShaderMaterial({glslVersion:THREE.GLSL3,depthTest:false,depthWrite:false,
+      uniforms:{previous:{value:simulationTargets[0].textures[0]},history:{value:simulationTargets[0].textures[1]},initialize:{value:1},dt:{value:.125}},
+      vertexShader:'void main(){gl_Position=vec4(position.xy,0.,1.);}',
+      fragmentShader:'uniform sampler2D previous;uniform sampler2D history;uniform float initialize;uniform float dt;layout(location=0) out vec4 state;layout(location=1) out vec4 memory;void main(){state=initialize>.5?vec4(-.5,0.,0.,1.):texture(previous,vec2(.5))+vec4(dt,0.,0.,0.);memory=initialize>.5?vec4(.25,0.,0.,1.):texture(history,vec2(.5))+vec4(dt*2.,0.,0.,0.);}'
+    });
+    readbackQuad.material=simulationMaterial;
+    const simulationCamera=new THREE.OrthographicCamera(-1,1,1,-1,0,1);
+    let simulationIndex=0;
+    for(let step=0;step<4;step++){
+      simulationMaterial.uniforms.previous.value=simulationTargets[simulationIndex].textures[0];
+      simulationMaterial.uniforms.history.value=simulationTargets[simulationIndex].textures[1];
+      simulationMaterial.uniforms.initialize.value=step===0?1:0;
+      simulationIndex=1-simulationIndex;
+      renderer.setRenderTarget(simulationTargets[simulationIndex]);
+      renderer.render(readbackQuad,simulationCamera);
+    }
+    const simulationRead=new THREE.ShaderMaterial({depthTest:false,depthWrite:false,
+      uniforms:{state:{value:simulationTargets[simulationIndex].textures[0]},history:{value:simulationTargets[simulationIndex].textures[1]}},
+      vertexShader:'void main(){gl_Position=vec4(position.xy,0.,1.);}',
+      fragmentShader:'uniform sampler2D state;uniform sampler2D history;void main(){gl_FragColor=vec4(texture2D(state,vec2(.5)).r,texture2D(history,vec2(.5)).r,0.,1.);}'
+    });
+    readbackQuad.material=simulationRead;
+    renderer.setRenderTarget(readbackTarget);
+    renderer.render(readbackQuad,simulationCamera);
+    renderer.readRenderTargetPixels(readbackTarget,2,2,1,1,floatPixel);
+    assert.deepEqual([...floatPixel],[-.125,1,0,1],'multiple simulation substeps must preserve signed state and the second attachment');
+    simulationTargets.forEach(target=>target.dispose());simulationMaterial.dispose();simulationRead.dispose();
+    readbackQuad.material=originalReadbackMaterial;
+    renderer.render(readbackQuad,simulationCamera);
     renderer.readRenderTargetPixels(readbackTarget,2,2,1,1,bytePixel);
     assert.ok(Math.abs(bytePixel[0]-64)<=1 && Math.abs(bytePixel[1]-128)<=1 && Math.abs(bytePixel[2]-191)<=1 && bytePixel[3]===255);
     const normalMap = new THREE.DataTexture(new Uint8Array([128,128,255,255]),1,1);
+    const outputHook = new THREE.MeshBasicMaterial({toneMapped:false});
+    let compileCalls=0, drawCallbacks=0;
+    outputHook.onBeforeCompile = shader => {
+      compileCalls++;
+      assert.ok(shader.fragmentShader.includes('#include <opaque_fragment>'));
+      shader.fragmentShader=shader.fragmentShader.replace('#include <opaque_fragment>','gl_FragColor=vec4(.125,.25,.5,1.);');
+    };
+    readbackQuad.material=outputHook;
+    readbackQuad.onBeforeRender=()=>drawCallbacks++;
+    await renderer.compileAsync(readbackQuad,new THREE.OrthographicCamera(-1,1,1,-1,0,1));
+    assert.equal(compileCalls,1);
+    assert.equal(drawCallbacks,0,'compilation must not invoke draw callbacks');
+    renderer.readRenderTargetPixels(readbackTarget,2,2,1,1,floatPixel);
+    assert.deepEqual([...floatPixel],[.25,.5,.75,1],'compilation must not draw over the target');
+    renderer.render(readbackQuad,new THREE.OrthographicCamera(-1,1,1,-1,0,1));
+    renderer.readRenderTargetPixels(readbackTarget,2,2,1,1,floatPixel);
+    assert.deepEqual([...floatPixel],[.125,.25,.5,1],'opaque output hook must change actual GPU pixels');
+    readbackQuad.onBeforeRender=()=>{};
+    outputHook.dispose();
     normalMap.needsUpdate = true;
     const hookedMaterial = new THREE.MeshStandardMaterial({normalMap});
     hookedMaterial.onBeforeCompile = shader => {
@@ -307,7 +384,158 @@ test("Web Audio compressor and external ShaderMaterial subclasses follow browser
     colourTexture.dispose();
     colourSampleMaterial.dispose();
     builtinColourMaterial.dispose();
+    const fogScene = new THREE.Scene();
+    const fogMaterial = new THREE.MeshBasicMaterial({color:0xffffff,toneMapped:false});
+    const fogMesh = new THREE.Mesh(new THREE.PlaneGeometry(2,2),fogMaterial);
+    fogMesh.position.z=-2;
+    fogScene.add(fogMesh);
+    const fogCamera = new THREE.OrthographicCamera(-1,1,1,-1,.1,10);
+    fogCamera.position.set(0,0,3);
+    fogCamera.lookAt(0,0,-2);
+    fogScene.fog = new THREE.FogExp2(0xff0000,20);
+    renderer.render(fogScene,fogCamera);
+    renderer.readRenderTargetPixels(readbackTarget,2,2,1,1,floatPixel);
+    assert.ok(floatPixel[0]>.99 && floatPixel[2]<.01,'initial fog must reach the GPU: '+JSON.stringify([...floatPixel]));
+    fogScene.fog.color.set(0x0000ff);
+    renderer.render(fogScene,fogCamera);
+    renderer.readRenderTargetPixels(readbackTarget,2,2,1,1,floatPixel);
+    assert.ok(floatPixel[0]<.01 && floatPixel[2]>.99,'mutating an existing fog colour must update GPU uniforms');
+    fogScene.fog=null;
+    renderer.render(fogScene,fogCamera);
+    renderer.readRenderTargetPixels(readbackTarget,2,2,1,1,floatPixel);
+    assert.ok(floatPixel[0]>.99 && floatPixel[2]>.99,'clearing fog must restore unfogged pixels');
+    const environmentMaterial = new THREE.MeshStandardMaterial({toneMapped:false});
+    environmentMaterial.onBeforeCompile = shader => {
+      shader.fragmentShader = 'uniform float envMapIntensity;\nuniform mat3 envMapRotation;\n'+shader.fragmentShader;
+      shader.fragmentShader = shader.fragmentShader.replace('#include <opaque_fragment>',
+        'gl_FragColor=vec4(envMapIntensity,abs(envMapRotation[0].xy),1.);');
+    };
+    fogMesh.material=environmentMaterial;
+    fogScene.environmentIntensity=.375;
+    fogScene.environmentRotation.z=Math.PI/2;
+    renderer.render(fogScene,fogCamera);
+    renderer.readRenderTargetPixels(readbackTarget,2,2,1,1,floatPixel);
+    assert.ok(Math.abs(floatPixel[0]-.375)<.001 && floatPixel[1]<.001 && floatPixel[2]>.99,
+      'scene environment intensity and rotation must reach built-in material uniforms: '+JSON.stringify([...floatPixel]));
+    fogMesh.material=fogMaterial;
+    environmentMaterial.dispose();
+    const shadowLight=new THREE.DirectionalLight(0xffffff,1);
+    shadowLight.castShadow=true;
+    shadowLight.shadow.mapSize.set(8,8);
+    shadowLight.shadow.intensity=.25;
+    fogScene.add(shadowLight);
+    renderer.shadowMap.enabled=true;
+    const shadowApiMaterial=new THREE.MeshStandardMaterial({toneMapped:false});
+    shadowApiMaterial.onBeforeCompile=shader=>{
+      shader.fragmentShader=shader.fragmentShader.replace('#include <opaque_fragment>',`
+        DirectionalLightShadow s=directionalLightShadows[0];
+        gl_FragColor=vec4(s.shadowIntensity,getShadow(directionalShadowMap[0],s.shadowMapSize,s.shadowIntensity,s.shadowBias,s.shadowRadius,vDirectionalShadowCoord[0]),0.,1.);
+      `);
+    };
+    fogMesh.material=shadowApiMaterial;
+    renderer.render(fogScene,fogCamera);
+    renderer.readRenderTargetPixels(readbackTarget,2,2,1,1,floatPixel);
+    assert.ok(Math.abs(floatPixel[0]-.25)<.001,'modern shadow API must compile and upload intensity');
+    shadowLight.shadow.intensity=.75;
+    renderer.render(fogScene,fogCamera);
+    renderer.readRenderTargetPixels(readbackTarget,2,2,1,1,floatPixel);
+    assert.ok(Math.abs(floatPixel[0]-.75)<.001,'shadow intensity changes must reach the GPU');
+    const pointLight=new THREE.PointLight(0xffffff,1);
+    pointLight.position.z=6;
+    fogScene.add(pointLight);
+    const rawLightMaterial=new THREE.ShaderMaterial({lights:true,depthTest:false,depthWrite:false,
+      vertexShader:'void main(){gl_Position=vec4(position.xy,0.,1.);}',
+      fragmentShader:`
+        #include <common>
+        #include <packing>
+        #include <lights_pars_begin>
+        #include <shadowmap_pars_fragment>
+        void main(){
+          IncidentLight light;getPointLightInfo(pointLights[0],vec3(0.),light);
+          DirectionalLightShadow s=directionalLightShadows[0];
+          gl_FragColor=vec4(s.shadowIntensity,getShadow(directionalShadowMap[0],s.shadowMapSize,s.shadowIntensity,s.shadowBias,s.shadowRadius,vec4(0.,0.,0.,1.)),light.direction.z,1.);
+        }`});
+    fogMesh.material=rawLightMaterial;
+    renderer.render(fogScene,fogCamera);
+    renderer.readRenderTargetPixels(readbackTarget,2,2,1,1,floatPixel);
+    assert.ok(Math.abs(floatPixel[0]-.75)<.001 && floatPixel[2]>.99,
+      'ShaderMaterial must support modern shadow and light-position overloads: '+JSON.stringify([...floatPixel]));
+    fogScene.remove(pointLight);
+    rawLightMaterial.dispose();
+    fogMesh.material=fogMaterial;
+    fogScene.remove(shadowLight);
+    renderer.shadowMap.enabled=false;
+    shadowApiMaterial.dispose();
+    const customDepth=new THREE.MeshDepthMaterial({depthPacking:THREE.RGBADepthPacking});
+    const customDistance=new THREE.MeshDistanceMaterial();
+    let depthCompiles=0,distanceCompiles=0;
+    customDepth.onBeforeCompile=shader=>{depthCompiles++;assert.ok(shader.fragmentShader.includes('DEPTH_PACKING'));};
+    customDistance.onBeforeCompile=shader=>{distanceCompiles++;assert.ok(shader.fragmentShader.includes('referencePosition'));};
+    fogMesh.customDepthMaterial=customDepth;
+    fogMesh.customDistanceMaterial=customDistance;
+    await renderer.compileAsync(fogScene,fogCamera);
+    assert.ok(customDepth._h && customDistance._h && customDepth._h!==customDistance._h);
+    assert.equal(depthCompiles,1);
+    assert.equal(distanceCompiles,1);
+    assert.equal(fogMesh._nativeShadowMaterials,`${customDepth._h}:${customDistance._h}`);
+    fogMesh.customDepthMaterial=null;
+    fogMesh.customDistanceMaterial=null;
+    await renderer.compileAsync(fogScene,fogCamera);
+    assert.equal(fogMesh._nativeShadowMaterials,'0:0');
+    const uploadTexture=new THREE.DataTexture(new Uint8Array([255,0,0,255]),1,1);
+    uploadTexture.anisotropy=8;
+    renderer.initTexture(uploadTexture);
+    assert.ok(uploadTexture._h,'eager upload must allocate a texture handle');
+    const originalTextureParams=globalThis.__TN.cmd.texParams;
+    let textureParameterCommands=0;
+    try {
+      globalThis.__TN.cmd.texParams=(...args)=>{textureParameterCommands++;return originalTextureParams(...args);};
+      for(let i=0;i<5;i++)globalThis.__TN._ensureTextureNative(uploadTexture);
+      assert.equal(textureParameterCommands,0,'unchanged texture sampling must not resend native parameters');
+      uploadTexture.anisotropy=4;
+      globalThis.__TN._ensureTextureNative(uploadTexture);
+      globalThis.__TN._ensureTextureNative(uploadTexture);
+      assert.equal(textureParameterCommands,1,'changed sampler parameters must be transferred exactly once');
+    } finally { globalThis.__TN.cmd.texParams=originalTextureParams; }
+    const originalEnvironmentCommand=globalThis.__TN.cmd.sceneEnvironment;
+    const originalBarrier=globalThis.__TN.cmd.submit;
+    let environmentCommands=0,environmentBarriers=0;
+    try {
+      globalThis.__TN.cmd.sceneEnvironment=(...args)=>{environmentCommands++;return originalEnvironmentCommand(...args);};
+      globalThis.__TN.cmd.submit=(...args)=>{environmentBarriers++;return originalBarrier(...args);};
+      fogScene.environment=uploadTexture;
+      fogScene.environment=uploadTexture;
+      assert.ok(uploadTexture._environmentScenes.has(fogScene));
+      fogScene.environment=null;
+      assert.equal(environmentCommands,2,'reassigning the same environment must not rebind it');
+      assert.equal(environmentBarriers,0,'environment changes must stay in the ordered command batch');
+      assert.ok(!uploadTexture._environmentScenes.has(fogScene));
+    } finally {
+      globalThis.__TN.cmd.sceneEnvironment=originalEnvironmentCommand;
+      globalThis.__TN.cmd.submit=originalBarrier;
+    }
+    const pngCanvas=document.createElement('canvas');
+    pngCanvas.width=2;pngCanvas.height=2;
+    pngCanvas.getContext('2d').fillRect(0,0,2,2);
+    let synchronous=true;
+    const blobPromise=new Promise(resolve=>pngCanvas.toBlob(blob=>{assert.equal(synchronous,false);resolve(blob)}));
+    synchronous=false;
+    const pngBlob=await blobPromise;
+    assert.equal(pngBlob.type,'image/png');
+    assert.deepEqual([...new Uint8Array(await pngBlob.arrayBuffer()).slice(0,8)],[137,80,78,71,13,10,26,10]);
+    customDepth.dispose();customDistance.dispose();uploadTexture.dispose();fogMaterial.dispose();
     renderer.setRenderTarget(null);
+    const presentedScene=new THREE.Scene();
+    presentedScene.background=new THREE.Color(0x00ff00);
+    renderer.render(presentedScene,fogCamera);
+    globalThis.__TN.cmd.submit();
+    const presentedBlob=await new Promise(resolve=>renderer.domElement.toBlob(resolve));
+    assert.ok(presentedBlob && presentedBlob.size>0,'native canvas export must return an encoded image');
+    const presentedImage=native.decodeImage(new Uint8Array(await presentedBlob.arrayBuffer()));
+    assert.equal(presentedImage.width,renderer.domElement.width);
+    assert.equal(presentedImage.height,renderer.domElement.height);
+    assert.deepEqual([...presentedImage.pixels.slice(0,4)],[0,255,0,255],
+      'canvas export must contain the presented native framebuffer');
     readbackTarget.dispose();
     const cmd = globalThis.__TN.cmd;
     const originalRenderPass = cmd.renderPass;

@@ -66,7 +66,7 @@ if (args.Length > 0 && (args[0].Equals("pull", StringComparison.OrdinalIgnoreCas
 {
     if (args.Length < 2)
     {
-        Console.Error.WriteLine("Usage: dotnet run --project <ThreeBrowserRuntime.csproj> -- pull <https://site> [destination] [--force]");
+        Console.Error.WriteLine("Usage: dotnet run --project <ThreeBrowserRuntime.csproj> -- pull <https://site> [destination] [--force] [--beautify-js]");
         return 1;
     }
     if (!File.Exists(sitePuller))

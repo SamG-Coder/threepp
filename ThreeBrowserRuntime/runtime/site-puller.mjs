@@ -4,9 +4,14 @@ import path from "node:path";
 import process from "node:process";
 import { detectBundledRendererUsage, detectMinifiedJavaScript, relinkLegacyThreeBundle, relinkViteChunk } from "./vite-relinker.mjs";
 
-const [address, destinationArgument, ...flags] = process.argv.slice(2);
+const arguments_ = process.argv.slice(2);
+const flags = arguments_.filter(argument => argument.startsWith("--"));
+const [address, destinationArgument] = arguments_.filter(argument => !argument.startsWith("--"));
+for (const flag of flags) {
+  if (!["--force", "--beautify-js"].includes(flag)) throw new Error(`Unknown pull option: ${flag}`);
+}
 if (!address) {
-  console.error("Usage: pull <https://site.example/page> [destination] [--force]");
+  console.error("Usage: pull <https://site.example/page> [destination] [--force] [--beautify-js]");
   process.exit(2);
 }
 
@@ -17,6 +22,22 @@ if (!new Set(["http:", "https:"]).has(startURL.protocol)) {
 
 const destination = path.resolve(destinationArgument || process.cwd());
 const force = flags.includes("--force");
+const beautifyJavaScript = flags.includes("--beautify-js");
+const formatter = beautifyJavaScript ? await import("prettier") : null;
+const beautifiedFiles = [];
+async function formatJavaScript(source, filename) {
+  if (!formatter) return source;
+  try {
+    const formatted = await formatter.format(source, {
+      parser: "babel", filepath: filename, printWidth: 100,
+      embeddedLanguageFormatting: "off", endOfLine: "lf",
+    });
+    beautifiedFiles.push(filename.replaceAll("\\", "/"));
+    return formatted;
+  } catch (error) {
+    throw new Error(`Could not beautify JavaScript ${filename}: ${error.message}`, { cause: error });
+  }
+}
 fs.mkdirSync(destination, { recursive: true });
 const existing = fs.readdirSync(destination).filter(name => name !== ".git");
 if (existing.length && !force) {
@@ -530,6 +551,7 @@ for (const record of successful) {
         findings.add(`Native WebGLRenderer relinked in ${record.localPath}`);
       }
     }
+    if (moduleLike(record.url, record.contentType, record.hint)) output = await formatJavaScript(output, record.localPath);
     fs.writeFileSync(target, output);
   } else {
     fs.writeFileSync(target, record.content);
@@ -573,7 +595,7 @@ const entryLines = [
   ...rootModules.map(record => `await import(${JSON.stringify(`./${record.localPath.replaceAll("\\", "/")}`)});`),
   "",
 ];
-fs.writeFileSync(path.join(destination, "site-entry.mjs"), entryLines.join("\n"));
+fs.writeFileSync(path.join(destination, "site-entry.mjs"), await formatJavaScript(entryLines.join("\n"), "site-entry.mjs"));
 
 const threeMode = !hasThreeRuntimeCode ? "not-detected" :
   relinkedFiles.length ? "relinked" : hasInterceptableThreeImport ? "importable" : "bundled";
@@ -603,6 +625,8 @@ const manifest = {
   search: requestedSearch,
   searchParams: requestedSearchParams,
   pulledAt: new Date().toISOString(),
+  exportOptions: { beautifyJavaScript },
+  beautifiedFiles,
   entry: "site-entry.mjs",
   requiresWebGPU: usesWebGpuRenderer || importMapEntries.has("three/webgpu") || importMapEntries.has("three/tsl"),
   html: rootRecord.localPath.replaceAll("\\", "/"),

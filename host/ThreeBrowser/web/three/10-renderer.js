@@ -394,6 +394,7 @@
 
       this.isWebGLRenderer = true;
       this.domElement = canvas;
+      canvas._threeBrowserNativeRenderer = true;
       styleHitCanvas(canvas);
       this.autoClear = true;
       this.autoClearColor = true;
@@ -649,12 +650,23 @@
     getContextAttributes() {
       return {};
     }
-    compile() {}
-    compileAsync() {
-      return Promise.resolve(this);
+    compile(scene, camera) {
+      const previousCompileOnly = this._nativeCompileOnly;
+      this._nativeCompileOnly = true;
+      try { this.render(scene, camera); TN.cmd?.submit(); }
+      finally { this._nativeCompileOnly = previousCompileOnly; }
+      return this;
     }
-    initTexture() {}
-    initRenderTarget() {}
+    async compileAsync(scene, camera) {
+      this.compile(scene, camera);
+      return this;
+    }
+    initTexture(texture) {
+      TN._ensureTextureNative?.(texture);
+      if (texture?._h && !texture.isRenderTargetTexture) TN.cmd?.initTexture(texture._h);
+      TN.cmd?.submit();
+    }
+    initRenderTarget(target) { target?._ensureNative?.(); }
     clear(color = true, depth = true, stencil = true) {
       if (this._renderTarget?._h && TN.cmd?.clearTarget) {
         TN.cmd.clearTarget(this._renderTarget._h, (color ? 1 : 0) | (depth ? 2 : 0) | (stencil ? 4 : 0), this._activeCubeFace || 0, this._activeMipmapLevel || 0);
@@ -856,6 +868,16 @@
       // shadow resolution calls shadow.map.dispose()). Preserve that browser
       // contract with a lightweight target facade.
       const shadowLights = [];
+      if (scene?.isScene && scene._h && TN.cmd?.sceneState) {
+        const rotation = new TN.Matrix3().setFromMatrix4(new TN.Matrix4().makeRotationFromEuler(scene.environmentRotation)).transpose();
+        const fog = scene.fog;
+        const signature = [scene.environmentIntensity,...rotation.elements,fog?.isFogExp2,fog?.isFog,
+          fog?.color?.r,fog?.color?.g,fog?.color?.b,fog?.near,fog?.far,fog?.density].join(':');
+        if (scene._nativeSceneState !== signature) {
+          TN.cmd.sceneState(scene._h,scene.environmentIntensity ?? 1,rotation,fog);
+          scene._nativeSceneState = signature;
+        }
+      }
       scene?.traverse?.((object) => {
         if (!object?.castShadow || !object.shadow || object.shadow.map) return;
         object.shadow.map = {
@@ -881,6 +903,16 @@
           // and first-person viewmodels rely on this, so detect matrix changes
           // and transfer the decomposed pose across the native boundary.
           obj?.syncNativeManualMatrix?.();
+          if (obj?.isMesh && obj._h && TN.cmd?.objectShadowMaterials) {
+            const depth = obj.customDepthMaterial, distance = obj.customDistanceMaterial;
+            depth?.flushNative?.(self);
+            distance?.flushNative?.(self);
+            const signature = `${depth?._h || 0}:${distance?._h || 0}`;
+            if (obj._nativeShadowMaterials !== signature) {
+              TN.cmd.objectShadowMaterials(obj._h, depth?._h || 0, distance?._h || 0);
+              obj._nativeShadowMaterials = signature;
+            }
+          }
           if (obj?._h && TN.cmd?.objectFlags) {
             const signature = `${obj.castShadow}:${obj.receiveShadow}:${obj.layers?.mask ?? 1}`;
             if (obj._nativeObjectFlags !== signature) {
@@ -923,7 +955,7 @@
             if (parent.visible === false) drawableVisible = false;
           }
           if (drawableVisible && camera?.layers && obj?.layers) drawableVisible = camera.layers.test(obj.layers);
-          if (drawableVisible && obj && typeof obj.onBeforeRender === "function") {
+          if (!self._nativeCompileOnly && drawableVisible && obj && typeof obj.onBeforeRender === "function") {
             try {
               obj.onBeforeRender(self, scene, camera, obj.geometry, obj.material);
               if (obj.isBatchedMesh) obj._nativeBeforeRenderFailed = false;
@@ -1058,6 +1090,10 @@
         // deliberately not rasterized: their custom fullscreen shaders cannot
         // consume those native targets, and the final pass resolves directly
         // to the prepared real scene.
+        if (this._nativeCompileOnly) {
+          TN.cmd?.compileScene(scene._h, camera._h);
+          return true;
+        }
         if (activeRenderTarget) {
           if (
             nativeOffscreen === "evaluate" &&

@@ -92,7 +92,7 @@ namespace threepp {
             if (type == "DirectionalLight") {
 
                 uniforms = {
-                        {"shadowBias", 0.f},
+                        {"shadowIntensity", 1.f}, {"shadowBias", 0.f},
                         {"shadowNormalBias", 0.f},
                         {"shadowRadius", 1.f},
                         {"shadowMapSize", Vector2()}};
@@ -100,7 +100,7 @@ namespace threepp {
             } else if (type == "SpotLight") {
 
                 uniforms = {
-                        {"shadowBias", 0.f},
+                        {"shadowIntensity", 1.f}, {"shadowBias", 0.f},
                         {"shadowNormalBias", 0.f},
                         {"shadowRadius", 1.f},
                         {"shadowMapSize", Vector2()}};
@@ -108,7 +108,7 @@ namespace threepp {
             } else if (type == "PointLight") {
 
                 uniforms = {
-                        {"shadowBias", 0.f},
+                        {"shadowIntensity", 1.f}, {"shadowBias", 0.f},
                         {"shadowNormalBias", 0.f},
                         {"shadowRadius", 1.f},
                         {"shadowMapSize", Vector2()},

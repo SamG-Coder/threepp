@@ -13,6 +13,9 @@
 #include "threepp/renderers/GLCubeRenderTarget.hpp"
 #include "threepp/renderers/RenderTarget.hpp"
 #include "threepp/renderers/gl/GLPMREM.hpp"
+#if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
+#include <glad/glad.h>
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -553,6 +556,31 @@ uint32_t tn_cube_rt_create(uint32_t id, int size) {
         setError(ex.what());
         return 0;
     }
+}
+
+int tn_renderer_read_presented_pixels(int width, int height, unsigned char* data) {
+#if defined(__EMSCRIPTEN__) || defined(__ANDROID__)
+    // Reading the presented front buffer is a desktop OpenGL operation.
+    return 0;
+#else
+    if (!data || width <= 0 || height <= 0) return 0;
+    return onWorker([=] {
+        auto* renderer = dynamic_cast<GLRenderer*>(g.renderer.get());
+        if (!renderer) return 0;
+        const auto size = renderer->size();
+        if (width > size.first || height > size.second) return 0;
+        renderPendingFrame();
+        auto* previous = renderer->getRenderTarget();
+        renderer->setRenderTarget(nullptr);
+        GLint previousReadBuffer;
+        glGetIntegerv(GL_READ_BUFFER, &previousReadBuffer);
+        glReadBuffer(GL_FRONT);
+        renderer->readPixels(Vector2(0,0), {width,height}, Format::RGBA, data);
+        glReadBuffer(previousReadBuffer);
+        renderer->setRenderTarget(previous);
+        return 1;
+    });
+#endif
 }
 
 int tn_render_target_read_pixels(uint32_t id, int x, int y, int width, int height, void* data, int floatingPoint) {

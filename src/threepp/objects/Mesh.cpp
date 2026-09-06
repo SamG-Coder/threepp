@@ -380,6 +380,8 @@ void Mesh::copy(const Object3D& source, bool recursive) {
         // TODO morphs
 
         materials_ = m->materials_;
+        customDepthMaterial = m->customDepthMaterial;
+        customDistanceMaterial = m->customDistanceMaterial;
         geometry_ = m->geometry_;
     }
 }

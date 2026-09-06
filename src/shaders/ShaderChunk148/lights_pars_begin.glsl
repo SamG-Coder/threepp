@@ -219,3 +219,16 @@ float getSpotAttenuation( const in float coneCosine, const in float penumbraCosi
 	}
 
 #endif
+
+#if NUM_POINT_LIGHTS > 0
+void getPointLightInfo(const in PointLight light, const in vec3 position, out IncidentLight incident) {
+    GeometricContext geometry; geometry.position=position;
+    getPointLightInfo(light, geometry, incident);
+}
+#endif
+#if NUM_SPOT_LIGHTS > 0
+void getSpotLightInfo(const in SpotLight light, const in vec3 position, out IncidentLight incident) {
+    GeometricContext geometry; geometry.position=position;
+    getSpotLightInfo(light, geometry, incident);
+}
+#endif

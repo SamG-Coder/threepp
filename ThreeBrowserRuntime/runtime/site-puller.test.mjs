@@ -11,6 +11,36 @@ import test from "node:test";
 const execFileAsync = promisify(execFile);
 const puller = fileURLToPath(new URL("./site-puller.mjs", import.meta.url));
 
+test("optional beautification preserves module behaviour and shader strings", async () => {
+  const source = 'export const shader=`void main(){gl_FragColor=vec4(1.);}`;export function compute(x){return {value:x+2,pattern:/a+b/.source}};';
+  const server = createServer((request,response) => {
+    response.writeHead(200,{"content-type":request.url === '/' ? 'text/html' : 'text/javascript'});
+    response.end(request.url === '/' ? '<script type="module" src="/app.js"></script>' : source);
+  });
+  const temporaryRoot = await mkdtemp(path.join(tmpdir(),'threebrowser-beautify-'));
+  try {
+    await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+    const url = `http://127.0.0.1:${server.address().port}/`;
+    for (const enabled of [false,true]) {
+      const destination=path.join(temporaryRoot,String(enabled));
+      await execFileAsync(process.execPath,[puller,url,...(enabled?['--beautify-js']:[]),destination]);
+      const output=await readFile(path.join(destination,'app.mjs'),'utf8');
+      const manifest=JSON.parse(await readFile(path.join(destination,'threebrowser.pull.json'),'utf8'));
+      assert.equal(manifest.exportOptions.beautifyJavaScript,enabled);
+      if(enabled){
+        assert.ok(output.split('\n').length>3);
+        assert.deepEqual(manifest.beautifiedFiles,['app.mjs','site-entry.mjs']);
+      } else assert.equal(output,source);
+      const module=await import(pathToFileURL(path.join(destination,'app.mjs')).href);
+      assert.deepEqual(module.compute(3),{value:5,pattern:'a+b'});
+      assert.equal(module.shader,'void main(){gl_FragColor=vec4(1.);}');
+    }
+  } finally {
+    await new Promise(resolve=>server.close(resolve));
+    await rm(temporaryRoot,{recursive:true,force:true});
+  }
+});
+
 test("classic dynamic imports and glTF dependencies are usable offline", async () => {
   const server = createServer((request, response) => {
     const routes = {

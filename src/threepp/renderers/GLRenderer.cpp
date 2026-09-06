@@ -237,6 +237,37 @@ struct GLRenderer::Impl {
         }
     }
 
+    void compile(Object3D* scene, Camera* camera) {
+        auto* previous = currentRenderState;
+        currentRenderState = renderStates.get(scene, renderStateStack.size());
+        currentRenderState->init();
+        renderStateStack.emplace_back(currentRenderState);
+        try {
+            scene->updateMatrixWorld();
+            camera->updateMatrixWorld();
+            scene->traverseVisible([&](Object3D& object) {
+                if (auto* light = dynamic_cast<Light*>(&object); light && light->layers.test(camera->layers)) {
+                    currentRenderState->pushLight(light);
+                    if (light->castShadow) currentRenderState->pushShadow(light);
+                }
+            });
+            currentRenderState->setupLights();
+            currentRenderState->setupLightsView(camera);
+            scene->traverse([&](Object3D& object) {
+                if (auto* materials = dynamic_cast<ObjectWithMaterials*>(&object)) {
+                    for (const auto& material : materials->materials()) if (material) getProgram(material.get(), scene, &object);
+                }
+                if (auto* mesh = dynamic_cast<Mesh*>(&object)) {
+                    if (mesh->customDepthMaterial) getProgram(mesh->customDepthMaterial.get(), scene, &object);
+                    if (mesh->customDistanceMaterial) getProgram(mesh->customDistanceMaterial.get(), scene, &object);
+                }
+            });
+        } catch (...) {
+            renderStateStack.pop_back(); currentRenderState = previous; throw;
+        }
+        renderStateStack.pop_back(); currentRenderState = previous;
+    }
+
     void render(Object3D* scene, Camera* camera) {
 
         // update scene graph
@@ -984,7 +1015,8 @@ struct GLRenderer::Impl {
 
                 needsProgramChange = true;
 
-            } else if (fog && material->fog && materialProperties->fog && !(fog.value() == materialProperties->fog.value())) {
+            } else if (material->fog && (fog.has_value() != materialProperties->fog.has_value() ||
+                       (fog && materialProperties->fog && !(fog.value() == materialProperties->fog.value())))) {
 
                 needsProgramChange = true;
 
@@ -1206,6 +1238,10 @@ struct GLRenderer::Impl {
         if (material->shaderOverride && !refreshMaterial) {
             gl::GLUniforms::upload(materialProperties->uniformsList, m_uniforms, &textures);
         }
+        if (material->is<MeshStandardMaterial>()) {
+            if (!isEnvMap) p_uniforms->setValue("envMapIntensity", scene->environmentIntensity);
+            p_uniforms->setValue("envMapRotation", isEnvMap ? Matrix3() : scene->environmentRotation);
+        }
 
         if (material->is<SpriteMaterial>() && object->is<Sprite>()) {
 
@@ -1292,37 +1328,24 @@ struct GLRenderer::Impl {
             _currentScissorTest = _scissorTest;
         }
 
-        const bool framebufferBound = state.bindFramebuffer(GL_FRAMEBUFFER, framebuffer) && framebuffer;
+        const bool framebufferBound = state.bindFramebuffer(GL_FRAMEBUFFER, framebuffer);
 
         if (framebufferBound && gl::GLCapabilities::instance().drawBuffers) {
 
-            bool needsUpdate = false;
-
+            // Draw-buffer routing belongs to each framebuffer. A newly bound
+            // target needs its own routing even when its attachment count
+            // matches the previous target (for example ping-pong simulation).
             if (renderTarget) {
                 const auto attachmentCount = std::max<std::size_t>(1, renderTarget->textures.size());
-                if (_currentDrawBuffers.size() != attachmentCount) needsUpdate = true;
                 _currentDrawBuffers.resize(attachmentCount);
                 for (std::size_t index = 0; index < attachmentCount; ++index) {
-                    const auto attachment = GL_COLOR_ATTACHMENT0 + static_cast<unsigned int>(index);
-                    if (_currentDrawBuffers[index] != attachment) needsUpdate = true;
-                    _currentDrawBuffers[index] = attachment;
+                    _currentDrawBuffers[index] = GL_COLOR_ATTACHMENT0 + static_cast<unsigned int>(index);
                 }
-
             } else {
-
-                if (_currentDrawBuffers.size() != 1 || _currentDrawBuffers.front() != GL_BACK) {
-
-                    _currentDrawBuffers.clear();
-                    _currentDrawBuffers.emplace_back(GL_BACK);
-
-                    needsUpdate = true;
-                }
+                _currentDrawBuffers.assign(1, GL_BACK);
             }
-
-            if (needsUpdate) {
-                if (std::getenv("THREEBROWSER_TRACE_RENDER")) std::cerr << "GLRenderer draw buffers " << _currentDrawBuffers.size() << std::endl;
-                glDrawBuffers(static_cast<int>(_currentDrawBuffers.size()), _currentDrawBuffers.data());
-            }
+            if (std::getenv("THREEBROWSER_TRACE_RENDER")) std::cerr << "GLRenderer draw buffers " << _currentDrawBuffers.size() << std::endl;
+            glDrawBuffers(static_cast<int>(_currentDrawBuffers.size()), _currentDrawBuffers.data());
         }
 
         state.viewport(_currentViewport);
@@ -1728,6 +1751,15 @@ std::vector<unsigned char> GLRenderer::readRGBPixels() {
 void GLRenderer::readPixels(const Vector2& position, const std::pair<int, int>& size, Format format, unsigned char* data) {
 
     pimpl_->readPixels(position, size, format, data);
+}
+
+void GLRenderer::compile(Object3D& scene, Camera& camera) {
+    pimpl_->compile(&scene, &camera);
+}
+
+void GLRenderer::initTexture(Texture& texture) {
+    if (dynamic_cast<CubeTexture*>(&texture)) pimpl_->textures.setTextureCube(texture, 0);
+    else pimpl_->textures.setTexture2D(texture, 0);
 }
 
 void GLRenderer::readPixels(const Vector2& position, const std::pair<int, int>& size, Format format, void* data, Type type) {

@@ -24,6 +24,12 @@ constexpr uint32_t OP_SCENE_CREATE = 10;
 constexpr uint32_t OP_SCENE_BG = 11;
 constexpr uint32_t OP_SCENE_FOG = 12;
 constexpr uint32_t OP_SCENE_FOG_EXP2 = 13;
+constexpr uint32_t OP_SCENE_STATE = 14;
+constexpr uint32_t OP_COMPILE_SCENE = 15;
+constexpr uint32_t OP_INIT_TEXTURE = 16;
+constexpr uint32_t OP_MAT_DEPTH = 17;
+constexpr uint32_t OP_MAT_DISTANCE = 18;
+constexpr uint32_t OP_SCENE_ENVIRONMENT = 19;
 
 constexpr uint32_t OP_PERSP_CAM = 20;
 constexpr uint32_t OP_ORTHO_CAM = 21;
@@ -94,6 +100,7 @@ constexpr uint32_t OP_OBJECT_REMOVE = 85;
 constexpr uint32_t OP_SLOT_DESTROY = 86;
 constexpr uint32_t OP_SET_POSE_QUAT = 87; // id, position, quaternion, scale
 constexpr uint32_t OP_OBJECT_FLAGS = 88;
+constexpr uint32_t OP_OBJECT_SHADOW_MATERIALS = 89;
 
 constexpr uint32_t OP_LIGHT_AMBIENT = 90;
 constexpr uint32_t OP_LIGHT_DIR = 91;

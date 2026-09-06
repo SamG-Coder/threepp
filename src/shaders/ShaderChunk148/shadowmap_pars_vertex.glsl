@@ -14,7 +14,7 @@
 		varying vec4 vDirectionalShadowCoord[ NUM_DIR_LIGHT_SHADOWS ];
 
 		struct DirectionalLightShadow {
-			float shadowBias;
+			float shadowIntensity; float shadowBias;
 			float shadowNormalBias;
 			float shadowRadius;
 			vec2 shadowMapSize;
@@ -27,7 +27,7 @@
 	#if NUM_SPOT_LIGHT_SHADOWS > 0
 
 		struct SpotLightShadow {
-			float shadowBias;
+			float shadowIntensity; float shadowBias;
 			float shadowNormalBias;
 			float shadowRadius;
 			vec2 shadowMapSize;
@@ -43,7 +43,7 @@
 		varying vec4 vPointShadowCoord[ NUM_POINT_LIGHT_SHADOWS ];
 
 		struct PointLightShadow {
-			float shadowBias;
+			float shadowIntensity; float shadowBias;
 			float shadowNormalBias;
 			float shadowRadius;
 			vec2 shadowMapSize;

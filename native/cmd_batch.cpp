@@ -14,6 +14,7 @@
 #include "threepp/materials/SpriteMaterial.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/materials/MeshDepthMaterial.hpp"
+#include "threepp/materials/MeshDistanceMaterial.hpp"
 #include "threepp/objects/Sprite.hpp"
 #include "threepp/textures/Texture.hpp"
 #include "threepp/textures/CubeTexture.hpp"
@@ -33,6 +34,11 @@
 using namespace tn;
 
 namespace {
+std::atomic<int> pendingFrames{0};
+struct PendingFrame {
+    PendingFrame() { ++pendingFrames; }
+    ~PendingFrame() { --pendingFrames; }
+};
 
 uint32_t ru32(const uint8_t* p) {
     uint32_t v;
@@ -74,6 +80,7 @@ struct PendingTex {
     Filter magFilter{Filter::Linear};
     Filter minFilter{Filter::LinearMipmapLinear};
     int texCoord{0};
+    int anisotropy{1};
     Vector2 offset{0, 0};
     Vector2 repeat{1, 1};
     std::vector<unsigned char> pixels;
@@ -326,6 +333,7 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             return;
         }
         case tn::cmd::OP_RENDER_PASS: {
+            applyPendingEnvironment();
             if (!has(p, end, 28)) return;
             Slot* sceneSlot = getSlot(ru32(p));
             Slot* cameraSlot = getSlot(ru32(p + 4));
@@ -459,6 +467,12 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             camera->farPlane = rf32(p + 8);
             camera->projectionMatrix.fromArray(values);
             camera->projectionMatrixInverse.copy(camera->projectionMatrix).invert();
+            return;
+        }
+        case tn::cmd::OP_SCENE_ENVIRONMENT: {
+            if (!has(p,end,8)) return;
+            g.pendingEnvironment[ru32(p)] = ru32(p+4);
+            applyPendingEnvironment();
             return;
         }
         case tn::cmd::OP_CAM_UPD_PROJ: {
@@ -595,15 +609,14 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             std::memcpy(tex.pixels.data() + static_cast<size_t>(y) * stride, cur, need);
             tex.rows = std::max(tex.rows, static_cast<int>(y + rows));
             if (tex.rows >= tex.height) {
-                const int w = tex.width;
-                const int h = tex.height;
-                auto pixels = std::move(tex.pixels);
+                auto completed = std::move(tex);
                 pendingTex.erase(it);
                 finishRgbaTexture(
-                        id, w, h, std::move(pixels),
-                        tex.wrapS, tex.wrapT, tex.colorSpace,
-                        tex.magFilter, tex.minFilter, tex.texCoord,
-                        tex.offset, tex.repeat);
+                        id, completed.width, completed.height, std::move(completed.pixels),
+                        completed.wrapS, completed.wrapT, completed.colorSpace,
+                        completed.magFilter, completed.minFilter, completed.texCoord,
+                        completed.offset, completed.repeat);
+                if (auto* slot = findSlot(id); slot && slot->texture) slot->texture->anisotropy = completed.anisotropy;
             }
             return;
         }
@@ -616,6 +629,7 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             const auto magFilter = magFilterFromJs(ru32(p + 16));
             const auto minFilter = minFilterFromJs(ru32(p + 20));
             const int texCoord = static_cast<int>(ru32(p + 24));
+            const int anisotropy = std::clamp(static_cast<int>(ru32(p + 28)), 1, 64);
             const Vector2 offset(rf32(p + 32), rf32(p + 36));
             const Vector2 repeat(rf32(p + 40), rf32(p + 44));
             auto pending = pendingTex.find(id);
@@ -626,23 +640,32 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
                 pending->second.magFilter = magFilter;
                 pending->second.minFilter = minFilter;
                 pending->second.texCoord = texCoord;
+                pending->second.anisotropy = anisotropy;
                 pending->second.offset.copy(offset);
                 pending->second.repeat.copy(repeat);
                 return;
             }
-            Slot* slot = findSlot(id);
-            if (!slot || !slot->texture) return;
+              Slot* slot = findSlot(id);
+              if (!slot || !slot->texture) return;
+              const bool mipmaps = minFilter != Filter::Nearest && minFilter != Filter::Linear;
+              const bool samplerChanged = slot->texture->wrapS != wrapS || slot->texture->wrapT != wrapT ||
+                      slot->texture->colorSpace != colorSpace || slot->texture->magFilter != magFilter ||
+                      slot->texture->minFilter != minFilter || slot->texture->anisotropy != anisotropy ||
+                      slot->texture->generateMipmaps != mipmaps;
+              const bool transformChanged = slot->texture->texCoord != texCoord ||
+                      slot->texture->offset != offset || slot->texture->repeat != repeat;
+              if (!samplerChanged && !transformChanged) return;
             slot->texture->wrapS = wrapS;
             slot->texture->wrapT = wrapT;
             slot->texture->colorSpace = colorSpace;
             slot->texture->magFilter = magFilter;
             slot->texture->minFilter = minFilter;
             slot->texture->texCoord = texCoord;
+            slot->texture->anisotropy = anisotropy;
             slot->texture->offset.copy(offset);
             slot->texture->repeat.copy(repeat);
-            slot->texture->generateMipmaps =
-                    minFilter != Filter::Nearest && minFilter != Filter::Linear;
-            slot->texture->needsUpdate();
+              slot->texture->generateMipmaps = mipmaps;
+              if (samplerChanged) slot->texture->needsUpdate();
             markDirty();
             return;
         }
@@ -744,6 +767,7 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             slot->material->blending = static_cast<Blending>(blending);
             slot->material->depthTest = (flags & 1u) != 0u;
             slot->material->premultipliedAlpha = (flags & 2u) != 0u;
+            slot->material->alphaToCoverage = (flags & 4u) != 0u;
             slot->material->needsUpdate();
             return;
         }
@@ -1135,6 +1159,59 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
                     AmbientLight::create(Color(ru32(p + 4)), rf32(p + 8)));
             return;
         }
+        case tn::cmd::OP_MAT_DEPTH: {
+            if (!has(p, end, 8)) return;
+            auto material = MeshDepthMaterial::create();
+            material->depthPacking = ru32(p + 4) == 3201 ? DepthPacking::RGBA : DepthPacking::Basic;
+            Slot slot; slot.kind = Kind::Material; slot.material = material;
+            insertAt(ru32(p), std::move(slot));
+            return;
+        }
+        case tn::cmd::OP_MAT_DISTANCE: {
+            if (!has(p, end, 4)) return;
+            Slot slot; slot.kind = Kind::Material; slot.material = MeshDistanceMaterial::create();
+            insertAt(ru32(p), std::move(slot));
+            return;
+        }
+        case tn::cmd::OP_COMPILE_SCENE: {
+            if (!has(p, end, 8)) return;
+            auto* renderer = dynamic_cast<GLRenderer*>(g.renderer.get());
+            auto* scene = findObject(ru32(p));
+            auto* camera = dynamic_cast<Camera*>(findObject(ru32(p + 4)));
+            if (renderer && scene && camera) renderer->compile(*scene, *camera);
+            return;
+        }
+        case tn::cmd::OP_INIT_TEXTURE: {
+            if (!has(p, end, 4)) return;
+            auto* renderer = dynamic_cast<GLRenderer*>(g.renderer.get());
+            auto* slot = findSlot(ru32(p));
+            if (renderer && slot && slot->texture && !slot->renderTarget) renderer->initTexture(*slot->texture);
+            return;
+        }
+        case tn::cmd::OP_SCENE_STATE: {
+            if (!has(p, end, 68)) return;
+            auto* scene = dynamic_cast<Scene*>(findObject(ru32(p)));
+            if (!scene) return;
+            scene->environmentIntensity = rf32(p + 4);
+            std::array<float, 9> rotation;
+            for (unsigned i = 0; i < 9; ++i) rotation[i] = rf32(p + 8 + i * 4);
+            scene->environmentRotation.fromArray(rotation);
+            const Color color(rf32(p + 48), rf32(p + 52), rf32(p + 56));
+            if (ru32(p + 44) == 2) scene->fog = FogExp2(color, rf32(p + 60));
+            else if (ru32(p + 44) == 1) scene->fog = Fog(color, rf32(p + 60), rf32(p + 64));
+            else scene->fog.reset();
+            return;
+        }
+        case tn::cmd::OP_OBJECT_SHADOW_MATERIALS: {
+            if (!has(p, end, 12)) return;
+            auto* mesh = dynamic_cast<Mesh*>(findObject(ru32(p)));
+            if (!mesh) return;
+            auto* depth = findSlot(ru32(p + 4));
+            auto* distance = findSlot(ru32(p + 8));
+            mesh->customDepthMaterial = depth ? depth->material : nullptr;
+            mesh->customDistanceMaterial = distance ? distance->material : nullptr;
+            return;
+        }
         case tn::cmd::OP_OBJECT_FLAGS: {
             if (!has(p,end,12)) return;
             auto* object=findObject(ru32(p)); if(!object) return;
@@ -1159,6 +1236,7 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             shadow.mapSize.copy(size);
             const auto flags=ru32(p+4); shadow.autoUpdate=(flags&1u)!=0; shadow.needsUpdate=(flags&2u)!=0;
             shadow.bias=rf32(p+16); shadow.normalBias=rf32(p+20); shadow.radius=rf32(p+24);
+            shadow.intensity=has(p,end,104)?rf32(p+100):1.f;
             shadow.camera->nearPlane=rf32(p+28); shadow.camera->farPlane=rf32(p+32);
             std::array<float,16> values{}; for(size_t i=0;i<16;++i) values[i]=rf32(p+36+i*4);
             shadow.camera->projectionMatrix.fromArray(values);
@@ -1327,5 +1405,23 @@ int tn_cmd_submit_async(const uint8_t* data, int nbytes) {
     } catch (const std::exception& ex) {
         setError(ex.what());
         return 0;
+    }
+}
+
+int tn_cmd_pending_frames(void) { return pendingFrames.load(); }
+
+int tn_cmd_submit_frame_async(const uint8_t* data, int nbytes) {
+    try {
+        if (!data || nbytes <= 0) return 1;
+        std::vector<uint8_t> copy(data, data + nbytes);
+        auto pending = std::make_shared<PendingFrame>();
+        onWorkerAsync([buf = std::move(copy), pending = std::move(pending)]() mutable {
+            auto completion = std::move(pending);
+            execStream(buf.data(), static_cast<int>(buf.size()));
+            renderPendingFrame();
+        });
+        return 1;
+    } catch (const std::exception& ex) {
+        setError(ex.what()); return 0;
     }
 }

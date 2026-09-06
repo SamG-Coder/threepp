@@ -55,6 +55,8 @@ namespace threepp {
         [[nodiscard]] const gl::GLShadowMap& shadowMap() const override;
 
         gl::GLState& state();
+        void compile(Object3D& scene, Camera& camera);
+        void initTexture(Texture& texture);
 
         [[nodiscard]] std::optional<unsigned int> getGlTextureId(Texture& texture) const;
 
