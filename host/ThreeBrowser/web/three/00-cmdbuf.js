@@ -119,6 +119,7 @@
   let lastAsyncSubmitAt = -Infinity;
   let pendingAsyncScene = 0;
   let pendingAsyncCamera = 0;
+  let pendingWindowPresentation = null;
 
   function host() {
     if (hostCache) return hostCache;
@@ -174,6 +175,13 @@
   }
 
   function submitNow(preferAsync) {
+    if (pendingWindowPresentation) {
+      const frame = pendingWindowPresentation;
+      pendingWindowPresentation = null;
+      flushPoses();
+      if (frame.overlayScene) appendComposite(frame.scene, frame.camera, frame.overlayScene, frame.overlayCamera);
+      else appendRender(frame.scene, frame.camera);
+    }
     if (off <= 0) return;
     const n = host();
     const used = off;
@@ -373,6 +381,12 @@
   }
 
   function submitFrame(scene, camera) {
+    if (globalThis.__threeBrowserNativeRuntime && globalThis.__threeBrowserInAnimationFrame) {
+      if (pendingWindowPresentation) submitNow(true);
+      flushPoses();
+      pendingWindowPresentation = { scene, camera };
+      return;
+    }
     const n = host();
     const interval = asyncSubmitInterval(n);
     if (interval <= 0) {
@@ -420,7 +434,14 @@
     submit,
     submitAsync,
     submitFrame,
+    flushPresentation() { if (pendingWindowPresentation) submitNow(true); },
     submitComposite(worldScene, worldCamera, overlayScene, overlayCamera) {
+      if (globalThis.__threeBrowserNativeRuntime && globalThis.__threeBrowserInAnimationFrame) {
+        if (pendingWindowPresentation && (pendingWindowPresentation.scene !== worldScene || pendingWindowPresentation.camera !== worldCamera)) submitNow(true);
+        flushPoses();
+        pendingWindowPresentation = { scene: worldScene, camera: worldCamera, overlayScene, overlayCamera };
+        return;
+      }
       // A composite is the complete, newest presentation for this display
       // frame. Never allow an older coalesced single-scene render to fire
       // afterward and erase its viewmodel/HUD overlay.
@@ -507,9 +528,10 @@
       end(s);
     },
     shadowTexture(id, texture) { const s=begin(OP.SHADOW_TEXTURE,8); wu32(id); wu32(texture); end(s); },
-    matRenderState(id, blending, depthTest, premultipliedAlpha, alphaToCoverage) {
-      const s = begin(OP.MAT_RENDER_STATE, 12);
-      wu32(id); wu32(blending); wu32((depthTest ? 1 : 0) | (premultipliedAlpha ? 2 : 0) | (alphaToCoverage ? 4 : 0));
+    matRenderState(id, blending, depthTest, premultipliedAlpha, alphaToCoverage, toneMapped = true, colorWrite = true, shadowSide = null) {
+      const s = begin(OP.MAT_RENDER_STATE, 16);
+      wu32(id); wu32(blending); wu32((depthTest ? 1 : 0) | (premultipliedAlpha ? 2 : 0) | (alphaToCoverage ? 4 : 0) | (!toneMapped ? 8 : 0) | (!colorWrite ? 16 : 0) | 32);
+      wu32(shadowSide == null ? 3 : shadowSide);
       end(s);
     },
     setSize(w, h) {

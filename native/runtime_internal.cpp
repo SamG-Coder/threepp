@@ -9,6 +9,7 @@
 namespace tn {
 
 Runtime g;
+thread_local bool deferAutomaticPresentation = false;
 
 void logLine(const char* message) {
 #if defined(__ANDROID__)
@@ -32,6 +33,7 @@ void setError(const char* message) {
 }
 
 void markDirty() {
+    if (deferAutomaticPresentation) return;
     g.sceneDirty.store(true, std::memory_order_relaxed);
     g.cv.notify_one();
 }
@@ -50,16 +52,16 @@ void ensureWorker() {
 #endif
 }
 
-void onWorkerAsync(std::function<void()> fn) {
+void onWorkerAsync(std::function<void()> fn, bool requestPresentation) {
     ensureWorker();
     {
         std::lock_guard<std::mutex> lock(g.mu);
         if (g.stop) {
             return;
         }
-        g.jobs.emplace_back([fn = std::move(fn)] {
+        g.jobs.emplace_back([fn = std::move(fn), requestPresentation] {
             fn();
-            markDirty();
+            if (requestPresentation) markDirty();
         });
     }
     g.cv.notify_one();

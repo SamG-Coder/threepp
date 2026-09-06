@@ -226,6 +226,34 @@ struct GLShadowMap::Impl {
         }
 
         result->visible = material->visible;
+        // Three.js applies the source silhouette to custom depth/distance
+        // materials too. Otherwise a cutout card writes an opaque rectangle
+        // into the shadow map even though its color pass discards the pixels.
+        bool silhouetteChanged = false;
+        if (auto* destination = result->as<MaterialWithMap>()) {
+            auto* source = material->as<MaterialWithMap>();
+            const auto map = source ? source->map : nullptr;
+            silhouetteChanged |= destination->map != map;
+            destination->map = map;
+        }
+        if (auto* destination = result->as<MaterialWithAlphaMap>()) {
+            auto* source = material->as<MaterialWithAlphaMap>();
+            const auto map = source ? source->alphaMap : nullptr;
+            silhouetteChanged |= destination->alphaMap != map;
+            destination->alphaMap = map;
+        }
+        const float alphaTest = material->alphaToCoverage ? 0.5f : material->alphaTest;
+        silhouetteChanged |= result->alphaTest != alphaTest;
+        result->alphaTest = alphaTest;
+        if (auto* destination = result->as<MaterialWithDisplacementMap>()) {
+            auto* source = material->as<MaterialWithDisplacementMap>();
+            const auto map = source ? source->displacementMap : nullptr;
+            silhouetteChanged |= destination->displacementMap != map;
+            destination->displacementMap = map;
+            destination->displacementScale = source ? source->displacementScale : 1.f;
+            destination->displacementBias = source ? source->displacementBias : 0.f;
+        }
+        if (silhouetteChanged) result->needsUpdate();
         auto resultWithWireframe = result->as<MaterialWithWireframe>();
         auto materialWithWireframe = material->as<MaterialWithWireframe>();
         if (resultWithWireframe && materialWithWireframe) {

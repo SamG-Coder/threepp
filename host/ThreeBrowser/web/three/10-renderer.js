@@ -214,6 +214,10 @@
 
   function styleHitCanvas(el) {
     if (!el || !el.style) return;
+    // The native host maps the DOM canvas rectangle to its window. The fixed
+    // hit surface is only needed by the WebView host; applying it to the
+    // native DOM detaches page HUD coordinates from their canvas container.
+    if (globalThis.__threeBrowserNativeRuntime) return;
     const s = el.style;
     s.position = "fixed";
     s.left = "0";
@@ -385,7 +389,9 @@
 
       const n = native();
       if (TN.hostHas?.(n, "RuntimeStart")) {
-        const ok = n.RuntimeStart(width, height, "ThreeBrowser");
+        const ok = globalThis.__threeBrowserNativeRuntime
+          ? n.RuntimeStart(width, height, "ThreeBrowser", options.antialias === true ? 4 : 0)
+          : n.RuntimeStart(width, height, "ThreeBrowser");
         if (!ok) throw new Error(n.LastError?.() || "failed to start native renderer");
         this.backend = n.BackendName?.() || "native";
       } else {
@@ -467,6 +473,15 @@
       this._activeMipmapLevel = 0;
       this._anim = null;
       this._dummyContext = makeDummyGL();
+      if (TN.hostHas?.(n, "RuntimeSamples")) {
+        const samples = n.RuntimeSamples();
+        const baseAttributes = this._dummyContext.getContextAttributes();
+        this._dummyContext.getContextAttributes = () => ({ ...baseAttributes, antialias: samples > 0 });
+        const getParameter = this._dummyContext.getParameter.bind(this._dummyContext);
+        this._dummyContext.getParameter = parameter => parameter === 32937 ? samples : parameter === 32936 ? Number(samples > 0) : getParameter(parameter);
+        this._dummyContext.SAMPLES = 32937;
+        this._dummyContext.SAMPLE_BUFFERS = 32936;
+      }
       const bufferState = {
         setMask() {},
         setLocked() {},
@@ -648,7 +663,7 @@
       return this._dummyContext;
     }
     getContextAttributes() {
-      return {};
+      return this._dummyContext.getContextAttributes();
     }
     compile(scene, camera) {
       const previousCompileOnly = this._nativeCompileOnly;
@@ -1142,6 +1157,9 @@
         }
       }
       if (TN.cmd) {
+        // Reflection/depth passes temporarily change shadow settings. Restore
+        // the application's current settings before the window pass too.
+        TN.cmd.shadowState?.(this.shadowMap);
         const overlayScene = this._nativeOverlayDisplayFrame === displayFrame ? this._nativeOverlayScene : null;
         const overlayCamera = this._nativeOverlayDisplayFrame === displayFrame ? this._nativeOverlayCamera : null;
         if (overlayScene?._h && overlayCamera?._h && typeof TN.cmd.submitComposite === "function") {

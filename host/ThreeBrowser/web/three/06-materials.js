@@ -5,6 +5,7 @@
 
   let materialId = 0;
   const shaderUniformCache = new Map();
+  const traceShadowUniforms = !!globalThis.process?.env?.THREEBROWSER_NATIVE_SHADOW_TRACE;
 
   const FrontSide = TN.FrontSide ?? 0;
   const NormalBlending = TN.NormalBlending ?? 1;
@@ -288,7 +289,7 @@
   function pushShaderUniform(n, handle, name, value, mat) {
     if (!n || !handle || !name || value == null) return;
     try {
-      if (globalThis.process?.env?.THREEBROWSER_NATIVE_SHADOW_TRACE && String(name).startsWith("csm")) {
+      if (traceShadowUniforms && String(name).startsWith("csm")) {
         globalThis.__threeBrowserShadowUniformTrace ||= new Set();
         const detail = value?.isTexture ? `texture:${value._h || 0}` : value?.elements ? `matrix:${value.elements.length}` : JSON.stringify(value);
         const key = `${handle}:${name}:${detail}`;
@@ -315,15 +316,16 @@
         : typeof value === "object"
           ? `o:${value.r ?? value.x ?? ""},${value.g ?? value.y ?? ""},${value.b ?? value.z ?? ""},${value.a ?? value.w ?? ""}`
           : `${typeof value}:${value}`;
-      const cacheKey = `${handle}:${name}`;
+      let uniformCache = shaderUniformCache.get(handle);
+      if (!uniformCache) shaderUniformCache.set(handle, uniformCache = new Map());
       // Loading images legitimately have no native handle yet. Do not cache
       // that transient state or every later frame will skip the upload retry.
       if (isTexture && !value._h) {
-        shaderUniformCache.delete(cacheKey);
+        uniformCache.delete(name);
         return;
       }
-      if (shaderUniformCache.get(cacheKey) === signature) return;
-      shaderUniformCache.set(cacheKey, signature);
+      if (uniformCache.get(name) === signature) return;
+      uniformCache.set(name, signature);
       // Keep changing scalar/vector/matrix uniforms in the same ordered
       // command batch as texture bindings and draws. A synchronous worker
       // round trip for every tide/wind uniform stalls the application thread.
@@ -924,9 +926,9 @@
     }
 
     flushNative(renderer) {
-      const renderState = `${this.blending}:${this.depthTest}:${this.premultipliedAlpha}:${this.alphaToCoverage}`;
+      const renderState = `${this.blending}:${this.depthTest}:${this.premultipliedAlpha}:${this.alphaToCoverage}:${this.toneMapped}:${this.colorWrite}:${this.shadowSide}`;
       if (this._nativeRenderState !== renderState && TN.cmd?.matRenderState) {
-        TN.cmd.matRenderState(this._h, this.blending, this.depthTest !== false, !!this.premultipliedAlpha, !!this.alphaToCoverage);
+        TN.cmd.matRenderState(this._h, this.blending, this.depthTest !== false, !!this.premultipliedAlpha, !!this.alphaToCoverage, this.toneMapped !== false, this.colorWrite !== false, this.shadowSide);
         this._nativeRenderState = renderState;
       }
       if (this._nativeKind !== "shader" && this.onBeforeCompile !== defaultOnBeforeCompile && TN.hostHas(native(), "MaterialShaderTemplate")) {

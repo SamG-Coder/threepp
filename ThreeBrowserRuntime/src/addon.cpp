@@ -697,7 +697,7 @@ napi_value canvasOverlaySet(napi_env env, napi_callback_info info) {
 }
 
 napi_value start(napi_env env, napi_callback_info info) {
-    std::array<napi_value, 3> argv{};
+    std::array<napi_value, 4> argv{};
     std::size_t argc = argv.size();
     napi_get_cb_info(env, info, &argc, argv.data(), nullptr, nullptr);
     const int width = argc > 0 ? static_cast<int>(argNumber(env, argv[0], 1280)) : 1280;
@@ -710,7 +710,8 @@ napi_value start(napi_env env, napi_callback_info info) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     tn_runtime_set_standalone(1);
     tn_runtime_set_vsync(0);
-    const bool ok = tn_runtime_start(width, height, title.c_str()) != 0;
+    const int samples = argc > 3 ? static_cast<int>(argNumber(env, argv[3], 2)) : 2;
+    const bool ok = tn_runtime_start_with_samples(width, height, title.c_str(), samples) != 0;
     runtimeActive.store(ok, std::memory_order_release);
     runtimeMode.store(ok ? 1 : 0, std::memory_order_release);
     if (ok) {
@@ -2054,6 +2055,7 @@ napi_value stats(napi_env env, napi_callback_info) {
     set(env, result, "height", number(env, height));
     set(env, result, "vsync", boolean(env, vsync != 0));
     set(env, result, "presents", number(env, static_cast<double>(presents)));
+    if (runtimeMode.load(std::memory_order_acquire) == 1) set(env, result, "samples", number(env, tn_runtime_samples()));
     return result;
 }
 

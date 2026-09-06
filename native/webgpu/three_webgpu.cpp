@@ -1917,7 +1917,25 @@ void compositeCanvasOverlay(const RECT& rasterRect) {
             (static_cast<size_t>(y) * g.canvasOverlayWidth + sourceX) * 4;
         auto* destination = g.overlayPixels.data() +
             static_cast<size_t>(targetY) * destinationStride + targetX * 4;
-        std::memcpy(destination, source, static_cast<size_t>(copyWidth) * 4);
+        // Both rasters use straight alpha. Built-in diagnostics stay above
+        // page content; transparent pixels in either layer preserve the other.
+        for (int x = 0; x < copyWidth; ++x) {
+            const auto* src = source + x * 4;
+            auto* dst = destination + x * 4;
+            const unsigned alpha = dst[3];
+            if (alpha == 255 || src[3] == 0) continue;
+            if (alpha == 0) {
+                std::memcpy(dst, src, 4);
+                continue;
+            }
+            const unsigned remaining = src[3] * (255 - alpha);
+            const unsigned combined = alpha * 255 + remaining;
+            for (int channel = 0; channel < 3; ++channel) {
+                dst[channel] = static_cast<uint8_t>((dst[channel] * alpha * 255 +
+                    src[channel] * remaining + combined / 2) / combined);
+            }
+            dst[3] = static_cast<uint8_t>((combined + 127) / 255);
+        }
     }
 }
 
@@ -2572,7 +2590,10 @@ void buildOverlayPixels(int width, int height, bool compactFps = false,
     if (!loading && !menu && g.fpsOverlay.load(std::memory_order_relaxed)) {
         RECT badge = compactFps
             ? RECT{4, 4, width - 4, height - 4}
-            : RECT{width - 138, 18, width - 18, 54};
+            : builtInOverlayRasterRect(width, height);
+        // The raster is cropped to the badge (or its union with a page HUD).
+        // GDI coordinates must be local to that raster, as they are for menus.
+        OffsetRect(&badge, -cropLeft, -cropTop);
         rounded(badge, RGB(255, 255, 255), RGB(207, 213, 221), 10);
         wchar_t fps[32]{};
         std::swprintf(fps, std::size(fps), L"%d FPS  ·  %.1f ms",

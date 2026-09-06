@@ -136,9 +136,27 @@ Node supplies V8; no WebView or browser renderer process is used.
 This milestone is a three.js application runtime, not a general HTML/CSS
 browser. Localized ESM graphs, import maps, local and network `fetch`, image
 decoding, HDR environments, DRACO workers, skeletal animation, pointer/keyboard
-input, and the WebGPU/TSL command path are supported. DOM controls can execute,
-but this native-only milestone does not paint general HTML/CSS widgets over the
-GPU surface yet.
+input, and the WebGPU/TSL command path are supported. An experimental DOM renderer
+can paint page UI through the native Canvas2D overlay. It uses the existing page
+nodes and their event handlers; no application code is copied into the runtime.
+
+The experimental HTML renderer supports text, solid backgrounds, borders, loaded
+images, block/inline flow, basic flex rows/columns, fixed/absolute positioning,
+padding/margins, opacity, explicit overflow clipping, and common form controls.
+It reads inline styles, style elements, CSSOM rules, and linked stylesheets.
+Tag/class/ID/attribute selectors, descendant/child selectors, basic specificity,
+CSS variables, and pixel-width media queries are supported. Changes are checked
+at 10 Hz; unchanged layouts do not repaint or upload an overlay.
+
+This is a bounded compatibility layer: grid, full flex sizing/alignment,
+scrolling, transforms, animation, SVG, gradients, complete stacking contexts,
+browser font shaping, and browser-accurate DOM measurements remain unsupported.
+Text editing currently supports basic keyboard input, without selection or IME.
+The lightweight semantic menu bridge is the default. The DOM painter's full
+tree scanning and Canvas2D bitmap typography are unsuitable for production page
+parity and can significantly degrade performance on complex pages. It is only
+enabled explicitly with `THREEBROWSER_HTML_MODE=experimental`; ordinary launches
+do not run its layout or paint loop. Exact browser layout/fonts remain unfinished.
 
 Production Vite output creates a second, independent boundary. If Vite embeds a
 WebGL copy of Three.js into a minified chunk, the puller parses the chunk and
@@ -149,7 +167,7 @@ has renamed every class. The manifest reports each relinked native type and uses
 `threeMode: "relinked"`; a bundle with no safe renderer binding remains
 `"bundled"`.
 WebGPU bundles can use the native `navigator.gpu` bridge, subject to browser API
-coverage, but their React or HTML control panels are still headless. Source maps
+coverage, and their React or HTML control panels use the same basic DOM painter. Source maps
 and builds that preserve `three` imports remain preferable because they retain
 more module structure and allow stronger tree-shaking.
 

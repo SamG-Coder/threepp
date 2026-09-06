@@ -821,6 +821,9 @@ struct GLRenderer::Impl {
         }
 
         auto parameters = gl::GLPrograms::getParameters(scope, shadowCfg, caps, clipping, material, lights.state, shadowsArray.size(), scene, object, materialProperties->envMap, currentOutputColorSpace());
+        // Offscreen targets retain scene-linear light. Display tone mapping
+        // belongs to the screen/output pass, not to reflection/composer inputs.
+        if (_currentRenderTarget) parameters.toneMapping = ToneMapping::None;
         auto programCacheKey = gl::GLPrograms::getProgramCacheKey(scope, parameters);
 
         auto& programs = materialProperties->programs;
@@ -921,6 +924,7 @@ struct GLRenderer::Impl {
         auto materialProperties = properties.materialProperties.get(material);
 
         materialProperties->outputEncoding = parameters.outputEncoding;
+        materialProperties->toneMapping = parameters.toneMapping;
         materialProperties->instancing = parameters.instancing;
         materialProperties->skinning = parameters.skinning;
         materialProperties->numClippingPlanes = parameters.numClippingPlanes;
@@ -992,6 +996,11 @@ struct GLRenderer::Impl {
                 needsProgramChange = true;
 
             } else if (materialProperties->outputEncoding != encoding) {
+
+                needsProgramChange = true;
+
+            } else if (materialProperties->toneMapping !=
+                       ((!_currentRenderTarget && material->toneMapped) ? scope.toneMapping : ToneMapping::None)) {
 
                 needsProgramChange = true;
 

@@ -608,7 +608,7 @@ if (threeMode === "relinked") compatibilityNotes.push("Semantic Three.js scene, 
 if (usesWebGpuRenderer || importMapEntries.has("three/webgpu") || importMapEntries.has("three/tsl")) {
   compatibilityNotes.push("The bundled Three.js runtime was preserved as one version; WebGPU commands are redirected through the native navigator.gpu adapter.");
 }
-if (uiMode !== "canvas-only") compatibilityNotes.push("The native runtime does not paint arbitrary HTML/CSS, so visible browser UI will be missing.");
+if (uiMode !== "canvas-only") compatibilityNotes.push("The native runtime uses simplified semantic controls by default. Its experimental HTML painter is opt-in and does not provide browser layout, typography, or performance parity.");
 if (hasMinifiedCode) {
   compatibilityNotes.push("A minified production JavaScript bundle was detected. Native launch can relink recognizable Three.js types, but stock WebGL internals stay opaque.");
 }

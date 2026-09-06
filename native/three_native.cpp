@@ -304,7 +304,6 @@ void renderGlOverlay() {
     const int height = std::max(1, g.statsH.load(std::memory_order_relaxed));
     const int fps = g.statsFps.load(std::memory_order_relaxed);
     const int frameUs = g.statsFrameUs.load(std::memory_order_relaxed);
-    if (!ensureGlOverlayGpu()) return;
     int overlayLeft = 0;
     int overlayTop = 0;
     int overlayWidth = 0;
@@ -316,6 +315,28 @@ void renderGlOverlay() {
         width, height, fps, frameUs, tn_backend_name(), 0,
         g.statsPresents.load(std::memory_order_relaxed), &rowBytes);
     if (!pixels || rowBytes < overlayWidth * 4) return;
+    // Save texture state before creating or uploading the overlay: those
+    // operations bind a texture too, not only the final draw.
+    GLint oldProgram{}, oldVao{}, oldActiveTexture{}, oldTexture{}, viewport[4]{}, scissorBox[4]{};
+    glGetIntegerv(GL_CURRENT_PROGRAM, &oldProgram);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &oldVao);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &oldActiveTexture);
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &oldTexture);
+    if (!ensureGlOverlayGpu()) {
+        glBindTexture(GL_TEXTURE_2D, oldTexture);
+        glActiveTexture(oldActiveTexture);
+        return;
+    }
+    GLint unpackAlignment{}, unpackRowLength{}, blendSrcRgb{}, blendDstRgb{}, blendSrcAlpha{}, blendDstAlpha{}, blendEqRgb{}, blendEqAlpha{};
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &unpackAlignment);
+    glGetIntegerv(GL_UNPACK_ROW_LENGTH, &unpackRowLength);
+    glGetIntegerv(GL_BLEND_SRC_RGB, &blendSrcRgb);
+    glGetIntegerv(GL_BLEND_DST_RGB, &blendDstRgb);
+    glGetIntegerv(GL_BLEND_SRC_ALPHA, &blendSrcAlpha);
+    glGetIntegerv(GL_BLEND_DST_ALPHA, &blendDstAlpha);
+    glGetIntegerv(GL_BLEND_EQUATION_RGB, &blendEqRgb);
+    glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &blendEqAlpha);
     const uint64_t revision = tw_overlay_revision();
     const bool sizeChanged = glOverlayWidth != overlayWidth || glOverlayHeight != overlayHeight;
     const bool uploadNeeded = sizeChanged || glOverlayUploadedRevision != revision;
@@ -330,18 +351,13 @@ void renderGlOverlay() {
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, overlayWidth, overlayHeight,
                             GL_BGRA, GL_UNSIGNED_BYTE, pixels);
         }
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, unpackRowLength);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, unpackAlignment);
         glOverlayWidth = overlayWidth;
         glOverlayHeight = overlayHeight;
         glOverlayUploadedRevision = revision;
     }
 
-    GLint oldProgram{}, oldVao{}, oldActiveTexture{}, oldTexture{}, viewport[4]{}, scissorBox[4]{};
-    glGetIntegerv(GL_CURRENT_PROGRAM, &oldProgram);
-    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &oldVao);
-    glGetIntegerv(GL_ACTIVE_TEXTURE, &oldActiveTexture);
-    glActiveTexture(GL_TEXTURE0);
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &oldTexture);
     glGetIntegerv(GL_VIEWPORT, viewport);
     const GLboolean blend = glIsEnabled(GL_BLEND);
     const GLboolean depth = glIsEnabled(GL_DEPTH_TEST);
@@ -356,6 +372,7 @@ void renderGlOverlay() {
     glEnable(GL_SCISSOR_TEST);
     glScissor(overlayLeft, viewportY, overlayWidth, overlayHeight);
     glEnable(GL_BLEND);
+    glBlendEquation(GL_FUNC_ADD);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glUseProgram(glOverlayProgram);
     glUniform1i(glGetUniformLocation(glOverlayProgram, "overlayTexture"), 0);
@@ -367,6 +384,8 @@ void renderGlOverlay() {
     glBindTexture(GL_TEXTURE_2D, oldTexture);
     glActiveTexture(oldActiveTexture);
     glUseProgram(oldProgram);
+    glBlendFuncSeparate(blendSrcRgb, blendDstRgb, blendSrcAlpha, blendDstAlpha);
+    glBlendEquationSeparate(blendEqRgb, blendEqAlpha);
     if (blend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
     if (depth) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
     if (cull) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
@@ -784,7 +803,7 @@ LONG WINAPI nativeCrashTrace(EXCEPTION_POINTERS* exception) {
 }
 #endif
 
-int impl_runtime_start(int width, int height, const char* title) {
+int impl_runtime_start(int width, int height, const char* title, int samples = 2) {
     setError("");
     if (g.renderer) {
         return 1;
@@ -809,7 +828,7 @@ int impl_runtime_start(int width, int height, const char* title) {
     const bool delayStandaloneReveal = std::getenv("THREEBROWSER_READY_FILE") != nullptr;
     params.title(title ? title : "ThreeBrowser")
             .size(width > 0 ? width : 800, height > 0 ? height : 600)
-            .antialiasing(2)
+            .antialiasing(std::clamp(samples, 0, 16))
             .vsync(g.vsync.load(std::memory_order_relaxed))
             .headless(!g.standalone.load(std::memory_order_relaxed) || delayStandaloneReveal)
             .exitOnKeyEscape(false);
@@ -844,6 +863,9 @@ int impl_runtime_start(int width, int height, const char* title) {
     {
         g.renderer = std::make_unique<GLRenderer>(*g.canvas);
     }
+    GLint actualSamples = 0;
+    if (dynamic_cast<GLRenderer*>(g.renderer.get())) glGetIntegerv(GL_SAMPLES, &actualSamples);
+    g.actualSamples.store(actualSamples);
 #if !defined(__ANDROID__)
     runtimeInputListener.reset();
     g.canvas->addMouseListener(runtimeInputListener);
@@ -1013,6 +1035,36 @@ void tn_runtime_set_backend(int vulkan) {
 const char* tn_debug_scene(void) {
     thread_local std::string result;
     result = onWorker([] {
+        // Explicit diagnostic capture only; never read back shadows in the
+        // ordinary render loop. Packed depth and matrices help distinguish
+        // caster/clear failures from receiver projection failures.
+        if (const char* directory = std::getenv("THREEBROWSER_SHADOW_CAPTURE_DIR")) {
+            if (auto* renderer = dynamic_cast<GLRenderer*>(g.renderer.get())) {
+                auto* previous = renderer->getRenderTarget();
+                const auto face = renderer->getActiveCubeFace(), mip = renderer->getActiveMipmapLevel();
+                for (const auto& [id, slot] : g.slots) {
+                    auto* light = slot.object ? dynamic_cast<LightWithShadow*>(slot.object.get()) : nullptr;
+                    if (!light || !light->shadow || !light->shadow->map) continue;
+                    auto& shadow = *light->shadow;
+                    auto* target = shadow.map.get();
+                    std::vector<unsigned char> pixels(target->width * target->height * 4);
+                    renderer->setRenderTarget(target);
+                    renderer->readPixels(Vector2(0, 0), {static_cast<int>(target->width), static_cast<int>(target->height)}, Format::RGBA, pixels.data());
+                    const auto stem = std::string(directory) + "/shadow-" + std::to_string(id);
+                    std::ofstream image(stem + ".pgm", std::ios::binary);
+                    image << "P5\n" << target->width << " " << target->height << "\n255\n";
+                    for (std::size_t i = 0; i < pixels.size(); i += 4) {
+                        const double depth = (pixels[i] / 16777216.0 + pixels[i+1] / 65536.0 + pixels[i+2] / 256.0 + pixels[i+3]) / 256.0;
+                        image.put(static_cast<char>(std::clamp(depth * 255.0, 0.0, 255.0)));
+                    }
+                    std::ofstream metadata(stem + ".txt");
+                    metadata << "projection "; for (auto v : shadow.camera->projectionMatrix.elements) metadata << v << ' ';
+                    metadata << "\nshadowMatrix "; for (auto v : shadow.matrix.elements) metadata << v << ' ';
+                    metadata << "\nbias " << shadow.bias << " normalBias " << shadow.normalBias;
+                }
+                renderer->setRenderTarget(previous, face, mip);
+            }
+        }
         const auto sceneHandle = g.drawScene.load();
         const auto cameraHandle = g.drawCamera.load();
         const auto overlaySceneHandle = g.drawOverlayScene.load();
@@ -1070,10 +1122,16 @@ const char* tn_debug_scene(void) {
 }
 
 int tn_runtime_start(int width, int height, const char* title) {
+    return tn_runtime_start_with_samples(width, height, title, 2);
+}
+
+int tn_runtime_samples(void) { return g.actualSamples.load(); }
+
+int tn_runtime_start_with_samples(int width, int height, const char* title, int samples) {
     try {
         std::string titleCopy = title ? title : "ThreeBrowser";
-        return onWorker([width, height, titleCopy] {
-            return impl_runtime_start(width, height, titleCopy.c_str());
+        return onWorker([width, height, titleCopy, samples] {
+            return impl_runtime_start(width, height, titleCopy.c_str(), samples);
         });
     } catch (const std::exception& ex) {
         setError(ex.what());

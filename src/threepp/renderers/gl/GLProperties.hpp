@@ -60,6 +60,7 @@ namespace threepp::gl {
         Texture* environment;
 
         std::optional<ColorSpace> outputEncoding;
+        ToneMapping toneMapping{ToneMapping::None};
         bool instancing{};
         bool skinning{};
         bool vertexAlphas{};

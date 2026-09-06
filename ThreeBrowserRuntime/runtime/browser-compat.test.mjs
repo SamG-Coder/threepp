@@ -169,6 +169,7 @@ test("Web Audio compressor and external ShaderMaterial subclasses follow browser
     assert.equal(element.value, "12");
 
     const renderer = new THREE.WebGLRenderer();
+    assert.notEqual(renderer.domElement.style.position, 'fixed', 'native rendering must preserve the page canvas layout');
     assert.match(renderer.getContext().getParameter(renderer.getContext().RENDERER), /ThreeBrowser/);
     assert.equal(renderer.state.buffers.depth.getReversed(), false);
     assert.equal(typeof renderer.getContext().flush, "function");

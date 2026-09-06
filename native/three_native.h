@@ -23,6 +23,8 @@ TN_API int tn_runtime_has_vulkan(void);
 TN_API void tn_runtime_set_backend(int vulkan);
 
 TN_API int tn_runtime_start(int width, int height, const char* title);
+TN_API int tn_runtime_start_with_samples(int width, int height, const char* title, int samples);
+TN_API int tn_runtime_samples(void);
 TN_API int tn_runtime_is_open(void);
 TN_API void tn_runtime_set_size(int width, int height);
 TN_API void tn_runtime_set_vsync(int enabled);

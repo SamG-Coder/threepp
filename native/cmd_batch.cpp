@@ -290,7 +290,7 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             g.drawCamera.store(ru32(p + 4));
             g.drawOverlayScene.store(0);
             g.drawOverlayCamera.store(0);
-            markDirty();
+            g.sceneDirty.store(true, std::memory_order_release);
             return;
         }
         case tn::cmd::OP_RENDER_COMPOSITE: {
@@ -299,7 +299,7 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             g.drawCamera.store(ru32(p + 4));
             g.drawOverlayScene.store(ru32(p + 8));
             g.drawOverlayCamera.store(ru32(p + 12));
-            markDirty();
+            g.sceneDirty.store(true, std::memory_order_release);
             return;
         }
         case tn::cmd::OP_SET_SIZE: {
@@ -768,6 +768,15 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             slot->material->depthTest = (flags & 1u) != 0u;
             slot->material->premultipliedAlpha = (flags & 2u) != 0u;
             slot->material->alphaToCoverage = (flags & 4u) != 0u;
+            if ((flags & 32u) != 0u) {
+                slot->material->toneMapped = (flags & 8u) == 0u;
+                slot->material->colorWrite = (flags & 16u) == 0u;
+                if (has(p, end, 16)) {
+                    const auto side = ru32(p + 12);
+                    if (side <= 2u) slot->material->shadowSide = static_cast<Side>(side);
+                    else slot->material->shadowSide.reset();
+                }
+            }
             slot->material->needsUpdate();
             return;
         }
@@ -1356,6 +1365,14 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
 
 void execStream(const uint8_t* data, int nbytes) {
     if (!data || nbytes < 8) return;
+    // Uploads, uniforms, and offscreen passes are not requests to redraw the
+    // previous screen scene. Only an explicit render command presents a frame.
+    // Keep the immediate native API's automatic redraw behavior outside here.
+    struct PresentationScope {
+        bool previous = deferAutomaticPresentation;
+        PresentationScope() { deferAutomaticPresentation = true; }
+        ~PresentationScope() { deferAutomaticPresentation = previous; }
+    } presentationScope;
     const uint8_t* p = data;
     const uint8_t* end = data + nbytes;
     while (has(p, end, 8)) {
@@ -1400,7 +1417,7 @@ int tn_cmd_submit_async(const uint8_t* data, int nbytes) {
         std::vector<uint8_t> copy(data, data + nbytes);
         onWorkerAsync([buf = std::move(copy)] {
             execStream(buf.data(), static_cast<int>(buf.size()));
-        });
+        }, false);
         return 1;
     } catch (const std::exception& ex) {
         setError(ex.what());
@@ -1419,7 +1436,7 @@ int tn_cmd_submit_frame_async(const uint8_t* data, int nbytes) {
             auto completion = std::move(pending);
             execStream(buf.data(), static_cast<int>(buf.size()));
             renderPendingFrame();
-        });
+        }, false);
         return 1;
     } catch (const std::exception& ex) {
         setError(ex.what()); return 0;

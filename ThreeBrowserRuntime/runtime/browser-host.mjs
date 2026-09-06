@@ -6,6 +6,7 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import { Worker as NodeWorker } from "node:worker_threads";
 import { configureModuleDocument, configureModuleFile } from "./module-loader.mjs";
 import { HtmlInteractionBridge } from "./html-interaction-bridge.mjs";
+import { HtmlRenderer } from "./html-renderer.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -561,8 +562,10 @@ function parseHtmlFragment(parent, html) {
   parent.children.length = 0;
   parent._textContent = "";
   const stack = [parent];
-  const tokens = String(html).match(/<!--[\s\S]*?-->|<![^>]*>|<\/?[a-zA-Z][^>]*>|[^<]+/g) || [];
-  for (const token of tokens) {
+  const tokens = String(html).match(/<style\b[^>]*>[\s\S]*?<\/style\s*>|<!--[\s\S]*?-->|<![^>]*>|<\/?[a-zA-Z][^>]*>|[^<]+/gi) || [];
+  for (let token of tokens) {
+    const rawStyle = /^(<style\b[^>]*>)([\s\S]*?)<\/style\s*>$/i.exec(token);
+    if (rawStyle) token = rawStyle[1];
     if (token.startsWith("<!--") || /^<!/i.test(token)) continue;
     if (!token.startsWith("<")) {
       if (!token) continue;
@@ -585,6 +588,7 @@ function parseHtmlFragment(parent, html) {
       element.setAttribute(match[1], decodeHtmlText(match[2] ?? match[3] ?? match[4] ?? ""));
     }
     stack.at(-1).appendChild(element);
+    if (rawStyle) { element.textContent = rawStyle[2]; continue; }
     if (!htmlVoidElements.has(name) && !/\/\s*>$/.test(token)) stack.push(element);
   }
 }
@@ -593,8 +597,19 @@ function completeVirtualResourceTree(node) {
   if (!node || typeof node !== "object") return;
   if (node.tagName === "LINK" && !node._virtualLoadQueued) {
     node._virtualLoadQueued = true;
-    queueMicrotask(() => {
+    queueMicrotask(async () => {
       if (!node.parentNode) return;
+      if (String(node.rel || node.getAttribute('rel')).toLowerCase() === 'stylesheet') {
+        try {
+          const response = await fetch(new URL(node.href || node.getAttribute('href'), globalThis.location));
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          node._cssText = await response.text();
+        } catch (error) {
+          console.error(`ThreeBrowser stylesheet load failed: ${error.message}`);
+          node.dispatchEvent(new Event('error'));
+          return;
+        }
+      }
       node.sheet ??= { cssRules: [] };
       node.dispatchEvent(new Event("load"));
       if (typeof node.onload === "function") node.onload.call(node, new Event("load"));
@@ -1832,6 +1847,8 @@ document.documentElement.parentNode = document;
 
 function hydrateDocumentMarkup(html) {
   const source = String(html ?? "");
+  const headMarkup = /<head\b[^>]*>([\s\S]*?)<\/head\s*>/i.exec(source)?.[1];
+  if (headMarkup != null) head.innerHTML = headMarkup.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '');
   const bodyMarkup = /<body\b[^>]*>([\s\S]*?)<\/body\s*>/i.exec(source)?.[1] ?? source;
   // Script execution stays under loadEntry's module/classic-script ordering.
   // Keeping script text in the virtual DOM would duplicate megabytes of code
@@ -1845,6 +1862,7 @@ function hydrateDocumentMarkup(html) {
 globalThis.__threeBrowserHydrateDocument = hydrateDocumentMarkup;
 
 let pointerLockMotionWarmup = 0;
+let pointerLockUnadjustedMovement = false;
 let pointerLockSuspendedByRuntimeOverlay = false;
 let runtimeOverlayWasOpen = false;
 
@@ -1852,7 +1870,7 @@ function resumeRuntimeOverlayPointerLock() {
   if (!pointerLockSuspendedByRuntimeOverlay) return;
   pointerLockSuspendedByRuntimeOverlay = false;
   if (!document.pointerLockElement) return;
-  if (native.setPointerLock(true)) pointerLockMotionWarmup = 1;
+  if (native.setPointerLock(true, pointerLockUnadjustedMovement)) pointerLockMotionWarmup = 1;
 }
 
 export function setRuntimeOverlayVisible(open) {
@@ -1884,6 +1902,7 @@ function requestNativePointerLock(element, options = undefined) {
     return Promise.reject(new Error("Pointer lock could not be acquired"));
   }
   document.pointerLockElement = element;
+  pointerLockUnadjustedMovement = unadjustedMovement;
   // Win32 may deliver the cursor-centering/activation delta immediately after
   // the lock request. Browsers do not expose that synthetic movement to page
   // controls, so discard exactly the first locked move.
@@ -2044,6 +2063,15 @@ const htmlInteractionBridge = new HtmlInteractionBridge({
   createCanvas: () => document.createElement("canvas"),
   trace: Boolean(process.env.THREEBROWSER_TRACE_HTML_INTERACTION),
 });
+const htmlRenderer = new HtmlRenderer({
+  document,
+  presentedCanvas: () => refreshPresentedCanvas(),
+  viewport: () => ({ width: globalThis.innerWidth || 1280, height: globalThis.innerHeight || 720 }),
+  createCanvas: () => document.createElement('canvas'),
+});
+// The basic painter is experimental: it is not yet a browser-equivalent CSS
+// engine and must not add DOM layout/raster work to ordinary native scenes.
+const pageUi = process.env.THREEBROWSER_HTML_MODE === 'experimental' ? htmlRenderer : htmlInteractionBridge;
 
 globalThis.window = globalThis;
 globalThis.self = globalThis;
@@ -2892,8 +2920,8 @@ function submitNativeCommands(data, frame = false) {
   return native.submit(copy);
 }
 
-function startNativeRuntime(width, height, title) {
-  const started = native.start(width, height, title);
+function startNativeRuntime(width, height, title, samples = 2) {
+  const started = native.start(width, height, title, samples);
   if (!started) return false;
   for (const commands of pendingNativeCommands.splice(0)) {
     if (!native.submit(commands)) return false;
@@ -2904,6 +2932,7 @@ function startNativeRuntime(width, height, title) {
 function hostObject() {
   return {
     RuntimeStart: startNativeRuntime,
+    RuntimeSamples: () => native.stats().samples ?? 0,
     RuntimeSetSize: (width, height) => native.resize(width, height),
     RuntimeRender: (scene, camera) => native.render(scene, camera),
     BackendName: () => native.backendName(),
@@ -3025,6 +3054,19 @@ function physicalKeyCode(code) {
     9: "Tab", 16: "ShiftLeft", 17: "ControlLeft", 18: "AltLeft", 13: "Enter", 114: "F3" })[code] || `Key${code}`;
 }
 
+export function dispatchNativeKeyboardEvent(input) {
+  const properties = {
+    key: keyName(input.code), code: physicalKeyCode(input.code), keyCode: input.code, which: input.code,
+    shiftKey: input.shiftKey, ctrlKey: input.ctrlKey, altKey: input.altKey, repeat: !!input.repeat,
+  };
+  // A browser targets the focused element (or body), then bubbles through
+  // document and window once. Sending directly to window skips document
+  // controls; sending to both the element and window duplicates key events.
+  const focused = document.activeElement;
+  const target = focused && document.documentElement.contains(focused) ? focused : document.body || document;
+  target.dispatchEvent(eventWith(input.type, properties));
+}
+
 let mouseButtons = 0;
 let lastMouseX = 0;
 let lastMouseY = 0;
@@ -3093,7 +3135,7 @@ function dispatchNativeInput() {
     }
     if (overlayChord.consume) continue;
     if (consumeRuntimeOverlayInput(input)) continue;
-    if (htmlInteractionBridge.consumeNativeInput(input)) continue;
+    if (pageUi.consumeNativeInput(input)) continue;
     if (input.type === "pointerleave") {
       pointerInside = false;
       if (!native.overlayOpen?.()) {
@@ -3208,12 +3250,7 @@ function dispatchNativeInput() {
       }
     }
     if (native.overlayOpen?.()) continue;
-    const properties = {
-      key: keyName(input.code), code: physicalKeyCode(input.code), keyCode: input.code, which: input.code,
-      shiftKey: input.shiftKey, ctrlKey: input.ctrlKey, altKey: input.altKey, repeat: false,
-    };
-    if (document.activeElement) document.activeElement.dispatchEvent(eventWith(input.type, properties));
-    windowEvents.dispatchEvent(eventWith(input.type, properties));
+    dispatchNativeKeyboardEvent(input);
   }
 }
 
@@ -3282,19 +3319,27 @@ function pump() {
     }
     nextWebGpuFrame = Math.max(nextWebGpuFrame + webGpuFrameInterval, now);
   }
-  if (native.pressure() > 1) {
+  // Keep at most one outstanding frame so mouse look does not sit behind
+  // a second stale camera pose when native rendering is slow.
+  if (native.pressure() > 0) {
     setTimeout(pump, 1);
     return;
   }
   dispatchNativeInput();
   syncWindowSize();
-  if (syncRuntimeOverlayPointerLock()) htmlInteractionBridge.hide();
-  else htmlInteractionBridge.update(performance.now());
+  if (syncRuntimeOverlayPointerLock()) pageUi.hide();
+  else pageUi.update(performance.now());
   const callbacks = Array.from(frameCallbacks.values());
   frameCallbacks.clear();
   globalThis.__threeBrowserDisplayFrame = (globalThis.__threeBrowserDisplayFrame || 0) + 1;
   const timestamp = performance.now();
-  for (const callback of callbacks) callback(timestamp);
+  globalThis.__threeBrowserInAnimationFrame = true;
+  try {
+    for (const callback of callbacks) callback(timestamp);
+  } finally {
+    globalThis.__threeBrowserInAnimationFrame = false;
+    globalThis.__TN?.cmd?.flushPresentation?.();
+  }
   setImmediate(pump);
 }
 
@@ -3314,6 +3359,7 @@ export function stop() {
   for (const worker of activeWorkers) worker.terminate();
   activeWorkers.clear();
   htmlInteractionBridge.hide();
+  htmlRenderer.hide();
   releaseNativePointerLock();
   native.shutdown();
 }

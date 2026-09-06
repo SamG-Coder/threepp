@@ -93,6 +93,7 @@ struct Runtime {
     std::atomic<int> statsW{0};
     std::atomic<int> statsH{0};
     std::atomic<uint64_t> statsPresents{0};
+    std::atomic<int> actualSamples{0};
 
     std::mutex frameMu;
     std::vector<unsigned char> frameRgba;
@@ -115,6 +116,7 @@ void workerMain();
 void logLine(const char* message);
 void setError(const char* message);
 void markDirty();
+extern thread_local bool deferAutomaticPresentation;
 void ensureWorker();
 uint32_t insert(Slot slot);
 uint32_t insertAt(uint32_t id, Slot slot);
@@ -123,7 +125,7 @@ Slot* findSlot(uint32_t id);
 Object3D* asObject(uint32_t id);
 Object3D* findObject(uint32_t id);
 void resetIds();
-void onWorkerAsync(std::function<void()> fn);
+void onWorkerAsync(std::function<void()> fn, bool requestPresentation = true);
 void renderPendingFrame();
 void applyPendingEnvironment();
 void destroySlot(uint32_t id);
