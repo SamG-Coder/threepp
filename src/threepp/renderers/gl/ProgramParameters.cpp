@@ -17,9 +17,17 @@ using namespace threepp::gl;
 
 namespace {
 
-    ColorSpace getTextureEncodingFromMap(const std::shared_ptr<Texture>& map) {
+    ColorSpace getTextureEncodingFromMap(const Texture* map) {
 
+        // Byte colour textures use sRGB GPU storage. Sampling already returns
+        // linear RGB, including from custom shaders and before filtering.
+        if (map && map->colorSpace == ColorSpace::sRGB && map->type == Type::UnsignedByte &&
+            (map->format == Format::RGB || map->format == Format::RGBA)) return ColorSpace::Linear;
         return map ? map->colorSpace : ColorSpace::Linear;
+    }
+
+    ColorSpace getTextureEncodingFromMap(const std::shared_ptr<Texture>& map) {
+        return getTextureEncodingFromMap(map.get());
     }
 
 }// namespace
@@ -83,6 +91,11 @@ ProgramParameters::ProgramParameters(
 
     vertexShader = vShader;
     fragmentShader = fShader;
+    if (material->shaderOverride) {
+        vertexShader = material->shaderOverride->vertexShader;
+        fragmentShader = material->shaderOverride->fragmentShader;
+        shaderID.reset();
+    }
 
     if (definesMaterial) {
         defines = definesMaterial->defines;
@@ -117,7 +130,7 @@ ProgramParameters::ProgramParameters(
     if (envMap) {
         envMapMode = as_integer(effectiveEnvMap->mapping);
     }
-    envMapEncoding = effectiveEnvMap ? effectiveEnvMap->colorSpace : ColorSpace::Linear;
+    envMapEncoding = getTextureEncodingFromMap(effectiveEnvMap);
     envMapCubeUV = envMapMode != 0 &&
                    (static_cast<Mapping>(envMapMode) == Mapping::CubeUVReflection ||
                     static_cast<Mapping>(envMapMode) == Mapping::CubeUVRefraction);

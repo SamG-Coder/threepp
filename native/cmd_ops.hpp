@@ -17,6 +17,8 @@ constexpr uint32_t OP_SET_SIZE = 2;
 constexpr uint32_t OP_CLEAR_COLOR = 3;
 constexpr uint32_t OP_RENDER_PASS = 4;
 constexpr uint32_t OP_RENDER_COMPOSITE = 5; // world scene/camera, overlay scene/camera
+constexpr uint32_t OP_CLEAR_TARGET = 6;
+constexpr uint32_t OP_SHADOW_STATE = 7;
 
 constexpr uint32_t OP_SCENE_CREATE = 10;
 constexpr uint32_t OP_SCENE_BG = 11;
@@ -28,6 +30,7 @@ constexpr uint32_t OP_ORTHO_CAM = 21;
 constexpr uint32_t OP_ORTHO_UPDATE = 22;
 constexpr uint32_t OP_CAM_ASPECT = 23;
 constexpr uint32_t OP_CAM_UPD_PROJ = 24;
+constexpr uint32_t OP_CAM_PROJECTION = 25;
 
 constexpr uint32_t OP_BUF_GEO = 30;
 constexpr uint32_t OP_BOX_GEO = 31;
@@ -53,6 +56,9 @@ constexpr uint32_t OP_MAT_VISIBLE = 53;
 constexpr uint32_t OP_MAT_COLOR = 54;
 constexpr uint32_t OP_MAT_NORMAL_SCALE = 55;
 constexpr uint32_t OP_SHADER_TEX = 56;
+constexpr uint32_t OP_MAT_VERTEX_COLORS = 57;
+constexpr uint32_t OP_SHADER_UNIFORM = 58;
+constexpr uint32_t OP_MAT_RENDER_STATE = 59;
 constexpr uint32_t OP_TEX_PARAMS = 36;
 constexpr uint32_t OP_TEX_CUBE = 37;
 constexpr uint32_t OP_TEX_FLOAT = 38;
@@ -87,12 +93,16 @@ constexpr uint32_t OP_SET_VISIBLE = 84;
 constexpr uint32_t OP_OBJECT_REMOVE = 85;
 constexpr uint32_t OP_SLOT_DESTROY = 86;
 constexpr uint32_t OP_SET_POSE_QUAT = 87; // id, position, quaternion, scale
+constexpr uint32_t OP_OBJECT_FLAGS = 88;
 
 constexpr uint32_t OP_LIGHT_AMBIENT = 90;
 constexpr uint32_t OP_LIGHT_DIR = 91;
 constexpr uint32_t OP_LIGHT_HEMI = 92;
 constexpr uint32_t OP_LIGHT_POINT = 93;
 constexpr uint32_t OP_LIGHT_SPOT = 94;
+constexpr uint32_t OP_LIGHT_STATE = 95;
+constexpr uint32_t OP_LIGHT_SHADOW = 96;
+constexpr uint32_t OP_SHADOW_TEXTURE = 97;
 
 constexpr uint32_t OP_INST_MATRIX = 100;
 constexpr uint32_t OP_INST_COLOR = 101;

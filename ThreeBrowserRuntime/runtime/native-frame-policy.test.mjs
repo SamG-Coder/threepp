@@ -22,7 +22,7 @@ function loadSlice(relative, extras = {}) {
 
 test("native runtime skips composer revisits after one city prepare", () => {
   const context = loadSlice("../../host/ThreeBrowser/web/three/10-renderer.js", {
-    globals: { __threeBrowserNativeRuntime: true, __threeBrowserDisplayFrame: 4 },
+    globals: { __threeBrowserNativeRuntime: true, __threeBrowserDisplayFrame: 4, process: {env: {THREEBROWSER_NATIVE_POST_PROCESSING: '0'}} },
     TN: {
       Color: class {},
       Vector2: class {},
@@ -62,7 +62,7 @@ test("non-runtime hosts still evaluate offscreen passes", () => {
   assert.equal(decide({}, { children: [] }, { isPerspectiveCamera: true }, { _h: 1 }), "evaluate");
 });
 
-test("shader materials flush once per display frame unless defines change", () => {
+test("shader materials flush once per render call unless defines change", () => {
   const context = loadSlice("../../host/ThreeBrowser/web/three/06-materials.js", {
     globals: { __threeBrowserDisplayFrame: 3 },
     TN: {

@@ -19,6 +19,7 @@ namespace threepp {
             : GLRenderTarget(size, size, options) {
 
             this->texture = CubeTexture::create();
+            this->textures = {this->texture};
             if (options.mapping) this->texture->mapping = *options.mapping;
             if (options.wrapS) this->texture->wrapS = *options.wrapS;
             if (options.wrapT) this->texture->wrapT = *options.wrapT;

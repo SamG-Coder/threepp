@@ -896,8 +896,28 @@
       }
       return this;
     }
-    computeBoundingBox() {}
-    computeBoundingSphere() {}
+    computeBoundingBox() {
+      this.boundingBox ??= new TN.Box3();
+      this.geometry.boundingBox ?? this.geometry.computeBoundingBox();
+      this.boundingBox.makeEmpty();
+      const matrix = new TN.Matrix4(), box = new TN.Box3();
+      for (let index = 0; index < this.count; index++) {
+        this.getMatrixAt(index, matrix);
+        box.copy(this.geometry.boundingBox).applyMatrix4(matrix);
+        this.boundingBox.union(box);
+      }
+    }
+    computeBoundingSphere() {
+      this.boundingSphere ??= new TN.Sphere();
+      this.geometry.boundingSphere ?? this.geometry.computeBoundingSphere();
+      this.boundingSphere.makeEmpty();
+      const matrix = new TN.Matrix4(), sphere = new TN.Sphere();
+      for (let index = 0; index < this.count; index++) {
+        this.getMatrixAt(index, matrix);
+        sphere.copy(this.geometry.boundingSphere).applyMatrix4(matrix);
+        this.boundingSphere.union(sphere);
+      }
+    }
     updateMorphTargets() {}
     dispose() {
       super.dispose();

@@ -14,6 +14,7 @@
 #include "audio_playback.h"
 #include "camera_capture.h"
 #include "canvas2d.h"
+#include "threepp/renderers/shaders/ShaderLib.hpp"
 
 #define STB_IMAGE_STATIC
 #define STB_IMAGE_IMPLEMENTATION
@@ -1671,15 +1672,16 @@ napi_value setToneMapping(napi_env env, napi_callback_info info) {
 }
 
 napi_value shaderMaterialCreate(napi_env env, napi_callback_info info) {
-    napi_value argv[2]{};
-    std::size_t argc = 2;
+    napi_value argv[3]{};
+    std::size_t argc = 3;
     napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-    if (!runtimeActive.load(std::memory_order_acquire) || runtimeMode.load(std::memory_order_acquire) != 1 || argc != 2) {
+    if (!runtimeActive.load(std::memory_order_acquire) || runtimeMode.load(std::memory_order_acquire) != 1 || argc < 2) {
         return number(env, 0);
     }
     const std::string vertex = argString(env, argv[0], "");
     const std::string fragment = argString(env, argv[1], "");
-    return number(env, tn_shader_material_create(vertex.c_str(), fragment.c_str()));
+    const int raw = argc >= 3 ? static_cast<int>(argNumber(env, argv[2], 0)) : 0;
+    return number(env, tn_shader_material_create(vertex.c_str(), fragment.c_str(), raw));
 }
 
 napi_value shaderMaterialSetSource(napi_env env, napi_callback_info info) {
@@ -1694,6 +1696,23 @@ napi_value shaderMaterialSetSource(napi_env env, napi_callback_info info) {
     tn_shader_material_set_source(static_cast<std::uint32_t>(argNumber(env, argv[0], 0)),
                                   vertex.c_str(), fragment.c_str());
     return undefined(env);
+}
+
+napi_value materialShaderTemplate(napi_env env, napi_callback_info info) {
+    napi_value argv[1]{};
+    std::size_t argc = 1;
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    try {
+        const auto& shader = threepp::shaders::ShaderLib::instance().get(argString(env, argv[0], "standard"));
+        napi_value result{};
+        napi_create_object(env, &result);
+        set(env, result, "vertexShader", string(env, shader.vertexShader.c_str()));
+        set(env, result, "fragmentShader", string(env, shader.fragmentShader.c_str()));
+        return result;
+    } catch (const std::exception& error) {
+        napi_throw_error(env, nullptr, error.what());
+        return undefined(env);
+    }
 }
 
 napi_value shaderUniformFloat(napi_env env, napi_callback_info info) {
@@ -1884,17 +1903,36 @@ napi_value pmremFromObject(napi_env env, napi_callback_info info) {
 }
 
 napi_value renderTargetCreate(napi_env env, napi_callback_info info) {
-    napi_value argv[6]{};
-    std::size_t argc = 6;
+    napi_value argv[13]{};
+    std::size_t argc = 13;
     napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-    if (!runtimeActive.load(std::memory_order_acquire) || argc != 6) return number(env, 0);
+    if (!runtimeActive.load(std::memory_order_acquire) || argc < 6) return number(env, 0);
     return number(env, tn_render_target_create(
         static_cast<std::uint32_t>(argNumber(env, argv[0], 0)),
         static_cast<int>(argNumber(env, argv[1], 1)),
         static_cast<int>(argNumber(env, argv[2], 1)),
         static_cast<int>(argNumber(env, argv[3], 0)),
         static_cast<int>(argNumber(env, argv[4], 1)),
-        static_cast<int>(argNumber(env, argv[5], 0))));
+        static_cast<int>(argNumber(env, argv[5], 0)),
+        argc >= 7 ? static_cast<int>(argNumber(env, argv[6], 1)) : 1,
+        argc >= 8 ? static_cast<int>(argNumber(env, argv[7], 1009)) : 1009,
+        argc >= 9 ? static_cast<int>(argNumber(env, argv[8], 1023)) : 1023,
+        argc >= 10 ? static_cast<int>(argNumber(env, argv[9], 1006)) : 1006,
+        argc >= 11 ? static_cast<int>(argNumber(env, argv[10], 1006)) : 1006,
+        argc >= 12 ? static_cast<std::uint32_t>(argNumber(env, argv[11], 0)) : 0,
+        argc >= 13 ? static_cast<int>(argNumber(env, argv[12], 0)) : 0));
+}
+
+napi_value renderTargetReadPixels(napi_env env, napi_callback_info info) {
+    napi_value argv[6]{}; std::size_t argc=6;
+    napi_get_cb_info(env,info,&argc,argv,nullptr,nullptr);
+    if(argc!=6 || !runtimeActive.load(std::memory_order_acquire)) return boolean(env,false);
+    void* data=nullptr; size_t length=0,offset=0; napi_typedarray_type type{}; napi_value buffer{};
+    if(napi_get_typedarray_info(env,argv[5],&type,&length,&data,&buffer,&offset)!=napi_ok) return boolean(env,false);
+    if(type!=napi_float32_array && type!=napi_uint8_array && type!=napi_uint8_clamped_array) return boolean(env,false);
+    const int width=static_cast<int>(argNumber(env,argv[3],0)),height=static_cast<int>(argNumber(env,argv[4],0));
+    if(width<=0||height<=0||static_cast<uint64_t>(width)*height*4>length) return boolean(env,false);
+    return boolean(env,tn_render_target_read_pixels(static_cast<uint32_t>(argNumber(env,argv[0],0)),static_cast<int>(argNumber(env,argv[1],0)),static_cast<int>(argNumber(env,argv[2],0)),width,height,data,type==napi_float32_array)!=0);
 }
 
 napi_value renderTargetSet(napi_env env, napi_callback_info info) {
@@ -2201,6 +2239,7 @@ napi_value init(napi_env env, napi_value exports) {
         {"setToneMapping", nullptr, setToneMapping, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"shaderMaterialCreate", nullptr, shaderMaterialCreate, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"shaderMaterialSetSource", nullptr, shaderMaterialSetSource, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"materialShaderTemplate", nullptr, materialShaderTemplate, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"shaderUniformFloat", nullptr, shaderUniformFloat, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"shaderUniformInt", nullptr, shaderUniformInt, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"shaderUniformVec2", nullptr, shaderUniformVec2, nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -2217,6 +2256,7 @@ napi_value init(napi_env env, napi_value exports) {
         {"pmremFromCubemap", nullptr, pmremFromCubemap, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"pmremFromObject", nullptr, pmremFromObject, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"renderTargetCreate", nullptr, renderTargetCreate, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"renderTargetReadPixels", nullptr, renderTargetReadPixels, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"renderTargetSet", nullptr, renderTargetSet, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"renderTargetResize", nullptr, renderTargetResize, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"boneCreate", nullptr, boneCreate, nullptr, nullptr, nullptr, napi_default, nullptr},

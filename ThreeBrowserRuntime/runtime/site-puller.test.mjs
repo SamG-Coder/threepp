@@ -3,13 +3,42 @@ import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 
 const execFileAsync = promisify(execFile);
 const puller = fileURLToPath(new URL("./site-puller.mjs", import.meta.url));
+
+test("classic dynamic imports and glTF dependencies are usable offline", async () => {
+  const server = createServer((request, response) => {
+    const routes = {
+      "/nested/": ["text/html", '<script>import("/assets/start.js")</script>'],
+      "/assets/start.js": ["text/javascript", 'globalThis.offlineBootstrap = 42; const model = "/models/tree.gltf";'],
+      "/models/tree.gltf": ["model/gltf+json", JSON.stringify({ asset: { version: "2.0" }, buffers: [{ uri: "tree.bin" }], images: [{ uri: "textures/leaf.png" }, { uri: "data:image/png;base64,AA==" }] })],
+      "/models/tree.bin": ["application/octet-stream", "buffer"],
+      "/models/textures/leaf.png": ["image/png", "pixels"],
+    };
+    const route = routes[request.url];
+    response.writeHead(route ? 200 : 404, { "content-type": route?.[0] ?? "text/plain" });
+    response.end(route?.[1] ?? "missing");
+  });
+  const temporaryRoot = await mkdtemp(path.join(tmpdir(), "threebrowser-classic-import-"));
+  try {
+    await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+    await execFileAsync(process.execPath, [puller, `http://127.0.0.1:${server.address().port}/nested/`, temporaryRoot]);
+    const manifest = JSON.parse(await readFile(path.join(temporaryRoot, "threebrowser.pull.json"), "utf8"));
+    assert.ok(manifest.files.some(file => file.path === "models/tree.bin"));
+    assert.ok(manifest.files.some(file => file.path === "models/textures/leaf.png"));
+    await new Promise(resolve => server.close(resolve));
+    const entry = pathToFileURL(path.join(temporaryRoot, "site-entry.mjs")).href;
+    await execFileAsync(process.execPath, ["--input-type=module", "-e", `globalThis.document={body:{children:[{}]}}; await import(${JSON.stringify(entry)}); await new Promise(r=>setTimeout(r,30)); if(globalThis.offlineBootstrap!==42) process.exit(1);`]);
+  } finally {
+    if (server.listening) await new Promise(resolve => server.close(resolve));
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
 
 test("preserves structured HTML gates for runtime interaction hydration", async () => {
   const server = createServer((_request, response) => {

@@ -151,8 +151,26 @@ test("Web Audio compressor and external ShaderMaterial subclasses follow browser
     );
     assert.equal(instances.count, 2);
     assert.equal(instances.instanceMatrix.array.length, 32);
+    const bounded = new THREE.InstancedMesh(new THREE.BoxGeometry(2, 2, 2), new THREE.MeshBasicMaterial(), 2);
+    bounded.setMatrixAt(0, new THREE.Matrix4().makeTranslation(-5, 0, 0));
+    bounded.setMatrixAt(1, new THREE.Matrix4().makeTranslation(5, 0, 0));
+    bounded.computeBoundingBox();
+    bounded.computeBoundingSphere();
+    assert.equal(bounded.boundingBox.min.x, -6);
+    assert.equal(bounded.boundingBox.max.x, 6);
+    assert.ok(Math.abs(bounded.boundingSphere.radius - (5 + Math.sqrt(3))) < 1e-5);
+    const element = document.createElement("input");
+    element.setAttribute("id", "hydration-input");
+    element.setAttribute("class", "slider");
+    const attributes = element.attributes;
+    while (attributes.length) element.removeAttributeNode(attributes[0]);
+    assert.deepEqual(element.getAttributeNames(), []);
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(element, 12);
+    assert.equal(element.value, "12");
 
     const renderer = new THREE.WebGLRenderer();
+    assert.match(renderer.getContext().getParameter(renderer.getContext().RENDERER), /ThreeBrowser/);
+    assert.equal(renderer.state.buffers.depth.getReversed(), false);
     assert.equal(typeof renderer.getContext().flush, "function");
     assert.equal(typeof renderer.getContext().finish, "function");
     assert.doesNotThrow(() => renderer.getContext().finish());
@@ -192,6 +210,176 @@ test("Web Audio compressor and external ShaderMaterial subclasses follow browser
     assert.ok(manualRoot.matrix.elements.every((value, index) =>
       Math.abs(manualRoot._nativeManualMatrix[index] - value) < 1e-6));
     assert.equal(manualRoot._manualMatrixDirty, false);
+    class Derived3DTarget extends THREE.WebGLRenderTarget {
+      constructor() {
+        super(8, 4);
+        this.texture = new THREE.Data3DTexture(null, 8, 4, 2);
+        this._setTextureOptions({ wrapR: THREE.RepeatWrapping, generateMipmaps: true });
+      }
+    }
+    const derivedTarget = new Derived3DTarget();
+    assert.equal(derivedTarget.texture.wrapR, THREE.RepeatWrapping);
+    assert.equal(derivedTarget.texture.generateMipmaps, true);
+    assert.equal(derivedTarget.texture.flipY, false);
+    assert.equal(derivedTarget.textures[0], derivedTarget.texture);
+    derivedTarget.dispose();
+    const readbackTarget = new THREE.WebGLRenderTarget(8,8,{type:THREE.HalfFloatType});
+    const readbackQuad = new THREE.Mesh(new THREE.PlaneGeometry(2,2),new THREE.ShaderMaterial({
+      depthTest:false,depthWrite:false,
+      vertexShader:'void main(){gl_Position=vec4(position.xy,0.,1.);}',
+      fragmentShader:'void main(){gl_FragColor=vec4(.25,.5,.75,1.);}',
+    }));
+    renderer.setRenderTarget(readbackTarget);
+    renderer.render(readbackQuad,new THREE.OrthographicCamera(-1,1,1,-1,0,1));
+    const floatPixel = new Float32Array(4);
+    renderer.readRenderTargetPixels(readbackTarget,2,2,1,1,floatPixel);
+    assert.deepEqual([...floatPixel],[.25,.5,.75,1], 'float readback must return the GPU values, not a zero-filled probe');
+    const bytePixel = new Uint8Array(4);
+    renderer.readRenderTargetPixels(readbackTarget,2,2,1,1,bytePixel);
+    assert.ok(Math.abs(bytePixel[0]-64)<=1 && Math.abs(bytePixel[1]-128)<=1 && Math.abs(bytePixel[2]-191)<=1 && bytePixel[3]===255);
+    const normalMap = new THREE.DataTexture(new Uint8Array([128,128,255,255]),1,1);
+    normalMap.needsUpdate = true;
+    const hookedMaterial = new THREE.MeshStandardMaterial({normalMap});
+    hookedMaterial.onBeforeCompile = shader => {
+      shader.fragmentShader = `
+        void main() {
+        #ifdef USE_NORMALMAP_TANGENTSPACE
+          mat3 frame = getTangentFrame(vec3(gl_FragCoord.xy,0.),vec3(0.,0.,1.),gl_FragCoord.xy);
+          gl_FragColor = vec4(frame[0].x*.25,frame[1].y*.5,frame[2].z*.75,1.);
+        #else
+          gl_FragColor = vec4(1.,0.,0.,1.);
+        #endif
+        }`;
+    };
+    readbackQuad.material = hookedMaterial;
+    renderer.render(readbackQuad,new THREE.OrthographicCamera(-1,1,1,-1,0,1));
+    renderer.readRenderTargetPixels(readbackTarget,2,2,1,1,floatPixel);
+    assert.deepEqual([...floatPixel],[.25,.5,.75,1], 'modern normal-map defines and explicit-UV tangent frames must execute in native hooked materials');
+    hookedMaterial.dispose();
+    normalMap.dispose();
+    const mipTarget = new THREE.WebGLRenderTarget(8,8,{
+      type:THREE.HalfFloatType, minFilter:THREE.LinearMipmapLinearFilter, generateMipmaps:true,
+    });
+    const mipSourceMaterial = new THREE.ShaderMaterial({
+      depthTest:false,depthWrite:false,
+      vertexShader:'void main(){gl_Position=vec4(position.xy,0.,1.);}',
+      fragmentShader:'void main(){float c=mod(floor(gl_FragCoord.x)+floor(gl_FragCoord.y),2.);gl_FragColor=vec4(c,c,c,1.);}',
+    });
+    readbackQuad.material = mipSourceMaterial;
+    renderer.setRenderTarget(mipTarget);
+    renderer.render(readbackQuad,new THREE.OrthographicCamera(-1,1,1,-1,0,1));
+    const mipSampleMaterial = new THREE.ShaderMaterial({
+      uniforms:{image:{value:mipTarget.texture}},depthTest:false,depthWrite:false,
+      vertexShader:'void main(){gl_Position=vec4(position.xy,0.,1.);}',
+      fragmentShader:'uniform sampler2D image;void main(){gl_FragColor=textureLod(image,vec2(.5),3.);}',
+    });
+    readbackQuad.material = mipSampleMaterial;
+    renderer.setRenderTarget(readbackTarget);
+    renderer.render(readbackQuad,new THREE.OrthographicCamera(-1,1,1,-1,0,1));
+    renderer.readRenderTargetPixels(readbackTarget,2,2,1,1,floatPixel);
+    assert.deepEqual([...floatPixel],[.5,.5,.5,1], 'render-target mip levels must contain filtered rendered pixels');
+    mipTarget.dispose();
+    mipSourceMaterial.dispose();
+    mipSampleMaterial.dispose();
+    const colourTexture = new THREE.DataTexture(new Uint8Array([128,128,128,255]),1,1);
+    colourTexture.colorSpace = THREE.SRGBColorSpace;
+    colourTexture.needsUpdate = true;
+    const colourSampleMaterial = new THREE.ShaderMaterial({
+      uniforms:{image:{value:colourTexture}},depthTest:false,depthWrite:false,
+      vertexShader:'void main(){gl_Position=vec4(position.xy,0.,1.);}',
+      fragmentShader:'uniform sampler2D image;void main(){gl_FragColor=texture2D(image,vec2(.5));}',
+    });
+    readbackQuad.material = colourSampleMaterial;
+    renderer.render(readbackQuad,new THREE.OrthographicCamera(-1,1,1,-1,0,1));
+    renderer.readRenderTargetPixels(readbackTarget,2,2,1,1,floatPixel);
+    assert.ok(Math.abs(floatPixel[0]-.21586)<.001, `custom shader sRGB sample must be linear, got ${floatPixel[0]}`);
+    const builtinColourMaterial = new THREE.MeshBasicMaterial({map:colourTexture,toneMapped:false});
+    readbackQuad.material = builtinColourMaterial;
+    renderer.render(readbackQuad,new THREE.OrthographicCamera(-1,1,1,-1,0,1));
+    renderer.readRenderTargetPixels(readbackTarget,2,2,1,1,floatPixel);
+    assert.ok(Math.abs(floatPixel[0]-.21586)<.001, `built-in material must not decode twice, got ${floatPixel[0]}`);
+    colourTexture.colorSpace = THREE.NoColorSpace;
+    colourTexture.needsUpdate = true;
+    readbackQuad.material = colourSampleMaterial;
+    renderer.render(readbackQuad,new THREE.OrthographicCamera(-1,1,1,-1,0,1));
+    renderer.readRenderTargetPixels(readbackTarget,2,2,1,1,floatPixel);
+    assert.ok(Math.abs(floatPixel[0]-128/255)<.001, 'data textures must keep their untransformed channel values');
+    colourTexture.dispose();
+    colourSampleMaterial.dispose();
+    builtinColourMaterial.dispose();
+    renderer.setRenderTarget(null);
+    readbackTarget.dispose();
+    const cmd = globalThis.__TN.cmd;
+    const originalRenderPass = cmd.renderPass;
+    const originalSubmitFrame = cmd.submitFrame;
+    const originalPipeline = process.env.THREEBROWSER_NATIVE_POST_PROCESSING;
+    const destinations = [];
+    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial());
+    const passCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    const passTarget = new THREE.WebGLRenderTarget(8, 8);
+    try {
+      process.env.THREEBROWSER_NATIVE_POST_PROCESSING = '1';
+      cmd.renderPass = (_scene, _camera, target) => destinations.push(target);
+      cmd.submitFrame = () => destinations.push(0);
+      renderer.setRenderTarget(passTarget);
+      renderer.render(quad, passCamera);
+      assert.deepEqual(destinations, [passTarget._h], 'a fullscreen mesh must preserve the bound offscreen destination');
+      destinations.length = 0;
+      renderer.render(quad, passCamera, null);
+      assert.deepEqual(destinations, [0], 'an explicit legacy null destination still means the window');
+      const originalProjection = cmd.cameraProjection;
+      const projectionCommands = [];
+      try {
+        cmd.cameraProjection = (_id, near, far, elements) => projectionCommands.push({near, far, elements:[...elements]});
+        passCamera.projectionMatrix.elements[8] = 0.375;
+        renderer.render(quad, passCamera);
+        assert.equal(projectionCommands.at(-1).elements[8], 0.375, 'direct projection edits must cross the native boundary');
+        const passCalls = [];
+        cmd.renderPass = (...args) => passCalls.push(args);
+        passTarget.viewport.set(2, 3, 4, 5);
+        passTarget.scissor.set(1, 2, 3, 4);
+        passTarget.scissorTest = true;
+        renderer.autoClear = false;
+        renderer.render(quad, passCamera);
+        assert.equal(passCalls.at(-1)[6] & 4, 0, 'an accumulating pass must preserve its target');
+        assert.deepEqual(passCalls.at(-1).slice(7,9).map(v => v.toArray()), [[2,3,4,5],[1,2,3,4]]);
+        assert.equal(passCalls.at(-1)[9], true);
+      } finally {
+        cmd.cameraProjection = originalProjection;
+        renderer.autoClear = true;
+      }
+      const uniformCommands = [];
+      const originalUniform = cmd.shaderUniform;
+      const direction = new THREE.Vector2(1, 0);
+      const blur = new THREE.ShaderMaterial({
+        uniforms: { direction: { value: direction }, weights: { value: [0.25, 0.75] }, tints: { value: [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0)] } },
+        vertexShader: 'void main() { gl_Position = vec4(position, 1.0); }',
+        fragmentShader: 'uniform vec2 direction; uniform float weights[2]; uniform vec3 tints[2]; void main() { gl_FragColor = vec4(direction, weights[0] + tints[0].r, 1.0); }',
+      });
+      quad.material = blur;
+      void blur._h;
+      try {
+        cmd.shaderUniform = (id, name, kind, values) => uniformCommands.push({name, values: [...values]});
+        renderer.render(quad, passCamera);
+        direction.set(0, 1);
+        blur.uniforms.weights.value[0] = 0.5;
+        blur.uniforms.tints.value[1].set(0, 0, 1);
+        renderer.render(quad, passCamera);
+        assert.ok(uniformCommands.some(c => c.name === 'direction' && c.values[0] === 0 && c.values[1] === 1),
+          'a later pass in the same animation frame must upload its changed vector uniform');
+        assert.ok(uniformCommands.some(c => c.name === 'weights' && c.values[0] === 0.5 && c.values[1] === 0.75));
+        assert.ok(uniformCommands.some(c => c.name === 'tints' && c.values.join(',') === '1,0,0,0,0,1'));
+      } finally {
+        cmd.shaderUniform = originalUniform;
+      }
+    } finally {
+      cmd.renderPass = originalRenderPass;
+      cmd.submitFrame = originalSubmitFrame;
+      if (originalPipeline === undefined) delete process.env.THREEBROWSER_NATIVE_POST_PROCESSING;
+      else process.env.THREEBROWSER_NATIVE_POST_PROCESSING = originalPipeline;
+      renderer.setRenderTarget(null);
+      passTarget.dispose();
+    }
     renderer.dispose();
 
     const interactions = await import("./html-interaction-bridge.mjs");

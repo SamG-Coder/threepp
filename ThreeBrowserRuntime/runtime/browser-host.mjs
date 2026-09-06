@@ -121,6 +121,8 @@ if (typeof globalThis.ProgressEvent === "undefined") {
 const pointerCaptureTargets = new Map();
 
 class Element extends BrowserEventTarget {
+  get value() { return this._value ?? ""; }
+  set value(value) { this._value = String(value ?? ""); }
   constructor(tagName) {
     super();
     this.tagName = String(tagName).toUpperCase();
@@ -149,6 +151,17 @@ class Element extends BrowserEventTarget {
     });
     this.dataset = {};
     this._attributes = new Map();
+    // React's document hydration retains this live collection while removing
+    // attributes from the html/head/body singleton elements.
+    this.attributes = new Proxy([], {
+      get: (_target, property) => {
+        const values = [...this._attributes].map(([name, value]) => ({ name, value, nodeName: name, nodeValue: value, ownerElement: this }));
+        if (property === "item") return index => values[index] ?? null;
+        if (property === "getNamedItem") return name => values.find(attribute => attribute.name === name) ?? null;
+        const result = Reflect.get(values, property);
+        return typeof result === "function" ? result.bind(values) : result;
+      },
+    });
     this.children = [];
     this.parentNode = null;
     this._textContent = "";
@@ -322,6 +335,14 @@ class Element extends BrowserEventTarget {
   setAttributeNS(_namespace, name, value) { this.setAttribute(name, value); }
   getAttribute(name) { return this._attributes.get(String(name).toLowerCase()) ?? null; }
   getAttributeNS(_namespace, name) { return this.getAttribute(name); }
+  getAttributeNames() { return [...this._attributes.keys()]; }
+  removeAttributeNode(attribute) {
+    if (attribute?.ownerElement !== this || !this.hasAttribute(attribute.name)) {
+      throw new DOMException("Attribute does not belong to this element", "NotFoundError");
+    }
+    this.removeAttribute(attribute.name);
+    return attribute;
+  }
   hasAttribute(name) { return this._attributes.has(String(name).toLowerCase()); }
   removeAttribute(name) {
     const normalized = String(name).toLowerCase();
@@ -2875,10 +2896,19 @@ function hostObject() {
     BackendName: () => native.backendName(),
     LastError: () => native.lastError(),
     CmdSubmit: used => submitNativeCommands(new Uint8Array(globalThis.__TN_SHARED, 0, used)),
+    ResizeCmdBuffer: required => {
+      if (!Number.isSafeInteger(required) || required < 1 || required > 256 * 1024 * 1024) {
+        throw new RangeError("Native command exceeds the 256 MiB command limit");
+      }
+      const capacity = Math.max(globalThis.__TN_SHARED.byteLength, 2 ** Math.ceil(Math.log2(required)));
+      globalThis.__TN_SHARED = new ArrayBuffer(capacity);
+      return globalThis.__TN_SHARED;
+    },
     CmdSubmitBuffer: submitNativeCommands,
     RendererSetToneMapping: (mode, exposure) => native.setToneMapping(mode, exposure),
-    ShaderMaterialCreate: (vertex, fragment) => native.shaderMaterialCreate(vertex, fragment),
+    ShaderMaterialCreate: (vertex, fragment, raw = 0) => native.shaderMaterialCreate(vertex, fragment, raw),
     ShaderMaterialSetSource: (material, vertex, fragment) => native.shaderMaterialSetSource(material, vertex, fragment),
+    MaterialShaderTemplate: type => native.materialShaderTemplate(type),
     ShaderUniformFloat: (material, name, value) => native.shaderUniformFloat(material, name, value),
     ShaderUniformInt: (material, name, value) => native.shaderUniformInt(material, name, value),
     ShaderUniformVec2: (material, name, x, y) => native.shaderUniformVec2(material, name, x, y),
@@ -2895,10 +2925,11 @@ function hostObject() {
       native.pmremFromSky(id, sunX, sunY, sunZ, turbidity, rayleigh, mieDirectionalG),
     PmremFromCubemap: (id, texture) => native.pmremFromCubemap(id, texture),
     PmremFromObject: (id, object) => native.pmremFromObject(id, object),
-    RenderTargetCreate: (id, width, height, samples, depthBuffer, stencilBuffer) =>
-      native.renderTargetCreate(id, width, height, samples, depthBuffer, stencilBuffer),
+    RenderTargetCreate: (id, width, height, samples, depthBuffer, stencilBuffer, count, type, format, minFilter, magFilter, depthTexture, generateMipmaps) =>
+      native.renderTargetCreate(id, width, height, samples, depthBuffer, stencilBuffer, count, type, format, minFilter, magFilter, depthTexture, generateMipmaps),
     RenderTargetSet: (id, activeCubeFace, activeMipmapLevel) =>
       native.renderTargetSet(id, activeCubeFace, activeMipmapLevel),
+    RenderTargetReadPixels: (id,x,y,width,height,buffer) => native.renderTargetReadPixels(id,x,y,width,height,buffer),
     RenderTargetResize: (id, width, height) => native.renderTargetResize(id, width, height),
     BoneCreate: () => native.boneCreate(),
     SkeletonCreate: csv => native.skeletonCreate(Uint32Array.from(String(csv).split(",").filter(Boolean).map(Number))),

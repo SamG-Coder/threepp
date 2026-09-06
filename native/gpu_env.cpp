@@ -555,31 +555,91 @@ uint32_t tn_cube_rt_create(uint32_t id, int size) {
     }
 }
 
+int tn_render_target_read_pixels(uint32_t id, int x, int y, int width, int height, void* data, int floatingPoint) {
+    if (!data || x < 0 || y < 0 || width <= 0 || height <= 0) return 0;
+    return onWorker([=] {
+        auto* slot = findSlot(id);
+        auto* renderer = dynamic_cast<GLRenderer*>(g.renderer.get());
+        if (!renderer || !slot || !slot->renderTarget) return 0;
+        auto& target = *slot->renderTarget;
+        if (static_cast<uint64_t>(x) + width > target.width || static_cast<uint64_t>(y) + height > target.height) return 0;
+        auto* previous = renderer->getRenderTarget();
+        renderer->setRenderTarget(&target);
+        renderer->readPixels(Vector2(x,y), {width,height}, Format::RGBA, data, floatingPoint ? Type::Float : Type::UnsignedByte);
+        renderer->setRenderTarget(previous);
+        return 1;
+    });
+}
+
 uint32_t tn_render_target_create(
         uint32_t id,
         int width,
         int height,
         int samples,
         int depthBuffer,
-        int stencilBuffer) {
+        int stencilBuffer,
+        int count,
+        int type,
+        int format,
+        int minFilter,
+        int magFilter,
+        uint32_t depthTextureId,
+        int generateMipmaps) {
+    if (std::getenv("THREEBROWSER_TRACE_RENDER")) logLine("RenderTargetCreate entered");
     try {
         return onWorker([=] {
+            if (std::getenv("THREEBROWSER_TRACE_RENDER")) {
+                logLine(("RenderTargetCreate id=" + std::to_string(id) +
+                         " size=" + std::to_string(width) + "x" + std::to_string(height) +
+                         " count=" + std::to_string(count) + " type=" + std::to_string(type)).c_str());
+            }
             RenderTarget::Options opts;
-            opts.generateMipmaps = false;
-            opts.minFilter = Filter::Linear;
-            opts.magFilter = Filter::Linear;
-            opts.format = Format::RGBA;
+            opts.generateMipmaps = generateMipmaps != 0;
+            opts.minFilter = static_cast<Filter>(std::clamp(minFilter, 1003, 1008));
+            opts.magFilter = static_cast<Filter>(magFilter == 1003 ? 1003 : 1006);
+            switch (format) {
+                case 1028: opts.format = Format::Red; break;
+                case 1030: opts.format = Format::RG; break;
+                case 1026: opts.format = Format::Depth; break;
+                case 1027: opts.format = Format::DepthStencil; break;
+                default: opts.format = Format::RGBA; break;
+            }
+            opts.type = static_cast<Type>(std::clamp(type, 1009, 1020));
             opts.samples = static_cast<unsigned int>(std::clamp(samples, 0, 16));
             opts.depthBuffer = depthBuffer != 0;
             opts.stencilBuffer = stencilBuffer != 0;
+            opts.count = static_cast<unsigned int>(std::clamp(count, 1, 8));
+            if (depthTextureId) {
+                opts.depthTexture = DepthTexture::create(
+                        stencilBuffer ? Type::UnsignedInt248 : Type::UnsignedInt,
+                        stencilBuffer ? Format::DepthStencil : Format::Depth);
+            }
             auto target = RenderTarget::create(
                     static_cast<unsigned int>(std::clamp(width, 1, 16384)),
                     static_cast<unsigned int>(std::clamp(height, 1, 16384)), opts);
+            if (std::getenv("THREEBROWSER_TRACE_RENDER")) logLine("RenderTargetCreate allocated");
             Slot slot;
             slot.kind = Kind::Texture;
             slot.texture = target->texture;
+            const auto attachments = target->textures;
             slot.renderTarget = std::move(target);
-            return id ? insertAt(id, std::move(slot)) : insert(std::move(slot));
+            const uint32_t handle = id ? insertAt(id, std::move(slot)) : insert(std::move(slot));
+            if (std::getenv("THREEBROWSER_TRACE_RENDER")) logLine("RenderTargetCreate inserted owner");
+            for (std::size_t index = 1; index < attachments.size(); ++index) {
+                Slot attachmentSlot;
+                attachmentSlot.kind = Kind::Texture;
+                attachmentSlot.texture = attachments[index];
+                if (id) insertAt(id + static_cast<uint32_t>(index), std::move(attachmentSlot));
+                else insert(std::move(attachmentSlot));
+            }
+            if (depthTextureId && slot.renderTarget == nullptr) {
+                Slot depthSlot;
+                depthSlot.kind = Kind::Texture;
+                depthSlot.texture = getSlot(handle)->renderTarget->depthTexture;
+                insertAt(depthTextureId, std::move(depthSlot));
+            }
+            if (std::getenv("THREEBROWSER_TRACE_RENDER")) logLine("RenderTargetCreate inserted attachments");
+            return handle;
         });
     } catch (const std::exception& ex) {
         setError(ex.what());

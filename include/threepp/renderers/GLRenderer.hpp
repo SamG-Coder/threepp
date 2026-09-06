@@ -131,6 +131,7 @@ namespace threepp {
         void copyFramebufferToTexture(const Vector2& position, Texture& texture, int level = 0) override;
 
         void readPixels(const Vector2& position, const std::pair<int, int>& size, Format format, unsigned char* data);
+        void readPixels(const Vector2& position, const std::pair<int, int>& size, Format format, void* data, Type type);
 
         // Experimental threepp function
         void copyTextureToImage(Texture& texture) override;

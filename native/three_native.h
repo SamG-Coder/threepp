@@ -153,8 +153,10 @@ TN_API uint32_t tn_cube_rt_create(uint32_t id, int size);
 TN_API void tn_cube_rt_update(
     uint32_t cubeRt, uint32_t scene, float x, float y, float z, float near_plane, float far_plane);
 TN_API uint32_t tn_render_target_create(
-    uint32_t id, int width, int height, int samples, int depth_buffer, int stencil_buffer);
+    uint32_t id, int width, int height, int samples, int depth_buffer, int stencil_buffer,
+    int count, int type, int format, int min_filter, int mag_filter, uint32_t depth_texture_id, int generate_mipmaps);
 TN_API int tn_render_target_set(uint32_t id, int active_cube_face, int active_mipmap_level);
+TN_API int tn_render_target_read_pixels(uint32_t id, int x, int y, int width, int height, void* data, int floating_point);
 TN_API void tn_render_target_resize(uint32_t id, int width, int height);
 
 TN_API uint32_t tn_axes_helper_create(float size);
@@ -180,7 +182,7 @@ TN_API uint32_t tn_lod_create(void);
 TN_API int tn_lod_add_level(uint32_t lod, uint32_t object, float distance);
 TN_API void tn_lod_update(uint32_t lod, uint32_t camera);
 
-TN_API uint32_t tn_shader_material_create(const char* vertex_src, const char* fragment_src);
+TN_API uint32_t tn_shader_material_create(const char* vertex_src, const char* fragment_src, int raw);
 TN_API void tn_shader_material_set_source(uint32_t material, const char* vertex_src, const char* fragment_src);
 TN_API void tn_shader_uniform_float(uint32_t material, const char* name, float v);
 TN_API void tn_shader_uniform_int(uint32_t material, const char* name, int v);

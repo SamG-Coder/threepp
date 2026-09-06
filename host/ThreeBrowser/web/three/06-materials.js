@@ -230,6 +230,12 @@
       defineLines.push(value === true || value === "" ? `#define ${name}` : `#define ${name} ${value}`);
     }
     const expanded = expandShaderChunks(source || "");
+    if (/\bsRGBTransferOETF\s*\(/.test(expanded) && !/vec4\s+sRGBTransferOETF\s*\(/.test(expanded)) {
+      defineLines.push("vec4 sRGBTransferOETF(vec4 value) { return vec4(mix(1.055 * pow(max(value.rgb, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055, value.rgb * 12.92, vec3(lessThanEqual(value.rgb, vec3(0.0031308)))), value.a); }");
+    }
+    if (/\bluminance\s*\(/.test(expanded) && !/float\s+luminance\s*\(/.test(expanded)) {
+      defineLines.push("float luminance(vec3 value) { return dot(value, vec3(0.2126, 0.7152, 0.0722)); }");
+    }
     // CSM shader generators declare _shadowN only inside the corresponding
     // native shadow loop, but may use it later for ramp lighting. A renderer
     // with no native shadow pass still needs the browser's unshadowed value.
@@ -267,9 +273,16 @@
   }
 
   function shaderUniformType(mat, name) {
-    const source = `${mat?.vertexShader || ""}\n${mat?.fragmentShader || ""}`;
-    const escaped = String(name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return source.match(new RegExp(`\\buniform\\s+(bool|int|float|mat3|mat4)\\s+${escaped}\\b`))?.[1] || "";
+    if (!mat) return "";
+    let schema = mat._nativeUniformSchema;
+    if (!schema || schema.vertex !== mat.vertexShader || schema.fragment !== mat.fragmentShader) {
+      schema = {vertex:mat.vertexShader, fragment:mat.fragmentShader, types:new Map()};
+      for (const source of [mat.vertexShader || "", mat.fragmentShader || ""]) {
+        for (const match of source.matchAll(/\buniform\s+(bool|int|float|vec2|vec3|vec4|mat3|mat4)\s+(\w+)\b/g)) schema.types.set(match[2],match[1]);
+      }
+      mat._nativeUniformSchema = schema;
+    }
+    return schema.types.get(name) || "";
   }
 
   function pushShaderUniform(n, handle, name, value, mat) {
@@ -289,8 +302,14 @@
         TN._ensureTextureNative(value);
       }
       const elements = value?.elements;
+      const arrayValue = Array.isArray(value) || ArrayBuffer.isView(value)
+        ? Array.from(value).flatMap(v => typeof v === "number" ? [v] : v?.elements ? Array.from(v.elements) :
+            v?.isColor ? [v.r, v.g, v.b] : typeof v?.w === "number" ? [v.x, v.y, v.z, v.w] :
+            typeof v?.z === "number" ? [v.x, v.y, v.z] : typeof v?.y === "number" ? [v.x, v.y] : [])
+        : null;
       const signature = isTexture
         ? `t:${value._h || 0}`
+        : arrayValue ? `a:${arrayValue.join(",")}`
         : elements && (elements.length === 9 || elements.length === 16)
           ? `m:${Array.from(elements).join(",")}`
         : typeof value === "object"
@@ -305,6 +324,32 @@
       }
       if (shaderUniformCache.get(cacheKey) === signature) return;
       shaderUniformCache.set(cacheKey, signature);
+      // Keep changing scalar/vector/matrix uniforms in the same ordered
+      // command batch as texture bindings and draws. A synchronous worker
+      // round trip for every tide/wind uniform stalls the application thread.
+      if (!isTexture && TN.cmd?.shaderUniform) {
+        let kind = 0, values;
+        if (arrayValue?.length) {
+          const type = shaderUniformType(mat, name);
+          kind = {float:8, vec2:9, vec3:10, vec4:8, mat3:11, mat4:12}[type] || 0;
+          values = arrayValue;
+        } else if (typeof value === "boolean") { kind = 2; values = [value ? 1 : 0]; }
+        else if (typeof value === "number" && Number.isFinite(value)) {
+          kind = /^(int|bool)$/.test(shaderUniformType(mat, name)) ? 2 : 1;
+          values = [value];
+        } else if (elements?.length === 9 || elements?.length === 16) {
+          kind = elements.length === 9 ? 6 : 7; values = elements;
+        } else if (value?.isColor || typeof value?.r === "number") {
+          kind = 4; values = [value.r, value.g, value.b];
+        } else if (typeof value?.w === "number") {
+          kind = 5; values = [value.x, value.y, value.z, value.w];
+        } else if (typeof value?.z === "number") {
+          kind = 4; values = [value.x, value.y, value.z];
+        } else if (typeof value?.x === "number") {
+          kind = 3; values = [value.x, value.y];
+        }
+        if (kind) { TN.cmd.shaderUniform(handle, name, kind, values); return; }
+      }
       if (typeof value === "boolean") {
         if (n.ShaderUniformInt) n.ShaderUniformInt(handle, name, value ? 1 : 0);
         else if (n.ShaderUniformFloat) n.ShaderUniformFloat(handle, name, value ? 1 : 0);
@@ -547,7 +592,8 @@
         if (TN.hostHas?.(n, "ShaderMaterialCreate")) {
           handle = n.ShaderMaterialCreate(
             nativeShaderSource(mat, mat.vertexShader),
-            nativeShaderSource(mat, mat.fragmentShader)
+            nativeShaderSource(mat, mat.fragmentShader),
+            mat.isRawShaderMaterial ? 1 : 0
           );
           mat._nativeDefinesSignature = shaderDefinesSignature(mat);
           absorbNativeId(handle);
@@ -627,6 +673,7 @@
     mat.wireframeLinejoin = "round";
   }
 
+  function defaultOnBeforeCompile() {}
   class Material extends Super {
     constructor() {
       super();
@@ -675,7 +722,15 @@
       this.blendSrcAlpha = null;
       this.blendDstAlpha = null;
       this.blendEquationAlpha = null;
-      this.vertexColors = false;
+      let vertexColors = false;
+      Object.defineProperty(this, "vertexColors", {
+        enumerable: true, configurable: true,
+        get: () => vertexColors,
+        set: value => {
+          vertexColors = Boolean(value);
+          if (this.__h && TN.cmd?.matVertexColors) TN.cmd.matVertexColors(this.__h, vertexColors);
+        },
+      });
       // Material itself has no color property in stock Three.js. Most native
       // material subclasses still rely on this shared default, but external
       // subclasses such as LineMaterial define a prototype color accessor that
@@ -715,7 +770,7 @@
       this.version = 0;
       this._nativeKind = null;
       this._nativePbr = null;
-      this.onBeforeCompile = function onBeforeCompile() {};
+      this.onBeforeCompile = defaultOnBeforeCompile;
     }
 
     onBeforeRender() {}
@@ -866,15 +921,87 @@
       }
     }
 
-    flushNative() {
+    flushNative(renderer) {
+      const renderState = `${this.blending}:${this.depthTest}:${this.premultipliedAlpha}`;
+      if (this._nativeRenderState !== renderState && TN.cmd?.matRenderState) {
+        TN.cmd.matRenderState(this._h, this.blending, this.depthTest !== false, !!this.premultipliedAlpha);
+        this._nativeRenderState = renderState;
+      }
+      if (this._nativeKind !== "shader" && this.onBeforeCompile !== defaultOnBeforeCompile && TN.hostHas(native(), "MaterialShaderTemplate")) {
+        const key = this.customProgramCacheKey();
+        if (this._nativeHookKey !== key) {
+          const type = this.isMeshStandardMaterial ? "standard" : this.isMeshLambertMaterial ? "lambert" :
+            this.isMeshPhongMaterial ? "phong" : this.isMeshDepthMaterial ? "depth" : "basic";
+          const shader = { ...native().MaterialShaderTemplate(type), uniforms: {} };
+          this.onBeforeCompile(shader, renderer);
+          // Bridge newer public chunk symbols to the native built-in shader
+          // library without embedding any application's shader bodies.
+          shader.fragmentShader = `
+#if defined(TANGENTSPACE_NORMALMAP) && !defined(USE_NORMALMAP_TANGENTSPACE)
+#define USE_NORMALMAP_TANGENTSPACE
+#endif
+#if defined(OBJECTSPACE_NORMALMAP) && !defined(USE_NORMALMAP_OBJECTSPACE)
+#define USE_NORMALMAP_OBJECTSPACE
+#endif
+${shader.fragmentShader}`;
+          if (/\bgetTangentFrame\s*\(/.test(shader.fragmentShader) && !/mat3\s+getTangentFrame\s*\(/.test(shader.fragmentShader)) {
+            // Derivative cotangent frame: the modern public normal-map helper
+            // accepts explicit UVs instead of the legacy chunk's fixed vUv.
+            shader.fragmentShader = `
+mat3 getTangentFrame(vec3 eyePosition, vec3 surfaceNormal, vec2 uv) {
+  vec3 dx = dFdx(eyePosition), dy = dFdy(eyePosition);
+  vec2 uvDx = dFdx(uv), uvDy = dFdy(uv);
+  vec3 acrossY = cross(dy, surfaceNormal), acrossX = cross(surfaceNormal, dx);
+  vec3 tangent = acrossY * uvDx.x + acrossX * uvDy.x;
+  vec3 bitangent = acrossY * uvDx.y + acrossX * uvDy.y;
+  float lengthSquared = max(dot(tangent, tangent), dot(bitangent, bitangent));
+  float scale = lengthSquared > 0.0 ? inversesqrt(lengthSquared) : 0.0;
+  return mat3(tangent * scale, bitangent * scale, surfaceNormal);
+}
+${shader.fragmentShader}`;
+          }
+          if (/\bgetIBLIrradiance\s*\(/.test(shader.fragmentShader) && !/\bvec3\s+getLightProbeIndirectIrradiance\s*\(/.test(shader.fragmentShader)) {
+            const aliases = `
+#if defined(USE_ENVMAP)
+vec3 getLightProbeIndirectIrradiance(const in GeometricContext geometry, const in int level) { return getIBLIrradiance(geometry.normal); }
+vec3 getLightProbeIndirectRadiance(const in vec3 viewDir, const in vec3 normal, const in float roughness, const in int level) { return getIBLRadiance(viewDir, normal, roughness); }
+#endif
+`;
+            shader.fragmentShader = shader.fragmentShader.replace(/void\s+main\s*\(/, `${aliases}\nvoid main(`);
+          }
+          if (/\benvMapRotation\b/.test(shader.fragmentShader) && !/uniform\s+mat3\s+envMapRotation\b/.test(shader.fragmentShader)) {
+            shader.fragmentShader = `uniform mat3 envMapRotation;\n${shader.fragmentShader}`;
+            shader.uniforms.envMapRotation = { value: new TN.Matrix3() };
+          }
+          if (/\bnonPerturbedNormal\b/.test(shader.fragmentShader) && !/vec3\s+nonPerturbedNormal\b/.test(shader.fragmentShader)) {
+            shader.fragmentShader = shader.fragmentShader.replace("#include <normal_fragment_begin>", "#include <normal_fragment_begin>\nvec3 nonPerturbedNormal = normal;");
+          }
+          TN.cmd?.submit();
+          native().ShaderMaterialSetSource(this._h, shader.vertexShader, shader.fragmentShader);
+          this._nativeHookShader = shader;
+          this._nativeHookKey = key;
+        }
+        if (this._nativeHookShader && nativeShouldFlushShader(this, TN._renderFrame || 0, false)) {
+          if (this._nativeHookShader.uniforms.envMapRotation && renderer?._nativeCurrentScene?.environmentRotation) {
+            const matrix = new TN.Matrix4().makeRotationFromEuler(renderer._nativeCurrentScene.environmentRotation);
+            this._nativeHookShader.uniforms.envMapRotation.value.setFromMatrix4(matrix);
+          }
+          for (const [name, entry] of Object.entries(this._nativeHookShader.uniforms)) {
+            pushShaderUniform(native(), this._h, name, uniformRawValue(entry), this._nativeHookShader);
+          }
+        }
+      }
       if (this._nativeKind === "shader") {
         // Three.js applications commonly mutate material.defines directly and
         // only set needsUpdate afterwards. Compare the effective preprocessor
         // state at render time so native ShaderMaterial follows those changes.
         const definesChanged = !!this.__h &&
           this._nativeDefinesSignature !== shaderDefinesSignature(this);
-        const displayFrame = globalThis.__threeBrowserDisplayFrame || 0;
-        if (!nativeShouldFlushShader(this, displayFrame, definesChanged)) return;
+        // A material can be reused with different inputs by multiple passes
+        // within one animation frame (for example horizontal/vertical blur).
+        // Compare values for each render call; the uniform cache still avoids
+        // sending unchanged values across the native boundary.
+        if (!nativeShouldFlushShader(this, TN._renderFrame || 0, definesChanged)) return;
         if (definesChanged) {
           pushShaderSource(this);
         }
@@ -886,6 +1013,10 @@
   Object.defineProperty(Material.prototype, "_h", {
     get() {
       if (!this.__bound) bindNative(this);
+      if (this.__h && this._nativeVertexColors !== this.vertexColors && TN.cmd?.matVertexColors) {
+        TN.cmd.matVertexColors(this.__h, this.vertexColors);
+        this._nativeVertexColors = this.vertexColors;
+      }
       return this.__h || 0;
     },
     set(value) {

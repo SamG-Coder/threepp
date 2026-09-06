@@ -10,6 +10,8 @@
     CLEAR_COLOR: 3,
     RENDER_PASS: 4,
     RENDER_COMPOSITE: 5,
+    CLEAR_TARGET: 6,
+    SHADOW_STATE: 7,
     SCENE_CREATE: 10,
     SCENE_BG: 11,
     SCENE_FOG: 12,
@@ -19,6 +21,7 @@
     ORTHO_UPDATE: 22,
     CAM_ASPECT: 23,
     CAM_UPD_PROJ: 24,
+    CAM_PROJECTION: 25,
     BUF_GEO: 30,
     BOX_GEO: 31,
     BUF_ATTR: 32,
@@ -45,6 +48,9 @@
     MAT_COLOR: 54,
     MAT_NORMAL_SCALE: 55,
     SHADER_TEX: 56,
+    MAT_VERTEX_COLORS: 57,
+    SHADER_UNIFORM: 58,
+    MAT_RENDER_STATE: 59,
     MESH: 60,
     GROUP: 61,
     INSTANCED: 62,
@@ -64,11 +70,15 @@
     OBJECT_REMOVE: 85,
     SLOT_DESTROY: 86,
     SET_POSE_QUAT: 87,
+    OBJECT_FLAGS: 88,
     LIGHT_AMBIENT: 90,
     LIGHT_DIR: 91,
     LIGHT_HEMI: 92,
     LIGHT_POINT: 93,
     LIGHT_SPOT: 94,
+    LIGHT_STATE: 95,
+    LIGHT_SHADOW: 96,
+    SHADOW_TEXTURE: 97,
     INST_MATRIX: 100,
     INST_COLOR: 101,
     INST_COUNT: 102,
@@ -222,6 +232,9 @@
     bytes = align8(bytes);
     if (off + bytes <= ab.byteLength) return;
     submitNow();
+    if (off === 0 && bytes > ab.byteLength && TN.hostHas(host(), "ResizeCmdBuffer")) {
+      attach(host().ResizeCmdBuffer(bytes));
+    }
     if (off + bytes > ab.byteLength) {
       throw new Error("ThreeBrowser cmd buffer overflow");
     }
@@ -410,8 +423,8 @@
     render(scene, camera) {
       appendRender(scene, camera);
     },
-    renderPass(scene, camera, target, overrideMaterial = 0, face = 0, mip = 0, flags = 0) {
-      const s = begin(OP.RENDER_PASS, 28);
+    renderPass(scene, camera, target, overrideMaterial = 0, face = 0, mip = 0, flags = 0, viewport, scissor, scissorTest = false) {
+      const s = begin(OP.RENDER_PASS, viewport && scissor ? 64 : 28);
       wu32(scene);
       wu32(camera);
       wu32(target);
@@ -419,6 +432,44 @@
       wu32(face);
       wu32(mip);
       wu32(flags);
+      if (viewport && scissor) {
+        for (const rect of [viewport, scissor]) { wf32(rect.x); wf32(rect.y); wf32(rect.z); wf32(rect.w); }
+        wu32(scissorTest ? 1 : 0);
+      }
+      end(s);
+    },
+    cameraProjection(id, near, far, elements) {
+      const s = begin(OP.CAM_PROJECTION, 76);
+      wu32(id); wf32(near); wf32(far);
+      for (let i = 0; i < 16; ++i) wf32(elements[i]);
+      end(s);
+    },
+    clearTarget(target, flags, face = 0, mip = 0) {
+      const s = begin(OP.CLEAR_TARGET, 16);
+      wu32(target); wu32(flags); wu32(face); wu32(mip);
+      end(s);
+    },
+    lightState(id, color, intensity, groundColor, target) {
+      const s = begin(OP.LIGHT_STATE, 44);
+      wu32(id);
+      for (const v of [color.r,color.g,color.b,intensity,groundColor?.r || 0,groundColor?.g || 0,groundColor?.b || 0,target?.x || 0,target?.y || 0,target?.z || 0]) wf32(v);
+      end(s);
+    },
+    objectFlags(id, cast, receive, layers) {
+      const s=begin(OP.OBJECT_FLAGS,12); wu32(id); wu32((cast?1:0)|(receive?2:0)); wu32(layers); end(s);
+    },
+    shadowState(shadow) {
+      const s=begin(OP.SHADOW_STATE,8); wu32((shadow.enabled?1:0)|(shadow.autoUpdate?2:0)|(shadow.needsUpdate?4:0)); wu32(shadow.type); end(s);
+    },
+    lightShadow(id, shadow) {
+      const s=begin(OP.LIGHT_SHADOW,100); wu32(id); wu32((shadow.autoUpdate?1:0)|(shadow.needsUpdate?2:0));
+      for(const v of [shadow.mapSize.x,shadow.mapSize.y,shadow.bias,shadow.normalBias,shadow.radius,shadow.camera.near,shadow.camera.far,...shadow.camera.projectionMatrix.elements]) wf32(v);
+      end(s);
+    },
+    shadowTexture(id, texture) { const s=begin(OP.SHADOW_TEXTURE,8); wu32(id); wu32(texture); end(s); },
+    matRenderState(id, blending, depthTest, premultipliedAlpha) {
+      const s = begin(OP.MAT_RENDER_STATE, 12);
+      wu32(id); wu32(blending); wu32((depthTest ? 1 : 0) | (premultipliedAlpha ? 2 : 0));
       end(s);
     },
     setSize(w, h) {
@@ -927,6 +978,25 @@
       wf32(sx);
       wf32(sy);
       wf32(sz);
+      end(s);
+    },
+    shaderUniform(id, name, kind, values) {
+      const bytes = new TextEncoder().encode(String(name || ""));
+      if (!id || !bytes.length || bytes.length > 4096) return;
+      const nameSize = (bytes.length + 3) & ~3;
+      const s = begin(OP.SHADER_UNIFORM, 16 + nameSize + values.length * 4);
+      wu32(id); wu32(kind); wu32(bytes.length); wu32(values.length);
+      copyBytes(bytes);
+      off += nameSize - bytes.length;
+      for (const value of values) {
+        if (kind === 2) wu32(value); else wf32(value);
+      }
+      end(s);
+    },
+    matVertexColors(id, enabled) {
+      const s = begin(OP.MAT_VERTEX_COLORS, 8);
+      wu32(id);
+      wu32(enabled ? 1 : 0);
       end(s);
     },
     setPoseQuat(id, px, py, pz, qx, qy, qz, qw, sx, sy, sz) {

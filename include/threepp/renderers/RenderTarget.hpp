@@ -11,6 +11,7 @@
 #include "threepp/textures/DepthTexture.hpp"
 
 #include <optional>
+#include <vector>
 
 namespace threepp {
 
@@ -41,6 +42,10 @@ namespace threepp {
             // GL_MAX_SAMPLES.
             unsigned int samples{0};
 
+            // Number of color attachments. Three.js calls this `count` and
+            // exposes the attachments through RenderTarget::textures.
+            unsigned int count{1};
+
             std::shared_ptr<DepthTexture> depthTexture;
 
             Options() = default;
@@ -58,6 +63,7 @@ namespace threepp {
         Vector4 viewport;
 
         std::shared_ptr<Texture> texture;
+        std::vector<std::shared_ptr<Texture>> textures;
 
         bool depthBuffer;
         bool stencilBuffer;

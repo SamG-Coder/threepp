@@ -3,6 +3,8 @@
 #include "runtime_internal.hpp"
 
 #include "threepp/math/Matrix4.hpp"
+#include "threepp/math/Matrix3.hpp"
+#include "threepp/math/Vector4.hpp"
 #include "threepp/math/Vector2.hpp"
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/LineLoop.hpp"
@@ -16,6 +18,7 @@
 #include "threepp/textures/Texture.hpp"
 #include "threepp/textures/CubeTexture.hpp"
 #include "threepp/textures/DataTexture.hpp"
+#include "threepp/renderers/gl/GLShadowMap.hpp"
 
 #include <algorithm>
 #include <array>
@@ -310,6 +313,18 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             insertObject(ru32(p), Kind::Scene, scene);
             return;
         }
+        case tn::cmd::OP_CLEAR_TARGET: {
+            if (!has(p, end, 16)) return;
+            auto* gl = dynamic_cast<GLRenderer*>(g.renderer.get());
+            auto* target = findSlot(ru32(p));
+            if (!gl || !target || !target->renderTarget) return;
+            auto* previous = gl->getRenderTarget();
+            gl->setRenderTarget(target->renderTarget.get(), static_cast<int>(ru32(p + 8)), static_cast<int>(ru32(p + 12)));
+            const auto flags = ru32(p + 4);
+            gl->clear((flags & 1u) != 0, (flags & 2u) != 0, (flags & 4u) != 0);
+            gl->setRenderTarget(previous);
+            return;
+        }
         case tn::cmd::OP_RENDER_PASS: {
             if (!has(p, end, 28)) return;
             Slot* sceneSlot = getSlot(ru32(p));
@@ -320,6 +335,11 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             auto* scene = sceneSlot ? dynamic_cast<Scene*>(sceneSlot->object.get()) : nullptr;
             auto* camera = cameraSlot ? dynamic_cast<Camera*>(cameraSlot->object.get()) : nullptr;
             if (!gl || !scene || !camera || !targetSlot || !targetSlot->renderTarget) return;
+            if (std::getenv("THREEBROWSER_TRACE_RENDER")) {
+                logLine(("RenderPass begin scene=" + std::to_string(ru32(p)) +
+                         " camera=" + std::to_string(ru32(p + 4)) +
+                         " target=" + std::to_string(ru32(p + 8))).c_str());
+            }
 
             auto previousOverride = scene->overrideMaterial;
             const uint32_t flags = ru32(p + 24);
@@ -331,11 +351,32 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
                 scene->overrideMaterial = overrideSlot->material;
             }
             auto* previousTarget = gl->getRenderTarget();
+            if (has(p, end, 64)) {
+                targetSlot->renderTarget->viewport.set(rf32(p + 28), rf32(p + 32), rf32(p + 36), rf32(p + 40));
+                targetSlot->renderTarget->scissor.set(rf32(p + 44), rf32(p + 48), rf32(p + 52), rf32(p + 56));
+                targetSlot->renderTarget->scissorTest = ru32(p + 60) != 0;
+            }
+            const bool previousAutoClear = gl->autoClear;
+            const bool previousColor = gl->autoClearColor;
+            const bool previousDepth = gl->autoClearDepth;
+            const bool previousStencil = gl->autoClearStencil;
+            if ((flags & 2u) != 0u) {
+                gl->autoClear = (flags & 4u) != 0u;
+                gl->autoClearColor = (flags & 8u) != 0u;
+                gl->autoClearDepth = (flags & 16u) != 0u;
+                gl->autoClearStencil = (flags & 32u) != 0u;
+            }
             gl->setRenderTarget(targetSlot->renderTarget.get(),
                                 static_cast<int>(ru32(p + 16)),
                                 static_cast<int>(ru32(p + 20)));
+            if (std::getenv("THREEBROWSER_TRACE_RENDER")) logLine("RenderPass target set");
             gl->render(*scene, *camera);
+            if (std::getenv("THREEBROWSER_TRACE_RENDER")) logLine("RenderPass rendered");
             gl->setRenderTarget(previousTarget);
+            gl->autoClear = previousAutoClear;
+            gl->autoClearColor = previousColor;
+            gl->autoClearDepth = previousDepth;
+            gl->autoClearStencil = previousStencil;
             scene->overrideMaterial = std::move(previousOverride);
             return;
         }
@@ -406,6 +447,18 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
                 cam->aspect = rf32(p + 4);
                 cam->updateProjectionMatrix();
             }
+            return;
+        }
+        case tn::cmd::OP_CAM_PROJECTION: {
+            if (!has(p, end, 76)) return;
+            auto* camera = dynamic_cast<Camera*>(findObject(ru32(p)));
+            if (!camera) return;
+            std::array<float, 16> values{};
+            for (size_t i = 0; i < 16; ++i) values[i] = rf32(p + 12 + i * 4);
+            camera->nearPlane = rf32(p + 4);
+            camera->farPlane = rf32(p + 8);
+            camera->projectionMatrix.fromArray(values);
+            camera->projectionMatrixInverse.copy(camera->projectionMatrix).invert();
             return;
         }
         case tn::cmd::OP_CAM_UPD_PROJ: {
@@ -683,6 +736,17 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             insertMaterial(ru32(p), MeshNormalMaterial::create());
             return;
         }
+        case tn::cmd::OP_MAT_RENDER_STATE: {
+            if (!has(p, end, 12)) return;
+            auto* slot = findSlot(ru32(p));
+            const auto blending = ru32(p + 4), flags = ru32(p + 8);
+            if (!slot || !slot->material || blending > 5u) return;
+            slot->material->blending = static_cast<Blending>(blending);
+            slot->material->depthTest = (flags & 1u) != 0u;
+            slot->material->premultipliedAlpha = (flags & 2u) != 0u;
+            slot->material->needsUpdate();
+            return;
+        }
         case tn::cmd::OP_MAT_ALPHA: {
             if (!has(p, end, 16)) return;
             Slot* slot = findSlot(ru32(p));
@@ -767,7 +831,8 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             Slot* textureSlot = getSlot(textureId);
             if (!materialSlot || !materialSlot->material || !textureSlot || !textureSlot->texture) return;
             auto* shader = materialSlot->material->as<ShaderMaterial>();
-            if (!shader) return;
+            auto* uniforms = shader ? &shader->uniforms : materialSlot->material->shaderOverride ? &materialSlot->material->shaderOverride->uniforms : nullptr;
+            if (!uniforms) return;
             const std::string name(reinterpret_cast<const char*>(p + 12), nameLength);
             if (std::getenv("THREEBROWSER_NATIVE_TERRAIN_TRACE") && name == "tMasks") {
                 std::cerr << "terrain native sampler material=" << materialId
@@ -780,8 +845,8 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             if (retained == materialSlot->shaderTextures.end()) {
                 materialSlot->shaderTextures.push_back(textureSlot->texture);
             }
-            shader->uniforms[name].setValue(textureSlot->texture.get());
-            shader->uniformsNeedUpdate = true;
+            (*uniforms)[name].setValue(textureSlot->texture.get());
+            if (shader) shader->uniformsNeedUpdate = true;
             markDirty();
             return;
         }
@@ -962,6 +1027,78 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             object->scale.set(rf32(p + 28), rf32(p + 32), rf32(p + 36));
             return;
         }
+        case tn::cmd::OP_SHADER_UNIFORM: {
+            if (!has(p, end, 16)) return;
+            const auto kind = ru32(p + 4), nameLength = ru32(p + 8), count = ru32(p + 12);
+            if (!nameLength || nameLength > 4096 || count > 1048576) return;
+            const auto nameSize = (nameLength + 3u) & ~3u;
+            if (!has(p + 16, end, nameSize + count * 4u)) return;
+            Slot* slot = getSlot(ru32(p));
+            if (!slot || !slot->material) return;
+            auto* shader = slot->material->as<ShaderMaterial>();
+            auto* uniforms = shader ? &shader->uniforms : slot->material->shaderOverride ? &slot->material->shaderOverride->uniforms : nullptr;
+            if (!uniforms) return;
+            const std::string name(reinterpret_cast<const char*>(p + 16), nameLength);
+            const auto* data = p + 16 + nameSize;
+            auto& uniform = (*uniforms)[name];
+            if (kind == 1 && count == 1) uniform.setValue(rf32(data));
+            else if (kind == 2 && count == 1) uniform.setValue(static_cast<int32_t>(ru32(data)));
+            else if (kind == 3 && count == 2) uniform.setValue(Vector2(rf32(data), rf32(data + 4)));
+            else if (kind == 4 && count == 3) uniform.setValue(Vector3(rf32(data), rf32(data + 4), rf32(data + 8)));
+            else if (kind == 5 && count == 4) uniform.setValue(Vector4(rf32(data), rf32(data + 4), rf32(data + 8), rf32(data + 12)));
+            else if (kind == 6 && count == 9) {
+                std::array<float, 9> values{};
+                for (size_t i = 0; i < values.size(); ++i) values[i] = rf32(data + i * 4);
+                Matrix3 matrix; matrix.fromArray(values); uniform.setValue(matrix);
+            } else if (kind == 7 && count == 16) {
+                std::array<float, 16> values{};
+                for (size_t i = 0; i < values.size(); ++i) values[i] = rf32(data + i * 4);
+                Matrix4 matrix; matrix.fromArray(values); uniform.setValue(matrix);
+            } else if (kind == 8) {
+                std::vector<float> values(count);
+                for (size_t i = 0; i < count; ++i) values[i] = rf32(data + i * 4);
+                uniform.setValue(std::move(values));
+            } else if (kind == 9 && count % 2 == 0) {
+                std::vector<Vector2> values;
+                for (size_t i = 0; i < count; i += 2) values.emplace_back(rf32(data + i * 4), rf32(data + (i + 1) * 4));
+                uniform.setValue(std::move(values));
+            } else if (kind == 10 && count % 3 == 0) {
+                std::vector<Vector3> values;
+                for (size_t i = 0; i < count; i += 3) values.emplace_back(rf32(data + i * 4), rf32(data + (i + 1) * 4), rf32(data + (i + 2) * 4));
+                uniform.setValue(std::move(values));
+            } else if (kind == 11 && count % 9 == 0) {
+                std::vector<Matrix3> values(count / 9);
+                for (size_t i = 0; i < values.size(); ++i) {
+                    std::array<float, 9> v{};
+                    for (size_t j = 0; j < 9; ++j) v[j] = rf32(data + (i * 9 + j) * 4);
+                    values[i].fromArray(v);
+                }
+                uniform.setValue(std::move(values));
+            } else if (kind == 12 && count % 16 == 0) {
+                std::vector<Matrix4> values(count / 16);
+                for (size_t i = 0; i < values.size(); ++i) {
+                    std::array<float, 16> v{};
+                    for (size_t j = 0; j < 16; ++j) v[j] = rf32(data + (i * 16 + j) * 4);
+                    values[i].fromArray(v);
+                }
+                uniform.setValue(std::move(values));
+            } else return;
+            if (shader) shader->uniformsNeedUpdate = true;
+            markDirty();
+            return;
+        }
+        case tn::cmd::OP_MAT_VERTEX_COLORS: {
+            if (!has(p, end, 8)) return;
+            Slot* slot = getSlot(ru32(p));
+            if (!slot || !slot->material) return;
+            const bool enabled = ru32(p + 4) != 0;
+            if (slot->material->vertexColors != enabled) {
+                slot->material->vertexColors = enabled;
+                slot->material->needsUpdate();
+                markDirty();
+            }
+            return;
+        }
         case tn::cmd::OP_SET_POSE_QUAT: {
             if (!has(p, end, 44)) return;
             Object3D* object = findObject(ru32(p));
@@ -996,6 +1133,56 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             if (!has(p, end, 12)) return;
             insertObject(ru32(p), Kind::Object,
                     AmbientLight::create(Color(ru32(p + 4)), rf32(p + 8)));
+            return;
+        }
+        case tn::cmd::OP_OBJECT_FLAGS: {
+            if (!has(p,end,12)) return;
+            auto* object=findObject(ru32(p)); if(!object) return;
+            const auto flags=ru32(p+4),mask=ru32(p+8);
+            object->castShadow=(flags&1u)!=0; object->receiveShadow=(flags&2u)!=0;
+            object->layers.disableAll();
+            for(unsigned int i=0;i<32;++i) if(mask&(1u<<i)) object->layers.enable(i);
+            return;
+        }
+        case tn::cmd::OP_SHADOW_STATE: {
+            if(!has(p,end,8)||!g.renderer) return;
+            auto& shadow=g.renderer->shadowMap(); const auto flags=ru32(p);
+            shadow.enabled=(flags&1u)!=0; shadow.autoUpdate=(flags&2u)!=0; shadow.needsUpdate=(flags&4u)!=0;
+            shadow.type=static_cast<ShadowMap>(std::min(3u,ru32(p+4))); return;
+        }
+        case tn::cmd::OP_LIGHT_SHADOW: {
+            if(!has(p,end,100)) return;
+            auto* light=dynamic_cast<LightWithShadow*>(findObject(ru32(p))); if(!light||!light->shadow) return;
+            auto& shadow=*light->shadow;
+            const Vector2 size(std::clamp(rf32(p+8),1.f,8192.f),std::clamp(rf32(p+12),1.f,8192.f));
+            if(shadow.mapSize!=size) shadow.dispose();
+            shadow.mapSize.copy(size);
+            const auto flags=ru32(p+4); shadow.autoUpdate=(flags&1u)!=0; shadow.needsUpdate=(flags&2u)!=0;
+            shadow.bias=rf32(p+16); shadow.normalBias=rf32(p+20); shadow.radius=rf32(p+24);
+            shadow.camera->nearPlane=rf32(p+28); shadow.camera->farPlane=rf32(p+32);
+            std::array<float,16> values{}; for(size_t i=0;i<16;++i) values[i]=rf32(p+36+i*4);
+            shadow.camera->projectionMatrix.fromArray(values);
+            shadow.camera->projectionMatrixInverse.copy(shadow.camera->projectionMatrix).invert();
+            return;
+        }
+        case tn::cmd::OP_SHADOW_TEXTURE: {
+            if(!has(p,end,8)) return;
+            auto* light=dynamic_cast<LightWithShadow*>(findObject(ru32(p))); if(!light||!light->shadow||!light->shadow->map) return;
+            Slot slot; slot.kind=Kind::Texture; slot.texture=light->shadow->map->texture;
+            insertAt(ru32(p+4),std::move(slot)); return;
+        }
+        case tn::cmd::OP_LIGHT_STATE: {
+            if (!has(p, end, 44)) return;
+            auto* light = dynamic_cast<Light*>(findObject(ru32(p)));
+            if (!light) return;
+            light->color.setRGB(rf32(p + 4), rf32(p + 8), rf32(p + 12));
+            light->intensity = rf32(p + 16);
+            if (auto* hemi = dynamic_cast<HemisphereLight*>(light)) hemi->groundColor.setRGB(rf32(p + 20), rf32(p + 24), rf32(p + 28));
+            if (auto* directional = dynamic_cast<LightWithTarget*>(light)) {
+                auto& target = const_cast<Object3D&>(directional->target());
+                target.position.set(rf32(p + 32), rf32(p + 36), rf32(p + 40));
+                target.updateMatrixWorld(true);
+            }
             return;
         }
         case tn::cmd::OP_LIGHT_DIR: {

@@ -6,6 +6,7 @@
 #include "threepp/constants.hpp"
 #include "threepp/core/EventDispatcher.hpp"
 #include "threepp/core/Uniform.hpp"
+#include "threepp/core/Shader.hpp"
 #include "threepp/math/Plane.hpp"
 
 #include <atomic>
@@ -101,6 +102,9 @@ namespace threepp {
         bool visible = true;
 
         bool toneMapped = true;
+        // Optional application-authored shader customization. Retains the
+        // built-in material's lighting, maps, and render-state semantics.
+        std::shared_ptr<Shader> shaderOverride;
 
         std::unordered_map<std::string, UniformValue> defaultAttributeValues;
 

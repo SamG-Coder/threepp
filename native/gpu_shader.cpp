@@ -2,6 +2,8 @@
 #include "runtime_internal.hpp"
 
 #include "threepp/materials/ShaderMaterial.hpp"
+#include "threepp/materials/RawShaderMaterial.hpp"
+#include "threepp/renderers/shaders/ShaderLib.hpp"
 
 #include <algorithm>
 #include <array>
@@ -13,6 +15,31 @@
 using namespace tn;
 
 namespace {
+
+void normalizeRawShaderVersion(std::string& source, bool fragment = false) {
+    const auto first = source.find_first_not_of(" \t\r\n");
+    if (first != std::string::npos && source.compare(first, 8, "#version") == 0) {
+        const auto end = source.find('\n', first);
+#if defined(__ANDROID__)
+        source.replace(first, end == std::string::npos ? source.size() - first : end - first,
+                       "#version 300 es");
+#else
+        source.replace(first, end == std::string::npos ? source.size() - first : end - first,
+                       "#version 330 core");
+#endif
+    } else {
+#if defined(__ANDROID__)
+        source.insert(0, "#version 300 es\n");
+#else
+        source.insert(0, "#version 330 core\n");
+#endif
+    }
+    std::string aliases = "\n#define texture2D texture\n#define textureCube texture\n";
+    if (source.find("varying") != std::string::npos) aliases += fragment ? "#define varying in\n" : "#define varying out\n";
+    if (!fragment && source.find("attribute") != std::string::npos) aliases += "#define attribute in\n";
+    if (fragment && source.find("gl_FragColor") != std::string::npos) aliases += "out vec4 tb_fragColor;\n#define gl_FragColor tb_fragColor\n";
+    source.insert(source.find('\n') + 1, aliases);
+}
 
 void setShaderUniform(uint32_t material, const char* name, UniformValue value) {
     std::string key = name ? name : "";
@@ -33,11 +60,15 @@ void setShaderUniform(uint32_t material, const char* name, UniformValue value) {
 
 }// namespace
 
-uint32_t tn_shader_material_create(const char* vertex_src, const char* fragment_src) {
+uint32_t tn_shader_material_create(const char* vertex_src, const char* fragment_src, int raw) {
     try {
         std::string vertex = vertex_src ? vertex_src : "";
         std::string fragment = fragment_src ? fragment_src : "";
-        return onWorker([vertex, fragment]() mutable {
+        if (raw) {
+            normalizeRawShaderVersion(vertex);
+            normalizeRawShaderVersion(fragment, true);
+        }
+        return onWorker([vertex, fragment, raw]() mutable {
             if (std::getenv("THREEBROWSER_NATIVE_TERRAIN_TRACE") && fragment.find("tMasks") != std::string::npos) {
                 std::cerr << "terrain shader create IS_TERRAIN="
                           << (fragment.find("#define IS_TERRAIN") != std::string::npos)
@@ -59,7 +90,9 @@ uint32_t tn_shader_material_create(const char* vertex_src, const char* fragment_
                     " fs=" + std::to_string(fragment.size()) + " fs0=";
             head += fragment.substr(0, fragment.size() < 80 ? fragment.size() : 80);
             logLine(head.c_str());
-            auto mat = ShaderMaterial::create();
+            std::shared_ptr<ShaderMaterial> mat = raw
+                    ? std::static_pointer_cast<ShaderMaterial>(RawShaderMaterial::create())
+                    : ShaderMaterial::create();
             // Always take the JS source. Empty strings mean the page passed
             // empty, not "keep threepp default_vertex/default_fragment".
             mat->vertexShader = vertex;
@@ -86,12 +119,27 @@ void tn_shader_material_set_source(uint32_t material, const char* vertex_src, co
             }
             auto* sm = slot->material->as<ShaderMaterial>();
             if (!sm) {
+                const auto type = slot->material->type();
+                const std::string key = type == "MeshStandardMaterial" ? "standard" :
+                    type == "MeshPhysicalMaterial" ? "physical" : type == "MeshLambertMaterial" ? "lambert" :
+                    type == "MeshPhongMaterial" ? "phong" : type == "MeshDepthMaterial" ? "depth" : "basic";
+                if (!slot->material->shaderOverride) {
+                    slot->material->shaderOverride = std::make_shared<Shader>(shaders::ShaderLib::instance().get(key));
+                }
+                slot->material->shaderOverride->vertexShader = vertex;
+                slot->material->shaderOverride->fragmentShader = fragment;
+                slot->material->needsUpdate();
+                markDirty();
                 return;
             }
             if (std::getenv("THREEBROWSER_NATIVE_TERRAIN_TRACE") && fragment.find("tMasks") != std::string::npos) {
                 std::cerr << "terrain shader source material=" << material
                           << " IS_TERRAIN=" << (fragment.find("#define IS_TERRAIN") != std::string::npos)
                           << " bytes=" << fragment.size() << '\n';
+            }
+            if (sm->is<RawShaderMaterial>()) {
+                normalizeRawShaderVersion(vertex);
+                normalizeRawShaderVersion(fragment, true);
             }
             sm->vertexShader = vertex;
             sm->fragmentShader = fragment;

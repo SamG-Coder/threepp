@@ -1203,6 +1203,10 @@ struct GLRenderer::Impl {
             }
         }
 
+        if (material->shaderOverride && !refreshMaterial) {
+            gl::GLUniforms::upload(materialProperties->uniformsList, m_uniforms, &textures);
+        }
+
         if (material->is<SpriteMaterial>() && object->is<Sprite>()) {
 
             p_uniforms->setValue("center", object->as<Sprite>()->center);
@@ -1257,8 +1261,9 @@ struct GLRenderer::Impl {
         _currentActiveMipmapLevel = activeMipmapLevel;
 
         if (renderTarget && !properties.renderTargetProperties.get(renderTarget)->glFramebuffer) {
-
+            if (std::getenv("THREEBROWSER_TRACE_RENDER")) std::cerr << "GLRenderer initialize target" << std::endl;
             textures.setupRenderTarget(renderTarget);
+            if (std::getenv("THREEBROWSER_TRACE_RENDER")) std::cerr << "GLRenderer initialized target" << std::endl;
         }
 
         unsigned int framebuffer = 0;
@@ -1294,13 +1299,13 @@ struct GLRenderer::Impl {
             bool needsUpdate = false;
 
             if (renderTarget) {
-
-                if (_currentDrawBuffers.size() != 1 || _currentDrawBuffers.front() != GL_COLOR_ATTACHMENT0) {
-
-                    _currentDrawBuffers[0] = GL_COLOR_ATTACHMENT0;
-                    _currentDrawBuffers.resize(1);
-
-                    needsUpdate = true;
+                const auto attachmentCount = std::max<std::size_t>(1, renderTarget->textures.size());
+                if (_currentDrawBuffers.size() != attachmentCount) needsUpdate = true;
+                _currentDrawBuffers.resize(attachmentCount);
+                for (std::size_t index = 0; index < attachmentCount; ++index) {
+                    const auto attachment = GL_COLOR_ATTACHMENT0 + static_cast<unsigned int>(index);
+                    if (_currentDrawBuffers[index] != attachment) needsUpdate = true;
+                    _currentDrawBuffers[index] = attachment;
                 }
 
             } else {
@@ -1315,7 +1320,7 @@ struct GLRenderer::Impl {
             }
 
             if (needsUpdate) {
-
+                if (std::getenv("THREEBROWSER_TRACE_RENDER")) std::cerr << "GLRenderer draw buffers " << _currentDrawBuffers.size() << std::endl;
                 glDrawBuffers(static_cast<int>(_currentDrawBuffers.size()), _currentDrawBuffers.data());
             }
         }
@@ -1353,7 +1358,7 @@ struct GLRenderer::Impl {
         return data;
     }
 
-    void readPixels(const Vector2& position, const std::pair<int, int>& size, Format format, unsigned char* data) {
+    void readPixels(const Vector2& position, const std::pair<int, int>& size, Format format, void* data, Type type = Type::UnsignedByte) {
 
         const auto glFormat = gl::toGLFormat(format);
 
@@ -1378,7 +1383,7 @@ struct GLRenderer::Impl {
         }
 
         // this was size.width(), size.width() before refactor.. I assume it was an error
-        glReadPixels(static_cast<int>(position.x), static_cast<int>(position.y), size.first, size.second, glFormat, GL_UNSIGNED_BYTE, data);
+        glReadPixels(static_cast<int>(position.x), static_cast<int>(position.y), size.first, size.second, glFormat, gl::toGLType(type), data);
 
         if (multisampled) {
             const auto* rtProps = properties.renderTargetProperties.get(_currentRenderTarget);
@@ -1723,6 +1728,10 @@ std::vector<unsigned char> GLRenderer::readRGBPixels() {
 void GLRenderer::readPixels(const Vector2& position, const std::pair<int, int>& size, Format format, unsigned char* data) {
 
     pimpl_->readPixels(position, size, format, data);
+}
+
+void GLRenderer::readPixels(const Vector2& position, const std::pair<int, int>& size, Format format, void* data, Type type) {
+    pimpl_->readPixels(position, size, format, data, type);
 }
 
 void GLRenderer::copyTextureToImage(Texture& texture) {

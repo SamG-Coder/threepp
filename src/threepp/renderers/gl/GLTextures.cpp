@@ -51,7 +51,7 @@ namespace {
     //     return GL_LINEAR;
     // }
 
-    GLint getInternalFormat(GLuint glFormat, GLuint glType) {
+    GLint getInternalFormat(GLuint glFormat, GLuint glType, ColorSpace colorSpace) {
 
         GLint internalFormat = glFormat;
 
@@ -73,14 +73,14 @@ namespace {
 
             if (glType == GL_FLOAT) internalFormat = GL_RGB32F;
             if (glType == GL_HALF_FLOAT) internalFormat = GL_RGB16F;
-            if (glType == GL_UNSIGNED_BYTE) internalFormat = GL_RGB8;
+            if (glType == GL_UNSIGNED_BYTE) internalFormat = colorSpace == ColorSpace::sRGB ? GL_SRGB8 : GL_RGB8;
         }
 
         if (glFormat == GL_RGBA) {
 
             if (glType == GL_FLOAT) internalFormat = GL_RGBA32F;
             if (glType == GL_HALF_FLOAT) internalFormat = GL_RGBA16F;
-            if (glType == GL_UNSIGNED_BYTE) internalFormat = GL_RGBA8;
+            if (glType == GL_UNSIGNED_BYTE) internalFormat = colorSpace == ColorSpace::sRGB ? GL_SRGB8_ALPHA8 : GL_RGBA8;
         }
 
         return internalFormat;
@@ -190,7 +190,7 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
     GLuint glFormat = toGLFormat(texture.format);
 
     GLuint glType = toGLType(texture.type);
-    auto glInternalFormat = getInternalFormat(glFormat, glType);
+    auto glInternalFormat = getInternalFormat(glFormat, glType, texture.colorSpace);
 
     setTextureParameters(textureType, texture);
 
@@ -274,7 +274,11 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
         } else {
 
-            if (glType == GL_UNSIGNED_BYTE) {
+            if (image.byteSize() == 0) {
+                state->texImage2D(GL_TEXTURE_2D, 0, glInternalFormat,
+                                  static_cast<int>(image.width()), static_cast<int>(image.height()),
+                                  glFormat, glType, nullptr);
+            } else if (glType == GL_UNSIGNED_BYTE) {
                 state->texImage2D(GL_TEXTURE_2D, 0, glInternalFormat,
                                   static_cast<int>(image.width()), static_cast<int>(image.height()),
                                   glFormat, glType, texture.image().data().data());
@@ -338,16 +342,18 @@ void gl::GLTextures::deallocateRenderTarget(GLRenderTarget* renderTarget) {
 
     if (!renderTarget) return;
 
-    const auto& texture = renderTarget->texture;
-
     auto renderTargetProperties = properties->renderTargetProperties.get(renderTarget);
-    const auto& textureProperties = properties->textureProperties.get(texture.get());
+    const auto& attachments = renderTarget->textures.empty()
+            ? std::vector<std::shared_ptr<Texture>>{renderTarget->texture}
+            : renderTarget->textures;
 
-    if (textureProperties->glTexture) {
-
-        glDeleteTextures(1, &textureProperties->glTexture.value());
-
-        info->memory.textures--;
+    for (const auto& texture : attachments) {
+        const auto& textureProperties = properties->textureProperties.get(texture.get());
+        if (textureProperties->glTexture) {
+            glDeleteTextures(1, &textureProperties->glTexture.value());
+            info->memory.textures--;
+        }
+        properties->textureProperties.remove(texture.get());
     }
 
     if (renderTarget->depthTexture) {
@@ -366,7 +372,6 @@ void gl::GLTextures::deallocateRenderTarget(GLRenderTarget* renderTarget) {
     if (renderTargetProperties->glColorRenderbuffer) glDeleteRenderbuffers(1, &renderTargetProperties->glColorRenderbuffer.value());
     if (renderTargetProperties->glDepthRenderbuffer) glDeleteRenderbuffers(1, &renderTargetProperties->glDepthRenderbuffer.value());
 
-    properties->textureProperties.remove(texture.get());
     properties->renderTargetProperties.remove(renderTarget);
 }
 
@@ -472,7 +477,7 @@ void gl::GLTextures::uploadCubeTexture(TextureProperties* textureProperties, Tex
 
     GLuint glFormat = toGLFormat(texture.format);
     GLuint glType = toGLType(texture.type);
-    auto glInternalFormat = getInternalFormat(glFormat, glType);
+    auto glInternalFormat = getInternalFormat(glFormat, glType, texture.colorSpace);
     setTextureParameters(GL_TEXTURE_CUBE_MAP, texture);
 
     auto& images = texture.images();
@@ -502,7 +507,7 @@ void gl::GLTextures::setupFrameBufferTexture(
 
     const auto glFormat = toGLFormat(texture.format);
     const auto glType = toGLType(texture.type);
-    const auto glInternalFormat = getInternalFormat(/*texture.internalFormat,*/ glFormat, glType);
+    const auto glInternalFormat = getInternalFormat(glFormat, glType, texture.colorSpace);
 
     if (textureTarget == GL_TEXTURE_3D || textureTarget == GL_TEXTURE_2D_ARRAY) {
 
@@ -544,7 +549,7 @@ void gl::GLTextures::setupRenderBufferStorage(unsigned int renderbuffer, GLRende
 
         const auto glFormat = toGLFormat(texture->format);
         const auto glType = toGLType(texture->type);
-        const auto glInternalFormat = getInternalFormat(glFormat, glType);
+        const auto glInternalFormat = getInternalFormat(glFormat, glType, texture->colorSpace);
 
         if (samples > 0) {
             glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, glInternalFormat, renderTarget->width, renderTarget->height);
@@ -616,36 +621,43 @@ void gl::GLTextures::setupDepthRenderbuffer(GLRenderTarget* renderTarget) {
 
 void gl::GLTextures::setupRenderTarget(GLRenderTarget* renderTarget) {
 
+    const bool traceRenderTarget = std::getenv("THREEBROWSER_TRACE_RENDER") != nullptr;
+    if (traceRenderTarget) std::cerr << "GLTextures setup target attachments=" << renderTarget->textures.size() << std::endl;
+
     const auto& texture = renderTarget->texture;
 
     auto renderTargetProperties = properties->renderTargetProperties.get(renderTarget);
-    auto textureProperties = properties->textureProperties.get(texture.get());
 
     renderTarget->addEventListener("dispose", onRenderTargetDispose_);
 
-    GLuint glTexture;
-    glGenTextures(1, &glTexture);
-    textureProperties->glTexture = glTexture;
-    textureProperties->glInit = true;
-    textureProperties->version = texture->version();
-    info->memory.textures++;
-
-    // Handles WebGL2 RGBFormat fallback - #18858
-    if (texture->format == Format::RGB && (texture->type == Type::Float || texture->type == Type::HalfFloat)) {
-        texture->format = Format::RGBA;
-        std::cerr << "THREE.GLRenderer: Rendering to textures with RGB format is not supported. Using RGBA format instead." << std::endl;
-    }
-
     const bool isCube = dynamic_cast<CubeTexture*>(texture.get()) != nullptr;
 
+    auto initializeAttachment = [&](const std::shared_ptr<Texture>& attachment) {
+        auto textureProperties = properties->textureProperties.get(attachment.get());
+        GLuint glTexture;
+        glGenTextures(1, &glTexture);
+        textureProperties->glTexture = glTexture;
+        textureProperties->glInit = true;
+        textureProperties->version = attachment->version();
+        info->memory.textures++;
+        if (attachment->format == Format::RGB &&
+            (attachment->type == Type::Float || attachment->type == Type::HalfFloat)) {
+            attachment->format = Format::RGBA;
+            std::cerr << "THREE.GLRenderer: Rendering to textures with RGB format is not supported. Using RGBA format instead." << std::endl;
+        }
+        return textureProperties;
+    };
+
     if (isCube) {
+
+        auto textureProperties = initializeAttachment(texture);
 
         // Allocate a single GL_TEXTURE_CUBE_MAP with storage for all 6 faces.
         const GLuint glFormat = toGLFormat(texture->format);
         const GLuint glType = toGLType(texture->type);
-        const auto glInternalFormat = getInternalFormat(glFormat, glType);
+        const auto glInternalFormat = getInternalFormat(glFormat, glType, texture->colorSpace);
 
-        state->bindTexture(GL_TEXTURE_CUBE_MAP, glTexture);
+        state->bindTexture(GL_TEXTURE_CUBE_MAP, *textureProperties->glTexture);
         setTextureParameters(GL_TEXTURE_CUBE_MAP, *texture);
 
         for (int i = 0; i < 6; i++) {
@@ -662,7 +674,7 @@ void gl::GLTextures::setupRenderTarget(GLRenderTarget* renderTarget) {
         for (int i = 0; i < 6; i++) {
             state->bindFramebuffer(GL_FRAMEBUFFER, fbos[i]);
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                                   GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, glTexture, 0);
+                                   GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, *textureProperties->glTexture, 0);
         }
 
         // Shared depth renderbuffer across all faces.
@@ -696,17 +708,26 @@ void gl::GLTextures::setupRenderTarget(GLRenderTarget* renderTarget) {
 
         auto glTextureType = GL_TEXTURE_2D;
 
-        state->bindTexture(glTextureType, textureProperties->glTexture);
-        setTextureParameters(glTextureType, *texture);
-        setupFrameBufferTexture(*renderTargetProperties->glFramebuffer, renderTarget, *texture, GL_COLOR_ATTACHMENT0, glTextureType);
-
-        if (textureNeedsGenerateMipmaps(*texture)) {
-            generateMipmap(GL_TEXTURE_2D, *texture, renderTarget->width, renderTarget->height);
+        const auto& attachments = renderTarget->textures.empty()
+                ? std::vector<std::shared_ptr<Texture>>{texture}
+                : renderTarget->textures;
+        for (std::size_t index = 0; index < attachments.size(); ++index) {
+            if (traceRenderTarget) std::cerr << "GLTextures setup attachment " << index << std::endl;
+            const auto& attachment = attachments[index];
+            auto textureProperties = initializeAttachment(attachment);
+            state->bindTexture(glTextureType, textureProperties->glTexture);
+            setTextureParameters(glTextureType, *attachment);
+            setupFrameBufferTexture(*renderTargetProperties->glFramebuffer, renderTarget, *attachment,
+                                    GL_COLOR_ATTACHMENT0 + static_cast<unsigned int>(index), glTextureType);
+            if (textureNeedsGenerateMipmaps(*attachment)) {
+                generateMipmap(GL_TEXTURE_2D, *attachment, renderTarget->width, renderTarget->height);
+            }
         }
 
         state->bindTexture(GL_TEXTURE_2D, 0);
 
         if (renderTarget->depthBuffer) {
+            if (traceRenderTarget) std::cerr << "GLTextures setup depth" << std::endl;
             setupDepthRenderbuffer(renderTarget);
         }
 
@@ -726,7 +747,7 @@ void gl::GLTextures::setupRenderTarget(GLRenderTarget* renderTarget) {
 
             const auto glFormat = toGLFormat(texture->format);
             const auto glType = toGLType(texture->type);
-            const auto glInternalFormat = getInternalFormat(glFormat, glType);
+            const auto glInternalFormat = getInternalFormat(glFormat, glType, texture->colorSpace);
 
             glBindRenderbuffer(GL_RENDERBUFFER, glColorRenderbuffer);
             glRenderbufferStorageMultisample(GL_RENDERBUFFER, getRenderTargetSamples(renderTarget),
@@ -758,6 +779,7 @@ void gl::GLTextures::setupRenderTarget(GLRenderTarget* renderTarget) {
 int gl::GLTextures::getRenderTargetSamples(const GLRenderTarget* renderTarget) const {
 
     if (!renderTarget || renderTarget->samples == 0) return 0;
+    if (renderTarget->textures.size() > 1) return 0;
 
     // A cube target renders six faces through six framebuffers; there is no
     // resolve path for those, so the request is ignored rather than half-honoured.
@@ -798,17 +820,18 @@ void gl::GLTextures::updateMultisampleRenderTarget(GLRenderTarget* renderTarget)
 
 void gl::GLTextures::updateRenderTargetMipmap(GLRenderTarget* renderTarget) {
 
-    const auto texture = renderTarget->texture;
-
-    if (textureNeedsGenerateMipmaps(*texture)) {
-
-        const auto isCube = dynamic_cast<CubeTexture*>(texture.get()) != nullptr;
-        const auto target = isCube ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D;
-        const auto glTexture = properties->textureProperties.get(texture.get())->glTexture;
-
-        state->bindTexture(target, *glTexture);
-        generateMipmap(target, *texture, renderTarget->width, renderTarget->height);
-        state->bindTexture(target, 0);
+    const auto& attachments = renderTarget->textures.empty()
+            ? std::vector<std::shared_ptr<Texture>>{renderTarget->texture}
+            : renderTarget->textures;
+    for (const auto& texture : attachments) {
+        if (textureNeedsGenerateMipmaps(*texture)) {
+            const auto isCube = dynamic_cast<CubeTexture*>(texture.get()) != nullptr;
+            const auto target = isCube ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D;
+            const auto glTexture = properties->textureProperties.get(texture.get())->glTexture;
+            state->bindTexture(target, *glTexture);
+            generateMipmap(target, *texture, renderTarget->width, renderTarget->height);
+            state->bindTexture(target, 0);
+        }
     }
 }
 

@@ -101,6 +101,7 @@ std::string GLPrograms::getProgramCacheKey(const GLRenderer& renderer, const Pro
 }
 
 UniformMap* GLPrograms::getUniforms(Material& material) {
+    if (material.shaderOverride) return &material.shaderOverride->uniforms;
 
     if (shaderIDs.contains(material.type())) {
 

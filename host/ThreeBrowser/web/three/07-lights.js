@@ -87,7 +87,7 @@
   }
 
   function shadowCamera(kind) {
-    const c = new TN.Object3D();
+    const c = kind === 'ortho' ? new TN.OrthographicCamera(-5,5,5,-5,0.5,500) : new TN.PerspectiveCamera(kind === 'point' ? 90 : 50,1,0.5,500);
     c.isCamera = true;
     c.near = 0.5;
     c.far = 500;
@@ -95,7 +95,6 @@
     c.matrixWorldInverse = typeof TN.Matrix4 === "function" ? new TN.Matrix4() : c.matrixWorld;
     c.projectionMatrix = typeof TN.Matrix4 === "function" ? new TN.Matrix4() : c.matrix;
     c.projectionMatrixInverse = typeof TN.Matrix4 === "function" ? new TN.Matrix4() : c.matrix;
-    c.updateProjectionMatrix = function () {};
     if (kind === "ortho") {
       c.isOrthographicCamera = true;
       c.left = -5;
@@ -108,6 +107,7 @@
       c.aspect = 1;
       c.focus = 10;
     }
+    c.updateProjectionMatrix();
     return c;
   }
 
@@ -127,7 +127,15 @@
       this.blurSamples = 8;
     }
     update() {}
-    updateMatrices() {}
+    updateMatrices(light) {
+      if (!light?.target) return;
+      const target = light.target.getWorldPosition(new TN.Vector3());
+      this.camera.position.copy(light.getWorldPosition(new TN.Vector3()));
+      this.camera.lookAt(target);
+      this.camera.updateMatrixWorld();
+      this.matrix.set(.5,0,0,.5, 0,.5,0,.5, 0,0,.5,.5, 0,0,0,1);
+      this.matrix.multiply(this.camera.projectionMatrix).multiply(this.camera.matrixWorldInverse);
+    }
     dispose() {
       if (this.map && typeof this.map.dispose === "function") this.map.dispose();
       if (this.mapPass && typeof this.mapPass.dispose === "function") this.mapPass.dispose();

@@ -360,6 +360,7 @@ function inspectHtml(record, source) {
       // values established by the document are available to the app.
       record.inlineScripts ??= [];
       record.inlineScripts.push(match[2]);
+      inspectJavaScript(record, match[2]);
     }
   }
   for (const match of source.matchAll(/<(?:link|img|source|video|audio)\b[^>]*?\b(?:href|src)\s*=\s*["']([^"']+)["']/gi)) {
@@ -420,6 +421,14 @@ async function fetchRecord(record) {
   if (moduleLike(record.url, record.contentType, record.hint)) inspectJavaScript(record, text);
   else if (styleLike(record.url, record.contentType, record.hint)) inspectCss(record, text);
   else if (record === rootRecord) inspectHtml(record, text);
+  else if (/\.gltf$/i.test(record.url.pathname)) {
+    const model = JSON.parse(text);
+    for (const resource of [...(model.buffers || []), ...(model.images || [])]) {
+      if (resource.uri && isFetchable(resource.uri)) {
+        collectReference(record, new URL(resource.uri, record.url).href, "asset");
+      }
+    }
+  }
 }
 
 function relativeSpecifier(fromRecord, toRecord, documentRelative = false) {
@@ -557,7 +566,7 @@ const entryLines = [
     : []),
   `if (!document.body.children.length) globalThis.__threeBrowserHydrateDocument?.(${JSON.stringify(
     Buffer.isBuffer(rootRecord.content) ? rootRecord.content.toString("utf8") : String(rootRecord.content || ""))});`,
-  ...(rootRecord.inlineScripts || []).map(script => `(0, eval)(${JSON.stringify(script)});`),
+  ...(rootRecord.inlineScripts || []).map(script => `(0, eval)(${JSON.stringify(rewriteText({ ...rootRecord, localPath: "site-entry.mjs" }, script))});`),
   ...(rootClassicScripts.length ? [`const { readFileSync: __threeBrowserReadFile } = await import("node:fs");`] : []),
   ...rootClassicScripts.map(record =>
     `{ const __threeBrowserScript = document.createElement("script"); __threeBrowserScript.src = ${JSON.stringify(record.url.href)}; document.head.appendChild(__threeBrowserScript); (0, eval)(__threeBrowserReadFile(new URL(${JSON.stringify(`./${record.localPath.replaceAll("\\", "/")}`)}, import.meta.url), "utf8")); }`),
