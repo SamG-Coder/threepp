@@ -67,6 +67,27 @@ int main(int argc, char** argv) {
         };
         compare("perspective clipping");
         require(renderer.virtualGeometryStats().draws > 0, "GPU path was not exercised");
+        std::array<std::vector<unsigned char>, 4> cameraReferences;
+        renderer.setVirtualGeometry(false);
+        for (unsigned i = 0; i < 4; ++i) {
+            camera->position.x = float(i) * .25f;
+            renderer.render(*scene, *camera);
+            cameraReferences[i] = renderer.readRGBPixels();
+        }
+        renderer.setVirtualGeometry(true);
+        for (unsigned i = 0; i < 4; ++i) {
+            camera->position.x = float(i) * .25f;
+            renderer.render(*scene, *camera);
+        }
+        auto dispatches = renderer.virtualGeometryStats().dispatches;
+        for (unsigned repeat = 0; repeat < 3; ++repeat) for (unsigned i = 0; i < 4; ++i) {
+            camera->position.x = float(i) * .25f;
+            renderer.render(*scene, *camera);
+            require(renderer.readRGBPixels() == cameraReferences[i], "cached camera selection changed pixels");
+        }
+        require(renderer.virtualGeometryStats().dispatches == dispatches, "alternating cameras recomputed cached selections");
+        std::cout << "four alternating camera selections: 12 cache hits, zero new dispatches, exact pixels\n";
+        camera->position.x = 0;
         material->shaderOverride = std::make_shared<Shader>(shaders::ShaderLib::instance().phong);
         material->shaderOverride->fragmentShader.insert(0, "// fragment-only customization\n");
         material->needsUpdate();

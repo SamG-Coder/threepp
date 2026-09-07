@@ -88,7 +88,14 @@ public:
         entry.lastUse = ++serial_;
         const uint64_t commandCount = uint64_t(entry.clusters) * instances;
         if (commandCount > 262144) { ++stats.fallback; return false; }
-        GLuint commands = entry.commands;
+        Selection key{true, clipFromLocal.elements, first, count, instances, instanceBuffer,
+                      instanceVersion, instanceOwner, entry.generation};
+        auto selected = std::find_if(entry.selections.begin(), entry.selections.end(),
+            [&](const auto& selection) { return selection.key == key; });
+        if (selected == entry.selections.end()) selected = std::min_element(entry.selections.begin(), entry.selections.end(),
+            [](const auto& a, const auto& b) { return a.lastUse < b.lastUse; });
+        selected->lastUse = ++serial_;
+        GLuint commands = entry.commands[std::distance(entry.selections.begin(), selected)];
         if (instanceBuffer) {
             const size_t bytes = commandCount * 20;
             if (bytes > instanceCommandBytes_) {
@@ -104,9 +111,7 @@ public:
             }
             commands = instanceCommands_;
         }
-        Selection key{true, clipFromLocal.elements, first, count, instances, instanceBuffer,
-                      instanceVersion, instanceOwner, entry.generation};
-        auto& previousSelection = instanceBuffer ? instanceSelection_ : entry.selection;
+        auto& previousSelection = instanceBuffer ? instanceSelection_ : selected->key;
         if (previousSelection == key) {
             GLint previousIndirect = 0;
             glGetIntegerv(0x8F43, &previousIndirect);
@@ -222,17 +227,19 @@ private:
         bool operator==(const Selection&) const = default;
     };
     struct Entry {
-        GLuint bounds{}, commands{};
+        GLuint bounds{};
+        std::array<GLuint, 4> commands{};
         uint32_t clusters{}, structure{}, positionVersion{}, indexVersion{};
         uint64_t lastUse{};
         uint64_t generation{};
         size_t bytes{};
         Bounds root{};
-        Selection selection;
+        struct CachedSelection { Selection key; uint64_t lastUse{}; };
+        std::array<CachedSelection, 4> selections;
         Subscription subscription;
         ~Entry() {
             if (bounds) glDeleteBuffers(1, &bounds);
-            if (commands) glDeleteBuffers(1, &commands);
+            glDeleteBuffers(commands.size(), commands.data());
         }
     };
     using Cache = std::unordered_map<unsigned, std::unique_ptr<Entry>>;
@@ -360,15 +367,17 @@ void main() {
             }
         }
         entry->clusters = clusterCount;
-        entry->bytes = clusterCount * (sizeof(Bounds) + 20);
+        entry->bytes = clusterCount * (sizeof(Bounds) + 20 * entry->commands.size());
         GLint previous = 0;
         glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &previous);
         glGenBuffers(1, &entry->bounds);
         glBindBuffer(GL_ARRAY_BUFFER, entry->bounds);
         glBufferData(GL_ARRAY_BUFFER, bounds.size() * sizeof(Bounds), bounds.data(), GL_STATIC_DRAW);
-        glGenBuffers(1, &entry->commands);
-        glBindBuffer(GL_ARRAY_BUFFER, entry->commands);
-        glBufferData(GL_ARRAY_BUFFER, clusterCount * 20, nullptr, GL_DYNAMIC_DRAW);
+        glGenBuffers(entry->commands.size(), entry->commands.data());
+        for (auto commands : entry->commands) {
+            glBindBuffer(GL_ARRAY_BUFFER, commands);
+            glBufferData(GL_ARRAY_BUFFER, clusterCount * 20, nullptr, GL_DYNAMIC_DRAW);
+        }
         glBindBuffer(GL_ARRAY_BUFFER, previous);
         return entry;
     }

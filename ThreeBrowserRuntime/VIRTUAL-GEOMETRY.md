@@ -25,6 +25,10 @@ It is not yet the complete set of modes explored in ThreeNaniteTest.
 - Reuse selection commands only when the geometry generation, projection/world
   matrix, draw range, instance count, instance buffer/version and instance owner
   match. This is frustum selection reuse, not stale occlusion reuse.
+- Retain up to four ordinary draw selections per geometry using LRU replacement,
+  so alternating cameras/passes do not immediately overwrite each other's work.
+  The extra command buffers count against the existing 32 MiB residency cap.
+  Instanced draws currently retain the shared command buffer path.
 - Use bounded LRU metadata residency (32 MiB) and a bounded shared instance
   command buffer (up to 5 MiB). Source geometry remains resident and unchanged.
 - Restore compute/program/storage/indirect state and use barriers between shader
@@ -85,6 +89,8 @@ changes and clicks at three window sizes.
 It also checks fragment overrides, read-only varying additions, rejected vertex
 writes, and removing an override while cached programs remain alive. The menu
 test verifies a constant-height switch thumb, including the compact mode row.
+An alternating-camera regression warms four selections, then verifies twelve
+exact-pixel revisits with no additional compute dispatches.
 
 An optional output PNG path can be passed to the native smoke executable.
 Its timed clipped-plane workload is a controlled renderer microbenchmark, not
