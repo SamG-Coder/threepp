@@ -5,6 +5,8 @@
 
 #include <cstddef>
 #include <stdexcept>
+#include <cstdlib>
+#include <fstream>
 
 #if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
 #include <glad/glad.h>
@@ -16,6 +18,23 @@ using namespace threepp;
 using namespace threepp::gl;
 
 namespace {
+
+    void traceUpload(unsigned int buffer, unsigned int previous, BufferAttribute* attribute) {
+        // Opt-in, bounded diagnostics. Buffer ids identify repeated uploads
+        // within one GL context without recording application data.
+        struct Trace {
+            std::ofstream file;
+            unsigned int rows{};
+            Trace() { if (const auto* path = std::getenv("THREEBROWSER_BUFFER_UPLOAD_TRACE")) file.open(path); }
+        };
+        static thread_local Trace trace;
+        if (trace.file.is_open() && trace.rows < 100000) {
+            ++trace.rows;
+            const auto bytes = attribute->updateRange.count == -1 ? attribute->byteLength() :
+                    static_cast<size_t>(attribute->updateRange.count) * threepp::bytesPerElement(attribute->type());
+            trace.file << buffer << ',' << previous << ',' << attribute->version << ',' << bytes << '\n';
+        }
+    }
 
     // GLBindingStates already dispatches glVertexAttribIPointer vs
     // glVertexAttribPointer off this enum and forwards the attribute's
@@ -128,8 +147,12 @@ void GLAttributes::update(BufferAttribute* attribute, GLenum bufferType) {
         auto& data = buffers_.at(attribute);
 
         if (data.version < attribute->version) {
+            traceUpload(data.buffer, data.version, attribute);
             updateBuffer(data.buffer, attribute, bufferType, data.bytesPerElement);
-            ++data.version;
+            // One upload consumes every CPU revision made before this draw.
+            // Incrementing only once leaves the cache behind and re-uploads
+            // unchanged data on subsequent shadow/reflection/scene passes.
+            data.version = attribute->version;
         }
     }
 }

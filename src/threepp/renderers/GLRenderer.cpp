@@ -12,6 +12,7 @@
 #include "threepp/renderers/gl/GLMaterials.hpp"
 #include "threepp/renderers/gl/GLMorphTargets.hpp"
 #include "threepp/renderers/gl/GLObjects.hpp"
+#include "threepp/renderers/gl/GLPassProfile.hpp"
 #include "threepp/renderers/gl/GLPrograms.hpp"
 #include "threepp/renderers/gl/GLRenderLists.hpp"
 #include "threepp/renderers/gl/GLRenderStates.hpp"
@@ -269,6 +270,10 @@ struct GLRenderer::Impl {
     }
 
     void render(Object3D* scene, Camera* camera) {
+        gl::GLPassProfile profile(scene->id, camera->id,
+                                  _currentRenderTarget ? _currentRenderTarget->texture->id : 0,
+                                  _currentRenderTarget ? _currentRenderTarget->width : _size.width(),
+                                  _currentRenderTarget ? _currentRenderTarget->height : _size.height());
 
         // update scene graph
 
@@ -279,6 +284,7 @@ struct GLRenderer::Impl {
         // update camera matrices and frustum
 
         if (camera->parent == nullptr) camera->updateMatrixWorld();
+        profile.mark(0);
 
         //
         //    if ( scene.isScene === true ) scene.onBeforeRender( _this, scene, camera, _currentRenderTarget );
@@ -313,15 +319,18 @@ struct GLRenderer::Impl {
         if (_clippingEnabled) clipping.beginShadows();
 
         auto& shadowsArray = currentRenderState->getShadowsArray();
+        profile.mark(1);
 
         shadowMap.autoUpdate = scope.shadowMapAutoUpdate;
         shadowMap.render(scope, shadowsArray, scene, camera);
         scope.shadowMapAutoUpdate = shadowMap.autoUpdate;
+        profile.mark(2);
 
         currentRenderState->setupLights();
         currentRenderState->setupLightsView(camera);
 
         if (_clippingEnabled) clipping.endShadows();
+        profile.mark(3);
 
         //
 
@@ -348,6 +357,7 @@ struct GLRenderer::Impl {
             renderScreenSpaceSprites(scene);
             screenSpaceSprites_.clear();
         }
+        profile.mark(4);
 
         //
 
@@ -363,6 +373,7 @@ struct GLRenderer::Impl {
 
             textures.updateRenderTargetMipmap(_currentRenderTarget);
         }
+        profile.mark(5);
 
         //
 
