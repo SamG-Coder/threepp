@@ -70,4 +70,14 @@ Required checks: changed element type/length, shader rebuild, material disposal 
 
 The largest application CPU self-time functions are wave/shore calculations. They remain application code. Runtime work should improve transfer, traversal, resource updates and scheduling without copying those functions into C++, lowering resolution or changing simulation behavior.
 
-The next concrete optimization to prototype is adjacent instance-matrix command coalescing, with command-order and GPU regressions. Native all-pass timing is the next measurement priority. The other entries are candidates with stated evidence and validation requirements, not completed optimizations or predicted FPS gains.
+Adjacent instance-matrix command coalescing has now been implemented and validated below. Native all-pass timing is the next measurement priority. The other entries are candidates with stated evidence and validation requirements, not completed optimizations or predicted FPS gains.
+
+## Instance batching implementation and validation
+
+The command ring promotes adjacent single-matrix writes for the same mesh and consecutive indices into the existing OP_INST_MATRICES format. The first matrix remains a normal single-write command until a second compatible write arrives. Matrices are copied immediately, including when the caller reuses one Matrix4. Any other command, submission, buffer attachment or capacity boundary breaks the run. No writes are deferred across draws, reordered, or removed. Appending a Float32Array uses a direct typed-array copy without allocating a temporary byte view.
+
+Controlled seven-round benchmark, alternating old/new order: 100,000 updates in runs of 256 became 391 commands instead of 100,000. Bytes fell from 8,000,000 to 6,409,384. All rounds produced the same matrix-data hash and matrix count. Median JS preparation fell from 21.77 ms to 7.76 ms. A separate synchronous native-worker benchmark applying 100,000 updates to an allocated InstancedMesh measured 3.16 ms for individual commands versus 1.21 ms for one contiguous bulk command. The native benchmark excludes JS encoding and drawing; it is not a frame-rate measurement.
+
+The live follow-up trace observed 439 single-matrix plus 414 bulk commands per presentation, and approximately 589,978 submitted bytes per presentation. The preceding trace observed 4,422 individual matrix commands and approximately 645,053 bytes. The inspected follow-up capture included the pause overlay and a different view; the observed 21.1 FPS is not a controlled comparison with the preceding 10.7 FPS. Do not claim a doubling of application FPS from these runs. Live counters were collected before the final allocation-free typed-array append refinement; that refinement preserves command contents.
+
+All 60 tests pass with GPU tests enabled. Command regressions cover repeated/noncontiguous indices, multiple meshes, caller-owned matrix reuse, draw/destroy/submission boundaries and small-ring rollover. A GPU regression submits draws to two targets with different instance positions and verifies that each target contains its own expected result.

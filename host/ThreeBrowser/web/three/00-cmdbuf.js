@@ -120,6 +120,7 @@
   let pendingAsyncScene = 0;
   let pendingAsyncCamera = 0;
   let pendingWindowPresentation = null;
+  let lastInstanceStart = -1, lastInstanceId = 0, lastInstanceIndex = 0, lastInstanceCount = 0;
   let nameEncoder;
   const encodedUniformNames = new Map();
 
@@ -192,6 +193,7 @@
   }
 
   function submitNow(preferAsync) {
+    lastInstanceStart = -1;
     if (pendingWindowPresentation) {
       const frame = pendingWindowPresentation;
       pendingWindowPresentation = null;
@@ -279,6 +281,7 @@
   }
 
   function begin(op, payload) {
+    lastInstanceStart = -1;
     const size = align8(8 + payload);
     need(size);
     const start = off;
@@ -317,6 +320,7 @@
   }
 
   function attach(buffer) {
+    lastInstanceStart = -1;
     if (!buffer || !(buffer instanceof ArrayBuffer)) return;
     if (off > 0 && buffer.byteLength >= off) {
       new Uint8Array(buffer).set(u8.subarray(0, off));
@@ -1166,11 +1170,41 @@
       end(s);
     },
     instMatrix(id, index, elements) {
+      const src = elements instanceof Float32Array ? elements : new Float32Array(elements);
+      const handle = id >>> 0, instance = index >>> 0;
+      if (src.length === 16 && lastInstanceStart >= 0 && handle === lastInstanceId &&
+          instance === lastInstanceIndex + lastInstanceCount) {
+        const count = lastInstanceCount + 1;
+        const size = align8(20 + count * 64);
+        if (lastInstanceStart + size <= ab.byteLength) {
+          const start = lastInstanceStart;
+          if (lastInstanceCount === 1) {
+            // Promote the preceding single write in place. Snapshot bytes are
+            // already in the ring, so caller-owned matrices can be reused.
+            u8.copyWithin(start + 20, start + 16, start + 80);
+            u32[start >> 2] = OP.INST_MATRICES;
+          }
+          u32[(start + 4) >> 2] = size;
+          u32[(start + 16) >> 2] = count;
+          f32.set(src, (start + 20 + lastInstanceCount * 64) >> 2);
+          off = start + size;
+          lastInstanceCount = count;
+          return;
+        }
+      }
       const s = begin(OP.INST_MATRIX, 72);
       wu32(id);
       wu32(index);
-      copyBytes(elements instanceof Float32Array ? elements : new Float32Array(elements));
+      copyBytes(src);
       end(s);
+      // Any other command, submission or buffer attachment ends this run.
+      // Never combine writes across a draw or reorder noncontiguous indices.
+      if (src.length === 16) {
+        lastInstanceStart = s;
+        lastInstanceId = handle;
+        lastInstanceIndex = instance;
+        lastInstanceCount = 1;
+      }
     },
     instColor(id, index, hex) {
       const s = begin(OP.INST_COLOR, 16);

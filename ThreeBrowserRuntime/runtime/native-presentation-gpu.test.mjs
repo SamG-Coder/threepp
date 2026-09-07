@@ -142,6 +142,27 @@ test('GPU command uploads do not present stale scenes and overlays preserve scen
     coverageScene.add(new T.Mesh(new T.PlaneGeometry(4,4), coverageMaterial));
     renderer.setClearColor(0x000000, 1);
     const coverageTarget = new T.WebGLRenderTarget(4, 4, { samples: 4 });
+    const batchScene = new T.Scene();
+    const instances = new T.InstancedMesh(new T.PlaneGeometry(1, 2),
+      new T.MeshBasicMaterial({ color: 0xff0000, toneMapped: false }), 2);
+    instances.frustumCulled = false;
+    batchScene.add(instances);
+    const batchFirst = new T.WebGLRenderTarget(4,4), batchSecond = new T.WebGLRenderTarget(4,4);
+    const instancePose = new T.Matrix4();
+    instances.setMatrixAt(0, instancePose.makeTranslation(-.5,0,0));
+    instances.setMatrixAt(1, instancePose.makeTranslation(.5,0,0));
+    renderer.setRenderTarget(batchFirst); renderer.render(batchScene,camera);
+    instances.setMatrixAt(0, instancePose.makeTranslation(10,0,0));
+    instances.setMatrixAt(1, instancePose.makeTranslation(11,0,0));
+    renderer.setRenderTarget(batchSecond); renderer.render(batchScene,camera);
+    cmd.submit();
+    const batchPixel = new Uint8Array(4);
+    renderer.readRenderTargetPixels(batchFirst,0,0,1,1,batchPixel);
+    assert.equal(batchPixel[0],255,'the first draw must see the earlier batched instance positions');
+    renderer.readRenderTargetPixels(batchSecond,0,0,1,1,batchPixel);
+    assert.equal(batchPixel[0],0,'the second draw must see the later instance positions');
+    renderer.setRenderTarget(null);
+    batchFirst.dispose(); batchSecond.dispose();
     const readCoverage = () => {
       renderer.setRenderTarget(coverageTarget); renderer.render(coverageScene, camera); cmd.submit();
       const pixels = new Uint8Array(64);

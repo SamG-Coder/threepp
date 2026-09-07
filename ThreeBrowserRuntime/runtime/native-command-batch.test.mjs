@@ -4,8 +4,8 @@ import vm from "node:vm";
 import test from "node:test";
 
 const source = readFileSync(new URL("../../host/ThreeBrowser/web/three/00-cmdbuf.js", import.meta.url), "utf8");
-function harness(Encoder = TextEncoder) {
-  let shared = new ArrayBuffer(8 * 1024 * 1024);
+function harness(Encoder = TextEncoder, capacity = 8 * 1024 * 1024) {
+  let shared = new ArrayBuffer(capacity);
   const submissions = [];
   const host = {
     CmdSubmit: used => submissions.push(Buffer.from(new Uint8Array(shared, 0, used))),
@@ -36,6 +36,56 @@ test("numeric uniforms remain ordered in a batch with aligned names and signed i
   assert.equal(commands[2].readInt32LE(28), -3);
   assert.equal(commands[3].subarray(24, 27).toString(), "sun");
   assert.ok(Math.abs(commands[3].readFloatLE(36) - 0.3) < 1e-6);
+});
+
+function decodeMatrixCommands(submissions) {
+  const events = [], opcodes = [];
+  for (const buffer of submissions) {
+    for (let offset = 0; offset < buffer.length;) {
+      const op = buffer.readUInt32LE(offset), size = buffer.readUInt32LE(offset + 4);
+      assert.ok(size >= 8 && size % 8 === 0 && offset + size <= buffer.length);
+      opcodes.push(op);
+      if (op === 100 || op === 103) {
+        const handle = buffer.readUInt32LE(offset + 8), index = buffer.readUInt32LE(offset + 12);
+        const count = op === 103 ? buffer.readUInt32LE(offset + 16) : 1;
+        for (let i = 0; i < count; i++) {
+          const data = offset + (op === 103 ? 20 : 16) + i * 64;
+          events.push([handle, index + i, Array.from({ length: 16 }, (_,j) => buffer.readFloatLE(data+j*4))]);
+        }
+      } else events.push(op);
+      offset += size;
+    }
+  }
+  return { events, opcodes };
+}
+
+test("instance batches preserve snapshots, draw barriers, mesh changes and repeated indices", () => {
+  const { cmd, submissions } = harness();
+  const matrix = new Float32Array(16), expected = [];
+  const write = (handle,index,value) => {
+    matrix.fill(value); expected.push([handle,index,[...matrix]]); cmd.instMatrix(handle,index,matrix);
+  };
+  write(7,0,1); write(7,1,2); write(7,2,3);
+  cmd.renderPass(20,21,22); expected.push(4);
+  write(7,3,4); write(7,3,5); write(7,5,6); write(8,6,7); write(8,7,8);
+  cmd.destroy(8); expected.push(86);
+  write(8,8,9);
+  cmd.submit();
+  write(8,9,10); write(8,10,11); cmd.submit();
+  const decoded = decodeMatrixCommands(submissions);
+  assert.deepEqual(decoded.events, expected);
+  assert.deepEqual(decoded.opcodes, [103,4,100,100,100,103,86,100,103]);
+});
+
+test("instance batches split safely at ring-buffer boundaries", () => {
+  const { cmd, submissions } = harness(TextEncoder, 256);
+  const matrix = new Float32Array(16), expected = [];
+  for (let i=0;i<20;i++) {
+    matrix.fill(i+.25); expected.push([7,i,[...matrix]]); cmd.instMatrix(7,i,matrix);
+  }
+  cmd.submit();
+  assert.ok(submissions.length > 1);
+  assert.deepEqual(decodeMatrixCommands(submissions).events, expected);
 });
 
 test("cached uniform names preserve UTF-8 bytes, changing values and texture command order", () => {
