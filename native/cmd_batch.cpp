@@ -1,4 +1,5 @@
 #include "three_native.h"
+#include "webgpu/three_webgpu.h"
 #include "cmd_ops.hpp"
 #include "runtime_internal.hpp"
 #include "frame_profile.hpp"
@@ -380,6 +381,7 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
                                 static_cast<int>(ru32(p + 16)),
                                 static_cast<int>(ru32(p + 20)));
             if (std::getenv("THREEBROWSER_TRACE_RENDER")) logLine("RenderPass target set");
+            gl->setVirtualGeometry(tw_virtual_geometry_enabled() != 0);
             gl->render(*scene, *camera);
             if (std::getenv("THREEBROWSER_TRACE_RENDER")) logLine("RenderPass rendered");
             gl->setRenderTarget(previousTarget);

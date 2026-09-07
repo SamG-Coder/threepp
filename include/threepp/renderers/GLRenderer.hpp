@@ -55,6 +55,14 @@ namespace threepp {
         [[nodiscard]] const gl::GLShadowMap& shadowMap() const override;
 
         gl::GLState& state();
+        // Opt-in, full-detail native cluster culling. Unsupported draws retain
+        // the ordinary renderer. Toggling off releases cached cluster buffers.
+        void setVirtualGeometry(bool enabled);
+        struct VirtualGeometryStats {
+            uint64_t draws, clusters, builds, fallback, cacheBytes, dispatches, reused;
+            uint64_t shaderFallback, topologyFallback, smallFallback, visibleFallback;
+        };
+        [[nodiscard]] VirtualGeometryStats virtualGeometryStats() const;
         void compile(Object3D& scene, Camera& camera);
         void initTexture(Texture& texture);
 

@@ -2,6 +2,7 @@
 #include "threepp/renderers/GLRenderer.hpp"
 
 #include "threepp/renderers/RenderTarget.hpp"
+#include "threepp/renderers/shaders/ShaderLib.hpp"
 
 #include "threepp/renderers/gl/GLAttributes.hpp"
 #include "threepp/renderers/gl/GLBackground.hpp"
@@ -51,6 +52,8 @@
 #include "stb_image_write.h"
 
 #include <cmath>
+#include "threepp/renderers/gl/GLVirtualGeometry.hpp"
+#include "threepp/renderers/gl/GLStaticVertexProof.hpp"
 
 
 using namespace threepp;
@@ -78,6 +81,7 @@ struct GLRenderer::Impl {
     GLRenderer& scope;
 
     gl::GLState state;
+    gl::GLVirtualGeometry virtualGeometry;
 
 
     std::unique_ptr<Scene> _emptyScene;
@@ -539,23 +543,95 @@ struct GLRenderer::Impl {
             renderer->setMode(GL_TRIANGLES);
         }
 
+        if (virtualGeometry.enabled) {
+            // Eligibility is deliberately conservative: a vertex override,
+            // skinning or displacement invalidates static bounds. Built-in
+            // instancing uses its original matrix buffer and base-instance
+            // attribute fetch. Custom shaders (including gl_InstanceID users)
+            // always retain their original draw.
+            // Evaluate the source material as well as depth/override materials
+            // so a shadow pass cannot cull deformed casters using rest bounds.
+            bool shaderExcluded = false;
+            auto staticMaterial = [&](Material* m) {
+                if (!m) return false;
+                bool unsafeShader = m->is<ShaderMaterial>();
+                if (m->shaderOverride && !unsafeShader) {
+                    auto* proof = properties.materialProperties.get(m);
+                    if (proof->geometryVertexProofVersion != m->version() ||
+                        proof->geometryVertexProofShader != m->shaderOverride.get()) {
+                        const auto type = m->type();
+                        const char* key = type == "MeshStandardMaterial" ? "standard" :
+                            type == "MeshPhysicalMaterial" ? "physical" :
+                            type == "MeshPhongMaterial" ? "phong" :
+                            type == "MeshLambertMaterial" ? "lambert" :
+                            type == "MeshBasicMaterial" ? "basic" :
+                            type == "MeshDepthMaterial" ? "depth" :
+                            type == "MeshNormalMaterial" ? "normal" :
+                            type == "MeshToonMaterial" ? "toon" :
+                            type == "MeshMatcapMaterial" ? "matcap" : nullptr;
+                        // Prove vertex compatibility once per shader revision. The
+                        // additive check below accepts only fresh varying calculations;
+                        // arbitrary deformation remains on the original draw path.
+                        proof->geometryVertexProofCompatible = key &&
+                            m->shaderOverride->vertexShader == shaders::ShaderLib::instance().get(key).vertexShader;
+                        auto* defined = dynamic_cast<MaterialWithDefines*>(m);
+                        bool safeDefines = true;
+                        if (defined) for (const auto& [name, value] : defined->defines)
+                            if (!value.empty() || (name != "STANDARD" && name != "PHYSICAL" && name != "TOON" && name != "MATCAP")) safeDefines = false;
+                        if (!safeDefines) proof->geometryVertexProofCompatible = false;
+                        else if (key && !proof->geometryVertexProofCompatible)
+                            proof->geometryVertexProofCompatible = gl::hasStaticVertexAdditions(
+                                shaders::ShaderLib::instance().get(key).vertexShader, m->shaderOverride->vertexShader);
+                        proof->geometryVertexProofVersion = m->version();
+                        proof->geometryVertexProofShader = m->shaderOverride.get();
+                    }
+                    unsafeShader = !proof->geometryVertexProofCompatible;
+                }
+                if (unsafeShader) shaderExcluded = true;
+                if (unsafeShader || m->tetSkinning ||
+                    m->transparent || m->stencilWrite || !m->depthTest || !m->depthWrite) return false;
+                if (auto morph = m->as<MaterialWithMorphTargets>(); morph && (morph->morphTargets || morph->morphNormals)) return false;
+                if (auto displacement = m->as<MaterialWithDisplacementMap>(); displacement && displacement->displacementMap) return false;
+                return true;
+            };
+            bool eligible = virtualGeometry.enabled && isMesh && index &&
+                !(isWireframeMaterial && wireframeMaterial->wireframe) &&
+                !dynamic_cast<InstancedBufferGeometry*>(geometry) &&
+                !object->is<SkinnedMesh>() && object->frustumCulled && staticMaterial(material);
+            if (eligible) {
+                auto* mesh = object->as<Mesh>();
+                for (const auto& sourceMaterial : mesh->materials()) {
+                    if (!staticMaterial(sourceMaterial.get())) { eligible = false; break; }
+                }
+            }
+            if (eligible) {
+                Matrix4 clipFromLocal;
+                clipFromLocal.multiplyMatrices(camera->projectionMatrix, camera->matrixWorldInverse);
+                clipFromLocal.multiply(*object->matrixWorld);
+                const auto* instances = object->as<InstancedMesh>();
+                const unsigned instanceCount = instances ? instances->count() : 1;
+                const unsigned instanceBuffer = instances ? attributes.get(instances->instanceMatrix()).buffer : 0;
+                if (virtualGeometry.draw(*geometry, clipFromLocal, drawStart, drawCount, state, instanceBuffer, instanceCount,
+                                         instances ? instances->instanceMatrix()->version : 0, object->id)) {
+                    // Submitted source count is an upper bound. Exact surviving
+                    // counts require an asynchronous diagnostic readback.
+                    _info.update(drawCount, GL_TRIANGLES, instanceCount);
+                    return;
+                }
+            } else {
+                ++virtualGeometry.stats.fallback;
+                if (shaderExcluded) ++virtualGeometry.stats.shaderFallback;
+                else if (!isMesh || !index || dynamic_cast<InstancedBufferGeometry*>(geometry))
+                    ++virtualGeometry.stats.topologyFallback;
+            }
+        }
         if (auto im = object->as<InstancedMesh>()) {
-
             renderer->renderInstances(drawStart, drawCount, im->count());
-
         } else if (auto ig = dynamic_cast<InstancedBufferGeometry*>(geometry)) {
-
-            // No _maxInstanceCount clamp, unlike three.js: that exists to guard
-            // an instanceCount raised past what the instanced attributes were
-            // allocated for, and here the attributes and the count are set
-            // together by the geometry's owner. An empty one draws nothing.
             if (ig->instanceCount > 0) {
-
                 renderer->renderInstances(drawStart, drawCount, static_cast<int>(ig->instanceCount));
             }
-
         } else {
-
             renderer->render(drawStart, drawCount);
         }
     }
@@ -847,12 +923,15 @@ struct GLRenderer::Impl {
         }
 
         gl::GLProgram* program = nullptr;
+        auto* currentUniforms = gl::GLPrograms::getUniforms(*material);
+        const bool uniformsChanged = materialProperties->uniforms != currentUniforms;
+        materialProperties->uniforms = currentUniforms;
 
         if (programs.contains(programCacheKey)) {
 
             program = programs.at(programCacheKey);
 
-            if (materialProperties->currentProgram == program && materialProperties->lightsStateVersion == lightsStateVersion) {
+            if (!uniformsChanged && materialProperties->currentProgram == program && materialProperties->lightsStateVersion == lightsStateVersion) {
 
                 updateCommonMaterialProperties(material, parameters);
 
@@ -1558,6 +1637,7 @@ struct GLRenderer::Impl {
 
     void dispose() {
 
+        virtualGeometry.dispose();
         renderLists.dispose();
         renderStates.dispose();
         properties.dispose();
@@ -1780,6 +1860,17 @@ std::vector<unsigned char> GLRenderer::readRGBPixels() {
 void GLRenderer::readPixels(const Vector2& position, const std::pair<int, int>& size, Format format, unsigned char* data) {
 
     pimpl_->readPixels(position, size, format, data);
+}
+
+void GLRenderer::setVirtualGeometry(bool enabled) {
+    if (pimpl_->virtualGeometry.enabled && !enabled) pimpl_->virtualGeometry.dispose();
+    pimpl_->virtualGeometry.enabled = enabled;
+}
+
+GLRenderer::VirtualGeometryStats GLRenderer::virtualGeometryStats() const {
+    const auto& s = pimpl_->virtualGeometry.stats;
+    return {s.draws, s.clusters, s.builds, s.fallback, s.cacheBytes, s.dispatches, s.reused,
+            s.shaderFallback, s.topologyFallback, s.smallFallback, s.visibleFallback};
 }
 
 void GLRenderer::compile(Object3D& scene, Camera& camera) {

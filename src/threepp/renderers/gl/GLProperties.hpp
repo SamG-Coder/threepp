@@ -49,6 +49,10 @@ namespace threepp::gl {
 
     struct MaterialProperties {
 
+        std::optional<unsigned int> geometryVertexProofVersion;
+        const Shader* geometryVertexProofShader{};
+        bool geometryVertexProofCompatible{};
+
         GLProgram* program = nullptr;
         GLProgram* currentProgram = nullptr;
         std::unordered_map<std::string, GLProgram*> programs{};
@@ -82,7 +86,7 @@ namespace threepp::gl {
         unsigned int lightsStateVersion{};
 
         std::vector<UniformObject*> uniformsList;
-        UniformMap* uniforms;
+        UniformMap* uniforms{};
 
         unsigned int version{};
     };

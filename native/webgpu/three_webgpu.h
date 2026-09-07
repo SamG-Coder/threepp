@@ -464,6 +464,10 @@ TW_API void tw_overlay_wheel(int delta);
 TW_API int tw_take_display_command(int* enabled, int* width, int* height, int* refresh_hz);
 TW_API void tw_set_fullscreen_state(int mode, int width, int height, int refresh_hz);
 TW_API void tw_toggle_fps_overlay(void);
+TW_API void tw_set_virtual_geometry_supported(int supported);
+TW_API void tw_set_virtual_geometry(int enabled);
+TW_API int tw_virtual_geometry_enabled(void);
+TW_API void tw_set_virtual_geometry_stats(uint64_t draws, uint64_t fallback, uint64_t bytes);
 TW_API int tw_overlay_visible(void);
 TW_API void tw_overlay_bounds(int canvas_width, int canvas_height,
                               int* left, int* top, int* width, int* height);

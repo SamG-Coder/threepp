@@ -150,6 +150,9 @@ struct Runtime {
     std::atomic<int> wheelDelta{0};
     std::atomic<int> standaloneUi{0};
     std::atomic<int> fpsOverlay{0};
+    std::atomic<int> virtualGeometry{0};
+    std::atomic<int> virtualGeometrySupported{0};
+    std::atomic<uint64_t> virtualGeometryDraws{0}, virtualGeometryFallback{0}, virtualGeometryBytes{0};
     std::atomic<int> debugOverlay{0};
     std::atomic<int> overlayOpen{0};
     std::atomic<int> overlayDirty{1};
@@ -1797,6 +1800,7 @@ struct OverlayLayout {
     RECT fullscreenButton{};
     RECT fpsButton{};
     RECT debugButton{};
+    RECT virtualGeometryButton{};
     RECT dlssStatus{};
     RECT dlssSuperResolutionButton{};
     RECT dlssFrameGenerationButton{};
@@ -1816,7 +1820,7 @@ OverlayLayout overlayLayout(int width, int height) {
     layout.settings = layout.performance;
     layout.input = layout.performance;
     layout.bodyClip = RECT{left + 1, top + 96, left + panelWidth - 12, top + panelHeight - 20};
-    constexpr int contentHeight = 664;
+    constexpr int contentHeight = 728;
     const int bodyHeight = std::max(1L, layout.bodyClip.bottom - layout.bodyClip.top);
     layout.maxScroll = std::max(0, contentHeight - bodyHeight);
     const int scroll = std::clamp(g.overlayScrollPx.load(std::memory_order_relaxed), 0,
@@ -1833,15 +1837,17 @@ OverlayLayout overlayLayout(int width, int height) {
     layout.fpsButton = RECT{left + 24, contentTop + 182, left + 24 + columnWidth, contentTop + 228};
     layout.debugButton = RECT{layout.fpsButton.right + columnGap, contentTop + 182,
                               left + panelWidth - 24, contentTop + 228};
-    layout.dlssStatus = RECT{left + 24, contentTop + 288, left + panelWidth - 24, contentTop + 354};
-    layout.dlssSuperResolutionButton = RECT{left + 24, contentTop + 366,
-                                            left + panelWidth - 24, contentTop + 420};
-    layout.dlssFrameGenerationButton = RECT{left + 24, contentTop + 430,
+    layout.virtualGeometryButton = RECT{left + 24, contentTop + 236,
+                                        left + panelWidth - 24, contentTop + 274};
+    layout.dlssStatus = RECT{left + 24, contentTop + 352, left + panelWidth - 24, contentTop + 418};
+    layout.dlssSuperResolutionButton = RECT{left + 24, contentTop + 430,
                                             left + panelWidth - 24, contentTop + 484};
-    layout.dlssRayReconstructionButton = RECT{left + 24, contentTop + 494,
-                                              left + panelWidth - 24, contentTop + 548};
-    layout.reflexButton = RECT{left + 24, contentTop + 558,
-                               left + panelWidth - 24, contentTop + 612};
+    layout.dlssFrameGenerationButton = RECT{left + 24, contentTop + 494,
+                                            left + panelWidth - 24, contentTop + 548};
+    layout.dlssRayReconstructionButton = RECT{left + 24, contentTop + 558,
+                                              left + panelWidth - 24, contentTop + 612};
+    layout.reflexButton = RECT{left + 24, contentTop + 622,
+                               left + panelWidth - 24, contentTop + 676};
     layout.scrollTrack = RECT{left + panelWidth - 8, layout.bodyClip.top + 6,
                               left + panelWidth - 4, layout.bodyClip.bottom - 6};
     const int trackHeight = std::max(1L, layout.scrollTrack.bottom - layout.scrollTrack.top);
@@ -2299,6 +2305,7 @@ void buildOverlayPixels(int width, int height, bool compactFps = false,
         makeCropLocal(layout.borderlessButton);
         makeCropLocal(layout.fullscreenButton);
         makeCropLocal(layout.fpsButton);
+        makeCropLocal(layout.virtualGeometryButton);
         makeCropLocal(layout.debugButton);
         makeCropLocal(layout.dlssStatus);
         makeCropLocal(layout.dlssSuperResolutionButton);
@@ -2374,7 +2381,8 @@ void buildOverlayPixels(int width, int height, bool compactFps = false,
                     active ? RGB(185, 210, 248) : RGB(207, 213, 221), 9);
             RECT textRect{rect.left + 15, rect.top, rect.right - 62, rect.bottom};
             drawText(text, textRect, body, RGB(31, 40, 54), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-            RECT track{rect.right - 52, rect.top + 14, rect.right - 14, rect.bottom - 14};
+            const LONG trackTop = (rect.top + rect.bottom - 18) / 2;
+            RECT track{rect.right - 52, trackTop, rect.right - 14, trackTop + 18};
             rounded(track, active ? RGB(20, 105, 220) : RGB(207, 213, 221),
                     active ? RGB(20, 105, 220) : RGB(207, 213, 221), 20);
             const int knobLeft = active ? static_cast<int>(track.right) - 14 : static_cast<int>(track.left) + 3;
@@ -2394,6 +2402,22 @@ void buildOverlayPixels(int width, int height, bool compactFps = false,
                  DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         drawCompactToggle(layout.fpsButton, g.fpsOverlay.load(std::memory_order_relaxed) != 0, L"FPS counter");
         drawCompactToggle(layout.debugButton, g.debugOverlay.load(std::memory_order_relaxed) != 0, L"Diagnostic log");
+        drawCompactToggle(layout.virtualGeometryButton,
+            g.virtualGeometry.load(std::memory_order_relaxed) != 0,
+            g.virtualGeometrySupported.load(std::memory_order_relaxed)
+                ? L"Virtual Geometry (experimental)" : L"Virtual Geometry (unavailable on this backend)");
+        wchar_t geometryStatus[160]{L"Off - standard rendering"};
+        if (g.virtualGeometry.load(std::memory_order_relaxed)) {
+            std::swprintf(geometryStatus, std::size(geometryStatus),
+                L"Since enabled: %llu cluster draws / %llu standard  |  %.1f MiB cache",
+                static_cast<unsigned long long>(g.virtualGeometryDraws.load(std::memory_order_relaxed)),
+                static_cast<unsigned long long>(g.virtualGeometryFallback.load(std::memory_order_relaxed)),
+                g.virtualGeometryBytes.load(std::memory_order_relaxed) / 1048576.0);
+        }
+        RECT geometryStatusRect{panel.left + 24, layout.virtualGeometryButton.bottom + 7,
+                                panel.right - 24, layout.virtualGeometryButton.bottom + 39};
+        drawText(geometryStatus, geometryStatusRect, label, RGB(86, 97, 115),
+                 DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
         RECT dlssLabel{panel.left + 24, layout.dlssStatus.top - 25,
                        panel.right - 24, layout.dlssStatus.top - 2};
@@ -5716,6 +5740,7 @@ bool writeVersionedOutput(T* destination, uint32_t callerSize,
 extern "C" {
 
 int tw_start(void* parent_hwnd, int x, int y, int w, int h) {
+    tw_set_virtual_geometry_supported(0);
     try {
         return onWorker([parent_hwnd, x, y, w, h] {
             return implStart(parent_hwnd, x, y, w, h) ? 1 : 0;
@@ -5727,6 +5752,7 @@ int tw_start(void* parent_hwnd, int x, int y, int w, int h) {
 }
 
 int tw_attach_host(void* parent_hwnd, int x, int y, int w, int h) {
+    tw_set_virtual_geometry_supported(0);
     try {
         if (!parent_hwnd) {
             setError("invalid hwnd");
@@ -5957,6 +5983,8 @@ void tw_overlay_click(int x, int y) {
         const bool enabled = !g.debugOverlay.load(std::memory_order_relaxed);
         g.debugOverlay.store(enabled, std::memory_order_relaxed);
         g.statsLog.store(enabled, std::memory_order_relaxed);
+    } else if (insideBody && PtInRect(&layout.virtualGeometryButton, point)) {
+        tw_set_virtual_geometry(!g.virtualGeometry.load(std::memory_order_relaxed));
     } else if (insideBody && PtInRect(&layout.dlssSuperResolutionButton, point)) {
         const StreamlineFeatureState state = streamlineFeatureState();
         if (state.dlssSupported && state.dlssFunctionsLoaded) {
@@ -6110,6 +6138,28 @@ void tw_toggle_fps_overlay(void) {
     g.overlayDirty.store(1, std::memory_order_release);
 }
 
+void tw_set_virtual_geometry_supported(int supported) {
+    g.virtualGeometrySupported.store(supported != 0, std::memory_order_release);
+    if (!supported) g.virtualGeometry.store(0, std::memory_order_release);
+    g.overlayDirty.store(1, std::memory_order_release);
+}
+
+void tw_set_virtual_geometry(int enabled) {
+    g.virtualGeometry.store(enabled && g.virtualGeometrySupported.load(std::memory_order_acquire),
+                            std::memory_order_release);
+    g.overlayDirty.store(1, std::memory_order_release);
+}
+
+int tw_virtual_geometry_enabled(void) {
+    return g.virtualGeometry.load(std::memory_order_acquire);
+}
+
+void tw_set_virtual_geometry_stats(uint64_t draws, uint64_t fallback, uint64_t bytes) {
+    g.virtualGeometryDraws.store(draws, std::memory_order_relaxed);
+    g.virtualGeometryFallback.store(fallback, std::memory_order_relaxed);
+    g.virtualGeometryBytes.store(bytes, std::memory_order_relaxed);
+}
+
 int tw_overlay_visible(void) {
     return g.loading.load(std::memory_order_relaxed) != 0 ||
            g.overlayOpen.load(std::memory_order_relaxed) != 0 ||
@@ -6156,7 +6206,7 @@ const uint8_t* tw_overlay_raster(int width, int height, int fps, int frameUs,
     }
     const auto now = std::chrono::steady_clock::now();
     const bool sizeChanged = cachedWidth != rasterWidth || cachedHeight != rasterHeight;
-    const bool diagnosticsDue = fpsOnly &&
+    const bool diagnosticsDue = (fpsOnly || menu) &&
         (lastDiagnosticsRefresh.time_since_epoch().count() == 0 ||
          now - lastDiagnosticsRefresh >= std::chrono::seconds(1));
     const bool dirty = g.overlayDirty.exchange(0, std::memory_order_acq_rel) != 0;
@@ -6172,7 +6222,7 @@ const uint8_t* tw_overlay_raster(int width, int height, int fps, int frameUs,
         compositeCanvasOverlay(rasterRect);
         cachedWidth = rasterWidth;
         cachedHeight = rasterHeight;
-        if (fpsOnly) lastDiagnosticsRefresh = now;
+        if (fpsOnly || menu) lastDiagnosticsRefresh = now;
     }
     return g.overlayPixels.empty() ? nullptr : g.overlayPixels.data();
 }

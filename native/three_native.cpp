@@ -306,6 +306,10 @@ void renderGlOverlay() {
     const int height = std::max(1, g.statsH.load(std::memory_order_relaxed));
     const int fps = g.statsFps.load(std::memory_order_relaxed);
     const int frameUs = g.statsFrameUs.load(std::memory_order_relaxed);
+    if (auto* gl = dynamic_cast<GLRenderer*>(g.renderer.get())) {
+        const auto vg = gl->virtualGeometryStats();
+        tw_set_virtual_geometry_stats(vg.draws, vg.fallback, vg.cacheBytes);
+    }
     int overlayLeft = 0;
     int overlayTop = 0;
     int overlayWidth = 0;
@@ -481,6 +485,10 @@ void tn::renderPendingFrame() {
         return;
     }
     const auto t0 = std::chrono::steady_clock::now();
+#if !defined(__ANDROID__)
+    if (auto* gl = dynamic_cast<GLRenderer*>(g.renderer.get()))
+        gl->setVirtualGeometry(tw_virtual_geometry_enabled() != 0);
+#endif
 #if defined(__ANDROID__)
     g.renderer->render(*scene, *camera);
 #else
@@ -827,6 +835,7 @@ int impl_runtime_start(int width, int height, const char* title, int samples = 2
     }
 #endif
     Canvas::Parameters params;
+    params.computeContext(true);
     const bool delayStandaloneReveal = std::getenv("THREEBROWSER_READY_FILE") != nullptr;
     params.title(title ? title : "ThreeBrowser")
             .size(width > 0 ? width : 800, height > 0 ? height : 600)
@@ -868,6 +877,21 @@ int impl_runtime_start(int width, int height, const char* title, int samples = 2
     GLint actualSamples = 0;
     if (dynamic_cast<GLRenderer*>(g.renderer.get())) glGetIntegerv(GL_SAMPLES, &actualSamples);
     g.actualSamples.store(actualSamples);
+#if !defined(__ANDROID__)
+    GLint glMajor = 0, glMinor = 0;
+    if (dynamic_cast<GLRenderer*>(g.renderer.get())) {
+        glGetIntegerv(GL_MAJOR_VERSION, &glMajor);
+        glGetIntegerv(GL_MINOR_VERSION, &glMinor);
+    }
+    tw_set_virtual_geometry_supported(glMajor > 4 || (glMajor == 4 && glMinor >= 3));
+    if (const char* setting = std::getenv("THREEBROWSER_VIRTUAL_GEOMETRY"))
+        tw_set_virtual_geometry(std::string(setting) == "1");
+    if (std::getenv("THREEBROWSER_VIRTUAL_GEOMETRY_TRACE")) {
+        const char* requested = std::getenv("THREEBROWSER_VIRTUAL_GEOMETRY");
+        std::fprintf(stderr, "Virtual Geometry startup: requested=%s enabled=%d GL=%d.%d\n",
+                     requested ? requested : "unset", tw_virtual_geometry_enabled(), glMajor, glMinor);
+    }
+#endif
 #if !defined(__ANDROID__)
     runtimeInputListener.reset();
     g.canvas->addMouseListener(runtimeInputListener);
@@ -1105,6 +1129,17 @@ const char* tn_debug_scene(void) {
             });
         }
         std::string shadowProjections;
+        if (auto* renderer = dynamic_cast<GLRenderer*>(g.renderer.get())) {
+            const auto vg = renderer->virtualGeometryStats();
+            shadowProjections += " vgEnabled=" + std::to_string(tw_virtual_geometry_enabled()) +
+                " vgDraws=" + std::to_string(vg.draws) + " vgStandard=" + std::to_string(vg.fallback) +
+                " vgDispatches=" + std::to_string(vg.dispatches) + " vgReused=" + std::to_string(vg.reused) +
+                " vgBytes=" + std::to_string(vg.cacheBytes);
+            shadowProjections += " vgShader=" + std::to_string(vg.shaderFallback) +
+                " vgTopology=" + std::to_string(vg.topologyFallback) +
+                " vgSmall=" + std::to_string(vg.smallFallback) +
+                " vgVisible=" + std::to_string(vg.visibleFallback);
+        }
         for (const auto& [id, slot] : g.slots) {
             auto* light = slot.object ? dynamic_cast<LightWithShadow*>(slot.object.get()) : nullptr;
             if (!light || !light->shadow || !light->shadow->map) continue;

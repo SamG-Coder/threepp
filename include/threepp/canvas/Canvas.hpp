@@ -117,6 +117,8 @@ namespace threepp {
             Parameters& exitOnKeyEscape(bool flag);
 
             Parameters& headless(bool flag);
+            /// Prefer a compute-capable GL context, retrying 3.3 if unavailable.
+            Parameters& computeContext(bool flag) { computeContext_ = flag; return *this; }
 
         private:
             std::optional<WindowSize> size_;
@@ -126,6 +128,7 @@ namespace threepp {
             bool resizable_{true};
             bool exitOnKeyEscape_{true};
             bool headless_{false};
+            bool computeContext_{false};
             GraphicsAPI graphicsApi_{GraphicsAPI::OpenGL};
             std::optional<std::filesystem::path> favicon_;
 

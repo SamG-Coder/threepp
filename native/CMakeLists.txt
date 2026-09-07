@@ -43,6 +43,10 @@ if (MINGW)
 endif ()
 
 add_executable(three_native_smoke three_native_smoke.cpp)
+add_executable(three_virtual_geometry_smoke virtual_geometry_smoke.cpp)
+target_link_libraries(three_virtual_geometry_smoke PRIVATE threepp::threepp)
+target_include_directories(three_virtual_geometry_smoke PRIVATE "${CMAKE_SOURCE_DIR}/src/external/glad")
+set_target_properties(three_virtual_geometry_smoke PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 target_link_libraries(three_native_smoke PRIVATE three_native)
 set_target_properties(three_native_smoke PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
