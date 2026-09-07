@@ -52,6 +52,7 @@ namespace threepp::gl {
         std::optional<unsigned int> geometryVertexProofVersion;
         const Shader* geometryVertexProofShader{};
         bool geometryVertexProofCompatible{};
+        bool geometryAdaptiveVertexProofCompatible{};
 
         GLProgram* program = nullptr;
         GLProgram* currentProgram = nullptr;

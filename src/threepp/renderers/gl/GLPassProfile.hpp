@@ -44,4 +44,39 @@ public:
         out << '\n';
     }
 };
+
+class GLDrawProfile {
+    using Clock=std::chrono::steady_clock;
+    struct Trace {
+        std::ofstream file;
+        unsigned rows{};
+        Trace() {
+            if(const auto* path=std::getenv("THREEBROWSER_DRAW_PROFILE")) {
+                file.open(path);
+                if(file) file<<"frame,geometry,material,instances,programUs,bindingUs,submissionUs\n";
+            }
+        }
+    };
+    static Trace& trace() { static thread_local Trace value; return value; }
+    bool enabled{};
+    size_t frame{};
+    unsigned geometry{},material{},instances{};
+    Clock::time_point last;
+    std::array<double,3> stages{};
+public:
+    GLDrawProfile(size_t frame,unsigned geometry,unsigned material,unsigned instances)
+        :frame(frame),geometry(geometry),material(material),instances(instances) {
+        auto& t=trace(); enabled=t.file.is_open() && frame>=500 && t.rows<50000;
+        if(enabled) { ++t.rows; last=Clock::now(); }
+    }
+    void mark(unsigned index) {
+        if(!enabled) return;
+        auto now=Clock::now(); stages[index]=std::chrono::duration<double,std::micro>(now-last).count(); last=now;
+    }
+    ~GLDrawProfile() {
+        if(!enabled) return;
+        mark(2);
+        trace().file<<frame<<','<<geometry<<','<<material<<','<<instances<<','<<stages[0]<<','<<stages[1]<<','<<stages[2]<<'\n';
+    }
+};
 }

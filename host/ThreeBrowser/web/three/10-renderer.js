@@ -399,6 +399,23 @@
       }
 
       this.isWebGLRenderer = true;
+      // Match Three.js per-renderer metadata lifetime. Native render targets do
+      // not expose WebGL framebuffer handles; callers can detect their absence.
+      let rendererProperties = new WeakMap();
+      this.properties = {
+        has(object) { return rendererProperties.has(object); },
+        get(object) {
+          let value = rendererProperties.get(object);
+          if (value === undefined) {
+            value = {};
+            rendererProperties.set(object, value);
+          }
+          return value;
+        },
+        remove(object) { rendererProperties.delete(object); },
+        update(object, key, value) { rendererProperties.get(object)[key] = value; },
+        dispose() { rendererProperties = new WeakMap(); },
+      };
       this.domElement = canvas;
       canvas._threeBrowserNativeRenderer = true;
       styleHitCanvas(canvas);
@@ -1222,6 +1239,7 @@
 
     dispose() {
       this._anim = null;
+      this.properties.dispose();
     }
   }
 

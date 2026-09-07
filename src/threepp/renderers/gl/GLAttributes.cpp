@@ -73,7 +73,8 @@ Buffer GLAttributes::createBuffer(BufferAttribute* attribute, GLenum bufferType)
     return {buffer,
             glTypeOf(type),
             static_cast<int>(threepp::bytesPerElement(type)),
-            attribute->version};// attribute->version + 1 (?)
+            attribute->version,
+            ++nextGeneration_};
 }
 
 void GLAttributes::updateBuffer(GLuint buffer, BufferAttribute* attribute, GLenum bufferType, int bytesPerElement) {

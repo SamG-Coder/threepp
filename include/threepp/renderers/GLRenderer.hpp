@@ -58,9 +58,13 @@ namespace threepp {
         // Opt-in, full-detail native cluster culling. Unsupported draws retain
         // the ordinary renderer. Toggling off releases cached cluster buffers.
         void setVirtualGeometry(bool enabled);
+        // Zero preserves exact geometry. Positive values enable experimental
+        // attribute-aware hierarchy selection using a projected error metric.
+        void setVirtualGeometryPixelError(float pixels);
         struct VirtualGeometryStats {
             uint64_t draws, clusters, builds, fallback, cacheBytes, dispatches, reused;
             uint64_t shaderFallback, topologyFallback, smallFallback, visibleFallback;
+            uint64_t adaptiveDraws, adaptiveBuilds, adaptivePending, adaptiveBytes, adaptiveFailed, adaptiveReused;
         };
         [[nodiscard]] VirtualGeometryStats virtualGeometryStats() const;
         void compile(Object3D& scene, Camera& camera);

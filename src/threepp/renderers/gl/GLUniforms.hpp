@@ -33,6 +33,9 @@ namespace threepp::gl {
         explicit UniformObject(std::string id): id(std::move(id)) {}
 
         virtual void setValue(const UniformValue& value, GLTextures* textures = nullptr) = 0;
+        virtual void setStructuredValue(const std::unordered_map<std::string,NestedUniformValue>& value, GLTextures* textures) {
+            setValue(value,textures);
+        }
 
         virtual ~UniformObject() = default;
     };

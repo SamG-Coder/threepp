@@ -51,10 +51,15 @@ struct GLBindingStates::Impl {
             saveCache(geometry, index);
         }
 
-        if (object->is<InstancedMesh>()) {
-
-            updateBuffers = true;
+        uint64_t matrixGeneration = 0, colorGeneration = 0;
+        if (auto* instances = object->as<InstancedMesh>()) {
+            matrixGeneration = attributes_.get(instances->instanceMatrix()).generation;
+            if (instances->instanceColor()) colorGeneration = attributes_.get(instances->instanceColor()).generation;
         }
+        // Buffer contents may change every frame without changing the VAO's
+        // layout. Allocation generations also detect recycled GL buffer names.
+        updateBuffers = updateBuffers || currentState_->instanceMatrixGeneration != matrixGeneration ||
+            currentState_->instanceColorGeneration != colorGeneration;
 
         if (index) {
 
@@ -64,6 +69,8 @@ struct GLBindingStates::Impl {
         if (updateBuffers) {
 
             setupVertexAttributes(object, material, program, geometry);
+            currentState_->instanceMatrixGeneration = matrixGeneration;
+            currentState_->instanceColorGeneration = colorGeneration;
 
             if (index) {
 

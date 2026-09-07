@@ -24,6 +24,7 @@ namespace threepp::gl {
         std::optional<unsigned int> object;
         std::unordered_map<std::string, BufferAttribute*> attributes;
         BufferAttribute* index = nullptr;
+        uint64_t instanceMatrixGeneration{}, instanceColorGeneration{};
 
         int attributesNum = 0;
 

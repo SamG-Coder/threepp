@@ -169,6 +169,41 @@ test("Web Audio compressor and external ShaderMaterial subclasses follow browser
     assert.equal(element.value, "12");
 
     const renderer = new THREE.WebGLRenderer();
+    const { MeshStandardMaterial: StockMaterial } = await import('../node_modules/three/src/materials/MeshStandardMaterial.js');
+    for (const Material of [THREE.MeshStandardMaterial, StockMaterial]) {
+      const source = new Material();
+      source.userData = { effect: { enabled: true }, values: [1, 2] };
+      source.clippingPlanes = [new THREE.Plane(new THREE.Vector3(1, 0, 0), 2)];
+      const callback = () => {};
+      source.onBeforeCompile = callback;
+      const clone = source.clone();
+      assert.notEqual(clone.onBeforeCompile, callback, 'Three.js deliberately does not clone compile callbacks');
+      assert.deepEqual(clone.userData, source.userData);
+      clone.userData.effect.enabled = false;
+      clone.userData.values.push(3);
+      clone.clippingPlanes[0].constant = 5;
+      assert.equal(source.userData.effect.enabled, true);
+      assert.deepEqual(source.userData.values, [1, 2]);
+      assert.equal(source.clippingPlanes[0].constant, 2);
+      clone.dispose();
+      source.dispose();
+    }
+    const metadataTarget = new THREE.WebGLRenderTarget(16, 16);
+    assert.equal(renderer.properties.has(metadataTarget), false);
+    const metadata = renderer.properties.get(metadataTarget);
+    metadata.__useRenderToTexture = false;
+    renderer.initRenderTarget(metadataTarget);
+    assert.equal(renderer.properties.get(metadataTarget), metadata);
+    assert.equal(metadata.__useRenderToTexture, false);
+    assert.equal(metadata.__webglFramebuffer, undefined, 'native targets must not advertise unsupported WebGL handles');
+    renderer.properties.update(metadataTarget, 'testValue', 7);
+    assert.equal(metadata.testValue, 7);
+    renderer.properties.remove(metadataTarget);
+    assert.equal(renderer.properties.has(metadataTarget), false);
+    assert.notEqual(renderer.properties.get(metadataTarget), metadata);
+    renderer.dispose();
+    assert.equal(renderer.properties.has(metadataTarget), false);
+    metadataTarget.dispose();
     assert.notEqual(renderer.domElement.style.position, 'fixed', 'native rendering must preserve the page canvas layout');
     assert.match(renderer.getContext().getParameter(renderer.getContext().RENDERER), /ThreeBrowser/);
     assert.equal(renderer.state.buffers.depth.getReversed(), false);

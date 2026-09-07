@@ -62,6 +62,7 @@ namespace {
     private:
         int addr;
         std::vector<float> cache;
+        std::optional<int> integerCache;
         ActiveUniformInfo activeInfo;
         std::function<void(const UniformValue&, GLTextures*)> setValueFun;
 
@@ -119,9 +120,15 @@ namespace {
 
         // Single texture (2D / Cube)
 
-        void setValueT1(const UniformValue& value, GLTextures* textures) const {
+        void setInteger(int value) {
+            if(integerCache && *integerCache==value) return;
+            glUniform1i(addr,value);
+            integerCache=value;
+        }
+
+        void setValueT1(const UniformValue& value, GLTextures* textures) {
             const auto unit = textures->allocateTextureUnit();
-            glUniform1i(addr, unit);
+            setInteger(unit);
             auto tex = std::get<Texture*>(value);
             textures->setTexture2D(*tex, unit);
             if (id == "tMasks" && std::getenv("THREEBROWSER_NATIVE_TERRAIN_TRACE")) {
@@ -153,28 +160,28 @@ namespace {
             }
         }
 
-        void setValueT3D1(const UniformValue& value, GLTextures* textures) const {
+        void setValueT3D1(const UniformValue& value, GLTextures* textures) {
             const auto unit = textures->allocateTextureUnit();
-            glUniform1i(addr, unit);
+            setInteger(unit);
             auto tex = std::get<Texture*>(value);
             textures->setTexture3D(*tex, unit);
         }
 
-        void setValueT6(const UniformValue& value, GLTextures* textures) const {
+        void setValueT6(const UniformValue& value, GLTextures* textures) {
             const auto unit = textures->allocateTextureUnit();
-            glUniform1i(addr, unit);
+            setInteger(unit);
             auto tex = std::get<Texture*>(value);
             textures->setTextureCube(*tex, unit);
         }
 
-        void setValueV1i(const UniformValue& value) const {
+        void setValueV1i(const UniformValue& value) {
 
             if (std::holds_alternative<bool>(value)) {
                 bool b = std::get<bool>(value);
-                glUniform1i(addr, b);
+                setInteger(b);
             } else if (std::holds_alternative<int>(value)) {
                 int i = std::get<int>(value);
-                glUniform1i(addr, i);
+                setInteger(i);
             } else {
                 throw std::runtime_error("Illegal variant index: " + std::to_string(value.index()));
             }
@@ -369,9 +376,9 @@ namespace {
                     return [&](const UniformValue& value, GLTextures*) {
                         std::visit(overloaded{
                                            [&](auto) { std::cerr << "setValueM4: unsupported variant at index: " << value.index() << std::endl; },
-                                           [&](std::vector<float> arg) { glUniformMatrix4fv(addr, activeInfo.size, false, arg.data()); },
-                                           [&](std::vector<Matrix4> arg) { glUniformMatrix4fv(addr, activeInfo.size, false, flatten(arg, activeInfo.size, 16).data()); },
-                                           [&](std::vector<Matrix4*> arg) { glUniformMatrix4fv(addr, activeInfo.size, false, flattenP(arg, activeInfo.size, 16).data()); }},
+                                           [&](const std::vector<float>& arg) { glUniformMatrix4fv(addr, activeInfo.size, false, arg.data()); },
+                                           [&](const std::vector<Matrix4>& arg) { glUniformMatrix4fv(addr, activeInfo.size, false, flatten(arg, activeInfo.size, 16).data()); },
+                                           [&](const std::vector<Matrix4*>& arg) { glUniformMatrix4fv(addr, activeInfo.size, false, flattenP(arg, activeInfo.size, 16).data()); }},
                                    value);
                     };
                 case 0x8b5e:// SAMPLER_2D
@@ -418,29 +425,26 @@ namespace {
             std::visit(
                     overloaded{
                             [&](auto) { std::cout << "StructuredUniform '" << activeInfo.name << "': unsupported variant at index: " << value.index() << std::endl; },
-                            [&](std::unordered_map<std::string, NestedUniformValue> args) {
-                                for (auto& u : seq) {
-                                    NestedUniformValue& v = args.at(u->id);
-                                    std::visit(overloaded{
-                                                       [&](auto) { std::cout << "Warning: Unhandled NestedUniformValue!" << std::endl; },
-                                                       [&](int arg) { u->setValue(arg, textures); },
-                                                       [&](float arg) { u->setValue(arg, textures); },
-                                                       [&](Vector2 arg) { u->setValue(arg, textures); },
-                                                       [&](Vector3 arg) { u->setValue(arg, textures); },
-                                                       [&](Color arg) { u->setValue(arg, textures); }},
-                                               v);
-                                }
+                            [&](const std::unordered_map<std::string, NestedUniformValue>& args) {
+                                setStructuredValue(args,textures);
                             },
-                            [&](std::vector<std::unordered_map<std::string, NestedUniformValue>*> arg) {
+                            [&](const std::vector<std::unordered_map<std::string, NestedUniformValue>*>& arg) {
                                 for (auto& u : seq) {
                                     const auto index = utils::parseInt(u->id);
                                     if (index < 0 || static_cast<std::size_t>(index) >= arg.size()) continue;
                                     auto value = arg[index];
                                     if (!value) continue;
-                                    u->setValue(*value, textures);
+                                    u->setStructuredValue(*value, textures);
                                 }
                             }},
                     value);
+        }
+
+        void setStructuredValue(const std::unordered_map<std::string,NestedUniformValue>& values, GLTextures* textures) override {
+            for(auto& uniform:seq) {
+                const auto& value=values.at(uniform->id);
+                std::visit([&](const auto& component) { uniform->setValue(component,textures); },value);
+            }
         }
 
     private:
@@ -518,10 +522,8 @@ GLUniforms::GLUniforms(unsigned int program) {
 
 void GLUniforms::setValue(const std::string& name, const UniformValue& value, GLTextures* textures) {
 
-    if (map.contains(name)) {
-
-        map.at(name)->setValue(value, textures);
-    }
+    const auto found=map.find(name);
+    if(found!=map.end()) found->second->setValue(value,textures);
 }
 
 void GLUniforms::upload(std::vector<UniformObject*>& seq, UniformMap& values, GLTextures* textures) {

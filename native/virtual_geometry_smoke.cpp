@@ -8,6 +8,12 @@
 #include <chrono>
 
 using namespace threepp;
+static PFNGLVERTEXATTRIBPOINTERPROC originalAttributePointer{};
+static unsigned attributePointerCalls{};
+static void APIENTRY countAttributePointer(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void* pointer) {
+    ++attributePointerCalls;
+    originalAttributePointer(index, size, type, normalized, stride, pointer);
+}
 
 static void require(bool value, const char* message) {
     if (!value) throw std::runtime_error(message);
@@ -31,6 +37,21 @@ int main(int argc, char** argv) {
         auto geometry = PlaneGeometry::create(20, 20, 128, 128);
         auto material = MeshPhongMaterial::create();
         const auto& proofStock = shaders::ShaderLib::instance().phong.vertexShader;
+        {
+            auto source=std::string("varying vec3 diagnosticAffine;\n")+proofStock;
+            const std::string marker="#include <fog_vertex>";
+            source.insert(source.find(marker)+marker.size(),"\nvec4 proofPoint=vec4(transformed,1.);\n#ifdef USE_INSTANCING\nproofPoint=instanceMatrix*proofPoint;\n#endif\ndiagnosticAffine=(modelMatrix*proofPoint).xyz;\n");
+            require(gl::hasStaticVertexAdditions(proofStock,source,true),"Affine world-position varying was rejected");
+            const auto position=source.find("diagnosticAffine=(modelMatrix*proofPoint).xyz;");
+            source.replace(position,std::string("diagnosticAffine=(modelMatrix*proofPoint).xyz;").size(),"diagnosticAffine=vec3(length(proofPoint.xyz));");
+            require(gl::hasStaticVertexAdditions(proofStock,source),"Pure distance varying was rejected for static bounds");
+            require(!gl::hasStaticVertexAdditions(proofStock,source,true),"Nonlinear distance varying was accepted for interpolation");
+            std::unordered_map<std::string,int> symbols{{"position",1},{"uv",1},{"modelMatrix",0},{"scale",0}};
+            for(const char* expression : {"position*position","position/uv.x","unknown(position)","normalize(position)","position[uv.x]","position + missing","position++"})
+                require(gl::affineExpressionDegree(expression,symbols)==2,"Non-affine expression was accepted");
+            for(const char* expression : {"(modelMatrix*vec4(position,1.)).xyz","position*scale + vec3(1.)","uv/2.0","position[2]"})
+                require(gl::affineExpressionDegree(expression,symbols)<=1,"Valid affine expression rejected");
+        }
         for (const char* unsafe : {"transformed.x=0.;", "gl_Position=vec4(0.);",
                  "return;", "vec3 transformed=vec3(0.);", "vec3 fresh=deform(position);",
                  "#define transformed position", "#ifdef USE_INSTANCING", "#include <project_vertex>"}) {
@@ -204,6 +225,23 @@ int main(int argc, char** argv) {
         scene->add(instanced);
         compare("instance matrices and colors");
         require(renderer.virtualGeometryStats().draws > 0, "instancing path not exercised");
+        originalAttributePointer = glad_glVertexAttribPointer;
+        glad_glVertexAttribPointer = countAttributePointer;
+        auto bindingReference = renderer.readRGBPixels();
+        attributePointerCalls = 0;
+        for (unsigned i = 0; i < 12; ++i) renderer.render(*scene, *camera);
+        require(attributePointerCalls == 0, "unchanged instance buffers rebuilt vertex bindings");
+        require(renderer.readRGBPixels() == bindingReference, "retained instance bindings changed pixels");
+        instanced->instanceMatrix()->needsUpdate();
+        renderer.render(*scene, *camera);
+        require(attributePointerCalls == 0, "matrix content upload rebuilt unchanged vertex layout");
+        require(renderer.readRGBPixels() == bindingReference, "matrix content upload changed retained bindings");
+        instanced->dispose();
+        renderer.render(*scene, *camera);
+        require(attributePointerCalls > 0, "recreated instance buffers retained invalid vertex bindings");
+        require(renderer.readRGBPixels() == bindingReference, "recreated instance buffers changed pixels");
+        glad_glVertexAttribPointer = originalAttributePointer;
+        std::cout << "instanced VAO reuse: zero attribute pointer calls over 12 draws and a content upload, exact pixels\n";
         transform.makeTranslation(0, 0, 1);
         instanced->setMatrixAt(30, transform);
         instanced->instanceMatrix()->needsUpdate();
@@ -287,6 +325,11 @@ int main(int argc, char** argv) {
             if (enabled) require(renderer.virtualGeometryStats().draws >= 100, "benchmark did not exercise indirect draws");
         }
         glDeleteQueries(1, &timer);
+        // An explicitly disposed mesh can be rendered again, then destroyed
+        // before its renderer. Listener cleanup must not dereference its corpse.
+        instanced.reset();
+        peer.reset();
+        renderer.dispose();
         std::cout << "Virtual Geometry smoke passed\n";
         return 0;
     } catch (const std::exception& e) {

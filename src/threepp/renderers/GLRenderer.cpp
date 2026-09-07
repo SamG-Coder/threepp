@@ -53,6 +53,7 @@
 
 #include <cmath>
 #include "threepp/renderers/gl/GLVirtualGeometry.hpp"
+#include "threepp/renderers/gl/GLAdaptiveGeometry.hpp"
 #include "threepp/renderers/gl/GLStaticVertexProof.hpp"
 
 
@@ -82,6 +83,7 @@ struct GLRenderer::Impl {
 
     gl::GLState state;
     gl::GLVirtualGeometry virtualGeometry;
+    gl::GLAdaptiveGeometry adaptiveGeometry;
 
 
     std::unique_ptr<Scene> _emptyScene;
@@ -421,6 +423,9 @@ struct GLRenderer::Impl {
 
     void renderBufferDirect(Camera* camera, Object3D* _scene, BufferGeometry* geometry, Material* material, Object3D* object, std::optional<GeometryGroup> group) {
 
+        gl::GLDrawProfile drawProfile(_info.render.frame,geometry->id,material->id,
+            object->is<InstancedMesh>() ? object->as<InstancedMesh>()->count() : 1);
+
         auto scene = _scene;
 
         if (!scene) {
@@ -431,6 +436,7 @@ struct GLRenderer::Impl {
         const auto frontFaceCW = (isMesh && object->matrixWorld->determinant() < 0);
 
         auto program = setProgram(camera, scene, material, object);
+        drawProfile.mark(0);
 
         state.setMaterial(material, frontFaceCW);
 
@@ -470,6 +476,7 @@ struct GLRenderer::Impl {
         }
 
         bindingStates.setup(object, material, program, geometry, index);
+        drawProfile.mark(1);
 
         gl::BufferRenderer* renderer = bufferRenderer.get();
 
@@ -578,6 +585,10 @@ struct GLRenderer::Impl {
                         bool safeDefines = true;
                         if (defined) for (const auto& [name, value] : defined->defines)
                             if (!value.empty() || (name != "STANDARD" && name != "PHYSICAL" && name != "TOON" && name != "MATCAP")) safeDefines = false;
+                        proof->geometryAdaptiveVertexProofCompatible = safeDefines && proof->geometryVertexProofCompatible;
+                        if(safeDefines && key && !proof->geometryAdaptiveVertexProofCompatible)
+                            proof->geometryAdaptiveVertexProofCompatible = gl::hasStaticVertexAdditions(
+                                shaders::ShaderLib::instance().get(key).vertexShader, m->shaderOverride->vertexShader, true);
                         if (!safeDefines) proof->geometryVertexProofCompatible = false;
                         else if (key && !proof->geometryVertexProofCompatible)
                             proof->geometryVertexProofCompatible = gl::hasStaticVertexAdditions(
@@ -610,9 +621,23 @@ struct GLRenderer::Impl {
                 clipFromLocal.multiply(*object->matrixWorld);
                 const auto* instances = object->as<InstancedMesh>();
                 const unsigned instanceCount = instances ? instances->count() : 1;
-                const unsigned instanceBuffer = instances ? attributes.get(instances->instanceMatrix()).buffer : 0;
-                if (virtualGeometry.draw(*geometry, clipFromLocal, drawStart, drawCount, state, instanceBuffer, instanceCount,
-                                         instances ? instances->instanceMatrix()->version : 0, object->id)) {
+                const auto instanceBuffer = instances ? attributes.get(instances->instanceMatrix()) : gl::Buffer{};
+                // Safe static bounds alone do not prove that custom varyings
+                // interpolate correctly after simplification. Keep those exact.
+                auto adaptiveMaterial = [&](Material* m) {
+                    return !m->shaderOverride || properties.materialProperties.get(m)->geometryAdaptiveVertexProofCompatible;
+                };
+                bool adaptiveEligible = adaptiveMaterial(material);
+                for (const auto& source : object->as<Mesh>()->materials())
+                    if (!adaptiveMaterial(source.get())) adaptiveEligible = false;
+                if (adaptiveEligible && adaptiveGeometry.draw(*geometry, clipFromLocal, drawStart, drawCount,
+                        state.currentViewport, state, instanceBuffer.buffer, instanceCount,
+                        instances ? instances->instanceMatrix()->version : 0, instanceBuffer.generation)) {
+                    _info.update(drawCount, GL_TRIANGLES, instanceCount);
+                    return;
+                }
+                if (virtualGeometry.draw(*geometry, clipFromLocal, drawStart, drawCount, state, instanceBuffer.buffer, instanceCount,
+                                         instances ? instances->instanceMatrix()->version : 0, object->id, instanceBuffer.generation)) {
                     // Submitted source count is an upper bound. Exact surviving
                     // counts require an asynchronous diagnostic readback.
                     _info.update(drawCount, GL_TRIANGLES, instanceCount);
@@ -1646,6 +1671,7 @@ struct GLRenderer::Impl {
     void dispose() {
 
         virtualGeometry.dispose();
+        adaptiveGeometry.dispose();
         renderLists.dispose();
         renderStates.dispose();
         properties.dispose();
@@ -1871,14 +1897,23 @@ void GLRenderer::readPixels(const Vector2& position, const std::pair<int, int>& 
 }
 
 void GLRenderer::setVirtualGeometry(bool enabled) {
-    if (pimpl_->virtualGeometry.enabled && !enabled) pimpl_->virtualGeometry.dispose();
+    if (pimpl_->virtualGeometry.enabled && !enabled) {
+        pimpl_->virtualGeometry.dispose();
+        pimpl_->adaptiveGeometry.dispose();
+    }
     pimpl_->virtualGeometry.enabled = enabled;
+}
+
+void GLRenderer::setVirtualGeometryPixelError(float pixels) {
+    pimpl_->adaptiveGeometry.pixelError = std::isfinite(pixels) ? std::clamp(pixels, 0.f, 16.f) : 0.f;
 }
 
 GLRenderer::VirtualGeometryStats GLRenderer::virtualGeometryStats() const {
     const auto& s = pimpl_->virtualGeometry.stats;
+    const auto& a = pimpl_->adaptiveGeometry;
     return {s.draws, s.clusters, s.builds, s.fallback, s.cacheBytes, s.dispatches, s.reused,
-            s.shaderFallback, s.topologyFallback, s.smallFallback, s.visibleFallback};
+            s.shaderFallback, s.topologyFallback, s.smallFallback, s.visibleFallback,
+            a.draws, a.builds, a.pending, a.bytes+a.commandBytes, a.failed, a.reused};
 }
 
 void GLRenderer::compile(Object3D& scene, Camera& camera) {

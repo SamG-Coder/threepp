@@ -7,6 +7,19 @@ import test from 'node:test';
 
 const directory = fileURLToPath(new URL('../build/bin/', import.meta.url));
 
+test('Adaptive Geometry preserves hierarchy boundaries and refines GPU detail with distance', {
+  skip: process.env.THREEBROWSER_RUN_GPU_TESTS !== '1' || process.platform !== 'win32',
+}, () => {
+  const executable = path.join(directory, 'three_adaptive_geometry_smoke.exe');
+  assert.ok(fs.existsSync(executable), 'Build the three_adaptive_geometry_smoke target');
+  const result = spawnSync(executable, [], {
+    encoding: 'utf8', timeout: 60000, windowsHide: true,
+    env: { ...process.env, PATH: `${directory};${process.env.PATH}` },
+  });
+  assert.equal(result.status, 0, `${result.error || ''}\n${result.stdout}\n${result.stderr}`);
+  assert.match(result.stdout, /Adaptive Geometry smoke passed/);
+});
+
 test('Virtual Geometry native pixel parity, instancing, MSAA and invalidation', {
   skip: process.env.THREEBROWSER_RUN_GPU_TESTS !== '1' || process.platform !== 'win32',
 }, () => {

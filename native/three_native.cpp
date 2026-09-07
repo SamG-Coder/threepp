@@ -308,7 +308,8 @@ void renderGlOverlay() {
     const int frameUs = g.statsFrameUs.load(std::memory_order_relaxed);
     if (auto* gl = dynamic_cast<GLRenderer*>(g.renderer.get())) {
         const auto vg = gl->virtualGeometryStats();
-        tw_set_virtual_geometry_stats(vg.draws, vg.fallback, vg.cacheBytes);
+        tw_set_virtual_geometry_stats(vg.draws, vg.fallback, vg.cacheBytes + vg.adaptiveBytes);
+        tw_set_virtual_geometry_detail_stats(vg.adaptiveDraws, vg.adaptiveBuilds, vg.adaptivePending);
     }
     int overlayLeft = 0;
     int overlayTop = 0;
@@ -486,8 +487,10 @@ void tn::renderPendingFrame() {
     }
     const auto t0 = std::chrono::steady_clock::now();
 #if !defined(__ANDROID__)
-    if (auto* gl = dynamic_cast<GLRenderer*>(g.renderer.get()))
+    if (auto* gl = dynamic_cast<GLRenderer*>(g.renderer.get())) {
         gl->setVirtualGeometry(tw_virtual_geometry_enabled() != 0);
+        gl->setVirtualGeometryPixelError(1.f);
+    }
 #endif
 #if defined(__ANDROID__)
     g.renderer->render(*scene, *camera);
@@ -1139,6 +1142,12 @@ const char* tn_debug_scene(void) {
                 " vgTopology=" + std::to_string(vg.topologyFallback) +
                 " vgSmall=" + std::to_string(vg.smallFallback) +
                 " vgVisible=" + std::to_string(vg.visibleFallback);
+            shadowProjections += " vgAdaptiveDraws=" + std::to_string(vg.adaptiveDraws) +
+                " vgAdaptiveBuilds=" + std::to_string(vg.adaptiveBuilds) +
+                " vgAdaptivePending=" + std::to_string(vg.adaptivePending) +
+                " vgAdaptiveBytes=" + std::to_string(vg.adaptiveBytes) +
+                " vgAdaptiveFailed=" + std::to_string(vg.adaptiveFailed);
+            shadowProjections += " vgAdaptiveReused=" + std::to_string(vg.adaptiveReused);
         }
         for (const auto& [id, slot] : g.slots) {
             auto* light = slot.object ? dynamic_cast<LightWithShadow*>(slot.object.get()) : nullptr;

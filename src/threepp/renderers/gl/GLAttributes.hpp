@@ -26,6 +26,7 @@ namespace threepp::gl {
 
     private:
         std::unordered_map<BufferAttribute*, Buffer> buffers_;
+        uint64_t nextGeneration_{};
     };
 
 }// namespace threepp::gl

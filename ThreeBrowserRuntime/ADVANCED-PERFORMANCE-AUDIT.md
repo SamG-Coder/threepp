@@ -1,5 +1,39 @@
 # Advanced runtime performance investigation
 
+## Instanced vertex binding follow-up (2026-09-07)
+
+Baseline: f6f65e9, Virtual Geometry enabled. A separate 20-second native run used
+the existing worker CPU/GPU timestamp trace, with a V8 sampling profile from
+seconds 5 through 17. The worker summary excludes the first 30 presents and the
+last incomplete frame. Application code, quality settings and simulation remain
+unchanged. These are observational samples, not a deterministic replay.
+
+| Worker measurement per present | Before | After retaining instance bindings |
+| --- | ---: | ---: |
+| Frames sampled | 216 | 220 |
+| Mean command CPU time | 31.032 ms | 30.626 ms |
+| Median command CPU time | 30.828 ms | 30.422 ms |
+| Mean GPU timestamp interval | 57.724 ms | 56.573 ms |
+| Submission batches | 1 | 1 |
+| Observed FPS | about 16 | about 16 |
+
+GPU timestamp intervals can include gaps in GPU work; they are not a shader-busy
+time measurement. The small timing differences need repeated controlled runs
+before claiming a speedup. The sampling profile also attributes substantial JS
+self time to application wave calculations; those functions were not changed.
+
+The confirmed redundant work was `GLBindingStates::setup` forcing every instanced
+draw to repeat vertex attribute layout setup. It now compares buffer-allocation
+generations. Content uploads leave the generation unchanged, while recreated
+buffers receive a new generation even if GL reuses a numeric buffer name.
+Virtual Geometry selection keys also include this allocation generation.
+
+The GPU regression instruments actual `glVertexAttribPointer` calls: twelve
+unchanged draws and a matrix-content upload perform zero layout calls with exact
+pixels. Disposing/recreating the instance buffers forces setup again and retains
+the reference pixels. Shared geometry, mixed instance colors, alternate cameras,
+matrix changes and cached-command invalidation remain covered by the smoke test.
+
 ## Measured scope
 
 Baseline: ea5d896. Same local exported application, existing quality settings,

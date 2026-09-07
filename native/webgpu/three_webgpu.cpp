@@ -153,6 +153,7 @@ struct Runtime {
     std::atomic<int> virtualGeometry{0};
     std::atomic<int> virtualGeometrySupported{0};
     std::atomic<uint64_t> virtualGeometryDraws{0}, virtualGeometryFallback{0}, virtualGeometryBytes{0};
+    std::atomic<uint64_t> virtualGeometryDetailDraws{0}, virtualGeometryDetailBuilds{0}, virtualGeometryDetailPending{0};
     std::atomic<int> debugOverlay{0};
     std::atomic<int> overlayOpen{0};
     std::atomic<int> overlayDirty{1};
@@ -2406,10 +2407,13 @@ void buildOverlayPixels(int width, int height, bool compactFps = false,
             g.virtualGeometry.load(std::memory_order_relaxed) != 0,
             g.virtualGeometrySupported.load(std::memory_order_relaxed)
                 ? L"Virtual Geometry (experimental)" : L"Virtual Geometry (unavailable on this backend)");
-        wchar_t geometryStatus[160]{L"Off - standard rendering"};
+        wchar_t geometryStatus[256]{L"Off - standard rendering"};
         if (g.virtualGeometry.load(std::memory_order_relaxed)) {
             std::swprintf(geometryStatus, std::size(geometryStatus),
-                L"Since enabled: %llu cluster draws / %llu standard  |  %.1f MiB cache",
+                L"Adaptive: %llu draws / %llu cooked / %llu pending\nExact clusters: %llu draws / %llu standard  |  %.1f MiB cache",
+                static_cast<unsigned long long>(g.virtualGeometryDetailDraws.load(std::memory_order_relaxed)),
+                static_cast<unsigned long long>(g.virtualGeometryDetailBuilds.load(std::memory_order_relaxed)),
+                static_cast<unsigned long long>(g.virtualGeometryDetailPending.load(std::memory_order_relaxed)),
                 static_cast<unsigned long long>(g.virtualGeometryDraws.load(std::memory_order_relaxed)),
                 static_cast<unsigned long long>(g.virtualGeometryFallback.load(std::memory_order_relaxed)),
                 g.virtualGeometryBytes.load(std::memory_order_relaxed) / 1048576.0);
@@ -2417,7 +2421,7 @@ void buildOverlayPixels(int width, int height, bool compactFps = false,
         RECT geometryStatusRect{panel.left + 24, layout.virtualGeometryButton.bottom + 7,
                                 panel.right - 24, layout.virtualGeometryButton.bottom + 39};
         drawText(geometryStatus, geometryStatusRect, label, RGB(86, 97, 115),
-                 DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+                 DT_LEFT | DT_WORDBREAK | DT_END_ELLIPSIS);
 
         RECT dlssLabel{panel.left + 24, layout.dlssStatus.top - 25,
                        panel.right - 24, layout.dlssStatus.top - 2};
@@ -6158,6 +6162,12 @@ void tw_set_virtual_geometry_stats(uint64_t draws, uint64_t fallback, uint64_t b
     g.virtualGeometryDraws.store(draws, std::memory_order_relaxed);
     g.virtualGeometryFallback.store(fallback, std::memory_order_relaxed);
     g.virtualGeometryBytes.store(bytes, std::memory_order_relaxed);
+}
+
+void tw_set_virtual_geometry_detail_stats(uint64_t draws, uint64_t builds, uint64_t pending) {
+    g.virtualGeometryDetailDraws.store(draws, std::memory_order_relaxed);
+    g.virtualGeometryDetailBuilds.store(builds, std::memory_order_relaxed);
+    g.virtualGeometryDetailPending.store(pending, std::memory_order_relaxed);
 }
 
 int tw_overlay_visible(void) {

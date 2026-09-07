@@ -872,6 +872,14 @@
         if (skip[key] || key.startsWith("is") || key.startsWith("_")) continue;
         const value = source[key];
         if (typeof value === "function") continue;
+        if (key === "userData") {
+          this.userData = JSON.parse(JSON.stringify(value));
+          continue;
+        }
+        if (key === "clippingPlanes") {
+          this.clippingPlanes = value === null ? null : value.map(plane => plane.clone());
+          continue;
+        }
         const dest = this[key];
         if (isColorObj(dest) && value != null) {
           dest.set(value);

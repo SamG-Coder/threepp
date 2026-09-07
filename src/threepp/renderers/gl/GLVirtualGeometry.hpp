@@ -34,7 +34,7 @@ public:
 
     bool draw(BufferGeometry& geometry, const Matrix4& clipFromLocal,
               int first, int count, GLState& state, GLuint instanceBuffer = 0, unsigned instances = 1,
-              unsigned instanceVersion = 0, unsigned instanceOwner = 0) {
+              unsigned instanceVersion = 0, unsigned instanceOwner = 0, uint64_t instanceBufferGeneration = 0) {
 #if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__)
         if (uint64_t(count) * instances < 12288) {
             ++stats.fallback;
@@ -89,7 +89,7 @@ public:
         const uint64_t commandCount = uint64_t(entry.clusters) * instances;
         if (commandCount > 262144) { ++stats.fallback; return false; }
         Selection key{true, clipFromLocal.elements, first, count, instances, instanceBuffer,
-                      instanceVersion, instanceOwner, entry.generation};
+                      instanceVersion, instanceOwner, entry.generation, instanceBufferGeneration};
         auto selected = std::find_if(entry.selections.begin(), entry.selections.end(),
             [&](const auto& selection) { return selection.key == key; });
         if (selected == entry.selections.end()) selected = std::min_element(entry.selections.begin(), entry.selections.end(),
@@ -208,9 +208,11 @@ private:
         int first{}, count{};
         unsigned instances{}, instanceBuffer{}, instanceVersion{}, instanceOwner{};
         uint64_t generation{};
+        uint64_t instanceBufferGeneration{};
         bool operator==(const Selection& other) const {
             // Reject different owners/revisions before comparing camera matrices.
             return valid && other.valid && generation == other.generation &&
+                instanceBufferGeneration == other.instanceBufferGeneration &&
                 instanceOwner == other.instanceOwner && instanceVersion == other.instanceVersion &&
                 instanceBuffer == other.instanceBuffer && instances == other.instances &&
                 first == other.first && count == other.count && clip == other.clip;

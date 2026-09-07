@@ -1,6 +1,7 @@
 
 #ifndef THREEPP_BUFFER_HPP
 #define THREEPP_BUFFER_HPP
+#include <cstdint>
 
 namespace threepp::gl {
 
@@ -9,6 +10,7 @@ namespace threepp::gl {
         int type{};
         int bytesPerElement{};
         unsigned int version{};
+        uint64_t generation{};
     };
 
 }// namespace threepp::gl

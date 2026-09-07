@@ -19,41 +19,18 @@ using namespace threepp::gl;
 
 struct GLObjects::Impl {
 
-    struct OnInstancedMeshDispose: EventListener {
-
-        explicit OnInstancedMeshDispose(Impl* scope): scope(scope) {}
-
-        void onEvent(Event& event) override {
-            auto instancedMesh = std::any_cast<InstancedMesh*>(event.target);
-
-            instancedMesh->removeEventListener("dispose", *this);
-
-            auto& tracked = scope->registeredInstancedMeshes_;
-            tracked.erase(std::remove(tracked.begin(), tracked.end(), instancedMesh), tracked.end());
-
-            scope->attributes_.remove(instancedMesh->instanceMatrix());
-
-            if (instancedMesh->instanceColor()) scope->attributes_.remove(instancedMesh->instanceColor());
-        }
-
-    private:
-        Impl* scope;
-    };
-
     GLInfo& info_;
     GLGeometries& geometries_;
     GLAttributes& attributes_;
 
-    OnInstancedMeshDispose onInstancedMeshDispose;
-
     std::unordered_map<BufferGeometry*, size_t> updateMap_;
-    std::vector<InstancedMesh*> registeredInstancedMeshes_;
+    // Handles outlive their dispatchers safely; raw mesh pointers do not.
+    std::unordered_map<unsigned, Subscription> registeredInstancedMeshes_;
 
     Impl(GLGeometries& geometries, GLAttributes& attributes, GLInfo& info)
         : info_(info),
           geometries_(geometries),
-          attributes_(attributes),
-          onInstancedMeshDispose(this) {}
+          attributes_(attributes) {}
 
     BufferGeometry* update(Object3D* object) {
 
@@ -73,10 +50,13 @@ struct GLObjects::Impl {
 
         if (auto instancedMesh = object->as<InstancedMesh>()) {
 
-            if (!object->hasEventListener("dispose", onInstancedMeshDispose)) {
-
-                object->addEventListener("dispose", onInstancedMeshDispose);
-                registeredInstancedMeshes_.push_back(instancedMesh);
+            if (!registeredInstancedMeshes_.contains(object->id)) {
+                registeredInstancedMeshes_.emplace(object->id, object->subscribe("dispose", [this](Event& event) {
+                    auto* mesh = std::any_cast<InstancedMesh*>(event.target);
+                    attributes_.remove(mesh->instanceMatrix());
+                    if (mesh->instanceColor()) attributes_.remove(mesh->instanceColor());
+                    registeredInstancedMeshes_.erase(mesh->id);
+                }));
             }
 
             attributes_.update(instancedMesh->instanceMatrix(), GL_ARRAY_BUFFER);
@@ -92,9 +72,6 @@ struct GLObjects::Impl {
 
     void dispose() {
 
-        for (auto* im : registeredInstancedMeshes_) {
-            im->removeEventListener("dispose", onInstancedMeshDispose);
-        }
         registeredInstancedMeshes_.clear();
         updateMap_.clear();
     }

@@ -468,6 +468,7 @@ TW_API void tw_set_virtual_geometry_supported(int supported);
 TW_API void tw_set_virtual_geometry(int enabled);
 TW_API int tw_virtual_geometry_enabled(void);
 TW_API void tw_set_virtual_geometry_stats(uint64_t draws, uint64_t fallback, uint64_t bytes);
+TW_API void tw_set_virtual_geometry_detail_stats(uint64_t draws, uint64_t builds, uint64_t pending);
 TW_API int tw_overlay_visible(void);
 TW_API void tw_overlay_bounds(int canvas_width, int canvas_height,
                               int* left, int* top, int* width, int* height);
