@@ -96,22 +96,9 @@ public:
             [](const auto& a, const auto& b) { return a.lastUse < b.lastUse; });
         selected->lastUse = ++serial_;
         GLuint commands = entry.commands[std::distance(entry.selections.begin(), selected)];
-        if (instanceBuffer) {
-            const size_t bytes = commandCount * 20;
-            if (bytes > instanceCommandBytes_) {
-                GLint previous = 0;
-                glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &previous);
-                if (!instanceCommands_) glGenBuffers(1, &instanceCommands_);
-                glBindBuffer(GL_ARRAY_BUFFER, instanceCommands_);
-                glBufferData(GL_ARRAY_BUFFER, bytes, nullptr, GL_DYNAMIC_DRAW);
-                glBindBuffer(GL_ARRAY_BUFFER, previous);
-                instanceCommandBytes_ = bytes;
-                instanceSelection_.valid = false;
-                stats.cacheBytes = residentBytes_ + instanceCommandBytes_;
-            }
-            commands = instanceCommands_;
-        }
-        auto& previousSelection = instanceBuffer ? instanceSelection_ : selected->key;
+        auto* instanceSlot = instanceBuffer ? instanceCommands(key, commandCount * 20) : nullptr;
+        if (instanceSlot) commands = instanceSlot->commands;
+        auto& previousSelection = instanceSlot ? instanceSlot->key : selected->key;
         if (previousSelection == key) {
             GLint previousIndirect = 0;
             glGetIntegerv(0x8F43, &previousIndirect);
@@ -200,10 +187,7 @@ public:
 #if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__)
         cache_.clear();
         residentBytes_ = 0;
-        if (instanceCommands_) glDeleteBuffers(1, &instanceCommands_);
-        instanceCommands_ = 0;
-        instanceCommandBytes_ = 0;
-        instanceSelection_.valid = false;
+        for (auto& slot : instanceSelections_) releaseInstance(slot);
         if (program_) glDeleteProgram(program_);
         program_ = 0;
         initialized_ = false;
@@ -224,7 +208,13 @@ private:
         int first{}, count{};
         unsigned instances{}, instanceBuffer{}, instanceVersion{}, instanceOwner{};
         uint64_t generation{};
-        bool operator==(const Selection&) const = default;
+        bool operator==(const Selection& other) const {
+            // Reject different owners/revisions before comparing camera matrices.
+            return valid && other.valid && generation == other.generation &&
+                instanceOwner == other.instanceOwner && instanceVersion == other.instanceVersion &&
+                instanceBuffer == other.instanceBuffer && instances == other.instances &&
+                first == other.first && count == other.count && clip == other.clip;
+        }
     };
     struct Entry {
         GLuint bounds{};
@@ -248,9 +238,17 @@ private:
     uint64_t serial_{};
     bool initialized_{};
     GLuint program_{};
-    GLuint instanceCommands_{};
+    struct InstanceSelection {
+        Selection key;
+        GLuint commands{};
+        size_t bytes{};
+        uint64_t lastUse{};
+    };
+    // Independent immutable command results prevent one instanced object/pass
+    // from overwriting another's selection. Both slot count and bytes are capped.
+    std::array<InstanceSelection, 256> instanceSelections_{};
+    static constexpr size_t instanceBudget_ = 32 * 1024 * 1024;
     size_t instanceCommandBytes_{};
-    Selection instanceSelection_;
     GLint planeLocation_{}, rangeLocation_{}, clusterLocation_{}, commandLocation_{}, instancedLocation_{};
     using Dispatch = void(APIENTRY*)(GLuint, GLuint, GLuint);
     using Barrier = void(APIENTRY*)(GLbitfield);
@@ -259,7 +257,46 @@ private:
     Barrier barrier_{};
     MultiDraw multiDraw_{};
 
+    void releaseInstance(InstanceSelection& slot) {
+        if (slot.commands) glDeleteBuffers(1, &slot.commands);
+        instanceCommandBytes_ -= slot.bytes;
+        slot = {};
+    }
+
+    InstanceSelection* instanceCommands(const Selection& key, size_t bytes) {
+        auto slot = std::find_if(instanceSelections_.begin(), instanceSelections_.end(),
+            [&](const auto& candidate) { return candidate.key == key; });
+        if (slot == instanceSelections_.end()) {
+            slot = std::min_element(instanceSelections_.begin(), instanceSelections_.end(),
+                [](const auto& a, const auto& b) { return a.lastUse < b.lastUse; });
+            slot->key = {};
+            // The command-count guard guarantees a single allocation fits.
+            const size_t growth = bytes > slot->bytes ? bytes - slot->bytes : 0;
+            while (instanceCommandBytes_ + growth > instanceBudget_) {
+                auto oldest = instanceSelections_.end();
+                for (auto it = instanceSelections_.begin(); it != instanceSelections_.end(); ++it)
+                    if (it != slot && it->commands && (oldest == instanceSelections_.end() || it->lastUse < oldest->lastUse)) oldest = it;
+                releaseInstance(*oldest);
+            }
+            if (growth) {
+                GLint previous = 0;
+                glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &previous);
+                if (!slot->commands) glGenBuffers(1, &slot->commands);
+                glBindBuffer(GL_ARRAY_BUFFER, slot->commands);
+                glBufferData(GL_ARRAY_BUFFER, bytes, nullptr, GL_DYNAMIC_DRAW);
+                glBindBuffer(GL_ARRAY_BUFFER, previous);
+                slot->bytes = bytes;
+                instanceCommandBytes_ += growth;
+            }
+        }
+        slot->lastUse = ++serial_;
+        stats.cacheBytes = residentBytes_ + instanceCommandBytes_;
+        return &*slot;
+    }
+
     void erase(Cache::iterator it) {
+        for (auto& slot : instanceSelections_)
+            if (slot.key.generation == it->second->generation) releaseInstance(slot);
         residentBytes_ -= it->second->bytes;
         cache_.erase(it);
         stats.cacheBytes = residentBytes_ + instanceCommandBytes_;

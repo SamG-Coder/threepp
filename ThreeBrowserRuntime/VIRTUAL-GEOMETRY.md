@@ -28,9 +28,13 @@ It is not yet the complete set of modes explored in ThreeNaniteTest.
 - Retain up to four ordinary draw selections per geometry using LRU replacement,
   so alternating cameras/passes do not immediately overwrite each other's work.
   The extra command buffers count against the existing 32 MiB residency cap.
-  Instanced draws currently retain the shared command buffer path.
-- Use bounded LRU metadata residency (32 MiB) and a bounded shared instance
-  command buffer (up to 5 MiB). Source geometry remains resident and unchanged.
+- Retain instanced draw selections by instance owner, buffer/revision, geometry
+  generation, camera/object transform, draw range and count. Use at most 256 LRU
+  selections with a separate 32 MiB byte cap; reuse allocated command storage
+  on misses when its capacity fits. Geometry disposal/invalidation releases its
+  cached instance selections, and disabling the mode releases all buffers.
+- Use bounded LRU metadata/ordinary-command residency (32 MiB) plus the bounded
+  instanced-command pool (32 MiB). Source geometry remains resident and unchanged.
 - Restore compute/program/storage/indirect state and use barriers between shader
   writes and draw consumption. Preserve MSAA and the existing shading path.
 - Turn off the mode to release its buffers and return to ordinary submission.
@@ -91,6 +95,10 @@ writes, and removing an override while cached programs remain alive. The menu
 test verifies a constant-height switch thumb, including the compact mode row.
 An alternating-camera regression warms four selections, then verifies twelve
 exact-pixel revisits with no additional compute dispatches.
+Two instanced owners sharing geometry/material also alternate across two cameras
+without recomputation, including mixed per-instance-color variants. Revision
+invalidation, command-cache eviction, byte limits and geometry disposal are
+checked separately.
 
 An optional output PNG path can be passed to the native smoke executable.
 Its timed clipped-plane workload is a controlled renderer microbenchmark, not

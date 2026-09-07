@@ -69,6 +69,7 @@ namespace threepp::gl {
         std::optional<ColorSpace> outputEncoding;
         ToneMapping toneMapping{ToneMapping::None};
         bool instancing{};
+        bool instancingColor{};
         bool skinning{};
         bool vertexAlphas{};
 

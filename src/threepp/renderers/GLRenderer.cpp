@@ -1016,6 +1016,7 @@ struct GLRenderer::Impl {
         materialProperties->outputEncoding = parameters.outputEncoding;
         materialProperties->toneMapping = parameters.toneMapping;
         materialProperties->instancing = parameters.instancing;
+        materialProperties->instancingColor = parameters.instancingColor;
         materialProperties->skinning = parameters.skinning;
         materialProperties->numClippingPlanes = parameters.numClippingPlanes;
         materialProperties->numIntersection = parameters.numClipIntersection;
@@ -1100,6 +1101,13 @@ struct GLRenderer::Impl {
 
             } else if (!isInstancedMesh && materialProperties->instancing) {
 
+                needsProgramChange = true;
+
+            } else if (materialProperties->instancingColor !=
+                       (isInstancedMesh && object->as<InstancedMesh>()->instanceColor() != nullptr)) {
+
+                // A shared material may alternate between colored and uncolored
+                // instance owners. The attribute exists only in the color variant.
                 needsProgramChange = true;
 
             } else if (isSkinnedMesh && !materialProperties->skinning) {

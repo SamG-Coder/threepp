@@ -210,6 +210,54 @@ int main(int argc, char** argv) {
         compare("moving instance");
         instanced->setCount(48);
         compare("instance count change");
+        auto peer = InstancedMesh::create(instanced->geometry(), material, 64);
+        for (unsigned i = 0; i < 64; ++i) {
+            transform.makeTranslation(float(i % 8) * 3 - 9, float(i / 8) * 3 - 9, -.5f);
+            peer->setMatrixAt(i, transform);
+        }
+        scene->add(peer);
+        std::array<std::vector<unsigned char>, 2> instanceReferences;
+        renderer.setVirtualGeometry(false);
+        for (unsigned i = 0; i < 2; ++i) {
+            camera->position.x = float(i) * .5f;
+            renderer.render(*scene, *camera);
+            instanceReferences[i] = renderer.readRGBPixels();
+        }
+        renderer.setVirtualGeometry(true);
+        for (unsigned i = 0; i < 2; ++i) {
+            camera->position.x = float(i) * .5f;
+            renderer.render(*scene, *camera);
+        }
+        dispatches = renderer.virtualGeometryStats().dispatches;
+        for (unsigned repeat = 0; repeat < 3; ++repeat) for (unsigned i = 0; i < 2; ++i) {
+            camera->position.x = float(i) * .5f;
+            renderer.render(*scene, *camera);
+            require(renderer.readRGBPixels() == instanceReferences[i], "instanced selection cache changed pixels");
+        }
+        require(renderer.virtualGeometryStats().dispatches == dispatches, "instanced owners/cameras overwrite each other's cache");
+        std::cout << "two instanced owners and cameras: 12 cache hits, zero new dispatches, exact pixels\n";
+        transform.makeTranslation(0, 0, 2);
+        peer->setMatrixAt(30, transform);
+        peer->instanceMatrix()->needsUpdate();
+        compare("cached instance revision invalidation");
+        scene->remove(*peer);
+        renderer.setVirtualGeometry(false);
+        instanced->setGeometry(PlaneGeometry::create(2, 2, 64, 64));
+        instanced->setCount(64);
+        renderer.setVirtualGeometry(true);
+        renderer.render(*scene, *camera);
+        const auto firstResidency = renderer.virtualGeometryStats().cacheBytes;
+        const auto firstCommands = uint64_t((instanced->geometry()->getIndex()->count() + 191) / 192) * instanced->count() * 20;
+        for (unsigned i = 0; i < 300; ++i) {
+            camera->position.x = float(i) * .001f;
+            renderer.render(*scene, *camera);
+        }
+        require(renderer.virtualGeometryStats().cacheBytes <= firstResidency - firstCommands + 32 * 1024 * 1024,
+            "instanced command cache exceeded byte budget");
+        compare("instanced cache eviction parity");
+        instanced->geometry()->dispose();
+        require(renderer.virtualGeometryStats().cacheBytes == 0, "geometry disposal retained instanced command selections");
+        compare("instanced cache rebuild after disposal");
         scene->remove(*instanced);
         scene->add(mesh);
         // A controlled geometry-bound workload, not an application FPS claim.
