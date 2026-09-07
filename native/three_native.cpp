@@ -49,6 +49,7 @@
 #include <vector>
 
 #include "runtime_internal.hpp"
+#include "frame_profile.hpp"
 
 #include <iostream>
 
@@ -62,6 +63,7 @@ namespace { void releaseGlOverlayGpu(); }
 namespace tn {
 
 void destroySurface() {
+    CommandProfile::release();
     g.open.store(false, std::memory_order_release);
 #if defined(_WIN32)
     if (g.canvas) {

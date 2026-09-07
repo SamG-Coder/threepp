@@ -93,3 +93,54 @@ Seven alternating benchmark rounds, 200,000 checks over 128 textures with period
 The observed opcode 38 float-texture upload occurs about once per presentation. Native OP_TEX_FLOAT allocates a pixel vector; finishFloatTexture constructs a temporary DataTexture and copies its state into an existing texture. GLTextures uploads the pixels with texImage2D even when dimensions/format/type remain unchanged. These are concrete allocation/storage-update paths to measure next.
 
 Candidate: reuse matching CPU pixel storage and use subimage updates for an already allocated compatible GPU texture. Preserve handle identity, sampler state, float precision, mipmap behavior, color space and resize/format changes. Validate updates before and after intervening draws; do not replace GPU-generated render-target contents or alter application update frequency. Allocation avoidance is established by code inspection, but its GPU/driver benefit remains unmeasured and is not claimed here.
+
+## Float storage and preparation implementation
+
+Matching RGBA float command uploads now copy into the existing CPU vector and mark the same texture dirty. Render-target slots are excluded. Changed dimensions, storage type or format retain the allocation path. Plain 2D float GPU uploads reuse allocated storage with `glTexSubImage2D` only when width, height, internal format, external format and data type match. Other upload branches invalidate the storage record. Sampler changes and mip generation still run through their existing paths.
+
+Renderer preparation no longer allocates one-element material arrays for each visited object or runs four separate material searches in the metadata traversal. Scene environment rotation is computed once per distinct Euler value/order and shared with hooked material uniforms. Each use checks the current Euler, so callbacks and nested passes can still change it. Object traversal, matrix-world propagation and application callbacks remain active on every pass; there is no speculative cross-frame transform or scene-membership cache.
+
+The regression suite samples GPU pixels after compatible updates, resizing, float/byte transitions, repeat wrapping, and two draws separated by an upload. It also checks material replacement during render callbacks and mutable environment Euler components/order.
+
+### Complete command-submission timing
+
+Set `THREEBROWSER_FRAME_PROFILE` to an absolute JSONL output path before launching the native runtime. This opt-in diagnostic records worker CPU execution and asynchronous OpenGL timestamp spans for every command submission, including resource-only and offscreen submissions. A presentation marker associates preceding submissions with the next presented frame. Shadows and resolves issued within those submissions are included in the total; they are not individually attributed.
+
+Queries are polled on later submissions with `GL_QUERY_RESULT_AVAILABLE`. There is no `glFinish` or wait for an unavailable result. At most 32 samples are pending. Unsupported backends, saturation and unavailable teardown samples record `gpuUs: null`, not zero. Query names are released before context teardown. Profiling is disabled by default.
+
+CPU scopes exclude enqueue time and command-buffer copying before worker dispatch. GPU values are timestamp spans, which can include idle/driver scheduling gaps; they are not shader-active time. Direct native calls outside command submission are outside these scopes. CPU and GPU overlap, so do not add their totals together. The old `stats.frameUs` remains a presentation-only statistic.
+
+Summarize a trace, excluding the first 200 presentations:
+
+```powershell
+node ThreeBrowserRuntime/runtime/summarize-frame-profile.mjs "$env:TEMP/trace.jsonl" 200
+```
+
+### Reproducible controlled workload
+
+```powershell
+node ThreeBrowserRuntime/runtime/benchmark-hotpaths.mjs "$env:TEMP/hotpaths.json" 300
+```
+
+This fixed workload uploads a 256x256 float texture, visits 1,000 ordinary transform objects and performs eight offscreen passes into a 128x128, four-sample target per iteration. It warms up for 30 iterations, synchronizes through pixel readback, verifies expected sampled colors and hashes all measured output pixels. Run before and after builds with profiling disabled and no other rendering workload. Compare matching `workload`, `frames` and `pixelHash`; do not equate these timings with application FPS.
+
+Two 300-iteration baseline runs had medians 4.354 and 4.100 ms; the first two optimized runs had medians 3.746 and 3.939 ms. All four output hashes were `f3e1260350c02f4a0bf916592740a5c52c0113cc8234fa08f69181d3a5689f4c`. These isolated measurements show a modest improvement, with run-to-run variation.
+
+The final build measured 3.616 ms median with the same output hash. All 64 tests passed with `THREEBROWSER_RUN_GPU_TESTS=1`, including an additional child-process test proving the optional GPU timing covers offscreen-only submissions and identifies presentation.
+
+### Matched application check
+
+The same local Ashore export was launched for each build, entered through the same UI control, warmed for 30 seconds and measured for 15 seconds. Both used existing quality settings and four native samples. A temporary benchmark-only host copy drained physical input during the run; application files were untouched. Both captured views were inspected and showed the same viewpoint with the overlay closed. The copy was removed after benchmarking. An earlier pair with changed camera/overlay state was rejected.
+
+The baseline was `dd94167` with the same optional timing instrumentation added; the optimized build includes the float/preparation changes above. The optimized run preceded the baseline in this final pair. The following figures are one matched pair, not a statistically established application-wide improvement:
+
+| Metric | Baseline | Optimized |
+| --- | ---: | ---: |
+| Presented frames / measured interval | 220 / 15.039 s | 227 / 14.983 s |
+| Observed FPS | 14.63 | 15.15 |
+| Mean JS RAF callback time | 27.06 ms | 26.04 ms |
+| Median native submission CPU time | 34.32 ms | 34.35 ms |
+| Median GPU submission timestamp span | 57.18 ms | 56.24 ms |
+| Median bytes / frame | 587,760 | 587,760 |
+
+The large native rendering cost remains. The existing presentation-only counter reported roughly 0.2 ms, which did not describe the cost of the complete submission. Next investigation should attribute the measured native total to individual offscreen/shadow/resolve passes before changing scheduling or render preparation further. Existing application shader-hook errors remained visible in both builds; this optimization pass did not rewrite them or suppress diagnostics.

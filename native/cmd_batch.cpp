@@ -1,6 +1,7 @@
 #include "three_native.h"
 #include "cmd_ops.hpp"
 #include "runtime_internal.hpp"
+#include "frame_profile.hpp"
 
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Matrix3.hpp"
@@ -565,6 +566,19 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             if (!width || !height || width > 16384 || height > 16384 || !has(cur, end, bytes)) {
                 setError("texture needs float rgba pixels");
                 return;
+            }
+            // Keep the CPU allocation and Texture identity for matching uploads.
+            if (auto* slot = findSlot(id); slot && slot->texture && !slot->renderTarget) {
+                auto& texture = *slot->texture;
+                if (texture.type == Type::Float && texture.format == Format::RGBA &&
+                    !texture.images().empty() && texture.image().isFloat() &&
+                    texture.image().width() == width && texture.image().height() == height &&
+                    texture.image().data<float>().size() == count) {
+                    std::memcpy(texture.image().data<float>().data(), cur, bytes);
+                    texture.needsUpdate();
+                    markDirty();
+                    return;
+                }
             }
             std::vector<float> pixels(count);
             std::memcpy(pixels.data(), cur, bytes);
@@ -1420,6 +1434,7 @@ int tn_cmd_submit(const uint8_t* data, int nbytes) {
         }
         std::vector<uint8_t> copy(data, data + nbytes);
         return onWorker([buf = std::move(copy)] {
+            CommandProfile profile(static_cast<int>(buf.size()));
             execStream(buf.data(), static_cast<int>(buf.size()));
             // A frame command is not complete until the renderer has consumed
             // it. Returning before presentation lets the JS animation loop run
@@ -1440,6 +1455,7 @@ int tn_cmd_submit_async(const uint8_t* data, int nbytes) {
         }
         std::vector<uint8_t> copy(data, data + nbytes);
         onWorkerAsync([buf = std::move(copy)] {
+            CommandProfile profile(static_cast<int>(buf.size()));
             execStream(buf.data(), static_cast<int>(buf.size()));
         }, false);
         return 1;
@@ -1458,6 +1474,7 @@ int tn_cmd_submit_frame_async(const uint8_t* data, int nbytes) {
         auto pending = std::make_shared<PendingFrame>();
         onWorkerAsync([buf = std::move(copy), pending = std::move(pending)]() mutable {
             auto completion = std::move(pending);
+            CommandProfile profile(static_cast<int>(buf.size()));
             execStream(buf.data(), static_cast<int>(buf.size()));
             renderPendingFrame();
         }, false);

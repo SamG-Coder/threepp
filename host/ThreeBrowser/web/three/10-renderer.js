@@ -884,7 +884,7 @@
       // contract with a lightweight target facade.
       const shadowLights = [];
       if (scene?.isScene && scene._h && TN.cmd?.sceneState) {
-        const rotation = new TN.Matrix3().setFromMatrix4(new TN.Matrix4().makeRotationFromEuler(scene.environmentRotation)).transpose();
+        const rotation = TN._environmentRotationMatrix(scene);
         const fog = scene.fog;
         const signature = [scene.environmentIntensity,...rotation.elements,fog?.isFogExp2,fog?.isFog,
           fog?.color?.r,fog?.color?.g,fog?.color?.b,fog?.near,fog?.far,fog?.density].join(':');
@@ -992,7 +992,9 @@
           if (obj?.isSkinnedMesh && typeof obj._syncNativeSkeleton === "function") {
             obj._syncNativeSkeleton();
           }
-          const materials = Array.isArray(obj?.material) ? obj.material : [obj?.material];
+          const objectMaterial = obj?.material;
+          const materials = Array.isArray(objectMaterial) ? objectMaterial : null;
+          const materialCount = materials ? materials.length : (objectMaterial ? 1 : 0);
           // r148 enables the skinning chunks from WebGLRenderer state, not
           // from ShaderMaterial itself. Custom instanced character classes
           // deliberately extend InstancedMesh while exposing isSkinnedMesh,
@@ -1002,7 +1004,8 @@
             if (skeleton.boneTexture && typeof TN._ensureTextureNative === "function") {
               TN._ensureTextureNative(skeleton.boneTexture);
             }
-            for (const material of materials) {
+            for (let i = 0; i < (materials ? materials.length : materialCount); i++) {
+              const material = materials ? materials[i] : objectMaterial;
               if (material?._nativeKind !== "shader") continue;
               material.defines ||= {};
               const enabledSkinning = !Object.prototype.hasOwnProperty.call(material.defines, "USE_SKINNING");
@@ -1021,14 +1024,15 @@
               name: obj.name,
               geometry: obj.geometry?.name || obj.geometry?.type,
               attributes: Object.keys(obj.geometry?.attributes || {}),
-              material: materials.map((material) => ({
+              material: (materials || [objectMaterial]).map((material) => ({
                 id: material?.id,
                 type: material?.type,
                 defines: material?.defines,
               })),
             });
           }
-          for (const material of materials) {
+          for (let i = 0; i < (materials ? materials.length : materialCount); i++) {
+            const material = materials ? materials[i] : objectMaterial;
             if (drawableVisible && typeof material?.flushNative === "function") {
               material.flushNative(self);
             }
@@ -1058,19 +1062,30 @@
         scene?.traverse?.((object) => {
           sceneObjectCount++;
           if (!object?._h) return;
-          const materials = Array.isArray(object.material) ? object.material : [object.material];
-          const depthDraw = materials.some((material) => material?.isMeshDepthMaterial);
+          const objectMaterial = object.material;
+          const materials = Array.isArray(objectMaterial) ? objectMaterial : null;
+          const count = materials ? materials.length : (objectMaterial ? 1 : 0);
+          let depthDraw = false, nativeMaterial = false, rawMaterial = false, sceneMaterial = false;
+          for (let i = 0; i < count; i++) {
+            const material = materials ? materials[i] : objectMaterial;
+            if (material?.isMeshDepthMaterial) depthDraw = true;
+            if (material?._h) {
+              nativeMaterial = true;
+              if (material.isRawShaderMaterial) rawMaterial = true;
+              if (material._nativeKind !== "shader") sceneMaterial = true;
+            }
+          }
           if (depthDraw) nativeDepthPass = true;
           if (
             (object.isMesh || object.isLine || object.isLineSegments || object.isPoints || object.isSprite) &&
-            (depthDraw || materials.some((material) => material?._h))
+            (depthDraw || nativeMaterial)
           ) {
             hasNativeDraw = true;
             nativeDrawableCount++;
-            if (materials.some((material) => material?._h && material?.isRawShaderMaterial)) {
+            if (rawMaterial) {
               hasNativeRawShaderDraw = true;
             }
-            if (materials.some((material) => material?._h && material?._nativeKind !== "shader")) {
+            if (sceneMaterial) {
               hasNativeSceneDraw = true;
             }
           }

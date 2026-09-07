@@ -27,6 +27,9 @@ namespace threepp::gl {
         std::optional<unsigned int> glTexture{};
         std::optional<int> currentAnisotropy{};
         unsigned int version{};
+        // Storage cache for plain 2D float uploads only.
+        bool floatStorage2D{};
+        unsigned int storageWidth{}, storageHeight{}, storageFormat{}, storageType{}, storageInternalFormat{};
     };
 
     struct RenderTargetProperties {

@@ -4,6 +4,19 @@
   }
 
   let materialId = 0;
+  // Shared by scene state and hook uniforms. Check values at each use, since
+  // callbacks can change the Euler between materials or nested render passes.
+  TN._environmentRotationMatrix = function (scene) {
+    const euler = scene.environmentRotation;
+    let cached = scene._nativeEnvironmentRotation;
+    if (!cached || cached.x !== euler.x || cached.y !== euler.y || cached.z !== euler.z || cached.order !== euler.order) {
+      cached = scene._nativeEnvironmentRotation = {
+        x: euler.x, y: euler.y, z: euler.z, order: euler.order,
+        matrix: new TN.Matrix3().setFromMatrix4(new TN.Matrix4().makeRotationFromEuler(euler)).transpose(),
+      };
+    }
+    return cached.matrix;
+  };
   const shaderUniformCache = new Map();
   const traceShadowUniforms = !!globalThis.process?.env?.THREEBROWSER_NATIVE_SHADOW_TRACE;
 
@@ -1012,8 +1025,7 @@ vec3 getLightProbeIndirectRadiance(const in vec3 viewDir, const in vec3 normal, 
         }
         if (this._nativeHookShader && nativeShouldFlushShader(this, TN._renderFrame || 0, false)) {
           if (this._nativeHookShader.uniforms.envMapRotation && renderer?._nativeCurrentScene?.environmentRotation) {
-            const matrix = new TN.Matrix4().makeRotationFromEuler(renderer._nativeCurrentScene.environmentRotation);
-            this._nativeHookShader.uniforms.envMapRotation.value.setFromMatrix4(matrix).transpose();
+            this._nativeHookShader.uniforms.envMapRotation.value.copy(TN._environmentRotationMatrix(renderer._nativeCurrentScene));
           }
           for (const name in this._nativeHookShader.uniforms) {
             if (!Object.prototype.hasOwnProperty.call(this._nativeHookShader.uniforms, name)) continue;

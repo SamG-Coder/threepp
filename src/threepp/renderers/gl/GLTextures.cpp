@@ -196,6 +196,17 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
     auto& mipmaps = texture.mipmaps();
 
+    const bool reusableFloat = !dynamic_cast<DepthTexture*>(&texture) && !dataTexture3D &&
+                              !image.compressedFormat && mipmaps.empty() &&
+                              glType == GL_FLOAT && image.isFloat() && image.byteSize() != 0;
+    const bool reuseStorage = reusableFloat && textureProperties->floatStorage2D &&
+                              textureProperties->storageWidth == image.width() &&
+                              textureProperties->storageHeight == image.height() &&
+                              textureProperties->storageFormat == glFormat &&
+                              textureProperties->storageType == glType &&
+                              textureProperties->storageInternalFormat == glInternalFormat;
+    textureProperties->floatStorage2D = false;
+
     if (dynamic_cast<DepthTexture*>(&texture)) {
 
         if (texture.type == Type::Float) {
@@ -283,9 +294,20 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
                                   static_cast<int>(image.width()), static_cast<int>(image.height()),
                                   glFormat, glType, texture.image().data().data());
             } else if (glType == GL_FLOAT) {
-                state->texImage2D(GL_TEXTURE_2D, 0, glInternalFormat,
-                                  static_cast<int>(image.width()), static_cast<int>(image.height()),
-                                  glFormat, glType, texture.image().data<float>().data());
+                if (reuseStorage) {
+                    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, image.width(), image.height(),
+                                    glFormat, glType, image.data<float>().data());
+                } else {
+                    state->texImage2D(GL_TEXTURE_2D, 0, glInternalFormat,
+                                      static_cast<int>(image.width()), static_cast<int>(image.height()),
+                                      glFormat, glType, image.data<float>().data());
+                }
+                textureProperties->floatStorage2D = reusableFloat;
+                textureProperties->storageWidth = image.width();
+                textureProperties->storageHeight = image.height();
+                textureProperties->storageFormat = glFormat;
+                textureProperties->storageType = glType;
+                textureProperties->storageInternalFormat = glInternalFormat;
             } else if (glType == GL_HALF_FLOAT) {
                 // Type::HalfFloat with CPU data: the buffer is raw half bits
                 // (see threepp/extras/DataUtils.hpp), and getInternalFormat has
