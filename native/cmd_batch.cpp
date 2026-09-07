@@ -81,6 +81,7 @@ struct PendingTex {
     Filter minFilter{Filter::LinearMipmapLinear};
     int texCoord{0};
     int anisotropy{1};
+    Mapping mapping{Mapping::UV};
     Vector2 offset{0, 0};
     Vector2 repeat{1, 1};
     std::vector<unsigned char> pixels;
@@ -616,7 +617,10 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
                         completed.wrapS, completed.wrapT, completed.colorSpace,
                         completed.magFilter, completed.minFilter, completed.texCoord,
                         completed.offset, completed.repeat);
-                if (auto* slot = findSlot(id); slot && slot->texture) slot->texture->anisotropy = completed.anisotropy;
+                if (auto* slot = findSlot(id); slot && slot->texture) {
+                    slot->texture->anisotropy = completed.anisotropy;
+                    slot->texture->mapping = completed.mapping;
+                }
             }
             return;
         }
@@ -632,6 +636,8 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             const int anisotropy = std::clamp(static_cast<int>(ru32(p + 28)), 1, 64);
             const Vector2 offset(rf32(p + 32), rf32(p + 36));
             const Vector2 repeat(rf32(p + 40), rf32(p + 44));
+            const auto mappingValue = has(p, end, 52) ? ru32(p + 48) : 0;
+            const bool hasMapping = mappingValue >= 300 && mappingValue <= 307;
             auto pending = pendingTex.find(id);
             if (pending != pendingTex.end()) {
                 pending->second.wrapS = wrapS;
@@ -641,12 +647,14 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
                 pending->second.minFilter = minFilter;
                 pending->second.texCoord = texCoord;
                 pending->second.anisotropy = anisotropy;
+                if (hasMapping) pending->second.mapping = static_cast<Mapping>(mappingValue);
                 pending->second.offset.copy(offset);
                 pending->second.repeat.copy(repeat);
                 return;
             }
               Slot* slot = findSlot(id);
               if (!slot || !slot->texture) return;
+              if (hasMapping) slot->texture->mapping = static_cast<Mapping>(mappingValue);
               const bool mipmaps = minFilter != Filter::Nearest && minFilter != Filter::Linear;
               const bool samplerChanged = slot->texture->wrapS != wrapS || slot->texture->wrapT != wrapT ||
                       slot->texture->colorSpace != colorSpace || slot->texture->magFilter != magFilter ||

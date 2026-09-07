@@ -267,6 +267,7 @@ std::unique_ptr<RenderTarget> GLPMREM::fromEquirectangular(Texture& equirect) {
     // cube_uv_reflection_fragment.glsl activates via Mapping::CubeUVReflection
     // — the signal to compile ENVMAP_TYPE_CUBE_UV (now the equirect-strip path).
     target->texture->mapping = Mapping::CubeUVReflection;
+    target->texture->isEquirectangularLodAtlas = true;
     target->scissorTest = true;
 
     impl->material->uniforms["envMap"].setValue(&equirect);

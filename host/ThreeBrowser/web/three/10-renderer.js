@@ -922,17 +922,20 @@
             const depth = obj.customDepthMaterial, distance = obj.customDistanceMaterial;
             depth?.flushNative?.(self);
             distance?.flushNative?.(self);
-            const signature = `${depth?._h || 0}:${distance?._h || 0}`;
-            if (obj._nativeShadowMaterials !== signature) {
-              TN.cmd.objectShadowMaterials(obj._h, depth?._h || 0, distance?._h || 0);
-              obj._nativeShadowMaterials = signature;
+            const depthHandle = depth?._h || 0, distanceHandle = distance?._h || 0;
+            if (obj._nativeDepthMaterial !== depthHandle || obj._nativeDistanceMaterial !== distanceHandle) {
+              TN.cmd.objectShadowMaterials(obj._h, depthHandle, distanceHandle);
+              obj._nativeDepthMaterial = depthHandle;
+              obj._nativeDistanceMaterial = distanceHandle;
             }
           }
           if (obj?._h && TN.cmd?.objectFlags) {
-            const signature = `${obj.castShadow}:${obj.receiveShadow}:${obj.layers?.mask ?? 1}`;
-            if (obj._nativeObjectFlags !== signature) {
-              TN.cmd.objectFlags(obj._h,!!obj.castShadow,!!obj.receiveShadow,obj.layers?.mask ?? 1);
-              obj._nativeObjectFlags = signature;
+            const castShadow = !!obj.castShadow, receiveShadow = !!obj.receiveShadow, layerMask = obj.layers?.mask ?? 1;
+            if (obj._nativeCastShadow !== castShadow || obj._nativeReceiveShadow !== receiveShadow || obj._nativeLayerMask !== layerMask) {
+              TN.cmd.objectFlags(obj._h, castShadow, receiveShadow, layerMask);
+              obj._nativeCastShadow = castShadow;
+              obj._nativeReceiveShadow = receiveShadow;
+              obj._nativeLayerMask = layerMask;
             }
           }
           if (obj?.isLight && obj._h && TN.cmd?.lightState) {

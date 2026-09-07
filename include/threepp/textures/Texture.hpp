@@ -42,6 +42,8 @@ namespace threepp {
         std::filesystem::path sourceFile;
 
         Mapping mapping = DEFAULT_MAPPING;
+        // Internal GLPMREM layout; externally supplied CubeUV maps use Three.js face packing.
+        bool isEquirectangularLodAtlas = false;
 
         TextureWrapping wrapS{TextureWrapping::ClampToEdge};
         TextureWrapping wrapT{TextureWrapping::ClampToEdge};

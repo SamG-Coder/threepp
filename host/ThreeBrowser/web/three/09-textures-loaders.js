@@ -1119,6 +1119,7 @@
       wrapT: texture && texture.wrapT != null ? texture.wrapT : TN.RepeatWrapping ?? 1000,
       colorSpace: linear ? 0xffffffff : 3001,
       anisotropy: Math.max(1, Math.min(64, texture?.anisotropy || 1)),
+      mapping: texture?.mapping ?? TN.UVMapping ?? 300,
       mag: texture && texture.magFilter != null ? texture.magFilter : TN.LinearFilter ?? 1006,
       min:
         texture && texture.minFilter != null
@@ -1136,7 +1137,7 @@
     if (!texture || !texture._h) return;
     if (!TN.cmd || typeof TN.cmd.texParams !== "function") return;
     const p = textureParams(texture);
-    const signature = [texture._h,p.wrapS,p.wrapT,p.colorSpace,p.mag,p.min,p.channel,p.ox,p.oy,p.rx,p.ry,p.anisotropy].join(':');
+    const signature = [texture._h,p.wrapS,p.wrapT,p.colorSpace,p.mag,p.min,p.channel,p.ox,p.oy,p.rx,p.ry,p.anisotropy,p.mapping].join(':');
     if (texture._nativeParamsSignature === signature) return;
     TN.cmd.texParams(
       texture._h,
@@ -1150,7 +1151,8 @@
       p.oy,
       p.rx,
       p.ry,
-      p.anisotropy
+      p.anisotropy,
+      p.mapping
     );
     texture._nativeParamsSignature = signature;
   }
@@ -1163,7 +1165,7 @@
     // those pixels over the render-target handle. For cube targets that also
     // collapses the six GPU faces into a single CPU image and makes the next
     // samplerCube bind try to re-upload an invalid CubeTexture.
-    if (texture.isRenderTargetTexture) return;
+    if (texture.isRenderTargetTexture) { applyNativeTexParams(texture); return; }
     const flip = !!texture.flipY;
     const ver = texture.version | 0;
     if (texture._h && texture._nativeFlipY === flip && texture._nativeVersion === ver) {

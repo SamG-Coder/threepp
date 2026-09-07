@@ -7,6 +7,8 @@ import { Worker as NodeWorker } from "node:worker_threads";
 import { configureModuleDocument, configureModuleFile } from "./module-loader.mjs";
 import { HtmlInteractionBridge } from "./html-interaction-bridge.mjs";
 import { HtmlRenderer } from "./html-renderer.mjs";
+import { PersistentStorage } from "./web-storage.mjs";
+import os from "node:os";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -900,6 +902,11 @@ class WebGLRenderingContextProbe {
 }
 class WebGL2RenderingContextProbe extends WebGLRenderingContextProbe {}
 
+class FormElement extends Element {
+  constructor() { super('form'); }
+  static [Symbol.hasInstance](value) { return value instanceof Element && value.tagName === 'FORM'; }
+}
+
 class CanvasElement extends Element {
   constructor(width = 1280, height = 720) {
     super("canvas");
@@ -1782,6 +1789,7 @@ export const document = Object.assign(documentTarget, {
       name === "img" ? new ImageElement() :
       name === "audio" ? new AudioElement() :
       name === "video" ? new VideoElement() :
+      name === "form" ? new FormElement() :
       new Element(tag);
   },
   createElementNS(_namespace, tag) { return this.createElement(tag); },
@@ -2170,6 +2178,7 @@ globalThis.Element = Element;
 globalThis.HTMLElement = Element;
 globalThis.HTMLIFrameElement = Element;
 globalThis.HTMLInputElement = Element;
+globalThis.HTMLFormElement = FormElement;
 globalThis.HTMLSelectElement = Element;
 globalThis.HTMLTextAreaElement = Element;
 globalThis.SVGElement = Element;
@@ -2228,7 +2237,10 @@ class MemoryStorage {
   removeItem(key) { this.values.delete(String(key)); }
   clear() { this.values.clear(); }
 }
-globalThis.localStorage = new MemoryStorage();
+globalThis.localStorage = new PersistentStorage(
+  path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.local', 'share'), 'ThreeBrowser', 'WebStorage'),
+  () => globalThis.location?.href || pathToFileURL(path.join(process.cwd(), 'index.html')).href,
+);
 globalThis.sessionStorage = new MemoryStorage();
 const audioParam = (value = 0) => ({
   value,

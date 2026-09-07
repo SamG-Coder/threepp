@@ -4,14 +4,14 @@ import vm from "node:vm";
 import test from "node:test";
 
 const source = readFileSync(new URL("../../host/ThreeBrowser/web/three/00-cmdbuf.js", import.meta.url), "utf8");
-function harness() {
+function harness(Encoder = TextEncoder) {
   let shared = new ArrayBuffer(8 * 1024 * 1024);
   const submissions = [];
   const host = {
     CmdSubmit: used => submissions.push(Buffer.from(new Uint8Array(shared, 0, used))),
     ResizeCmdBuffer: bytes => (shared = new ArrayBuffer(2 ** Math.ceil(Math.log2(bytes)))),
   };
-  const context = vm.createContext({ ArrayBuffer, Uint8Array, Uint32Array, Float32Array, TextEncoder,
+  const context = vm.createContext({ ArrayBuffer, Uint8Array, Uint32Array, Float32Array, TextEncoder: Encoder,
     __TN_SHARED: shared, chrome: { webview: { hostObjects: { sync: { native: host } } } },
   });
   vm.runInContext(source, context);
@@ -36,6 +36,36 @@ test("numeric uniforms remain ordered in a batch with aligned names and signed i
   assert.equal(commands[2].readInt32LE(28), -3);
   assert.equal(commands[3].subarray(24, 27).toString(), "sun");
   assert.ok(Math.abs(commands[3].readFloatLE(36) - 0.3) < 1e-6);
+});
+
+test("cached uniform names preserve UTF-8 bytes, changing values and texture command order", () => {
+  let encodes = 0;
+  class CountingEncoder extends TextEncoder {
+    encode(value) { encodes++; return super.encode(value); }
+  }
+  const { cmd, submissions } = harness(CountingEncoder);
+  const name = "lights[2].colour_é";
+  const expected = Buffer.from(name);
+  for (let frame = 0; frame < 3; frame++) {
+    cmd.shaderUniform(7, name, 1, [frame + .25]);
+    cmd.shaderTexture(8, name, 40 + frame);
+    cmd.submit();
+    const bytes = submissions[frame];
+    assert.equal(bytes.readUInt32LE(0), 58);
+    assert.equal(bytes.readUInt32LE(16), expected.length);
+    assert.deepEqual(bytes.subarray(24, 24 + expected.length), expected);
+    assert.equal(bytes.readFloatLE(24 + ((expected.length + 3) & ~3)), frame + .25);
+    const next = bytes.readUInt32LE(4);
+    assert.equal(bytes.readUInt32LE(next), 56);
+    assert.equal(bytes.readUInt32LE(next + 12), 40 + frame);
+    assert.deepEqual(bytes.subarray(next + 20, next + 20 + expected.length), expected);
+  }
+  assert.equal(encodes, 1, 'repeated names should be encoded once across both command types');
+  for (let i = 0; i < 5000; i++) cmd.shaderUniform(7, `generated${i}`, 1, [i]);
+  const before = encodes;
+  cmd.shaderUniform(7, name, 1, [9]);
+  assert.equal(encodes, before + 1, 'name churn must evict old entries rather than retain them forever');
+  cmd.submit();
 });
 
 test("a terrain upload larger than the initial ring preserves the preceding commands", () => {

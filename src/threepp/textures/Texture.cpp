@@ -178,6 +178,7 @@ Texture& Texture::copy(const Texture& source) {
     this->mipmaps_ = source.mipmaps_;
 
     this->mapping = source.mapping;
+    this->isEquirectangularLodAtlas = source.isEquirectangularLodAtlas;
 
     this->wrapS = source.wrapS;
     this->wrapT = source.wrapT;

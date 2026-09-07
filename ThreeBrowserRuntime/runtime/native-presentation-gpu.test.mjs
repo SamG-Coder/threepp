@@ -9,6 +9,8 @@ test('GPU command uploads do not present stale scenes and overlays preserve scen
   const host = await import('./browser-host.mjs');
   const T = host.loadThreeShim(fileURLToPath(new URL('../../host/ThreeBrowser/web/three/', import.meta.url)));
   try {
+    assert.ok(document.createElement('form') instanceof HTMLFormElement);
+    assert.ok(!(document.createElement('div') instanceof HTMLFormElement), 'form identity must not match every element');
     const renderer = new T.WebGLRenderer({ antialias: true });
     assert.ok(host.native.stats().samples >= 2, 'antialias request must allocate a multisampled native window');
     assert.equal(renderer.getContextAttributes().antialias, true);
@@ -146,6 +148,76 @@ test('GPU command uploads do not present stale scenes and overlays preserve scen
       renderer.readRenderTargetPixels(coverageTarget, 0, 0, 4, 4, pixels);
       renderer.setRenderTarget(null); return pixels[0];
     };
+    // Reusing a material in multiple passes must observe in-place mutations,
+    // while unchanged values should not cross the command boundary again.
+    const dynamicVector = new T.Vector3(.1, 0, 0);
+    const dynamicMatrix = new T.Matrix4(); dynamicMatrix.elements[0] = .1;
+    const dynamicArray = new Float32Array([.1, 0]);
+    const dynamicMaterial = new T.ShaderMaterial({
+      uniforms: { direction: { value: dynamicVector }, transform: { value: dynamicMatrix }, weights: { value: dynamicArray } },
+      vertexShader: 'void main(){gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
+      fragmentShader: 'uniform vec3 direction; uniform mat4 transform; uniform float weights[2]; void main(){gl_FragColor=vec4(direction.x+transform[0][0]+weights[0],0.,0.,1.);}',
+      toneMapped: false,
+    });
+    coverageScene.children[0].material = dynamicMaterial;
+    const uniformWrites = [];
+    const originalUniform = cmd.shaderUniform;
+    cmd.shaderUniform = function(handle, name, kind, values) {
+      if (handle === dynamicMaterial.__h) uniformWrites.push(name);
+      return originalUniform.call(this, handle, name, kind, values);
+    };
+    try {
+      assert.ok(Math.abs(readCoverage() - 77) <= 1);
+      uniformWrites.length = 0;
+      readCoverage();
+      assert.equal(uniformWrites.length, 0, 'unchanged uniforms must not be resent');
+      dynamicVector.x = .2;
+      assert.ok(Math.abs(readCoverage() - 102) <= 1, 'next pass must observe a vector mutated in place');
+      dynamicMatrix.elements[0] = .2;
+      assert.ok(Math.abs(readCoverage() - 128) <= 1, 'next pass must observe matrix elements mutated in place');
+      dynamicArray[0] = .2;
+      assert.ok(Math.abs(readCoverage() - 153) <= 1, 'next pass must observe a typed array mutated in place');
+      assert.deepEqual(uniformWrites, ['direction', 'transform', 'weights']);
+      dynamicMaterial.uniformsGroups = [{ name: 'Parameters', uniforms: [{ value: .25 }] }];
+      const dynamicFragment = dynamicMaterial.fragmentShader;
+      dynamicMaterial.fragmentShader = 'uniform Parameters { float gain; };\n' + dynamicFragment;
+      uniformWrites.length = 0;
+      readCoverage();
+      assert.ok(uniformWrites.includes('gain'), 'a changed shader source must refresh uniform block members');
+      dynamicMaterial.fragmentShader = 'uniform Parameters { float amplitude; };\n' + dynamicFragment;
+      uniformWrites.length = 0;
+      readCoverage();
+      assert.ok(uniformWrites.includes('amplitude'), 'a renamed block member must use the new layout');
+      assert.ok(!uniformWrites.includes('gain'), 'the old block member must no longer be flushed');
+      dynamicMaterial.uniformsGroups[0].uniforms[0].value = .5;
+      uniformWrites.length = 0;
+      readCoverage();
+      assert.deepEqual(uniformWrites, ['amplitude'], 'cached block layout must still read live values');
+    } finally { cmd.shaderUniform = originalUniform; }
+    coverageScene.children[0].material = coverageMaterial;
+    const retypedUniform = new T.ShaderMaterial({
+      uniforms: { selector: { value: 1 } }, toneMapped: false,
+      vertexShader: 'void main(){gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
+      fragmentShader: 'uniform float selector; void main(){gl_FragColor=vec4(selector*.25,0.,0.,1.);}',
+    });
+    coverageScene.children[0].material = retypedUniform;
+    assert.ok(Math.abs(readCoverage() - 64) <= 1);
+    retypedUniform.fragmentShader = 'uniform int selector; void main(){gl_FragColor=vec4(float(selector)*.5,0.,0.,1.);}';
+    assert.ok(Math.abs(readCoverage() - 128) <= 1, 'source recompilation must re-upload unchanged values with the new declared type');
+    let integerHook = false;
+    const retypedHook = new T.MeshBasicMaterial({ toneMapped: false });
+    retypedHook.onBeforeCompile = shader => {
+      shader.uniforms.selector = { value: 1 };
+      shader.fragmentShader = integerHook
+        ? 'uniform int selector; void main(){gl_FragColor=vec4(float(selector)*.5,0.,0.,1.);}'
+        : 'uniform float selector; void main(){gl_FragColor=vec4(selector*.25,0.,0.,1.);}';
+    };
+    coverageScene.children[0].material = retypedHook;
+    assert.ok(Math.abs(readCoverage() - 64) <= 1);
+    integerHook = true;
+    retypedHook.needsUpdate = true;
+    assert.ok(Math.abs(readCoverage() - 128) <= 1, 'onBeforeCompile rebuilds must refresh uniform types too');
+    coverageScene.children[0].material = coverageMaterial;
     const covered = readCoverage();
     assert.ok(covered > 40 && covered < 220, `MSAA resolve must preserve partial alpha coverage, got ${covered}`);
     coverageTarget.samples = 0;
@@ -161,6 +233,92 @@ test('GPU command uploads do not present stale scenes and overlays preserve scen
     assert.ok(smoothCoverage > 0 && smoothCoverage < 100, `built-in alpha test must smooth coverage at the cutoff, got ${smoothCoverage}`);
     foliage.alphaToCoverage = false;
     assert.equal(readCoverage(), 255, 'disabling coverage must restore the built-in hard alpha test');
+    const falloffMaterial = new T.ShaderMaterial({
+      vertexShader: 'void main(){gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
+      fragmentShader: '#include <common>\n#include <lights_pars_begin>\nvoid main(){gl_FragColor=vec4(vec3(getDistanceAttenuation(2.,0.,2.)),1.);}',
+    });
+    coverageScene.children[0].material = falloffMaterial;
+    const falloff = readCoverage();
+    assert.ok(Math.abs(falloff - 64) <= 1, `ShaderMaterial light attenuation must match Three.js inverse-square falloff, got ${falloff}`);
+    // Stock CubeUV puts +X in the first face tile, not an equirectangular strip.
+    const atlasBytes = new Uint8Array(768 * 1024 * 4);
+    for (let y = 0; y < 1024; y++) for (let x = 0; x < 768; x++) {
+      const offset = (y * 768 + x) * 4;
+      atlasBytes[offset + (x < 256 && y < 256 ? 0 : 2)] = 255;
+      atlasBytes[offset + 3] = 255;
+    }
+    const atlas = new T.DataTexture(atlasBytes, 768, 1024);
+    atlas.mapping = T.CubeUVReflectionMapping; atlas.flipY = false;
+    atlas.generateMipmaps = false; atlas.needsUpdate = true;
+    const atlasMaterial = new T.MeshStandardMaterial({ toneMapped: false, envMap: atlas });
+    atlasMaterial.onBeforeCompile = shader => {
+      shader.fragmentShader = shader.fragmentShader.replace('#include <opaque_fragment>',
+        'gl_FragColor = textureCubeUV(envMap, vec3(1.,0.,0.), 0.);');
+    };
+    coverageScene.environment = atlas;
+    coverageScene.children[0].material = atlasMaterial;
+    assert.equal(readCoverage(), 255, 'stock CubeUV +X must sample the red face tile');
+    const atlasPixels = new Uint8Array(64);
+    renderer.readRenderTargetPixels(coverageTarget, 0, 0, 4, 4, atlasPixels);
+    assert.equal(atlasPixels[2], 0, 'stock CubeUV must not sample the blue strip location');
+    const atlasTarget = new T.WebGLRenderTarget(768, 1024);
+    atlasTarget.texture.mapping = T.CubeUVReflectionMapping;
+    coverageScene.children[0].material = new T.ShaderMaterial({
+      uniforms: { source: { value: atlas } },
+      vertexShader: 'void main(){gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
+      fragmentShader: 'uniform sampler2D source;void main(){gl_FragColor=texture2D(source,gl_FragCoord.xy/vec2(768.,1024.));}',
+    });
+    renderer.setRenderTarget(atlasTarget); renderer.render(coverageScene, camera); cmd.submit();
+    const renderedAtlasMaterial = new T.MeshStandardMaterial({ toneMapped: false, envMap: atlasTarget.texture });
+    renderedAtlasMaterial.onBeforeCompile = atlasMaterial.onBeforeCompile;
+    coverageScene.children[0].material = renderedAtlasMaterial;
+    assert.equal(readCoverage(), 255, 'GPU-generated CubeUV must preserve its mapping and rendered pixels');
+    // The runtime's own PMREM generator uses a different, explicitly tagged layout.
+    const equirectBytes = new Uint8Array(16 * 8 * 4);
+    for (let i = 0; i < equirectBytes.length; i += 4) {
+      equirectBytes[i + 1] = 255; equirectBytes[i + 3] = 255;
+    }
+    const equirect = new T.DataTexture(equirectBytes, 16, 8);
+    equirect.mapping = T.EquirectangularReflectionMapping; equirect.needsUpdate = true;
+    const equirectMaterial = new T.MeshStandardMaterial({ toneMapped: false, envMap: equirect });
+    equirectMaterial.onBeforeCompile = atlasMaterial.onBeforeCompile;
+    coverageScene.children[0].material = equirectMaterial;
+    readCoverage();
+    renderer.readRenderTargetPixels(coverageTarget, 0, 0, 4, 4, atlasPixels);
+    assert.ok(atlasPixels[1] >= 254 && atlasPixels[0] === 0 && atlasPixels[2] === 0,
+      `native PMREM must retain its equirectangular-strip sampler: ${atlasPixels.slice(0,4)}`);
+    coverageScene.environment = null;
+    renderer.toneMappingExposure = .92;
+    coverageScene.children[0].material = new T.RawShaderMaterial({
+      uniforms: { toneMappingExposure: { value: .92 } },
+      vertexShader: 'precision highp float;uniform mat4 projectionMatrix;uniform mat4 modelViewMatrix;attribute vec3 position;void main(){gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
+      fragmentShader: 'precision highp float;\n#include <tonemapping_pars_fragment>\n#include <colorspace_pars_fragment>\nvoid main(){gl_FragColor=sRGBTransferOETF(vec4(ACESFilmicToneMapping(vec3(.2,.4,.8)),1.));}',
+    });
+    readCoverage();
+    const displayPixels = new Uint8Array(64);
+    renderer.readRenderTargetPixels(coverageTarget, 0, 0, 4, 4, displayPixels);
+    const multiply = (rows, values) => rows.map(row => row.reduce((sum, v, i) => sum + v * values[i], 0));
+    const acesInput = multiply([[.59719,.35458,.04823],[.076,.90834,.01566],[.0284,.13383,.83777]], [.2,.4,.8].map(v => v * .92 / .6));
+    const fitted = acesInput.map(v => (v * (v + .0245786) - .000090537) / (v * (.983729 * v + .4329510) + .238081));
+    const expectedDisplay = multiply([[1.60475,-.53108,-.07367],[-.10208,1.10813,-.00605],[-.00327,-.07276,1.07602]], fitted)
+      .map(v => Math.max(0, Math.min(1, v))).map(v => Math.round(255 * (v <= .0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - .055)));
+    for (let i = 0; i < 3; ++i) assert.ok(Math.abs(displayPixels[i] - expectedDisplay[i]) <= 1,
+      `ACES/sRGB output channel ${i} must match the Three.js formula: ${displayPixels[i]} vs ${expectedDisplay[i]}`);
+    const thinScene = new T.Scene();
+    const thinMesh = new T.Mesh(new T.PlaneGeometry(.13, 4), new T.MeshBasicMaterial({ color: 0xffffff, toneMapped: false }));
+    thinMesh.rotation.z = .4; thinScene.add(thinMesh);
+    const thinTarget = new T.WebGLRenderTarget(32, 32, { type: T.HalfFloatType, samples: 4 });
+    thinTarget.depthTexture = new T.DepthTexture(32, 32);
+    const partialEdges = () => {
+      renderer.setRenderTarget(thinTarget); renderer.render(thinScene, camera); cmd.submit();
+      const pixels = new Uint8Array(32 * 32 * 4);
+      renderer.readRenderTargetPixels(thinTarget, 0, 0, 32, 32, pixels);
+      renderer.setRenderTarget(null);
+      return pixels.filter((v, i) => i % 4 === 0 && v > 0 && v < 255).length;
+    };
+    assert.ok(partialEdges() > 10, 'thin opaque geometry must retain fractional coverage through half-float MSAA/depth resolve');
+    thinTarget.samples = 0;
+    assert.equal(partialEdges(), 0, 'the single-sample control must have hard geometry edges');
   } finally {
     globalThis.__threeBrowserInAnimationFrame = false; host.stop();
   }

@@ -283,7 +283,7 @@ namespace {
 
     // Resolve Includes
 
-    std::string resolveIncludes(const std::string& str, bool threeR148) {
+    std::string resolveIncludes(const std::string& str, bool threeR148, bool equirectangularLodAtlas) {
 
         static const std::regex rex("#include +<([\\w\\d.]+)>");
 
@@ -299,7 +299,8 @@ namespace {
             pos = match.position(0) + match.length(0);
 
             const std::ssub_match& sub = match[1];
-            const std::string& r = shaders::ShaderChunk::instance().get(sub.str(), threeR148);
+            const bool modernChunk = sub.str() == "cube_uv_reflection_fragment" ? !equirectangularLodAtlas : threeR148;
+            const std::string& r = shaders::ShaderChunk::instance().get(sub.str(), modernChunk);
             if (r.empty()) {
                 std::stringstream ss;
                 ss << "unable to resolve #include <" << sub.str() << ">";
@@ -727,6 +728,7 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
                     parameters->alphaToCoverage ? "#define ALPHA_TO_COVERAGE" : "",
 
                     parameters->useLegacyLights ? "#define USE_LEGACY_LIGHTS" : "",
+                    !parameters->useLegacyLights ? "#define PHYSICALLY_CORRECT_LIGHTS" : "",
 
                     parameters->logarithmicDepthBuffer ? "#define USE_LOGDEPTHBUF" : "",
 
@@ -765,9 +767,18 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
         }
     }
 
+    if (parameters->envMapCubeUV && !parameters->envMapEquirectangularLodAtlas &&
+        parameters->envMapWidth > 0 && parameters->envMapHeight >= 4) {
+        // Match WebGLProgram's CubeUV dimensions. Division in GLSL preserves
+        // precision for large atlases instead of rounding small reciprocals.
+        prefixFragment += "\n#define CUBEUV_TEXEL_WIDTH (1.0 / " + std::to_string(parameters->envMapWidth) + ".0)\n";
+        prefixFragment += "#define CUBEUV_TEXEL_HEIGHT (1.0 / " + std::to_string(parameters->envMapHeight) + ".0)\n";
+        prefixFragment += "#define CUBEUV_MAX_MIP " + std::to_string(std::log2(parameters->envMapHeight / 4.0)) + "\n";
+    }
+
     auto resolveLogged = [&](const char* stage, std::string src) {
         try {
-            return resolveIncludes(src, parameters->shaderName == "ShaderMaterial");
+            return resolveIncludes(src, parameters->shaderName == "ShaderMaterial", parameters->envMapEquirectangularLodAtlas);
         } catch (const std::exception& ex) {
             std::ostringstream ss;
             ss << "[Shader include error] " << parameters->shaderName << " " << stage << ": " << ex.what();

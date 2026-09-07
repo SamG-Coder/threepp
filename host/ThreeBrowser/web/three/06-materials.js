@@ -303,19 +303,11 @@
         TN._ensureTextureNative(value);
       }
       const elements = value?.elements;
-      const arrayValue = Array.isArray(value) || ArrayBuffer.isView(value)
-        ? Array.from(value).flatMap(v => typeof v === "number" ? [v] : v?.elements ? Array.from(v.elements) :
+      const arrayValue = ArrayBuffer.isView(value) ? value : Array.isArray(value)
+        ? (value.every(v => typeof v === "number") ? value : value.flatMap(v => typeof v === "number" ? [v] : v?.elements ? Array.from(v.elements) :
             v?.isColor ? [v.r, v.g, v.b] : typeof v?.w === "number" ? [v.x, v.y, v.z, v.w] :
-            typeof v?.z === "number" ? [v.x, v.y, v.z] : typeof v?.y === "number" ? [v.x, v.y] : [])
+            typeof v?.z === "number" ? [v.x, v.y, v.z] : typeof v?.y === "number" ? [v.x, v.y] : []))
         : null;
-      const signature = isTexture
-        ? `t:${value._h || 0}`
-        : arrayValue ? `a:${arrayValue.join(",")}`
-        : elements && (elements.length === 9 || elements.length === 16)
-          ? `m:${Array.from(elements).join(",")}`
-        : typeof value === "object"
-          ? `o:${value.r ?? value.x ?? ""},${value.g ?? value.y ?? ""},${value.b ?? value.z ?? ""},${value.a ?? value.w ?? ""}`
-          : `${typeof value}:${value}`;
       let uniformCache = shaderUniformCache.get(handle);
       if (!uniformCache) shaderUniformCache.set(handle, uniformCache = new Map());
       // Loading images legitimately have no native handle yet. Do not cache
@@ -324,8 +316,21 @@
         uniformCache.delete(name);
         return;
       }
-      if (uniformCache.get(name) === signature) return;
-      uniformCache.set(name, signature);
+      const kindKey = isTexture ? 'texture' : arrayValue ? 'array' : elements ? 'matrix' : typeof value;
+      const components = arrayValue || elements || (typeof value === 'object' && !isTexture
+        ? [value.r ?? value.x, value.g ?? value.y, value.b ?? value.z, value.a ?? value.w] : null);
+      const scalar = isTexture ? value._h : value;
+      const previous = uniformCache.get(name);
+      if (previous?.kind === kindKey) {
+        if (components) {
+          let same = previous.values?.length === components.length;
+          for (let i = 0; same && i < components.length; i++) same = Object.is(previous.values[i], components[i]);
+          if (same) return;
+        } else if (Object.is(previous.scalar, scalar)) return;
+      }
+      // Snapshot values rather than array identity: applications mutate typed
+      // arrays, matrix.elements, and vector components in place between passes.
+      uniformCache.set(name, components ? { kind: kindKey, values: Array.from(components) } : { kind: kindKey, scalar });
       // Keep changing scalar/vector/matrix uniforms in the same ordered
       // command batch as texture bindings and draws. A synchronous worker
       // round trip for every tide/wind uniform stalls the application thread.
@@ -420,23 +425,26 @@
       if (!Object.prototype.hasOwnProperty.call(mat.uniforms, name)) continue;
       pushShaderUniform(n, mat.__h, name, uniformRawValue(mat.uniforms[name]), mat);
     }
-    const source = `${mat.vertexShader || ""}\n${mat.fragmentShader || ""}`;
-    if (source.includes("<uv_vertex>") || source.includes("uvTransform")) {
+    let layout = mat._nativeUniformLayout;
+    if (!layout || layout.vertex !== mat.vertexShader || layout.fragment !== mat.fragmentShader) {
+      const source = `${mat.vertexShader || ""}\n${mat.fragmentShader || ""}`;
+      const blocks = new Map();
+      for (const match of source.matchAll(/uniform\s+(\w+)\s*\{([^}]+)\}\s*;/g)) {
+        const names = String(match[2]).split(";")
+          .map(declaration => declaration.trim().match(/([A-Za-z_]\w*)(?:\s*\[[^\]]+\])?$/)?.[1]).filter(Boolean);
+        blocks.set(match[1], names);
+      }
+      layout = mat._nativeUniformLayout = { vertex: mat.vertexShader, fragment: mat.fragmentShader,
+        uv: source.includes("<uv_vertex>") || source.includes("uvTransform"), blocks };
+    }
+    if (layout.uv) {
       const map = uniformRawValue(mat.uniforms.map) || mat.map;
       if (map?.matrixAutoUpdate && typeof map.updateMatrix === "function") map.updateMatrix();
       const matrix = map?.matrix || { elements: [1, 0, 0, 0, 1, 0, 0, 0, 1] };
       pushShaderUniform(n, mat.__h, "uvTransform", matrix, mat);
     }
-    const blocks = new Map();
-    for (const match of source.matchAll(/uniform\s+(\w+)\s*\{([^}]+)\}\s*;/g)) {
-      const names = String(match[2])
-        .split(";")
-        .map((declaration) => declaration.trim().match(/([A-Za-z_]\w*)(?:\s*\[[^\]]+\])?$/)?.[1])
-        .filter(Boolean);
-      blocks.set(match[1], names);
-    }
     for (const group of mat.uniformsGroups || []) {
-      const names = blocks.get(group?.name);
+      const names = layout.blocks.get(group?.name);
       if (!names || !Array.isArray(group.uniforms)) continue;
       for (let i = 0; i < Math.min(names.length, group.uniforms.length); i++) {
         pushShaderUniform(n, mat.__h, names[i], uniformRawValue(group.uniforms[i]), mat);
@@ -926,10 +934,14 @@
     }
 
     flushNative(renderer) {
-      const renderState = `${this.blending}:${this.depthTest}:${this.premultipliedAlpha}:${this.alphaToCoverage}:${this.toneMapped}:${this.colorWrite}:${this.shadowSide}`;
-      if (this._nativeRenderState !== renderState && TN.cmd?.matRenderState) {
+      const renderState = this._nativeRenderState;
+      if ((!renderState || renderState.blending !== this.blending || renderState.depthTest !== this.depthTest ||
+          renderState.premultipliedAlpha !== this.premultipliedAlpha || renderState.alphaToCoverage !== this.alphaToCoverage ||
+          renderState.toneMapped !== this.toneMapped || renderState.colorWrite !== this.colorWrite ||
+          renderState.shadowSide !== this.shadowSide) && TN.cmd?.matRenderState) {
         TN.cmd.matRenderState(this._h, this.blending, this.depthTest !== false, !!this.premultipliedAlpha, !!this.alphaToCoverage, this.toneMapped !== false, this.colorWrite !== false, this.shadowSide);
-        this._nativeRenderState = renderState;
+        this._nativeRenderState = { blending: this.blending, depthTest: this.depthTest, premultipliedAlpha: this.premultipliedAlpha,
+          alphaToCoverage: this.alphaToCoverage, toneMapped: this.toneMapped, colorWrite: this.colorWrite, shadowSide: this.shadowSide };
       }
       if (this._nativeKind !== "shader" && this.onBeforeCompile !== defaultOnBeforeCompile && TN.hostHas(native(), "MaterialShaderTemplate")) {
         // Like Three.js, rebuild hooks when material state is invalidated.
@@ -990,6 +1002,9 @@ vec3 getLightProbeIndirectRadiance(const in vec3 viewDir, const in vec3 normal, 
           }
           TN.cmd?.submit();
           native().ShaderMaterialSetSource(this._h, shader.vertexShader, shader.fragmentShader);
+          // A rebuilt program may declare the same uniform name with a new
+          // type. Re-send values even when their numeric contents are equal.
+          shaderUniformCache.delete(this._h);
           this._nativeHookShader = shader;
           this._nativeHookKey = key;
           this._nativeHookVersion = this.version;
@@ -1000,7 +1015,9 @@ vec3 getLightProbeIndirectRadiance(const in vec3 viewDir, const in vec3 normal, 
             const matrix = new TN.Matrix4().makeRotationFromEuler(renderer._nativeCurrentScene.environmentRotation);
             this._nativeHookShader.uniforms.envMapRotation.value.setFromMatrix4(matrix).transpose();
           }
-          for (const [name, entry] of Object.entries(this._nativeHookShader.uniforms)) {
+          for (const name in this._nativeHookShader.uniforms) {
+            if (!Object.prototype.hasOwnProperty.call(this._nativeHookShader.uniforms, name)) continue;
+            const entry = this._nativeHookShader.uniforms[name];
             pushShaderUniform(native(), this._h, name, uniformRawValue(entry), this._nativeHookShader);
           }
         }
@@ -1260,6 +1277,7 @@ vec3 getLightProbeIndirectRadiance(const in vec3 viewDir, const in vec3 normal, 
         nativeShaderSource(mat, mat._vertexShader),
         nativeShaderSource(mat, mat._fragmentShader)
       );
+      shaderUniformCache.delete(mat.__h);
       mat._nativeDefinesSignature = shaderDefinesSignature(mat);
     } catch (err) {
       console.warn("ThreeBrowser ShaderMaterialSetSource failed", err);

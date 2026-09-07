@@ -47,6 +47,8 @@ namespace threepp {
             int envMapMode{};
             ColorSpace envMapEncoding{};
             bool envMapCubeUV{};
+            bool envMapEquirectangularLodAtlas{};
+            unsigned int envMapWidth{}, envMapHeight{};
             bool lightMap{};
             ColorSpace lightMapEncoding{};
             bool aoMap{};

@@ -474,15 +474,42 @@ test("Web Audio compressor and external ShaderMaterial subclasses follow browser
     customDistance.onBeforeCompile=shader=>{distanceCompiles++;assert.ok(shader.fragmentShader.includes('referencePosition'));};
     fogMesh.customDepthMaterial=customDepth;
     fogMesh.customDistanceMaterial=customDistance;
-    await renderer.compileAsync(fogScene,fogCamera);
-    assert.ok(customDepth._h && customDistance._h && customDepth._h!==customDistance._h);
-    assert.equal(depthCompiles,1);
-    assert.equal(distanceCompiles,1);
-    assert.equal(fogMesh._nativeShadowMaterials,`${customDepth._h}:${customDistance._h}`);
-    fogMesh.customDepthMaterial=null;
-    fogMesh.customDistanceMaterial=null;
-    await renderer.compileAsync(fogScene,fogCamera);
-    assert.equal(fogMesh._nativeShadowMaterials,'0:0');
+    const commands = globalThis.__TN.cmd;
+    const originalShadowMaterials = commands.objectShadowMaterials, originalObjectFlags = commands.objectFlags;
+    const shadowWrites = [], flagWrites = [];
+    commands.objectShadowMaterials = (handle, ...args) => {
+      if (handle === fogMesh._h) shadowWrites.push(args);
+      return originalShadowMaterials(handle, ...args);
+    };
+    commands.objectFlags = (handle, ...args) => {
+      if (handle === fogMesh._h) flagWrites.push(args);
+      return originalObjectFlags(handle, ...args);
+    };
+    try {
+      await renderer.compileAsync(fogScene,fogCamera);
+      assert.ok(customDepth._h && customDistance._h && customDepth._h!==customDistance._h);
+      assert.equal(depthCompiles,1);
+      assert.equal(distanceCompiles,1);
+      assert.deepEqual(shadowWrites, [[customDepth._h, customDistance._h]]);
+      await renderer.compileAsync(fogScene,fogCamera);
+      assert.equal(shadowWrites.length, 1, 'unchanged shadow bindings must not be resent');
+      flagWrites.length = 0;
+      fogMesh.castShadow = !fogMesh.castShadow;
+      fogMesh.receiveShadow = !fogMesh.receiveShadow;
+      fogMesh.layers.set(2);
+      await renderer.compileAsync(fogScene,fogCamera);
+      assert.deepEqual(flagWrites, [[fogMesh.castShadow, fogMesh.receiveShadow, 4]]);
+      await renderer.compileAsync(fogScene,fogCamera);
+      assert.equal(flagWrites.length, 1, 'unchanged object flags must not be resent');
+      fogMesh.layers.set(0);
+      fogMesh.customDepthMaterial=null;
+      fogMesh.customDistanceMaterial=null;
+      await renderer.compileAsync(fogScene,fogCamera);
+      assert.deepEqual(shadowWrites[1], [0, 0], 'removing materials must clear native bindings');
+    } finally {
+      commands.objectShadowMaterials = originalShadowMaterials;
+      commands.objectFlags = originalObjectFlags;
+    }
     const uploadTexture=new THREE.DataTexture(new Uint8Array([255,0,0,255]),1,1);
     uploadTexture.anisotropy=8;
     renderer.initTexture(uploadTexture);

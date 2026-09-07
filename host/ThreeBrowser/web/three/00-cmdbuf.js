@@ -120,6 +120,23 @@
   let pendingAsyncScene = 0;
   let pendingAsyncCamera = 0;
   let pendingWindowPresentation = null;
+  let nameEncoder;
+  const encodedUniformNames = new Map();
+
+  function uniformNameBytes(name) {
+    const key = String(name || "");
+    let bytes = encodedUniformNames.get(key);
+    if (bytes) return bytes;
+    nameEncoder ||= new TextEncoder();
+    bytes = nameEncoder.encode(key);
+    // Names repeat across materials and frames. Bound retention for programs
+    // that generate arbitrary names; values and commands are never cached.
+    if (bytes.length <= 256) {
+      if (encodedUniformNames.size >= 1024) encodedUniformNames.clear();
+      encodedUniformNames.set(key, bytes);
+    }
+    return bytes;
+  }
 
   function host() {
     if (hostCache) return hostCache;
@@ -693,10 +710,10 @@
       end(s);
       return true;
     },
-    // OP_TEX_PARAMS: u32 id, wrapS, wrapT, colorSpace, mag, min, channel, pad,
-    //                f32 ox, oy, repeatX, repeatY
-    texParams(id, wrapS, wrapT, colorSpace, mag, min, channel, ox, oy, rx, ry, anisotropy = 1) {
-      const s = begin(OP.TEX_PARAMS, 48);
+    // OP_TEX_PARAMS: u32 id, wrapS, wrapT, colorSpace, mag, min, channel, anisotropy,
+    //                f32 ox, oy, repeatX, repeatY; optional u32 mapping (0 = unchanged).
+    texParams(id, wrapS, wrapT, colorSpace, mag, min, channel, ox, oy, rx, ry, anisotropy = 1, mapping = 0) {
+      const s = begin(OP.TEX_PARAMS, 52);
       wu32(id);
       wu32(wrapS);
       wu32(wrapT);
@@ -709,6 +726,7 @@
       wf32(oy);
       wf32(rx);
       wf32(ry);
+      wu32(mapping);
       end(s);
     },
     // OP_TEX_BEGIN: u32 id, u32 width, u32 height, u32 pad
@@ -924,7 +942,7 @@
       end(s);
     },
     shaderTexture(id, name, tex) {
-      const bytes = new TextEncoder().encode(String(name || ""));
+      const bytes = uniformNameBytes(name);
       if (!id || !tex || !bytes.length) return;
       const s = begin(OP.SHADER_TEX, 12 + bytes.length);
       wu32(id);
@@ -1046,7 +1064,7 @@
       end(s);
     },
     shaderUniform(id, name, kind, values) {
-      const bytes = new TextEncoder().encode(String(name || ""));
+      const bytes = uniformNameBytes(name);
       if (!id || !bytes.length || bytes.length > 4096) return;
       const nameSize = (bytes.length + 3) & ~3;
       const s = begin(OP.SHADER_UNIFORM, 16 + nameSize + values.length * 4);

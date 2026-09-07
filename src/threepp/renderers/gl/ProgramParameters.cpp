@@ -129,6 +129,9 @@ ProgramParameters::ProgramParameters(
     envMap = effectiveEnvMap != nullptr;
     if (envMap) {
         envMapMode = as_integer(effectiveEnvMap->mapping);
+        envMapEquirectangularLodAtlas = effectiveEnvMap->isEquirectangularLodAtlas;
+        envMapWidth = effectiveEnvMap->image().width();
+        envMapHeight = effectiveEnvMap->image().height();
     }
     envMapEncoding = getTextureEncodingFromMap(effectiveEnvMap);
     envMapCubeUV = envMapMode != 0 &&
@@ -263,6 +266,7 @@ std::string ProgramParameters::hash() const {
     s << std::to_string(envMapMode) << '\n';
     s << std::to_string(as_integer(envMapEncoding)) << '\n';
     s << std::to_string(envMapCubeUV) << '\n';
+    s << envMapEquirectangularLodAtlas << ':' << envMapWidth << ':' << envMapHeight << '\n';
     s << std::to_string(lightMap) << '\n';
     s << std::to_string(as_integer(lightMapEncoding)) << '\n';
     s << std::to_string(aoMap) << '\n';

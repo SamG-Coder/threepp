@@ -68,10 +68,9 @@
 
 		#ifdef ENVMAP_MODE_REFLECTION
 
-			// Pure mirror reflection. WGPU raster does the same; the prior
-			// roughness-bend mix toward the normal made GL sample sharper env
-			// regions on glossy/mid-rough surfaces, breaking parity.
 			vec3 reflectVec = reflect( -viewDir, normal );
+			// Three.js bends the reflection toward the normal as roughness grows.
+			reflectVec = normalize( mix( reflectVec, normal, roughness * roughness ) );
 
 		#else
 
