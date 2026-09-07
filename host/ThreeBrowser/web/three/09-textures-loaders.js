@@ -1136,9 +1136,27 @@
   function applyNativeTexParams(texture) {
     if (!texture || !texture._h) return;
     if (!TN.cmd || typeof TN.cmd.texParams !== "function") return;
+    const previous = texture._nativeParamsInput;
+    const offset = texture.offset, repeat = texture.repeat;
+    if (previous && previous.handle === texture._h && previous.wrapS === texture.wrapS &&
+        previous.wrapT === texture.wrapT && previous.colorSpace === texture.colorSpace &&
+        previous.encoding === texture.encoding && previous.mag === texture.magFilter &&
+        previous.min === texture.minFilter && previous.channel === texture.channel &&
+        previous.anisotropy === texture.anisotropy && previous.mapping === texture.mapping &&
+        previous.ox === offset?.x && previous.oy === offset?.y &&
+        previous.rx === repeat?.x && previous.ry === repeat?.y) return;
+    // Only normalize/build a signature when an input changes. Snapshot vector
+    // components rather than identity, since offset/repeat mutate in place.
+    const input = { handle: texture._h, wrapS: texture.wrapS, wrapT: texture.wrapT,
+      colorSpace: texture.colorSpace, encoding: texture.encoding, mag: texture.magFilter,
+      min: texture.minFilter, channel: texture.channel, anisotropy: texture.anisotropy,
+      mapping: texture.mapping, ox: offset?.x, oy: offset?.y, rx: repeat?.x, ry: repeat?.y };
     const p = textureParams(texture);
     const signature = [texture._h,p.wrapS,p.wrapT,p.colorSpace,p.mag,p.min,p.channel,p.ox,p.oy,p.rx,p.ry,p.anisotropy,p.mapping].join(':');
-    if (texture._nativeParamsSignature === signature) return;
+    if (texture._nativeParamsSignature === signature) {
+      texture._nativeParamsInput = input;
+      return;
+    }
     TN.cmd.texParams(
       texture._h,
       p.wrapS,
@@ -1155,6 +1173,7 @@
       p.mapping
     );
     texture._nativeParamsSignature = signature;
+    texture._nativeParamsInput = input;
   }
 
   function uploadTextureNative(texture) {

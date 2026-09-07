@@ -81,3 +81,15 @@ Controlled seven-round benchmark, alternating old/new order: 100,000 updates in 
 The live follow-up trace observed 439 single-matrix plus 414 bulk commands per presentation, and approximately 589,978 submitted bytes per presentation. The preceding trace observed 4,422 individual matrix commands and approximately 645,053 bytes. The inspected follow-up capture included the pause overlay and a different view; the observed 21.1 FPS is not a controlled comparison with the preceding 10.7 FPS. Do not claim a doubling of application FPS from these runs. Live counters were collected before the final allocation-free typed-array append refinement; that refinement preserves command contents.
 
 All 60 tests pass with GPU tests enabled. Command regressions cover repeated/noncontiguous indices, multiple meshes, caller-owned matrix reuse, draw/destroy/submission boundaries and small-ring rollover. A GPU regression submits draws to two targets with different instance positions and verifies that each target contains its own expected result.
+
+## Texture-state fast path
+
+The measured applyNativeTexParams hotspot now compares raw sampler inputs before constructing normalized parameters and string signatures. Mutable offset/repeat components and native handle identity are included. Changed inputs still pass through the existing normalization/deduplication path; failed sends remain retryable.
+
+Seven alternating benchmark rounds, 200,000 checks over 128 textures with periodic in-place offset changes: median 77.51 ms before versus 2.49 ms after. Both paths emitted the same 95 parameter commands with identical arguments in the first measured round; command sequences were equal in every round. This isolates texture-state checks. The earlier live profile attributed 90 ms of self time over 20 seconds to this function, so this improvement must not be presented as a large whole-frame speedup. All 62 tests pass with GPU tests enabled, including sampling fields, mutable transforms, legacy encoding, equivalent normalized values and failed-submission retry.
+
+## Additional native texture candidate
+
+The observed opcode 38 float-texture upload occurs about once per presentation. Native OP_TEX_FLOAT allocates a pixel vector; finishFloatTexture constructs a temporary DataTexture and copies its state into an existing texture. GLTextures uploads the pixels with texImage2D even when dimensions/format/type remain unchanged. These are concrete allocation/storage-update paths to measure next.
+
+Candidate: reuse matching CPU pixel storage and use subimage updates for an already allocated compatible GPU texture. Preserve handle identity, sampler state, float precision, mipmap behavior, color space and resize/format changes. Validate updates before and after intervening draws; do not replace GPU-generated render-target contents or alter application update frequency. Allocation avoidance is established by code inspection, but its GPU/driver benefit remains unmeasured and is not claimed here.
