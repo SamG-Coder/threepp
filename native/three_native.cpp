@@ -434,6 +434,9 @@ void tn::renderPendingFrame() {
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
             renderGlOverlay();
         });
+        // The loading overlay uses raw GL calls. Invalidate cached clear color
+        // and bindings before the first application/offscreen pass.
+        if (auto* renderer = dynamic_cast<GLRenderer*>(g.renderer.get())) renderer->resetState();
         return;
     }
 #endif
@@ -2449,7 +2452,7 @@ void tn_material_set_visible(uint32_t materialHandle, int visible) {
 namespace {
 
 void applyMaterialMapSlot(Material* material, const std::shared_ptr<Texture>& texture, int slot) {
-    if (!material || !texture) {
+    if (!material) {
         return;
     }
     switch (slot) {
@@ -2509,11 +2512,11 @@ void tn_material_set_map_slot(uint32_t materialHandle, int slot, uint32_t textur
         onWorker([materialHandle, slot, textureHandle] {
             Slot* matSlot = getSlot(materialHandle);
             Slot* texSlot = getSlot(textureHandle);
-            if (!matSlot || !matSlot->material || !texSlot || !texSlot->texture) {
+            if (!matSlot || !matSlot->material || (textureHandle && (!texSlot || !texSlot->texture))) {
                 setError("material set map needs material and texture");
                 return;
             }
-            applyMaterialMapSlot(matSlot->material.get(), texSlot->texture, slot);
+            applyMaterialMapSlot(matSlot->material.get(), textureHandle ? texSlot->texture : nullptr, slot);
         });
     } catch (const std::exception& ex) {
         setError(ex.what());

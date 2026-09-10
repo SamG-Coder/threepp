@@ -115,7 +115,7 @@
   };
 
   function applyMapSlot(matId, slot, texId) {
-    if (!matId || !texId) return;
+    if (!matId) return;
     if (TN.cmd && typeof TN.cmd.matMapSlot === "function") TN.cmd.matMapSlot(matId, slot, texId);
     else {
       const n = native();
@@ -125,7 +125,12 @@
   }
 
   function bindMap(mat, texture, slot) {
-    if (!texture || typeof texture !== "object") return;
+    slot = slot ?? 0;
+    const bindings = mat._nativeMapBindings || (mat._nativeMapBindings = []);
+    if (!texture || typeof texture !== "object") {
+      if (bindings[slot]) { applyMapSlot(mat.__h, slot, 0); bindings[slot] = null; }
+      return;
+    }
     if (!texture._materials) texture._materials = [];
     if (texture._materials.indexOf(mat) < 0) texture._materials.push(mat);
     // Upload at bind time, after loaders have set flipY/wrap/colorSpace.
@@ -139,7 +144,10 @@
     }
     const matId = mat.__h || 0;
     if (!matId || !texture._h) return;
-    applyMapSlot(matId, slot == null ? 0 : slot, texture._h);
+    const previous = bindings[slot];
+    if (previous?.material === matId && previous.texture === texture && previous.handle === texture._h) return;
+    applyMapSlot(matId, slot, texture._h);
+    bindings[slot] = {material:matId,texture,handle:texture._h};
   }
 
   function bindAllMaps(mat) {
@@ -955,6 +963,7 @@
     }
 
     flushNative(renderer) {
+      bindAllMaps(this);
       const renderState = this._nativeRenderState;
       if ((!renderState || renderState.blending !== this.blending || renderState.depthTest !== this.depthTest ||
           renderState.premultipliedAlpha !== this.premultipliedAlpha || renderState.alphaToCoverage !== this.alphaToCoverage ||

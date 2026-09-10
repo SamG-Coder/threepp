@@ -234,7 +234,7 @@ ColorSpace colorSpaceFromJs(uint32_t value) {
 }
 
 void applyMaterialMapSlot(Material* material, const std::shared_ptr<Texture>& texture, uint32_t slot) {
-    if (!material || !texture) {
+    if (!material) {
         return;
     }
     switch (slot) {
@@ -552,6 +552,21 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             if (!width || !height || !has(cur, end, need)) {
                 setError("texture needs rgba pixels");
                 return;
+            }
+            // Streaming byte textures deserve the same stable-storage path as
+            // float textures. Avoid rebuilding/copying an Image and Texture on
+            // every upload, and preserve the existing sampler configuration.
+            if (auto* slot = findSlot(id); slot && slot->texture && !slot->renderTarget) {
+                auto& texture = *slot->texture;
+                if (texture.type == Type::UnsignedByte && texture.format == Format::RGBA &&
+                    !texture.images().empty() && !texture.image().isFloat() && !texture.image().isHalfFloat() &&
+                    texture.image().width() == width && texture.image().height() == height &&
+                    texture.image().data<unsigned char>().size() == need) {
+                    std::memcpy(texture.image().data<unsigned char>().data(), cur, need);
+                    texture.needsUpdate();
+                    markDirty();
+                    return;
+                }
             }
             std::vector<unsigned char> pixels(cur, cur + need);
             finishRgbaTexture(id, static_cast<int>(width), static_cast<int>(height), std::move(pixels));
@@ -928,8 +943,10 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             if (!has(p, end, 12)) return;
             Slot* matSlot = getSlot(ru32(p));
             Slot* texSlot = getSlot(ru32(p + 8));
-            if (!matSlot || !matSlot->material || !texSlot || !texSlot->texture) return;
-            applyMaterialMapSlot(matSlot->material.get(), texSlot->texture, ru32(p + 4));
+            if (!matSlot || !matSlot->material) return;
+            const auto textureId = ru32(p + 8);
+            if (textureId && (!texSlot || !texSlot->texture)) return;
+            applyMaterialMapSlot(matSlot->material.get(), textureId ? texSlot->texture : nullptr, ru32(p + 4));
             return;
         }
         case tn::cmd::OP_MAT_PBR: {
@@ -1304,6 +1321,17 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             if (!light) return;
             light->color.setRGB(rf32(p + 4), rf32(p + 8), rf32(p + 12));
             light->intensity = rf32(p + 16);
+            // Old producers have a 44-byte payload. Extended producers send
+            // attenuation/cone settings so mutable Three.js lights stay live.
+            if (has(p, end, 60)) {
+                if (auto* point = dynamic_cast<PointLight*>(light)) {
+                    point->distance = rf32(p + 44); point->decay = rf32(p + 48);
+                }
+                if (auto* spot = dynamic_cast<SpotLight*>(light)) {
+                    spot->distance = rf32(p + 44); spot->decay = rf32(p + 48);
+                    spot->angle = rf32(p + 52); spot->penumbra = rf32(p + 56);
+                }
+            }
             if (auto* hemi = dynamic_cast<HemisphereLight*>(light)) hemi->groundColor.setRGB(rf32(p + 20), rf32(p + 24), rf32(p + 28));
             if (auto* directional = dynamic_cast<LightWithTarget*>(light)) {
                 auto& target = const_cast<Object3D&>(directional->target());

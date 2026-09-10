@@ -88,6 +88,30 @@ test("instance batches split safely at ring-buffer boundaries", () => {
   assert.deepEqual(decodeMatrixCommands(submissions).events, expected);
 });
 
+test('offset instance writes snapshot only 16 values without allocating subarray views', () => {
+  const {cmd,submissions}=harness(TextEncoder,256);
+  const storage=new Float32Array(16*12),expected=[];
+  storage.subarray=()=>{throw new Error('unexpected matrix view allocation');};
+  for(let i=0;i<12;i++) {
+    storage.fill(i+.5,i*16,i*16+16);
+    cmd.instMatrix(7,i,storage,i*16);
+    expected.push([7,i,Array(16).fill(i+.5)]);
+  }
+  storage.fill(-1);cmd.submit();
+  assert.deepEqual(decodeMatrixCommands(submissions).events,expected);
+  assert.throws(()=>cmd.instMatrix(7,0,storage,storage.length-15),{name:'RangeError',message:'Instance matrix requires 16 source elements'});
+});
+
+test('light state transports changing attenuation and cone values', () => {
+  const {cmd,submissions}=harness();
+  const light={distance:60,decay:2,angle:.5,penumbra:.25};
+  cmd.lightState(9,{r:1,g:.5,b:.25},120,null,null,light);cmd.submit();
+  const payload=submissions[0];
+  assert.equal(payload.readUInt32LE(4),72);
+  assert.equal(payload.readFloatLE(52),60);assert.equal(payload.readFloatLE(56),2);
+  assert.equal(payload.readFloatLE(60),.5);assert.equal(payload.readFloatLE(64),.25);
+});
+
 test("cached uniform names preserve UTF-8 bytes, changing values and texture command order", () => {
   let encodes = 0;
   class CountingEncoder extends TextEncoder {

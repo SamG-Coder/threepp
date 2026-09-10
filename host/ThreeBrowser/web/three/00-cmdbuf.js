@@ -507,10 +507,12 @@
       wu32(target); wu32(flags); wu32(face); wu32(mip);
       end(s);
     },
-    lightState(id, color, intensity, groundColor, target) {
-      const s = begin(OP.LIGHT_STATE, 44);
+    lightState(id, color, intensity, groundColor, target, light) {
+      const s = begin(OP.LIGHT_STATE, 60);
       wu32(id);
       for (const v of [color.r,color.g,color.b,intensity,groundColor?.r || 0,groundColor?.g || 0,groundColor?.b || 0,target?.x || 0,target?.y || 0,target?.z || 0]) wf32(v);
+      wf32(light?.distance ?? 0); wf32(light?.decay ?? 2);
+      wf32(light?.angle ?? Math.PI / 3); wf32(light?.penumbra ?? 0);
       end(s);
     },
     objectFlags(id, cast, receive, layers) {
@@ -1169,10 +1171,11 @@
       wu32(0);
       end(s);
     },
-    instMatrix(id, index, elements) {
+    instMatrix(id, index, elements, sourceOffset = 0) {
       const src = elements instanceof Float32Array ? elements : new Float32Array(elements);
+      if (!Number.isInteger(sourceOffset) || sourceOffset < 0 || sourceOffset + 16 > src.length) throw new RangeError('Instance matrix requires 16 source elements');
       const handle = id >>> 0, instance = index >>> 0;
-      if (src.length === 16 && lastInstanceStart >= 0 && handle === lastInstanceId &&
+      if (lastInstanceStart >= 0 && handle === lastInstanceId &&
           instance === lastInstanceIndex + lastInstanceCount) {
         const count = lastInstanceCount + 1;
         const size = align8(20 + count * 64);
@@ -1186,7 +1189,8 @@
           }
           u32[(start + 4) >> 2] = size;
           u32[(start + 16) >> 2] = count;
-          f32.set(src, (start + 20 + lastInstanceCount * 64) >> 2);
+          const destination = (start + 20 + lastInstanceCount * 64) >> 2;
+          for (let i = 0; i < 16; i++) f32[destination + i] = src[sourceOffset + i];
           off = start + size;
           lastInstanceCount = count;
           return;
@@ -1195,11 +1199,11 @@
       const s = begin(OP.INST_MATRIX, 72);
       wu32(id);
       wu32(index);
-      copyBytes(src);
+      for (let i = 0; i < 16; i++) wf32(src[sourceOffset + i]);
       end(s);
       // Any other command, submission or buffer attachment ends this run.
       // Never combine writes across a draw or reorder noncontiguous indices.
-      if (src.length === 16) {
+      {
         lastInstanceStart = s;
         lastInstanceId = handle;
         lastInstanceIndex = instance;

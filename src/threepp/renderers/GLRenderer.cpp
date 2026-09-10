@@ -1055,14 +1055,18 @@ struct GLRenderer::Impl {
         auto* scene = _scene->as<Scene>();
         if (!scene) scene = _emptyScene.get();// scene could be a Mesh, Line, Points, ...
 
-        bool isMeshBasicMaterial = material->type() == "MeshBasicMaterial";
-        bool isMeshLambertMaterial = material->type() == "MeshLambertMaterial";
-        bool isMeshToonMaterial = material->type() == "MeshToonMaterial";
-        bool isMeshPhongMaterial = material->type() == "MeshPhongMaterial";
-        bool isMeshStandardMaterial = material->type() == "MeshStandardMaterial" || material->type() == "MeshPhysicalMaterial";
-        bool isShadowMaterial = material->type() == "ShadowMaterial";
+        // type() returns an owning string. Query once per draw rather than
+        // allocating the same long material name for every classification.
+        const auto materialType = material->type();
+        bool isMeshBasicMaterial = materialType == "MeshBasicMaterial";
+        bool isMeshLambertMaterial = materialType == "MeshLambertMaterial";
+        bool isMeshToonMaterial = materialType == "MeshToonMaterial";
+        bool isMeshPhongMaterial = materialType == "MeshPhongMaterial";
+        bool isMeshStandardMaterial = materialType == "MeshStandardMaterial" || materialType == "MeshPhysicalMaterial";
+        bool isShadowMaterial = materialType == "ShadowMaterial";
         bool isShaderMaterial = material->is<ShaderMaterial>();
-        bool isEnvMap = material->is<MaterialWithEnvMap>() && material->as<MaterialWithEnvMap>()->envMap;
+        auto* materialWithEnvMap = material->as<MaterialWithEnvMap>();
+        bool isEnvMap = materialWithEnvMap && materialWithEnvMap->envMap;
 
         textures.resetTextureUnits();
 
@@ -1071,7 +1075,6 @@ struct GLRenderer::Impl {
         ColorSpace encoding = currentOutputColorSpace();
 
         Texture* envMap;
-        auto materialWithEnvMap = material->as<MaterialWithEnvMap>();
         if (materialWithEnvMap && materialWithEnvMap->envMap) {
             envMap = cubemaps.getPMREM(materialWithEnvMap->envMap.get());
         } else {
@@ -1102,8 +1105,9 @@ struct GLRenderer::Impl {
         //
 
         bool needsProgramChange = false;
-        bool isInstancedMesh = object->type() == "InstancedMesh";
-        bool isSkinnedMesh = object->type() == "SkinnedMesh";
+        const auto objectType = object->type();
+        bool isInstancedMesh = objectType == "InstancedMesh";
+        bool isSkinnedMesh = objectType == "SkinnedMesh";
 
         if (material->version() == materialProperties->version) {
 

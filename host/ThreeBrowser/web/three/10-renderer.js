@@ -957,10 +957,10 @@
           }
           if (obj?.isLight && obj._h && TN.cmd?.lightState) {
             const target = obj.target?.getWorldPosition?.(self._nativeLightTarget || (self._nativeLightTarget = new TN.Vector3()));
-            const values = [obj.color.r,obj.color.g,obj.color.b,obj.intensity,obj.groundColor?.r,obj.groundColor?.g,obj.groundColor?.b,target?.x,target?.y,target?.z];
+            const values = [obj.color.r,obj.color.g,obj.color.b,obj.intensity,obj.groundColor?.r,obj.groundColor?.g,obj.groundColor?.b,target?.x,target?.y,target?.z,obj.distance,obj.decay,obj.angle,obj.penumbra];
             const signature = values.join(',');
             if (obj._nativeLightState !== signature) {
-              TN.cmd.lightState(obj._h,obj.color,obj.intensity,obj.groundColor,target);
+              TN.cmd.lightState(obj._h,obj.color,obj.intensity,obj.groundColor,target,obj);
               obj._nativeLightState = signature;
             }
             if (obj.castShadow && obj.shadow?.camera && TN.cmd?.lightShadow) {

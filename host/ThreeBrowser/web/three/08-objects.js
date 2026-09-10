@@ -807,9 +807,9 @@
       writeMatrix(this.instanceMatrix.array, index * 16, matrix);
       this.instanceMatrix.needsUpdate = true;
       if (this._h) {
-        const slice = this.instanceMatrix.array.subarray(index * 16, index * 16 + 16);
-        if (TN.cmd) TN.cmd.instMatrix(this._h, index, slice);
+        if (TN.cmd) TN.cmd.instMatrix(this._h, index, this.instanceMatrix.array, index * 16);
         else {
+          const slice = this.instanceMatrix.array.subarray(index * 16, index * 16 + 16);
           const n = native();
           if (n && typeof n.InstancedSetMatrixAt === "function") {
             try {
