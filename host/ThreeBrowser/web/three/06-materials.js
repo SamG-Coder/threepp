@@ -153,7 +153,10 @@
   function bindAllMaps(mat) {
     if (!mat) return;
     for (const key in MAP_SLOTS) {
-      bindMap(mat, mat[key], MAP_SLOTS[key]);
+      const texture = mat[key], slot = MAP_SLOTS[key];
+      // Most per-frame material visits have empty map slots. Enter the
+      // binding/upload path only for a texture or a binding that needs clearing.
+      if (texture || mat._nativeMapBindings?.[slot]) bindMap(mat, texture, slot);
     }
     if (mat.node) {
       bindMap(mat, unwrapNodeValue(mat.normal), MAP_SLOTS.normalMap);

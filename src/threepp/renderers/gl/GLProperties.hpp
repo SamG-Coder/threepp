@@ -45,6 +45,7 @@ namespace threepp::gl {
         MaterialWithEnvMap* env;
         MaterialWithWireframe* wireframe;
         MaterialWithMorphTargets* morph;
+        MaterialWithTransmission* transmission;
         ShaderMaterial* shader;
         MeshStandardMaterial* standard;
         SpriteMaterial* sprite;

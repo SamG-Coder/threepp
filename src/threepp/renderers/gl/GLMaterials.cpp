@@ -35,6 +35,7 @@ MaterialInterfaces::MaterialInterfaces(Material* material)
       env(material->as<MaterialWithEnvMap>()),
       wireframe(material->as<MaterialWithWireframe>()),
       morph(material->as<MaterialWithMorphTargets>()),
+      transmission(material->as<MaterialWithTransmission>()),
       shader(material->as<ShaderMaterial>()),
       standard(material->as<MeshStandardMaterial>()),
       sprite(material->as<SpriteMaterial>()) {}

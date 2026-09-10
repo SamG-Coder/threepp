@@ -22,6 +22,9 @@ namespace threepp::gl {
             : threepp::RenderList([&properties](Material* mat) -> uint64_t {
                   auto mp = properties.materialProperties.get(mat);
                   return mp && mp->program ? static_cast<uint64_t>(mp->program->id) : 0;
+              }, [&properties](Material* mat) {
+                  const auto* transmission = properties.materialProperties.get(mat)->getInterfaces(mat).transmission;
+                  return transmission && transmission->transmission > 0.f;
               }) {}
     };
 

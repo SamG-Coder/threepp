@@ -35,6 +35,7 @@ namespace threepp {
     // Callback to resolve a material's current program ID.
     // GL backend returns GLProgram::id; another backend can return a pipeline hash.
     using ProgramIdResolver = std::function<uint64_t(Material*)>;
+    using TransmissionResolver = std::function<bool(Material*)>;
 
     struct RenderList {
 
@@ -45,7 +46,7 @@ namespace threepp {
         std::vector<std::unique_ptr<RenderItem>> renderItems;
         size_t renderItemsIndex = 0;
 
-        explicit RenderList(ProgramIdResolver resolver = nullptr);
+        explicit RenderList(ProgramIdResolver resolver = nullptr, TransmissionResolver transmissionResolver = nullptr);
 
         void init();
 
@@ -73,6 +74,7 @@ namespace threepp {
 
     private:
         ProgramIdResolver resolver_;
+        TransmissionResolver transmissionResolver_;
     };
 
     struct RenderLists {

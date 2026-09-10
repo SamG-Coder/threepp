@@ -1,5 +1,9 @@
 
 add_test_executable(GLRenderLists_test)
+add_executable(GLRenderListLiveState_test GLRenderListLiveState_test.cpp)
+target_link_libraries(GLRenderListLiveState_test PRIVATE threepp)
+target_include_directories(GLRenderListLiveState_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+add_test(NAME GLRenderListLiveState_test COMMAND GLRenderListLiveState_test)
 add_test_executable(GLUniforms_test)
 
 # Source-level check on ProgramParameters::hash(); needs the two files at runtime.

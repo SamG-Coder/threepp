@@ -46,7 +46,8 @@ namespace {
 
 }// namespace
 
-RenderList::RenderList(ProgramIdResolver resolver): resolver_(std::move(resolver)) {}
+RenderList::RenderList(ProgramIdResolver resolver, TransmissionResolver transmissionResolver)
+    : resolver_(std::move(resolver)), transmissionResolver_(std::move(transmissionResolver)) {}
 
 void RenderList::init() {
 
@@ -108,8 +109,15 @@ void RenderList::push(
 
     auto renderItem = getNextRenderItem(object, geometry, material, groupOrder, z, group);
 
-    auto transmissionMaterial = dynamic_cast<MaterialWithTransmission*>(material);
-    if (transmissionMaterial && transmissionMaterial->transmission > 0.f) {
+    // Backends may cache the immutable interface; the live transmission value
+    // is still queried on every push, including repeated passes in one frame.
+    bool isTransmissive;
+    if (transmissionResolver_) isTransmissive = transmissionResolver_(material);
+    else {
+        const auto* transmissionMaterial = dynamic_cast<MaterialWithTransmission*>(material);
+        isTransmissive = transmissionMaterial && transmissionMaterial->transmission > 0.f;
+    }
+    if (isTransmissive) {
 
         transmissive.insert(transmissive.begin(), renderItem);
 

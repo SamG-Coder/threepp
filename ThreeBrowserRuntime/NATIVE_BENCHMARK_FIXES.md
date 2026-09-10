@@ -37,6 +37,14 @@ Allocation figures are statistical V8 samples, not native C++ allocation totals.
 
 ## Remaining performance boundary
 
+### Follow-up: work repeated every frame
+
+The GL render-list classifier now uses the existing cached transmission interface, while reading the live transmission value for every object and pass. The generic backend classifier remains unchanged. JavaScript material synchronization skips the map binding helper for empty slots with no previous binding; actual textures and removals retain their existing path.
+
+The city trace reduces recurring render-list CPU time from 723 to 450 microseconds per frame. Across three final native process launches, cubes improve from 1.792 to 1.609 ms and city from 2.108 to 1.846 ms including readback. All eight native validation PNGs are byte-identical. All eight 3D and six diagnostic comparisons pass against unchanged saved browser baselines, as do separate frame-pacing/allocation comparisons. All 74 GPU-enabled runtime tests pass, plus a new C++ regression exercising live classification across 100 passes, same-pass changes and cache recreation.
+
+These are steady-state measurements after warm-up. Callback pacing is essentially unchanged, and several small timing differences should not be overinterpreted. Full evidence and limits are in `C:\three-runtime-benchmarks\PER-FRAME-REPORT.md`.
+
 ### Follow-up: sorting and automatic instancing
 
 Native now defaults to `sortObjects = true`, matching Three.js and the facade. A new ordered command forwards explicit true/false changes for offscreen and window rendering. The native renderer conservatively packs compatible adjacent low-poly Mesh draws into a bounded 1,024-matrix streaming buffer after normal visibility checks and sorting. Small scenes, high-poly geometry, unsupported shaders/states/transforms and callbacks retain their original draw path. Set `THREEBROWSER_DISABLE_AUTO_INSTANCING=1` before launching to measure the sorting-only control.
