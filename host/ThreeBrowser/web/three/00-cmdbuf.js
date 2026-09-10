@@ -91,6 +91,7 @@
     INST_COLOR: 101,
     INST_COUNT: 102,
     INST_MATRICES: 103,
+    RAW_GL: 104,
   };
 
   // Keep in sync with native/cmd_ops.hpp MAP_SLOT_*
@@ -110,6 +111,7 @@
   let u8 = new Uint8Array(ab);
   let u32 = new Uint32Array(ab);
   let f32 = new Float32Array(ab);
+  let f64 = new Float64Array(ab);
   let off = 0;
   let nextId = 1;
   let shared = false;
@@ -178,6 +180,7 @@
     u8 = new Uint8Array(ab);
     u32 = new Uint32Array(ab);
     f32 = new Float32Array(ab);
+    f64 = new Float64Array(ab);
   }
 
   function align8(n) {
@@ -194,6 +197,7 @@
   }
 
   function submitNow(preferAsync) {
+    lastRawUpload = -1;
     lastInstanceStart = -1;
     if (pendingWindowPresentation) {
       const frame = pendingWindowPresentation;
@@ -254,7 +258,11 @@
     }
     off = 0;
     pendingSubmit = false;
-    n.CmdSubmit(used);
+    const accepted = n.CmdSubmit(used);
+    if (accepted === false) {
+      rawUniforms.clear();
+      throw new Error("Native command submission failed");
+    }
   }
 
   function cmdBytes(payload) {
@@ -282,6 +290,8 @@
   }
 
   function begin(op, payload) {
+    lastRawUpload = -1;
+    if (op !== OP.RAW_GL) rawUniforms.clear();
     lastInstanceStart = -1;
     const size = align8(8 + payload);
     need(size);
@@ -446,7 +456,98 @@
     submitNow(true);
   }
 
+  // Single-location uniforms persist across draws. Array writes invalidate
+  // the cache because they can overlap other uniform locations.
+  const rawUniforms = new Map();
+  let rawUniformSizes = null, rawUniformBarriers = null, rawBufferUpload = -1, lastRawUpload = -1;
+  const rawGLStats = {uniformCalls: 0, uniformSkipped: 0, bufferUploadsCoalesced: 0, bytesSkipped: 0};
   const cmd = {
+    // Direct GL uses the same ring, growth, attachment and synchronous
+    // submission barriers as scene commands, with GL-specific uniform elision.
+    configureRawGL(ops, enabled = true, uniforms = true) {
+      rawUniforms.clear();
+      lastRawUpload = -1;
+      rawBufferUpload = enabled ? ops.bufferSubData : -1;
+      rawUniformSizes = enabled && uniforms ? new Map() : null;
+      rawUniformBarriers = new Set([ops.useProgram, ops.linkProgram, ops.deleteProgram]);
+      if (rawUniformSizes) for (const [name, opcode] of Object.entries(ops)) {
+        const matrix = /^uniformMatrix([234])fv$/.exec(name);
+        const vector = /^uniform([1234])(f|i|ui)v$/.exec(name);
+        if (matrix) rawUniformSizes.set(opcode, Number(matrix[1]) ** 2 * 4);
+        else if (vector) rawUniformSizes.set(opcode, Number(vector[1]) * 4);
+        else if (/^uniform[1234](f|i|ui)$/.test(name)) rawUniformSizes.set(opcode, 0);
+      }
+      for (const name of Object.keys(rawGLStats)) rawGLStats[name] = 0;
+    },
+    invalidateRawGL() { rawUniforms.clear(); lastRawUpload = -1; },
+    rawGLStats,
+    rawGL(op, args, data) {
+      if (data != null && !ArrayBuffer.isView(data)) throw new Error("Raw GL payload must be a typed view");
+      const length = data?.byteLength || 0;
+      if (args.length > 10 || length > 64 * 1024 * 1024 - 96) throw new Error("Invalid raw GL command size");
+      // Replace only adjacent writes to the same bound target and exact range.
+      // Every intervening command (including binds/draws) and submit is a barrier.
+      if (op === rawBufferUpload && lastRawUpload >= 0 && args.length === 2 && data != null) {
+        const previous = lastRawUpload;
+        if (u32[(previous + 12) >> 2] === length &&
+            f64[(previous + 16) >> 3] === Number(args[0]) &&
+            f64[(previous + 24) >> 3] === Number(args[1])) {
+          u8.set(new Uint8Array(data.buffer, data.byteOffset, length), previous + 96);
+          ++rawGLStats.bufferUploadsCoalesced;
+          rawGLStats.bytesSkipped += align8(96 + length);
+          return;
+        }
+      }
+      let uniform = null;
+      if (rawUniformSizes) {
+        if (rawUniformBarriers.has(op)) rawUniforms.clear();
+        if (rawUniformSizes.has(op)) {
+          ++rawGLStats.uniformCalls;
+          if (length !== rawUniformSizes.get(op)) rawUniforms.clear();
+          else {
+            const location = Number(args[0]);
+            const previous = rawUniforms.get(location);
+            const bytes = data == null ? null : new Uint8Array(data.buffer, data.byteOffset, length);
+            let same = previous && previous.op === op && previous.args.length === args.length;
+            if (same) for (let i = 0; i < args.length; ++i) if (!Object.is(previous.args[i], Number(args[i]))) { same = false; break; }
+            if (same && bytes) for (let i = 0; i < length; ++i) if (previous.bytes[i] !== bytes[i]) { same = false; break; }
+            if (same) {
+              ++rawGLStats.uniformSkipped;
+              rawGLStats.bytesSkipped += align8(96 + length);
+              return;
+            }
+            uniform = {location, bytes, previous};
+          }
+        }
+      }
+      const s = begin(OP.RAW_GL, 88 + length);
+      try {
+        wu32(op);
+        wu32(length);
+        for (let i = 0; i < 10; ++i) {
+          const value = args[i] == null ? 0 : Number(args[i]);
+          if (!Number.isFinite(value)) throw new Error("Raw GL argument must be finite");
+          f64[off >> 3] = value;
+          off += 8;
+        }
+        copyBytes(data);
+        end(s);
+        if (op === rawBufferUpload && args.length === 2 && data != null) lastRawUpload = s;
+        if (uniform) {
+          // Own the snapshot; caller arrays may change immediately after upload.
+          let entry = uniform.previous;
+          if (!entry || entry.bytes?.length !== uniform.bytes?.length) entry = {args: [], bytes: uniform.bytes ? new Uint8Array(length) : null};
+          entry.op = op;
+          entry.args.length = args.length;
+          for (let i = 0; i < args.length; ++i) entry.args[i] = Number(args[i]);
+          if (uniform.bytes) entry.bytes.set(uniform.bytes);
+          rawUniforms.set(uniform.location, entry);
+        }
+      } catch (error) {
+        off = s;
+        throw error;
+      }
+    },
     OP,
     MAP_SLOT,
     alloc,

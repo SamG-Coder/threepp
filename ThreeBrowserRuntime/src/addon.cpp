@@ -14,6 +14,7 @@
 #include "audio_playback.h"
 #include "camera_capture.h"
 #include "canvas2d.h"
+#include "raw_gl_addon.h"
 #include "threepp/renderers/shaders/ShaderLib.hpp"
 
 #define STB_IMAGE_STATIC
@@ -2315,6 +2316,7 @@ napi_value init(napi_env env, napi_value exports) {
         {"reflexMode", nullptr, reflexMode, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, std::size(properties), properties);
+    registerRawGL(env, exports);
     return exports;
 }
 

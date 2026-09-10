@@ -12,6 +12,7 @@
 namespace tn::cmd {
 
 constexpr uint32_t OP_NOP = 0;
+constexpr uint32_t OP_RAW_GL = 104;
 constexpr uint32_t OP_RENDER = 1;
 constexpr uint32_t OP_SET_SIZE = 2;
 constexpr uint32_t OP_CLEAR_COLOR = 3;

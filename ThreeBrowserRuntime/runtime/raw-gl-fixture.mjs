@@ -1,0 +1,41 @@
+import assert from 'node:assert/strict';
+import * as T from '../node_modules/three/build/three.module.js';
+import * as host from './browser-host.mjs';
+import {createRawGLRenderer} from './raw-gl.mjs';
+
+const renderer=createRawGLRenderer(T,host,32),gl=renderer.getContext();
+const target=new T.WebGLRenderTarget(32,32,{samples:0});
+const scene=new T.Scene(),camera=new T.OrthographicCamera(-1,1,1,-1,.1,10);camera.position.z=2;
+const geometry=new T.PlaneGeometry(2,2),texels=new Uint8Array([255,0,0,255]);
+const texture=new T.DataTexture(texels,1,1);texture.needsUpdate=true;
+const material=new T.MeshBasicMaterial({map:texture,toneMapped:false});scene.add(new T.Mesh(geometry,material));
+const pixels=new Uint8Array(32*32*4);
+const sample=()=>{renderer.setRenderTarget(target);renderer.render(scene,camera);renderer.readRenderTargetPixels(target,0,0,32,32,pixels);return [...pixels.slice((16*32+16)*4,(16*32+16)*4+4)];};
+try {
+  assert.deepEqual(sample(),[255,0,0,255]);
+  texels.set([0,0,255,255]);texture.needsUpdate=true;
+  assert.deepEqual(sample(),[0,0,255,255]);
+  material.map=null;material.color.set(0x00ff00);material.needsUpdate=true;
+  assert.deepEqual(sample(),[0,255,0,255]);
+  material.map=texture;material.color.set(0xffffff);material.needsUpdate=true;
+  assert.deepEqual(sample(),[0,0,255,255]);
+  const buffer=gl.createBuffer(),source=new Float32Array([1,2,3,4]),copy=new Float32Array(4);
+  gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.bufferData(gl.ARRAY_BUFFER,source,gl.DYNAMIC_DRAW);source.fill(9);
+  gl.getBufferSubData(gl.ARRAY_BUFFER,0,copy);assert.deepEqual([...copy],[1,2,3,4]);
+  gl.bufferSubData(gl.ARRAY_BUFFER,4,new Float32Array([5,6]));
+  gl.bufferSubData(gl.ARRAY_BUFFER,4,new Float32Array([7,8]));gl.getBufferSubData(gl.ARRAY_BUFFER,0,copy);assert.deepEqual([...copy],[1,7,8,4]);
+  if(process.env.THREEBROWSER_DISABLE_RAW_GL_COALESCING!=='1') assert.ok(gl.getCommandStats().bufferUploadsCoalesced>0);
+  gl.deleteBuffer(buffer);
+  const shader=gl.createShader(gl.VERTEX_SHADER);gl.shaderSource(shader,'not valid GLSL');gl.compileShader(shader);
+  assert.equal(gl.getShaderParameter(shader,gl.COMPILE_STATUS),false);assert.ok(gl.getShaderInfoLog(shader).length);gl.deleteShader(shader);
+  assert.throws(()=>gl.readPixels(0,0,2,2,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array(1)),/exceeds destination/);
+  assert.equal(typeof host.native.rawGlSubmit,'undefined','standalone transport must be removed');
+  const malformed=new Uint32Array([globalThis.__TN.cmd.OP.RAW_GL,16,0,0]);
+  assert.equal(host.native.submit(new Uint8Array(malformed.buffer)),false);
+  assert.match(host.native.lastError(),/Truncated raw GL/);
+  assert.throws(()=>gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,{}),/typed-data/);
+  assert.equal(gl.getError(),gl.NO_ERROR);
+  const stats=gl.getBridgeStats();assert.equal(stats[0],0,'no threepp scene/resource slots');assert.equal(stats[3],0,'no threepp render scene');assert.ok(stats[1]>100);assert.ok(stats[2]>0);
+  renderer.setRenderTarget(null);renderer.render(scene,camera);assert.ok(host.native.stats().presents>0);
+  console.log(JSON.stringify({ok:true,gpu:gl.getParameter(gl.RENDERER),version:gl.getParameter(gl.VERSION),bridge:stats}));
+} finally {renderer.setRenderTarget(null);target.dispose();geometry.dispose();material.dispose();texture.dispose();renderer.dispose();host.stop();}

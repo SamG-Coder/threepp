@@ -1,5 +1,6 @@
 add_library(three_native SHARED
         three_native.cpp
+        raw_gl.cpp
         runtime_internal.cpp
         gpu_line.cpp
         gpu_points.cpp

@@ -55,6 +55,7 @@ endif ()
 
 add_library(three_browser_runtime MODULE
         src/addon.cpp
+        src/raw_gl_addon.cpp
         src/audio_playback.cpp
         src/camera_capture.cpp
         src/canvas2d.cpp)

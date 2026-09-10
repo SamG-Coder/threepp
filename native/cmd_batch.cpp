@@ -1,4 +1,5 @@
 #include "three_native.h"
+#include "raw_gl.h"
 #include "webgpu/three_webgpu.h"
 #include "cmd_ops.hpp"
 #include "runtime_internal.hpp"
@@ -287,6 +288,12 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
     switch (op) {
         case tn::cmd::OP_NOP:
             return;
+        case tn::cmd::OP_RAW_GL: {
+            TNRawGLResult result{};
+            tn_raw_gl_command(p,static_cast<size_t>(end-p),&result);
+            if(result.kind<0)throw std::runtime_error(result.text);
+            return;
+        }
         case tn::cmd::OP_RENDER: {
             if (!has(p, end, 8)) return;
             g.drawScene.store(ru32(p));
@@ -1455,6 +1462,7 @@ void execStream(const uint8_t* data, int nbytes) {
     } presentationScope;
     const uint8_t* p = data;
     const uint8_t* end = data + nbytes;
+    bool hasRawGL = false;
     while (has(p, end, 8)) {
         const uint32_t op = ru32(p);
         const uint32_t bytes = ru32(p + 4);
@@ -1462,6 +1470,7 @@ void execStream(const uint8_t* data, int nbytes) {
             setError("truncated command stream");
             return;
         }
+        if (op == tn::cmd::OP_RAW_GL && !hasRawGL) {tn_raw_gl_begin_batch();hasRawGL=true;}
         execOne(op, p + 8, p + bytes);
         p += bytes;
     }

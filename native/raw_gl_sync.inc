@@ -1,0 +1,25 @@
+switch(op) {
+case 0:
+case 1:
+case 2:
+case 65:
+case 67:
+case 69:
+case 71:
+case 73:
+case 75:
+case 77:
+case 80:
+case 81:
+case 82:
+case 83:
+case 84:
+case 85:
+case 86:
+case 87:
+case 88:
+case 89:
+case 90:
+case 130:
+case 131:
+case 132: return true;default:return false;}

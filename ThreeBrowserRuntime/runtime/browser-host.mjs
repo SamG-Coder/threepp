@@ -3386,6 +3386,17 @@ export function loadThreeShim(directory = path.join(here, "three")) {
   return globalThis.THREE;
 }
 
+export function loadCommandBuffer() {
+  if (!globalThis.__TN?.cmd) {
+    const staged = path.join(here, "three", "00-cmdbuf.js");
+    const source = path.resolve(here, "../../host/ThreeBrowser/web/three/00-cmdbuf.js");
+    const file = fs.existsSync(staged) ? staged : source;
+    vm.runInThisContext(fs.readFileSync(file, "utf8"), { filename: file });
+  }
+  if (typeof globalThis.__TN.cmd.rawGL !== "function") throw new Error("Rebuild/stage the main command buffer with direct GL support");
+  return globalThis.__TN.cmd;
+}
+
 function applyManifestSearch(url, manifest) {
   if (!url) return url;
   if (typeof manifest.search === "string") {
