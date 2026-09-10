@@ -554,10 +554,11 @@
       end(s);
     },
     shadowTexture(id, texture) { const s=begin(OP.SHADOW_TEXTURE,8); wu32(id); wu32(texture); end(s); },
-    matRenderState(id, blending, depthTest, premultipliedAlpha, alphaToCoverage, toneMapped = true, colorWrite = true, shadowSide = null) {
-      const s = begin(OP.MAT_RENDER_STATE, 16);
-      wu32(id); wu32(blending); wu32((depthTest ? 1 : 0) | (premultipliedAlpha ? 2 : 0) | (alphaToCoverage ? 4 : 0) | (!toneMapped ? 8 : 0) | (!colorWrite ? 16 : 0) | 32);
+    matRenderState(id, blending, depthTest, premultipliedAlpha, alphaToCoverage, toneMapped = true, colorWrite = true, shadowSide = null, wireframe = false, wireframeLinewidth = 1) {
+      const s = begin(OP.MAT_RENDER_STATE, 20);
+      wu32(id); wu32(blending); wu32((depthTest ? 1 : 0) | (premultipliedAlpha ? 2 : 0) | (alphaToCoverage ? 4 : 0) | (!toneMapped ? 8 : 0) | (!colorWrite ? 16 : 0) | 32 | (wireframe ? 64 : 0) | 128);
       wu32(shadowSide == null ? 3 : shadowSide);
+      wf32(wireframeLinewidth);
       end(s);
     },
     setSize(w, h) {

@@ -460,7 +460,8 @@ struct GLRenderer::Impl {
 
         int rangeFactor = 1;
 
-        auto wireframeMaterial = dynamic_cast<MaterialWithWireframe*>(material);
+        const auto& interfaces = properties.materialProperties.get(material)->getInterfaces(material);
+        auto wireframeMaterial = interfaces.wireframe;
         bool isWireframeMaterial = wireframeMaterial != nullptr;
 
         if (isWireframeMaterial && wireframeMaterial->wireframe) {
@@ -469,7 +470,7 @@ struct GLRenderer::Impl {
             rangeFactor = 2;
         }
 
-        if (auto m = material->as<MaterialWithMorphTargets>()) {
+        if (auto m = interfaces.morph) {
             if (m->morphTargets || m->morphNormals) {
                 morphTargets.update(object, geometry, material, program);
             }
@@ -1064,8 +1065,10 @@ struct GLRenderer::Impl {
         bool isMeshPhongMaterial = materialType == "MeshPhongMaterial";
         bool isMeshStandardMaterial = materialType == "MeshStandardMaterial" || materialType == "MeshPhysicalMaterial";
         bool isShadowMaterial = materialType == "ShadowMaterial";
-        bool isShaderMaterial = material->is<ShaderMaterial>();
-        auto* materialWithEnvMap = material->as<MaterialWithEnvMap>();
+        auto materialProperties = properties.materialProperties.get(material);
+        const auto& interfaces = materialProperties->getInterfaces(material);
+        bool isShaderMaterial = interfaces.shader != nullptr;
+        auto* materialWithEnvMap = interfaces.env;
         bool isEnvMap = materialWithEnvMap && materialWithEnvMap->envMap;
 
         textures.resetTextureUnits();
@@ -1086,7 +1089,6 @@ struct GLRenderer::Impl {
                             object->geometry()->hasAttribute("color") &&
                             object->geometry()->getAttribute("color")->itemSize() == 4;
 
-        auto materialProperties = properties.materialProperties.get(material);
         auto& lights = currentRenderState->getLights();
 
         if (_clippingEnabled) {
@@ -1372,7 +1374,7 @@ struct GLRenderer::Impl {
 
         if (isShaderMaterial) {
 
-            auto m = dynamic_cast<ShaderMaterial*>(material);
+            auto m = interfaces.shader;
             if (m->uniformsNeedUpdate) {
 
                 gl::GLUniforms::upload(materialProperties->uniformsList, m_uniforms, &textures);
@@ -1383,12 +1385,12 @@ struct GLRenderer::Impl {
         if (material->shaderOverride && !refreshMaterial) {
             gl::GLUniforms::upload(materialProperties->uniformsList, m_uniforms, &textures);
         }
-        if (material->is<MeshStandardMaterial>()) {
+        if (interfaces.standard) {
             if (!isEnvMap) p_uniforms->setValue("envMapIntensity", scene->environmentIntensity);
             p_uniforms->setValue("envMapRotation", isEnvMap ? Matrix3() : scene->environmentRotation);
         }
 
-        if (material->is<SpriteMaterial>() && object->is<Sprite>()) {
+        if (interfaces.sprite && object->is<Sprite>()) {
 
             p_uniforms->setValue("center", object->as<Sprite>()->center);
         }

@@ -918,6 +918,8 @@
         TN.releaseHandle(handle);
         this.__h = 0;
         this.__bound = false;
+        this._nativeRenderState = undefined;
+        this._nativeColorR = this._nativeColorG = this._nativeColorB = undefined;
       }
     }
 
@@ -964,14 +966,24 @@
 
     flushNative(renderer) {
       bindAllMaps(this);
+      // Color.set()/copy() mutate the existing Color without needsUpdate in
+      // Three.js. Compare components cheaply; encode only changed colors.
+      const color = this._nativeNodeFallback ? unwrapNodeValue(this.color) : this.color;
+      if (color?.isColor && TN.cmd?.matColor &&
+          (this._nativeColorR !== color.r || this._nativeColorG !== color.g || this._nativeColorB !== color.b)) {
+        TN.cmd.matColor(this._h, hex(color));
+        this._nativeColorR = color.r; this._nativeColorG = color.g; this._nativeColorB = color.b;
+      }
       const renderState = this._nativeRenderState;
       if ((!renderState || renderState.blending !== this.blending || renderState.depthTest !== this.depthTest ||
           renderState.premultipliedAlpha !== this.premultipliedAlpha || renderState.alphaToCoverage !== this.alphaToCoverage ||
           renderState.toneMapped !== this.toneMapped || renderState.colorWrite !== this.colorWrite ||
-          renderState.shadowSide !== this.shadowSide) && TN.cmd?.matRenderState) {
-        TN.cmd.matRenderState(this._h, this.blending, this.depthTest !== false, !!this.premultipliedAlpha, !!this.alphaToCoverage, this.toneMapped !== false, this.colorWrite !== false, this.shadowSide);
+          renderState.shadowSide !== this.shadowSide || renderState.wireframe !== this.wireframe ||
+          renderState.wireframeLinewidth !== this.wireframeLinewidth) && TN.cmd?.matRenderState) {
+        TN.cmd.matRenderState(this._h, this.blending, this.depthTest !== false, !!this.premultipliedAlpha, !!this.alphaToCoverage, this.toneMapped !== false, this.colorWrite !== false, this.shadowSide, !!this.wireframe, this.wireframeLinewidth ?? 1);
         this._nativeRenderState = { blending: this.blending, depthTest: this.depthTest, premultipliedAlpha: this.premultipliedAlpha,
-          alphaToCoverage: this.alphaToCoverage, toneMapped: this.toneMapped, colorWrite: this.colorWrite, shadowSide: this.shadowSide };
+          alphaToCoverage: this.alphaToCoverage, toneMapped: this.toneMapped, colorWrite: this.colorWrite, shadowSide: this.shadowSide,
+          wireframe: this.wireframe, wireframeLinewidth: this.wireframeLinewidth };
       }
       if (this._nativeKind !== "shader" && this.onBeforeCompile !== defaultOnBeforeCompile && TN.hostHas(native(), "MaterialShaderTemplate")) {
         // Like Three.js, rebuild hooks when material state is invalidated.

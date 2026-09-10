@@ -18,6 +18,19 @@ function harness(Encoder = TextEncoder, capacity = 8 * 1024 * 1024) {
   return { cmd: context.__TN.cmd, submissions };
 }
 
+test('material state snapshots wireframe toggles and line width', () => {
+  const {cmd,submissions}=harness();
+  cmd.matRenderState(7,1,true,false,false,true,true,null,true,2.5);
+  cmd.matRenderState(7,1,true,false,false);
+  cmd.submit();
+  const buffer=submissions[0],next=buffer.readUInt32LE(4);
+  assert.equal(buffer.readUInt32LE(0),59);
+  assert.equal(buffer.readUInt32LE(16)&192,192);
+  assert.equal(buffer.readFloatLE(24),2.5);
+  assert.equal(buffer.readUInt32LE(next+16)&192,128);
+  assert.equal(buffer.readFloatLE(next+24),1);
+});
+
 test("numeric uniforms remain ordered in a batch with aligned names and signed integers", () => {
   const { cmd, submissions } = harness();
   cmd.matVertexColors(7, true);

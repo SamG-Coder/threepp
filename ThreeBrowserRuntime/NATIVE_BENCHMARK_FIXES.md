@@ -37,6 +37,18 @@ Allocation figures are statistical V8 samples, not native C++ allocation totals.
 
 ## Remaining performance boundary
 
+### Follow-up: native material interface caching
+
+The follow-up optimization removes repeated C++ multiple-inheritance casts from per-draw program setup and material uniform refresh. Renderer-owned `MaterialProperties` caches 19 non-owning interface pointers once per material and releases the cache on disposal. Current colors, textures, wireframe/morph flags, uniforms and program-invalidation conditions remain live.
+
+Against a freshly rebuilt native baseline at `e41a424`, native completed render/readback median latency fell from 5.202 to 2.304 ms for 1,000 cubes, 5.882 to 2.955 ms for city, and 1.883 to 1.019 ms for PBR lighting. All eight saved native validation PNGs are byte-identical; all eight 3D and six diagnostic cases pass the unchanged browser baseline. Browser tests were not rerun.
+
+GPU regressions also exposed and fixed missing automatic facade color synchronization and wireframe command transport. The extended material-state command retains support for old payloads. Disposed materials clear their facade state caches before explicit reattachment. All 72 runtime tests pass with GPU tests enabled, zero skips and zero failures.
+
+Frame pacing improves much less than completed draw latency, and instance p99 does not improve. A new city trace averages roughly 0.92 microseconds of program setup per draw, down from the earlier trace's 4.56 microseconds. The detailed measurements, compatibility scope, allocation tradeoff and remaining limits are recorded in `C:\three-runtime-benchmarks\PERFORMANCE-REPORT.md`.
+
+The following paragraph describes the earlier, pre-optimization trace:
+
 This does not establish performance parity with the browser. A separate city trace placed roughly 4 ms of native CPU time in draw/program setup, versus about 0.7 ms in render-list preparation; a draw-level trace placed most per-draw work in program/uniform setup. The same city still takes about 5.9 ms including readback on the native path. The measured instance allocation defect is fixed; broader OpenGL submission/driver overhead remains a separate optimization target.
 
 Detailed before/after records, raw samples, CPU/memory/GC counters and PNGs are in the standalone benchmark repository's `FIX-REPORT.md` and generated `results/` directory. The baseline reports were preserved.

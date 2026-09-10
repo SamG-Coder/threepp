@@ -55,5 +55,28 @@ test('native maps, attenuation and instanced snapshots follow live Three.js chan
     delete instances.instanceMatrix.array.subarray;
     render();
     assert.equal(pixels[(8*16+4)*4],255);assert.equal(pixels[(8*16+12)*4],255);assert.equal(pixels[(8*16+8)*4],0);
+
+    // Warm the native interface cache, then mutate values and replace material
+    // types. Cached interface pointers must never freeze color/map/draw state.
+    scene.remove(instances);scene.add(litMesh);
+    const ambient=new T.AmbientLight(0xffffff,2);scene.add(ambient);
+    for(const Material of [T.MeshBasicMaterial,T.MeshLambertMaterial,T.MeshPhongMaterial,T.MeshStandardMaterial,T.MeshPhysicalMaterial]) {
+      const live=new Material({color:0xff0000,toneMapped:false});litMesh.material=live;
+      render();
+      const pixel=()=>{render();return [...pixels.slice((8*16+5)*4,(8*16+5)*4+3)];};
+      let rgb=pixel();assert.ok(rgb[0]>20&&rgb[1]===0&&rgb[2]===0,`${live.type}: initial red ${rgb}`);
+      live.color.set(0x00ff00);rgb=pixel();
+      assert.ok(rgb[1]>20&&rgb[0]===0&&rgb[2]===0,`${live.type}: live green ${rgb}`);
+      live.wireframe=true;rgb=pixel();
+      assert.deepEqual(rgb,[0,0,0],`${live.type}: live wireframe must expose the background`);
+      live.wireframe=false;rgb=pixel();
+      assert.ok(rgb[1]>20,`${live.type}: restoring solid draws must restore coverage`);
+      live.wireframe=true;pixel();live.dispose();
+      litMesh.material=live;
+      assert.deepEqual(pixel(),[0,0,0],`${live.type}: reuse after disposal must restore wireframe state`);
+      live.wireframe=false;live.color.set(0x0000ff);rgb=pixel();
+      assert.ok(rgb[2]>20&&rgb[0]===0&&rgb[1]===0,`${live.type}: rebound material must stay live ${rgb}`);
+      live.dispose();
+    }
   } finally {host.stop();}
 });

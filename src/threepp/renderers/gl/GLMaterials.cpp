@@ -18,6 +18,27 @@
 using namespace threepp;
 using namespace threepp::gl;
 
+MaterialInterfaces::MaterialInterfaces(Material* material)
+    : color(material->as<MaterialWithColor>()),
+      map(material->as<MaterialWithMap>()),
+      specular(material->as<MaterialWithSpecularMap>()),
+      displacement(material->as<MaterialWithDisplacementMap>()),
+      normal(material->as<MaterialWithNormalMap>()),
+      bump(material->as<MaterialWithBumpMap>()),
+      roughness(material->as<MaterialWithRoughness>()),
+      metalness(material->as<MaterialWithMetalness>()),
+      alpha(material->as<MaterialWithAlphaMap>()),
+      emissive(material->as<MaterialWithEmissive>()),
+      ao(material->as<MaterialWithAoMap>()),
+      light(material->as<MaterialWithLightMap>()),
+      reflectivity(material->as<MaterialWithReflectivity>()),
+      env(material->as<MaterialWithEnvMap>()),
+      wireframe(material->as<MaterialWithWireframe>()),
+      morph(material->as<MaterialWithMorphTargets>()),
+      shader(material->as<ShaderMaterial>()),
+      standard(material->as<MeshStandardMaterial>()),
+      sprite(material->as<SpriteMaterial>()) {}
+
 struct GLMaterials::Impl {
 
     GLProperties& properties;
@@ -26,21 +47,19 @@ struct GLMaterials::Impl {
 
     void refreshUniformsCommon(UniformMap& uniforms, Material* material) {
 
-        auto colorMaterial = dynamic_cast<MaterialWithColor*>(material);
-        auto mapMaterial = dynamic_cast<MaterialWithMap*>(material);
-        auto specularMaterial = dynamic_cast<MaterialWithSpecularMap*>(material);
-        auto displacementMaterial = dynamic_cast<MaterialWithDisplacementMap*>(material);
-        auto normalMaterial = dynamic_cast<MaterialWithNormalMap*>(material);
-        auto bumpMaterial = dynamic_cast<MaterialWithBumpMap*>(material);
-        auto roughnessMaterial = dynamic_cast<MaterialWithRoughness*>(material);
-        auto metalnessMaterial = dynamic_cast<MaterialWithMetalness*>(material);
-        auto alphaMaterial = dynamic_cast<MaterialWithAlphaMap*>(material);
-        auto emissiveMaterial = dynamic_cast<MaterialWithEmissive*>(material);
-        // auto spriteMaterial = dynamic_cast<SpriteMaterial*>(material);
-        // TODO clearcoat
-
-        auto aoMaterial = dynamic_cast<MaterialWithAoMap*>(material);
-        auto lightMaterial = dynamic_cast<MaterialWithLightMap*>(material);
+        const auto& interfaces = properties.materialProperties.get(material)->getInterfaces(material);
+        auto colorMaterial = interfaces.color;
+        auto mapMaterial = interfaces.map;
+        auto specularMaterial = interfaces.specular;
+        auto displacementMaterial = interfaces.displacement;
+        auto normalMaterial = interfaces.normal;
+        auto bumpMaterial = interfaces.bump;
+        auto roughnessMaterial = interfaces.roughness;
+        auto metalnessMaterial = interfaces.metalness;
+        auto alphaMaterial = interfaces.alpha;
+        auto emissiveMaterial = interfaces.emissive;
+        auto aoMaterial = interfaces.ao;
+        auto lightMaterial = interfaces.light;
 
         uniforms.at("opacity").setValue(material->opacity);
 
@@ -77,7 +96,7 @@ struct GLMaterials::Impl {
             uniforms.at("envMap").setValue(envMap);
             uniforms.at("flipEnvMap").value<bool>() = cubeTexture && cubeTexture->_needsFlipEnvMap;
 
-            auto reflectiveMaterial = dynamic_cast<MaterialWithReflectivity*>(material);
+            auto reflectiveMaterial = interfaces.reflectivity;
             if (reflectiveMaterial) {
                 uniforms.at("reflectivity").value<float>() = reflectiveMaterial->reflectivity;
                 uniforms.at("refractionRatio").value<float>() = reflectiveMaterial->refractionRatio;

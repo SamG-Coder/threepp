@@ -9,6 +9,7 @@
 #include "GLUniforms.hpp"
 #include "threepp/core/Uniform.hpp"
 #include "threepp/materials/Material.hpp"
+#include "threepp/materials/interfaces.hpp"
 #include "threepp/renderers/RenderTarget.hpp"
 #include "threepp/textures/Texture.hpp"
 
@@ -16,7 +17,38 @@
 #include <optional>
 #include <unordered_map>
 
+namespace threepp {
+    class ShaderMaterial;
+    class MeshStandardMaterial;
+    class SpriteMaterial;
+}
+
 namespace threepp::gl {
+
+    // Cache only immutable C++ interfaces, never material values. The cache
+    // belongs to the renderer's material properties and is erased on disposal.
+    struct MaterialInterfaces {
+        explicit MaterialInterfaces(Material* material);
+        MaterialWithColor* color;
+        MaterialWithMap* map;
+        MaterialWithSpecularMap* specular;
+        MaterialWithDisplacementMap* displacement;
+        MaterialWithNormalMap* normal;
+        MaterialWithBumpMap* bump;
+        MaterialWithRoughness* roughness;
+        MaterialWithMetalness* metalness;
+        MaterialWithAlphaMap* alpha;
+        MaterialWithEmissive* emissive;
+        MaterialWithAoMap* ao;
+        MaterialWithLightMap* light;
+        MaterialWithReflectivity* reflectivity;
+        MaterialWithEnvMap* env;
+        MaterialWithWireframe* wireframe;
+        MaterialWithMorphTargets* morph;
+        ShaderMaterial* shader;
+        MeshStandardMaterial* standard;
+        SpriteMaterial* sprite;
+    };
 
     struct GLProgram;
 
@@ -48,6 +80,12 @@ namespace threepp::gl {
     };
 
     struct MaterialProperties {
+
+        std::optional<MaterialInterfaces> interfaces;
+        const MaterialInterfaces& getInterfaces(Material* material) {
+            if (!interfaces) interfaces.emplace(material);
+            return *interfaces;
+        }
 
         std::optional<unsigned int> geometryVertexProofVersion;
         const Shader* geometryVertexProofShader{};

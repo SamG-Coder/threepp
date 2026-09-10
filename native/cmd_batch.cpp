@@ -807,6 +807,14 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             slot->material->depthTest = (flags & 1u) != 0u;
             slot->material->premultipliedAlpha = (flags & 2u) != 0u;
             slot->material->alphaToCoverage = (flags & 4u) != 0u;
+            // Bit 128 marks the wireframe extension; older senders leave it
+            // unset and retain the material's existing wireframe state.
+            if ((flags & 128u) != 0u) {
+                if (auto* wire = slot->material->as<MaterialWithWireframe>()) {
+                    wire->wireframe = (flags & 64u) != 0u;
+                    if (has(p, end, 20)) wire->wireframeLinewidth = rf32(p + 16);
+                }
+            }
             if ((flags & 32u) != 0u) {
                 slot->material->toneMapped = (flags & 8u) == 0u;
                 slot->material->colorWrite = (flags & 16u) == 0u;
