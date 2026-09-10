@@ -137,6 +137,11 @@ void destroySlot(uint32_t id) {
         slot.texture->dispose();
     }
     if (slot.renderTarget) {
+        // Readback may leave this target bound. Never let a later pass save
+        // and restore a raw pointer to a target released by this command.
+        if (g.renderer && g.renderer->getRenderTarget() == slot.renderTarget.get()) {
+            g.renderer->setRenderTarget(nullptr);
+        }
         slot.renderTarget->dispose();
     }
     g.slots.erase(it);

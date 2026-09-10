@@ -103,6 +103,12 @@ struct GLRenderer::Impl {
     // window resize is implicit.
     std::shared_ptr<OrthographicCamera> screenSpaceCam_;
 
+    // One bounded streaming buffer per renderer. Source scene objects retain
+    // their identity; only compatible adjacent draws are packed into it.
+    std::unique_ptr<InstancedMesh> automaticInstances_;
+    const bool automaticInstancing_ = std::getenv("THREEBROWSER_DISABLE_AUTO_INSTANCING") == nullptr;
+    static constexpr size_t automaticInstanceCapacity_ = 1024;
+
     std::vector<gl::GLRenderList*> renderListStack;
     std::vector<gl::GLRenderState*> renderStateStack;
 
@@ -861,7 +867,13 @@ struct GLRenderer::Impl {
             if (_scene->overrideMaterial) overrideMaterial = _scene->overrideMaterial.get();
         }
 
-        for (const auto& renderItem : renderList) {
+        for (size_t i = 0; i < renderList.size();) {
+
+            const auto& renderItem = renderList[i];
+            if (automaticInstancing_ && !overrideMaterial && !virtualGeometry.enabled && !_clippingEnabled) {
+                const auto count = renderAutomaticInstances(renderList, i, scene, camera);
+                if (count) { i += count; continue; }
+            }
 
             auto object = renderItem->object;
             auto geometry = renderItem->geometry;
@@ -869,7 +881,85 @@ struct GLRenderer::Impl {
             auto group = renderItem->group;
 
             renderObject(object, scene, camera, geometry, material, group);
+            ++i;
         }
+    }
+
+    size_t renderAutomaticInstances(const std::vector<gl::RenderItem*>& list, size_t first,
+                                   Object3D* scene, Camera* camera) {
+        const auto* item = list[first];
+        auto* material = item->material;
+        auto* geometry = item->geometry;
+        // Measurements show that small / triangle-heavy scenes can lose time
+        // to instance uploads. Restrict this path to many low-poly draws.
+        if (list.size() < 512 || first + 3 >= list.size() || item->group || !geometry ||
+            material->transparent || material->opacity != 1.f || material->stencilWrite ||
+            !material->depthTest || !material->depthWrite || material->shaderOverride || material->tetSkinning ||
+            !geometry->getMorphAttributes().empty() || dynamic_cast<InstancedBufferGeometry*>(geometry)) return 0;
+        if (!geometry->getIndex() || geometry->getIndex()->count() > 384 ||
+            geometry->hasAttribute("instanceMatrix") || geometry->hasAttribute("instanceColor")) return 0;
+        const auto type = material->type();
+        if (type != "MeshBasicMaterial" && type != "MeshLambertMaterial" &&
+            type != "MeshPhongMaterial" && type != "MeshStandardMaterial") return 0;
+        const auto& interfaces = properties.materialProperties.get(material)->getInterfaces(material);
+        if (interfaces.shader || (interfaces.wireframe && interfaces.wireframe->wireframe) ||
+            (interfaces.displacement && interfaces.displacement->displacementMap) ||
+            (interfaces.morph && (interfaces.morph->morphTargets || interfaces.morph->morphNormals))) return 0;
+        if (const auto* defined = material->as<MaterialWithDefines>()) {
+            for (const auto& [name, value] : defined->defines)
+                if (name != "STANDARD" || !value.empty()) return 0;
+        }
+
+        auto eligible = [&](const gl::RenderItem* next) {
+            auto* object = next->object;
+            if (next->material != material || next->geometry != geometry || next->group ||
+                next->groupOrder != item->groupOrder || next->renderOrder != item->renderOrder ||
+                object->receiveShadow != item->object->receiveShadow || object->onBeforeRender || object->onAfterRender ||
+                typeid(*object) != typeid(Mesh)) return false;
+            // The built-in instance-normal transform supports orthogonal TRS
+            // columns. Shear, singular and mirrored transforms keep their draw.
+            const auto& e = object->matrixWorld->elements;
+            const float a = e[0]*e[0]+e[1]*e[1]+e[2]*e[2];
+            const float b = e[4]*e[4]+e[5]*e[5]+e[6]*e[6];
+            const float c = e[8]*e[8]+e[9]*e[9]+e[10]*e[10];
+            if (!(a > 0 && b > 0 && c > 0) || e[3] != 0 || e[7] != 0 || e[11] != 0 || e[15] != 1) return false;
+            if (std::abs(e[0]*e[4]+e[1]*e[5]+e[2]*e[6]) > 1e-6f*std::sqrt(a*b) ||
+                std::abs(e[0]*e[8]+e[1]*e[9]+e[2]*e[10]) > 1e-6f*std::sqrt(a*c) ||
+                std::abs(e[4]*e[8]+e[5]*e[9]+e[6]*e[10]) > 1e-6f*std::sqrt(b*c)) return false;
+            return object->matrixWorld->determinant() > 0;
+        };
+        size_t count = 0;
+        while (first + count < list.size() && count < automaticInstanceCapacity_ && eligible(list[first + count])) ++count;
+        if (count < 4) return 0;
+
+        // Borrow geometry/material for this synchronous draw only. There are
+        // no callbacks in an eligible run, so this cannot reenter the renderer.
+        const std::shared_ptr<BufferGeometry> borrowedGeometry(std::shared_ptr<BufferGeometry>{}, geometry);
+        const std::shared_ptr<Material> borrowedMaterial(std::shared_ptr<Material>{}, material);
+        if (!automaticInstances_) {
+            automaticInstances_ = std::make_unique<InstancedMesh>(borrowedGeometry, borrowedMaterial, automaticInstanceCapacity_);
+            automaticInstances_->frustumCulled = false;
+            automaticInstances_->instanceMatrix()->setUsage(DrawUsage::Dynamic);
+        } else {
+            automaticInstances_->setGeometry(borrowedGeometry);
+            automaticInstances_->setMaterial(borrowedMaterial);
+        }
+        auto* batch = automaticInstances_.get();
+        batch->receiveShadow = item->object->receiveShadow;
+        batch->setCount(count);
+        for (size_t j = 0; j < count; ++j) {
+            auto* source = list[first+j]->object;
+            source->modelViewMatrix.multiplyMatrices(camera->matrixWorldInverse, *source->matrixWorld);
+            source->normalMatrix.getNormalMatrix(source->modelViewMatrix);
+            batch->setMatrixAt(j, *source->matrixWorld);
+        }
+        batch->instanceMatrix()->updateRange = {0, static_cast<int>(count * 16)};
+        batch->instanceMatrix()->needsUpdate();
+        objects.update(batch);
+        renderObject(batch, scene, camera, geometry, material, std::nullopt);
+        batch->setGeometry(nullptr);
+        batch->setMaterial(nullptr);
+        return count;
     }
 
     void renderObject(Object3D* object, Object3D* scene, Camera* camera, BufferGeometry* geometry, Material* material, std::optional<GeometryGroup> group) {
@@ -1676,6 +1766,7 @@ struct GLRenderer::Impl {
 
     void dispose() {
 
+        automaticInstances_.reset();
         virtualGeometry.dispose();
         adaptiveGeometry.dispose();
         renderLists.dispose();

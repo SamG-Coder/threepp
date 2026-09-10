@@ -1166,6 +1166,7 @@
               }
             }
             const overrideHandle = scene?.overrideMaterial?._h || 0;
+            TN.cmd.rendererSort?.(this.sortObjects !== false);
             TN.cmd.shadowState?.(this.shadowMap);
             TN.cmd.renderPass(
               scene._h,
@@ -1201,6 +1202,7 @@
       if (TN.cmd) {
         // Reflection/depth passes temporarily change shadow settings. Restore
         // the application's current settings before the window pass too.
+        TN.cmd.rendererSort?.(this.sortObjects !== false);
         TN.cmd.shadowState?.(this.shadowMap);
         const overlayScene = this._nativeOverlayDisplayFrame === displayFrame ? this._nativeOverlayScene : null;
         const overlayCamera = this._nativeOverlayDisplayFrame === displayFrame ? this._nativeOverlayCamera : null;

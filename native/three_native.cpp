@@ -911,7 +911,7 @@ int impl_runtime_start(int width, int height, const char* title, int samples = 2
         markDirty();
     });
 #endif
-    g.renderer->sortObjects = false;
+    g.renderer->sortObjects = true;
     g.renderer->checkShaderErrors = true;
     g.renderer->onShaderError = [](const std::string& msg) { logLine(msg.c_str()); };
     g.renderer->toneMapping = ToneMapping::None;

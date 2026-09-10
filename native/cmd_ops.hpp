@@ -19,6 +19,7 @@ constexpr uint32_t OP_RENDER_PASS = 4;
 constexpr uint32_t OP_RENDER_COMPOSITE = 5; // world scene/camera, overlay scene/camera
 constexpr uint32_t OP_CLEAR_TARGET = 6;
 constexpr uint32_t OP_SHADOW_STATE = 7;
+constexpr uint32_t OP_RENDERER_SORT = 8;
 
 constexpr uint32_t OP_SCENE_CREATE = 10;
 constexpr uint32_t OP_SCENE_BG = 11;

@@ -31,6 +31,16 @@ test('material state snapshots wireframe toggles and line width', () => {
   assert.equal(buffer.readFloatLE(next+24),1);
 });
 
+test('renderer sorting changes remain ordered with render passes', () => {
+  const {cmd,submissions}=harness();
+  cmd.rendererSort(true);cmd.renderPass(1,2,3);
+  cmd.rendererSort(false);cmd.renderPass(1,2,3);cmd.submit();
+  const buffer=submissions[0],commands=[];
+  for(let offset=0;offset<buffer.length;offset+=buffer.readUInt32LE(offset+4))
+    commands.push([buffer.readUInt32LE(offset),buffer.readUInt32LE(offset+8)]);
+  assert.deepEqual(commands,[[8,1],[4,1],[8,0],[4,1]]);
+});
+
 test("numeric uniforms remain ordered in a batch with aligned names and signed integers", () => {
   const { cmd, submissions } = harness();
   cmd.matVertexColors(7, true);

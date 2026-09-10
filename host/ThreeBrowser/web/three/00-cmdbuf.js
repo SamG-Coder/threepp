@@ -12,6 +12,7 @@
     RENDER_COMPOSITE: 5,
     CLEAR_TARGET: 6,
     SHADOW_STATE: 7,
+    RENDERER_SORT: 8,
     SCENE_CREATE: 10,
     SCENE_BG: 11,
     SCENE_FOG: 12,
@@ -494,6 +495,11 @@
         for (const rect of [viewport, scissor]) { wf32(rect.x); wf32(rect.y); wf32(rect.z); wf32(rect.w); }
         wu32(scissorTest ? 1 : 0);
       }
+      end(s);
+    },
+    rendererSort(enabled) {
+      const s = begin(OP.RENDERER_SORT, 4);
+      wu32(enabled ? 1 : 0);
       end(s);
     },
     cameraProjection(id, near, far, elements) {

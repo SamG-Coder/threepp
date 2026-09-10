@@ -37,6 +37,14 @@ Allocation figures are statistical V8 samples, not native C++ allocation totals.
 
 ## Remaining performance boundary
 
+### Follow-up: sorting and automatic instancing
+
+Native now defaults to `sortObjects = true`, matching Three.js and the facade. A new ordered command forwards explicit true/false changes for offscreen and window rendering. The native renderer conservatively packs compatible adjacent low-poly Mesh draws into a bounded 1,024-matrix streaming buffer after normal visibility checks and sorting. Small scenes, high-poly geometry, unsupported shaders/states/transforms and callbacks retain their original draw path. Set `THREEBROWSER_DISABLE_AUTO_INSTANCING=1` before launching to measure the sorting-only control.
+
+Across three independent final process launches (nine repeats), cubes fell from 2.265 to 1.807 ms and city from 2.948 to 2.131 ms including readback. The city trace submitted 846 objects in five draws. Shadows were 0.044 ms slower and triangle-heavy cases essentially unchanged; this is not a universal speedup. All eight 3D cases pass the unchanged saved browser baseline in all three launches, and all six diagnostics pass. Browser tests were not rerun.
+
+The combined-scene investigation also caught a dangling bound render-target pointer after handle disposal. Native now unbinds the target before destroying it. A new GPU regression compares batched/unbatched images, crosses the buffer capacity, exercises live state and fallbacks, replaces targets repeatedly, and checks transparent sorting with true/false toggles. All 74 runtime tests pass with GPU cases enabled and no skips. Full results and limits are in `C:\three-runtime-benchmarks\AUTOMATIC-BATCHING-REPORT.md`.
+
 ### Follow-up: native material interface caching
 
 The follow-up optimization removes repeated C++ multiple-inheritance casts from per-draw program setup and material uniform refresh. Renderer-owned `MaterialProperties` caches 19 non-owning interface pointers once per material and releases the cache on disposal. Current colors, textures, wireframe/morph flags, uniforms and program-invalidation conditions remain live.

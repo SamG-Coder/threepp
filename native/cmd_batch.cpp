@@ -335,6 +335,10 @@ void execOne(uint32_t op, const uint8_t* p, const uint8_t* end) {
             gl->setRenderTarget(previous);
             return;
         }
+        case tn::cmd::OP_RENDERER_SORT: {
+            if (g.renderer && has(p, end, 4)) g.renderer->sortObjects = ru32(p) != 0;
+            return;
+        }
         case tn::cmd::OP_RENDER_PASS: {
             applyPendingEnvironment();
             if (!has(p, end, 28)) return;
