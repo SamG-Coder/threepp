@@ -55,7 +55,8 @@ function elementLooksLikeGate(element) {
     .flatMap(tokenWords);
   if (identityWords.some(word => ["hud", "toolbar", "toolbox", "widget"].includes(word))) return false;
   return identityWords.some(word =>
-    ["blocker", "overlay", "modal", "dialog", "gate", "splash", "screen", "menu"].includes(word));
+    ["blocker", "overlay", "modal", "dialog", "gate", "splash", "screen", "menu"].includes(word)) ||
+    (!CONTROL_TAGS.includes(String(element.tagName).toLowerCase()) && identityWords.includes("intro"));
 }
 
 export function elementIsVisible(element, document = element?.ownerDocument) {

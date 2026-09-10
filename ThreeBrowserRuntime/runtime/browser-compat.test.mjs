@@ -756,6 +756,41 @@ test("Web Audio compressor and external ShaderMaterial subclasses follow browser
     assert.equal(syntheticGate.controls[0].label, "Play");
     assert.equal(interactions.activateHtmlControl(syntheticGate.controls[0]), true);
     assert.equal(clicks, 3);
+
+    // Threejs-Punk appends this intro after loading, then enables ENTER when
+    // its opacity transition completes. Exercise ordinary timed rescans.
+    globalThis.__threeBrowserHydrateDocument('<main></main>');
+    bridge.hide();
+    assert.equal(bridge.update(1000), false);
+    const intro = document.createElement('div');
+    intro.className = 'intro-container';
+    intro.innerHTML = '<div class="intro-actions"><button class="intro-button" disabled>ENTER</button></div>';
+    document.body.appendChild(intro);
+    const enter = intro.querySelector('button');
+    let entered = 0;
+    enter.addEventListener('click', () => entered++);
+    enter.style.opacity = '0';
+    assert.equal(bridge.update(1100), false);
+    enter.style.opacity = '1';
+    assert.equal(bridge.update(1200), false, 'disabled entry is not interactive');
+    enter.disabled = false;
+    assert.equal(enter.hasAttribute('disabled'), false, 'disabled property reflects the attribute');
+    assert.equal(bridge.update(1300), true, 'late entry becomes interactive after transition');
+    assert.equal(bridge.gate.controls[0].label, 'ENTER');
+    assert.equal(bridge.gate.root, enter.parentNode);
+    bridge.consumeNativeInput({type:'keydown', code:13});
+    assert.equal(entered, 1);
+    const replacement = document.createElement('button');
+    replacement.textContent = 'ENTER';
+    replacement.addEventListener('click', () => entered += 10);
+    enter.parentNode.replaceChild(replacement, enter);
+    bridge.update(1400);
+    assert.equal(bridge.gate.controls[0].element, replacement);
+    const hit = bridge.hitRegions[0];
+    bridge.consumeNativeInput({type:'pointerup', code:1, x:(hit.left+hit.right)/2, y:(hit.top+hit.bottom)/2});
+    assert.equal(entered, 11, 'pointer input reaches a newly replaced control');
+    intro.remove();
+    assert.equal(bridge.update(1500), false);
   } finally {
     host.stop();
   }

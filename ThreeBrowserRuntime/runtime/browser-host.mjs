@@ -238,7 +238,14 @@ class Element extends BrowserEventTarget {
       this.type = "submit";
     }
     if (["INPUT", "TEXTAREA", "SELECT", "BUTTON", "OPTION"].includes(this.tagName)) {
-      this.disabled = false;
+      Object.defineProperty(this, "disabled", {
+        configurable: true,
+        get: () => this._attributes.has("disabled"),
+        set: value => {
+          if (value) this._attributes.set("disabled", "");
+          else this._attributes.delete("disabled");
+        },
+      });
       this.required = false;
     }
     if (this.tagName === "STYLE") {
