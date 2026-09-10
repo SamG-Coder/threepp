@@ -67,11 +67,40 @@ export function createRawGLContext(native,canvas) {
   };
   for(let n=1;n<=4;n++)gl[`vertexAttrib${n}fv`]=(index,data)=>invoke(`vertexAttrib${n}fv`,[index],data instanceof Float32Array?data:new Float32Array(data));
   for(const [name,count] of [['texImage2D',8],['texSubImage2D',8],['texImage3D',9],['texSubImage3D',10]])gl[name]=(...args)=>{
+    if ((name==='texImage2D' && args.length===6) || (name==='texSubImage2D' && args.length===7)) {
+      const source=args.at(-1),image=source?._threeBrowserReadPixels?.() || source;
+      if (!image?.data || !image.width || !image.height) throw new Error('Raw GL requires decoded image pixels');
+      const format=args.at(-3),type=args.at(-2);
+      if(format!==gl.RGBA || type!==gl.UNSIGNED_BYTE) throw new Error('Raw GL image uploads require RGBA unsigned bytes');
+      const width=image.width,height=image.height;
+      let pixels=new Uint8Array(image.data.buffer,image.data.byteOffset,image.data.byteLength);
+      const flip=webPixelStore.get(gl.UNPACK_FLIP_Y_WEBGL),premultiply=webPixelStore.get(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL);
+      if(flip || premultiply) {
+        const copy=new Uint8Array(width*height*4);
+        for(let y=0;y<height;y++)copy.set(pixels.subarray(y*width*4,(y+1)*width*4),(flip?height-1-y:y)*width*4);
+        if(premultiply)for(let i=0;i<copy.length;i+=4){const a=copy[i+3]/255;copy[i]=Math.round(copy[i]*a);copy[i+1]=Math.round(copy[i+1]*a);copy[i+2]=Math.round(copy[i+2]*a);}
+        pixels=copy;
+      }
+      const numeric=name==='texImage2D'?[args[0],args[1],args[2],width,height,0,format,type]:[args[0],args[1],args[2],args[3],width,height,format,type];
+      if(pixels.byteLength>32*1024*1024) {
+        if(name==='texImage2D')invoke(name,numeric,null);
+        const rows=Math.max(1,Math.floor(4*1024*1024/(width*4)));
+        for(let y=0;y<height;y+=rows){const count=Math.min(rows,height-y);invoke('texSubImage2D',[args[0],args[1],name==='texImage2D'?0:args[2],(name==='texImage2D'?0:args[3])+y,width,count,format,type],pixels.subarray(y*width*4,(y+count)*width*4));}
+        return;
+      }
+      invoke(name,numeric,pixels);return;
+    }
     if(args.length<count+1)throw new Error(`${name}: raw GL supports typed-data overloads only`);
     const data=slice(args[count],args[count+1]??0);
     invoke(name,args.slice(0,count),data);
   };
   gl.readPixels=(x,y,width,height,format,type,destination,offset=0)=>invoke('readPixels',[x,y,width,height,format,type],slice(destination,offset));
+  let drawingWidth=-1,drawingHeight=-1;
+  gl.resizeDrawingBuffer=()=>{
+    if(canvas.width===drawingWidth&&canvas.height===drawingHeight)return;
+    invoke('configureDrawingBuffer',[canvas.width,canvas.height]);drawingWidth=canvas.width;drawingHeight=canvas.height;
+  };
+  gl.resizeDrawingBuffer();
   return gl;
 }
 
@@ -80,6 +109,7 @@ export function createRawGLRenderer(T,host,size) {
   host.native.setLoading(false,'Direct OpenGL');host.native.rawGlReset();host.loadCommandBuffer();
   const canvas=host.document.createElement('canvas');canvas.width=size;canvas.height=size;
   const context=createRawGLContext(host.native,canvas);
+  canvas.contextWebgl2=context;
   const renderer=new T.WebGLRenderer({canvas,context,antialias:false,alpha:false});
   const render=renderer.render.bind(renderer);
   renderer.render=(scene,camera)=>{render(scene,camera);if(renderer.getRenderTarget()===null)context.present();};

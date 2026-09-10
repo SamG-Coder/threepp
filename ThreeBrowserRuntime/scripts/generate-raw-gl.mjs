@@ -3,12 +3,19 @@ const ops=[];
 const add=(name,code,sync=false)=>ops.push({name,code,sync});
 add('flush','glFlush();',true);
 add('finish','glFinish();',true);
-add('present','glfwSwapBuffers(static_cast<GLFWwindow*>(tn::g.canvas->windowPtr()));tn::g.statsPresents.fetch_add(1);',true);
+add('present','presentDrawingBuffer();',true);
 const scalar={activeTexture:'u',attachShader:'uu',bindAttribLocation:'uus',bindBuffer:'uu',bindBufferBase:'uuu',bindFramebuffer:'uu',bindRenderbuffer:'uu',bindTexture:'uu',bindVertexArray:'u',blendColor:'ffff',blendEquation:'u',blendEquationSeparate:'uu',blendFunc:'uu',blendFuncSeparate:'uuuu',clear:'u',clearColor:'ffff',clearDepth:'d',clearStencil:'i',colorMask:'bbbb',compileShader:'u',cullFace:'u',depthFunc:'u',depthMask:'b',detachShader:'uu',disable:'u',disableVertexAttribArray:'u',drawArrays:'uii',drawArraysInstanced:'uiii',drawElements:'uiup',drawElementsInstanced:'uiupi',enable:'u',enableVertexAttribArray:'u',framebufferRenderbuffer:'uuuu',framebufferTexture2D:'uuuiu',framebufferTextureLayer:'uuuii',frontFace:'u',generateMipmap:'u',lineWidth:'f',linkProgram:'u',pixelStorei:'ui',polygonOffset:'ff',readBuffer:'u',renderbufferStorage:'uuii',renderbufferStorageMultisample:'uiuii',scissor:'iiii',stencilFunc:'uiu',stencilFuncSeparate:'uuiu',stencilMask:'u',stencilMaskSeparate:'uu',stencilOp:'uuu',stencilOpSeparate:'uuuu',texParameterf:'uuf',texParameteri:'uui',texStorage2D:'uiuii',texStorage3D:'uiuiii',uniformBlockBinding:'uuu',useProgram:'u',vertexAttribDivisor:'uu',vertexAttribIPointer:'ui uip'.replaceAll(' ',''),vertexAttribPointer:'uiubip',viewport:'iiii',blitFramebuffer:'iiiiiiiiuu'};
 // framebufferTexture2D has five arguments: target, attachment, textarget, texture, level.
 scalar.framebufferTexture2D='uuuui';
 const cast={u:i=>`GLuint(a[${i}])`,i:i=>`GLint(a[${i}])`,f:i=>`GLfloat(a[${i}])`,d:i=>`GLdouble(a[${i}])`,b:i=>`GLboolean(a[${i}])`,p:i=>`reinterpret_cast<const void*>(uintptr_t(a[${i}]))`,s:()=>`reinterpret_cast<const char*>(data)`};
-for(const [name,types]of Object.entries(scalar))add(name,`gl${name[0].toUpperCase()+name.slice(1)}(${[...types].map((t,i)=>cast[t](i)).join(',')});`);
+for(const [name,types]of Object.entries(scalar)){
+ let code=`gl${name[0].toUpperCase()+name.slice(1)}(${[...types].map((t,i)=>cast[t](i)).join(',')});`;
+ if(name==='bindFramebuffer')code='glBindFramebuffer(GLenum(a[0]),a[1]?GLuint(a[1]):drawingFramebuffer);';
+ if(name==='renderbufferStorage')code+='initializeDepthRenderbuffer(GLenum(a[1]));';
+ if(name==='renderbufferStorageMultisample')code+='initializeDepthRenderbuffer(GLenum(a[2]));';
+ if(name==='readBuffer')code='GLint f=0;glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&f);glReadBuffer(drawingFramebuffer&&GLuint(f)==drawingFramebuffer&&GLenum(a[0])==GL_BACK?GL_COLOR_ATTACHMENT0:GLenum(a[0]));';
+ add(name,code);
+}
 for(const [name,kind]of [['Buffer','Buffers'],['Texture','Textures'],['Framebuffer','Framebuffers'],['Renderbuffer','Renderbuffers'],['VertexArray','VertexArrays']]){
  add('create'+name,`GLuint v;glGen${kind}(1,&v);r.kind=1;r.values[0]=v;`,true);
  add('delete'+name,`GLuint v=GLuint(a[0]);glDelete${kind}(1,&v);`);
@@ -32,7 +39,7 @@ add('getParameter',`const GLenum p=GLenum(a[0]);switch(p){case GL_IMPLEMENTATION
  else{GLint v[16]{};glGetIntegerv(p,v);for(int i=0;i<n;i++)r.values[i]=v[i];}}`,true);
 add('bufferData','if(a[1]<0||a[1]>2147483647||(bytes&&size_t(a[1])>bytes))throw std::runtime_error("Invalid bufferData size");glBufferData(GLenum(a[0]),GLsizeiptr(a[1]),bytes?data:nullptr,GLenum(a[2]));');
 add('bufferSubData','glBufferSubData(GLenum(a[0]),GLintptr(a[1]),GLsizeiptr(bytes),data);');
-add('drawBuffers','glDrawBuffers(GLsizei(bytes/4),reinterpret_cast<const GLenum*>(data));');
+add('drawBuffers','GLint f=0;glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&f);if(drawingFramebuffer&&GLuint(f)==drawingFramebuffer&&bytes==4&&*reinterpret_cast<const GLenum*>(data)==GL_BACK){const GLenum attachment=GL_COLOR_ATTACHMENT0;glDrawBuffers(1,&attachment);}else glDrawBuffers(GLsizei(bytes/4),reinterpret_cast<const GLenum*>(data));');
 add('invalidateFramebuffer','glInvalidateFramebuffer(GLenum(a[0]),GLsizei(bytes/4),reinterpret_cast<const GLenum*>(data));');
 for(let n=1;n<=4;n++)for(const [suffix,type]of [['f','GLfloat'],['i','GLint'],['ui','GLuint']]){
  add(`uniform${n}${suffix}`,`glUniform${n}${suffix}(GLint(a[0]),${Array.from({length:n},(_,i)=>`${type}(a[${i+1}])`).join(',')});`);
@@ -48,6 +55,10 @@ add('readPixels','validateRead(a[2],a[3],a[4],a[5],bytes);glReadPixels(GLint(a[0
 add('getBufferSubData','glGetBufferSubData(GLenum(a[0]),GLintptr(a[1]),GLsizeiptr(bytes),output);',true);
 add('getBridgeStats','r.kind=5;r.count=4;r.values[0]=tn::g.slots.size();r.values[1]=executedCommands;r.values[2]=executedBatches;r.values[3]=tn::g.drawScene.load();',true);
 const root=new URL('../../',import.meta.url);
+add('fenceSync','const auto sync=glFenceSync(GLenum(a[0]),GLbitfield(a[1]));r.kind=1;if(sync){const auto id=nextRawSync++;rawSyncs.emplace(id,sync);r.values[0]=id;}',true);
+add('clientWaitSync','r.kind=1;r.values[0]=glClientWaitSync(rawSync(a[0]),GLbitfield(a[1]),GLuint64(a[2]));',true);
+add('deleteSync','glDeleteSync(rawSync(a[0]));rawSyncs.erase(uint32_t(a[0]));',true);
+add('configureDrawingBuffer','configureDrawingBuffer(GLint(a[0]),GLint(a[1]));',true);
 fs.writeFileSync(new URL('native/raw_gl_ops.inc',root),ops.map((o,i)=>`case ${i}: { ${o.code} break; } // ${o.name}`).join('\n')+'\n');
 fs.writeFileSync(new URL('native/raw_gl_sync.inc',root),'switch(op) {\n'+ops.filter(o=>o.sync).map(o=>`case ${ops.indexOf(o)}:`).join('\n')+' return true;default:return false;}\n');
 const glad=fs.readFileSync(new URL('src/external/glad/glad/glad.h',root),'utf8');const constants={};for(const m of glad.matchAll(/^#define GL_(\w+) (0x[\da-fA-F]+|\d+)$/gm))constants[m[1]]=Number(m[2]);

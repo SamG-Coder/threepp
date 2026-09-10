@@ -22,4 +22,8 @@ case 89:
 case 90:
 case 130:
 case 131:
-case 132: return true;default:return false;}
+case 132:
+case 133:
+case 134:
+case 135:
+case 136: return true;default:return false;}

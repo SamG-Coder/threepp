@@ -8,6 +8,7 @@ import { ancestor } from "acorn-walk";
 const nativeThreeImport = [
   'import * as __TB_THREE from "three";',
   'function __TB_relink(type,Original){',
+  'if(globalThis.__threeBrowserDirectGL)return Original;',
   'const Native=__TB_THREE[type];if(!Native||!Original)return Native||Original;',
   'const Relinked=class extends Native{};',
   'for(const key of Reflect.ownKeys(Original.prototype||{})){if(key!=="constructor"&&!(key in Relinked.prototype))Object.defineProperty(Relinked.prototype,key,Object.getOwnPropertyDescriptor(Original.prototype,key));}',
@@ -336,6 +337,7 @@ export function relinkLegacyThreeBundle(source, filename = "bundle.js") {
   const insertion = Math.min(...values.map(value => value.start));
   const bridge = [
     "function __TB_relinkLegacy(type,Original){",
+    "if(globalThis.__threeBrowserDirectGL)return Original;",
     "const Native=globalThis.__threeBrowserNativeThree?.[type];if(!Native||!Original)return Native||Original;",
     "function Relinked(...args){const instance=Reflect.construct(Native,args);Object.defineProperties(this,Object.getOwnPropertyDescriptors(instance));}",
     "Object.setPrototypeOf(Relinked,Native);Relinked.prototype=Object.create(Native.prototype);Object.defineProperty(Relinked.prototype,\"constructor\",{value:Relinked,writable:true,configurable:true});",

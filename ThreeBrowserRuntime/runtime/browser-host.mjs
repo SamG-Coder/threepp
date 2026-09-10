@@ -9,6 +9,11 @@ import { HtmlInteractionBridge } from "./html-interaction-bridge.mjs";
 import { HtmlRenderer } from "./html-renderer.mjs";
 import { PersistentStorage } from "./web-storage.mjs";
 import os from "node:os";
+import { createRawGLContext } from "./raw-gl.mjs";
+
+globalThis.__threeBrowserDirectGL = process.env.THREEBROWSER_DIRECT_GL === "1";
+let directGLContext = null;
+let showProjectFps = false;
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -924,11 +929,13 @@ class CanvasElement extends Element {
   set width(value) {
     this._canvasWidth = canvasBitmapDimension(value);
     this.context2d?._resize(this._canvasWidth, this._canvasHeight);
+    this.contextWebgl2?.resizeDrawingBuffer?.();
   }
   get height() { return this._canvasHeight; }
   set height(value) {
     this._canvasHeight = canvasBitmapDimension(value);
     this.context2d?._resize(this._canvasWidth, this._canvasHeight);
+    this.contextWebgl2?.resizeDrawingBuffer?.();
   }
   focus() { document.activeElement = this; }
   getBoundingClientRect() {
@@ -937,6 +944,18 @@ class CanvasElement extends Element {
   }
   getContext(type) {
     const name = String(type).toLowerCase();
+    if (globalThis.__threeBrowserDirectGL && (name === "webgl2" || name === "webgl")) {
+      if (!directGLContext) {
+        if (!startNativeRuntime(this.width, this.height, document.title || "ThreeBrowser DirectGL", 0)) throw new Error(native.lastError());
+        native.setLoading(false, "DirectGL");
+        loadCommandBuffer();
+        directGLContext = createRawGLContext(native, this);
+        currentCanvas = this;
+        this._threeBrowserNativeRenderer = true;
+      }
+      if (directGLContext.canvas !== this) throw new Error("DirectGL currently supports one rendering canvas");
+      return this.contextWebgl2 = directGLContext;
+    }
     if (name === "2d") return this.context2d ??= new Canvas2DContext(this);
     if (name === "webgl" || name === "experimental-webgl") return this.contextWebgl ??= new WebGLRenderingContextProbe(this);
     if (name === "webgl2" || name === "experimental-webgl2") return this.contextWebgl2 ??= new WebGL2RenderingContextProbe(this);
@@ -2079,7 +2098,7 @@ const htmlRenderer = new HtmlRenderer({
 });
 // The basic painter is experimental: it is not yet a browser-equivalent CSS
 // engine and must not add DOM layout/raster work to ordinary native scenes.
-const pageUi = process.env.THREEBROWSER_HTML_MODE === 'experimental' ? htmlRenderer : htmlInteractionBridge;
+let pageUi = process.env.THREEBROWSER_HTML_MODE === 'experimental' ? htmlRenderer : htmlInteractionBridge;
 
 globalThis.window = globalThis;
 globalThis.self = globalThis;
@@ -2933,8 +2952,10 @@ function submitNativeCommands(data, frame = false) {
 }
 
 function startNativeRuntime(width, height, title, samples = 2) {
+  const wasOpen = native.isOpen();
   const started = native.start(width, height, title, samples);
   if (!started) return false;
+  if (!wasOpen && showProjectFps) native.toggleFpsOverlay();
   for (const commands of pendingNativeCommands.splice(0)) {
     if (!native.submit(commands)) return false;
   }
@@ -3274,8 +3295,12 @@ function syncWindowSize() {
   globalThis.screen.width = globalThis.screen.availWidth = state.width;
   globalThis.screen.height = globalThis.screen.availHeight = state.height;
   if (currentCanvas) {
-    currentCanvas.clientWidth = currentCanvas.width = state.width;
-    currentCanvas.clientHeight = currentCanvas.height = state.height;
+    currentCanvas.clientWidth = state.width;
+    currentCanvas.clientHeight = state.height;
+    if (!directGLContext) {
+      currentCanvas.width = state.width;
+      currentCanvas.height = state.height;
+    }
   }
   notifyResizeObservers();
   globalThis.dispatchEvent(new Event("resize"));
@@ -3351,6 +3376,7 @@ function pump() {
   } finally {
     globalThis.__threeBrowserInAnimationFrame = false;
     globalThis.__TN?.cmd?.flushPresentation?.();
+    if (directGLContext && callbacks.length) directGLContext.present();
   }
   setImmediate(pump);
 }
@@ -3426,6 +3452,9 @@ export async function loadEntry(entryPath) {
       let manifest;
       try { manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")); }
       catch (error) { throw new Error(`Invalid pull manifest in ${manifestPath}: ${error.message}`); }
+      if (manifest.renderer === "direct-gl") globalThis.__threeBrowserDirectGL = true;
+      showProjectFps = manifest.showFps === true;
+      if (manifest.htmlMode === "experimental") pageUi = htmlRenderer;
       if (manifest.html) {
         const projectRoot = path.dirname(absolute);
         const htmlPath = path.resolve(projectRoot, String(manifest.html));

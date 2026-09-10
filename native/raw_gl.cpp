@@ -6,9 +6,70 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <unordered_map>
 
 namespace {
 uint64_t executedCommands=0,executedBatches=0; // Context worker only.
+std::unordered_map<uint32_t,GLsync> rawSyncs;
+uint32_t nextRawSync=1;
+GLuint drawingFramebuffer=0,drawingColor=0,drawingDepth=0;
+int drawingWidth=0,drawingHeight=0;
+// WebGL initializes new depth storage to the far plane. Desktop GL leaves it
+// undefined, which can reject every sky fragment during PMREM's first pass.
+void initializeDepthRenderbuffer(GLenum format) {
+    const bool stencil=format==GL_DEPTH24_STENCIL8||format==GL_DEPTH32F_STENCIL8;
+    if(!stencil&&format!=GL_DEPTH_COMPONENT16&&format!=GL_DEPTH_COMPONENT24&&format!=GL_DEPTH_COMPONENT32&&format!=GL_DEPTH_COMPONENT32F)return;
+    GLint read=0,draw=0,buffer=0;GLboolean mask=GL_TRUE;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&read);glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&draw);
+    glGetIntegerv(GL_RENDERBUFFER_BINDING,&buffer);glGetBooleanv(GL_DEPTH_WRITEMASK,&mask);
+    const bool scissor=glIsEnabled(GL_SCISSOR_TEST);glDisable(GL_SCISSOR_TEST);glDepthMask(GL_TRUE);
+    GLuint target=0;glGenFramebuffers(1,&target);glBindFramebuffer(GL_FRAMEBUFFER,target);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER,stencil?GL_DEPTH_STENCIL_ATTACHMENT:GL_DEPTH_ATTACHMENT,GL_RENDERBUFFER,GLuint(buffer));
+    glDrawBuffer(GL_NONE);glReadBuffer(GL_NONE);
+    const GLfloat farDepth=1;glClearBufferfv(GL_DEPTH,0,&farDepth);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,GLuint(read));glBindFramebuffer(GL_DRAW_FRAMEBUFFER,GLuint(draw));
+    glDeleteFramebuffers(1,&target);glDepthMask(mask);if(scissor)glEnable(GL_SCISSOR_TEST);
+}
+void configureDrawingBuffer(int width,int height) {
+    if(width==drawingWidth && height==drawingHeight)return;
+    GLint maximum=0;glGetIntegerv(GL_MAX_RENDERBUFFER_SIZE,&maximum);
+    if(width<1 || height<1 || width>maximum || height>maximum)throw std::runtime_error("Invalid DirectGL drawing buffer size");
+    GLint read=0,draw=0,renderbuffer=0;glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&read);glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&draw);glGetIntegerv(GL_RENDERBUFFER_BINDING,&renderbuffer);
+    if(!drawingFramebuffer){glGenFramebuffers(1,&drawingFramebuffer);glGenRenderbuffers(1,&drawingColor);glGenRenderbuffers(1,&drawingDepth);}
+    glBindFramebuffer(GL_FRAMEBUFFER,drawingFramebuffer);
+    glBindRenderbuffer(GL_RENDERBUFFER,drawingColor);glRenderbufferStorage(GL_RENDERBUFFER,GL_RGBA8,width,height);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_RENDERBUFFER,drawingColor);
+    glBindRenderbuffer(GL_RENDERBUFFER,drawingDepth);glRenderbufferStorage(GL_RENDERBUFFER,GL_DEPTH24_STENCIL8,width,height);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER,GL_DEPTH_STENCIL_ATTACHMENT,GL_RENDERBUFFER,drawingDepth);
+    const auto status=glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glBindRenderbuffer(GL_RENDERBUFFER,renderbuffer);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,read?GLuint(read):drawingFramebuffer);glBindFramebuffer(GL_DRAW_FRAMEBUFFER,draw?GLuint(draw):drawingFramebuffer);
+    if(status!=GL_FRAMEBUFFER_COMPLETE)throw std::runtime_error("DirectGL drawing buffer is incomplete");
+    drawingWidth=width;drawingHeight=height;
+}
+void presentDrawingBuffer() {
+    GLint read=0,draw=0;glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&read);glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&draw);
+    const bool scissor=glIsEnabled(GL_SCISSOR_TEST);glDisable(GL_SCISSOR_TEST);
+    if(drawingFramebuffer){
+        glBindFramebuffer(GL_READ_FRAMEBUFFER,drawingFramebuffer);glBindFramebuffer(GL_DRAW_FRAMEBUFFER,0);
+        glBlitFramebuffer(0,0,drawingWidth,drawingHeight,0,0,tn::g.statsW.load(),tn::g.statsH.load(),GL_COLOR_BUFFER_BIT,GL_LINEAR);
+    }
+    tn::renderDirectGlOverlay();
+    glfwSwapBuffers(static_cast<GLFWwindow*>(tn::g.canvas->windowPtr()));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,read);glBindFramebuffer(GL_DRAW_FRAMEBUFFER,draw);
+    if(scissor)glEnable(GL_SCISSOR_TEST);
+    const auto now=std::chrono::steady_clock::now();
+    static auto previous=now,windowStart=now;static int frames=0;
+    tn::g.statsFrameUs.store(int(std::chrono::duration_cast<std::chrono::microseconds>(now-previous).count()));previous=now;
+    ++frames;const auto elapsed=std::chrono::duration<double>(now-windowStart).count();
+    if(elapsed>=.5){tn::g.statsFps.store(int(std::lround(frames/elapsed)));frames=0;windowStart=now;}
+    tn::g.statsPresents.fetch_add(1);
+}
+GLsync rawSync(double id) {
+    const auto found=rawSyncs.find(uint32_t(id));
+    if(found==rawSyncs.end()) throw std::runtime_error("Invalid DirectGL sync handle");
+    return found->second;
+}
 
 size_t pixelBytes(int format, int type) {
     const size_t channels=format==GL_RGBA||format==GL_RGBA_INTEGER?4:format==GL_RGB||format==GL_RGB_INTEGER?3:format==GL_RG||format==GL_RG_INTEGER?2:1;

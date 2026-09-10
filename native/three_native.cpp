@@ -408,6 +408,29 @@ void renderGlOverlay() {
 }// namespace
 #endif
 
+void tn::renderDirectGlOverlay() {
+#if defined(_WIN32)
+    GLint framebuffer{}, sampler{};
+    GLboolean mask[4]{};
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &framebuffer);
+    glGetIntegeri_v(GL_SAMPLER_BINDING, 0, &sampler);
+    glGetBooleanv(GL_COLOR_WRITEMASK, mask);
+    const bool stencil = glIsEnabled(GL_STENCIL_TEST);
+    const bool discard = glIsEnabled(GL_RASTERIZER_DISCARD);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    glBindSampler(0, 0);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_RASTERIZER_DISCARD);
+    renderGlOverlay();
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
+    glBindSampler(0, sampler);
+    glColorMask(mask[0], mask[1], mask[2], mask[3]);
+    if (stencil) glEnable(GL_STENCIL_TEST);
+    if (discard) glEnable(GL_RASTERIZER_DISCARD);
+#endif
+}
+
 void tn::renderPendingFrame() {
 #if defined(_WIN32)
     // Command-buffer renderers publish their backbuffer scene through

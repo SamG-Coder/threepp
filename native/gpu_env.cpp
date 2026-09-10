@@ -570,14 +570,27 @@ int tn_renderer_read_presented_pixels(int width, int height, unsigned char* data
         const auto size = renderer->size();
         if (width > size.first || height > size.second) return 0;
         renderPendingFrame();
-        auto* previous = renderer->getRenderTarget();
-        renderer->setRenderTarget(nullptr);
-        GLint previousReadBuffer;
+        // DirectGL owns actual bindings outside GLRenderer's state cache.
+        // Read the presented window explicitly and preserve the caller's FBO.
+        GLint previousFramebuffer, previousReadBuffer, previousPackBuffer, alignment, rowLength, skipRows, skipPixels;
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousFramebuffer);
         glGetIntegerv(GL_READ_BUFFER, &previousReadBuffer);
+        glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &previousPackBuffer);
+        glGetIntegerv(GL_PACK_ALIGNMENT, &alignment);
+        glGetIntegerv(GL_PACK_ROW_LENGTH, &rowLength);
+        glGetIntegerv(GL_PACK_SKIP_ROWS, &skipRows);
+        glGetIntegerv(GL_PACK_SKIP_PIXELS, &skipPixels);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+        GLint windowReadBuffer;glGetIntegerv(GL_READ_BUFFER, &windowReadBuffer);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);glPixelStorei(GL_PACK_ROW_LENGTH, 0);glPixelStorei(GL_PACK_SKIP_ROWS, 0);glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
         glReadBuffer(GL_FRONT);
-        renderer->readPixels(Vector2(0,0), {width,height}, Format::RGBA, data);
+        glReadPixels(0,0,width,height,GL_RGBA,GL_UNSIGNED_BYTE,data);
+        glReadBuffer(windowReadBuffer);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, previousFramebuffer);
         glReadBuffer(previousReadBuffer);
-        renderer->setRenderTarget(previous);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, previousPackBuffer);
+        glPixelStorei(GL_PACK_ALIGNMENT, alignment);glPixelStorei(GL_PACK_ROW_LENGTH, rowLength);glPixelStorei(GL_PACK_SKIP_ROWS, skipRows);glPixelStorei(GL_PACK_SKIP_PIXELS, skipPixels);
         return 1;
     });
 #endif

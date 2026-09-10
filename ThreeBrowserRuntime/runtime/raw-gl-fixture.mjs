@@ -12,6 +12,11 @@ const material=new T.MeshBasicMaterial({map:texture,toneMapped:false});scene.add
 const pixels=new Uint8Array(32*32*4);
 const sample=()=>{renderer.setRenderTarget(target);renderer.render(scene,camera);renderer.readRenderTargetPixels(target,0,0,32,32,pixels);return [...pixels.slice((16*32+16)*4,(16*32+16)*4+4)];};
 try {
+  // PMREM renders into a fresh target with autoClear disabled. WebGL's depth
+  // initialization must let these fragments through even without clearDepth().
+  renderer.autoClear=false;
+  assert.deepEqual(sample(),[255,0,0,255],'fresh depth storage starts at the far plane');
+  renderer.autoClear=true;
   assert.deepEqual(sample(),[255,0,0,255]);
   texels.set([0,0,255,255]);texture.needsUpdate=true;
   assert.deepEqual(sample(),[0,0,255,255]);
@@ -33,9 +38,35 @@ try {
   const malformed=new Uint32Array([globalThis.__TN.cmd.OP.RAW_GL,16,0,0]);
   assert.equal(host.native.submit(new Uint8Array(malformed.buffer)),false);
   assert.match(host.native.lastError(),/Truncated raw GL/);
-  assert.throws(()=>gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,{}),/typed-data/);
+  assert.throws(()=>gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,{}),/decoded image/);
+  const imageTexture=gl.createTexture(),imageFramebuffer=gl.createFramebuffer();
+  gl.bindTexture(gl.TEXTURE_2D,imageTexture);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA8,gl.RGBA,gl.UNSIGNED_BYTE,{width:1,height:2,data:new Uint8Array([255,0,0,255,0,0,255,255])});
+  gl.bindFramebuffer(gl.FRAMEBUFFER,imageFramebuffer);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,imageTexture,0);
+  const imagePixels=new Uint8Array(8);
+  gl.readPixels(0,0,1,2,gl.RGBA,gl.UNSIGNED_BYTE,imagePixels);
+  assert.deepEqual([...imagePixels],[0,0,255,255,255,0,0,255]);
+  gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,gl.RGBA,gl.UNSIGNED_BYTE,{width:1,height:1,data:new Uint8Array([0,255,0,255])});
+  gl.readPixels(0,0,1,2,gl.RGBA,gl.UNSIGNED_BYTE,imagePixels);
+  assert.deepEqual([...imagePixels],[0,255,0,255,255,0,0,255]);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
+  gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.deleteFramebuffer(imageFramebuffer);gl.deleteTexture(imageTexture);
+  renderer.resetState();
+  const fence=gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE,0);assert.ok(fence);
+  gl.finish();assert.equal(gl.clientWaitSync(fence,0,0),gl.ALREADY_SIGNALED);gl.deleteSync(fence);
+  assert.throws(()=>gl.clientWaitSync(fence,0,0),/Invalid DirectGL sync/);
   assert.equal(gl.getError(),gl.NO_ERROR);
   const stats=gl.getBridgeStats();assert.equal(stats[0],0,'no threepp scene/resource slots');assert.equal(stats[3],0,'no threepp render scene');assert.ok(stats[1]>100);assert.ok(stats[2]>0);
   renderer.setRenderTarget(null);renderer.render(scene,camera);assert.ok(host.native.stats().presents>0);
+  const overlay=new Uint8Array(4*4*4);for(let i=0;i<overlay.length;i+=4){overlay[i]=255;overlay[i+3]=255;}
+  host.native.canvasOverlaySet(true,0,0,4,4,4,4,overlay,16);
+  renderer.render(scene,camera);
+  const captured=host.native.decodeImage(host.native.rendererCapturePng(32,32));
+  assert.deepEqual([...captured.pixels.slice(0,4)],[255,0,0,255],'DirectGL must composite the Canvas2D overlay');
+  host.native.canvasOverlaySet(false);
+  renderer.render(scene,camera);
+  assert.deepEqual(sample(),[0,0,255,255],'overlay must preserve scene rendering state');
   console.log(JSON.stringify({ok:true,gpu:gl.getParameter(gl.RENDERER),version:gl.getParameter(gl.VERSION),bridge:stats}));
 } finally {renderer.setRenderTarget(null);target.dispose();geometry.dispose();material.dispose();texture.dispose();renderer.dispose();host.stop();}

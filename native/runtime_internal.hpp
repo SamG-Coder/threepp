@@ -126,6 +126,7 @@ Object3D* asObject(uint32_t id);
 Object3D* findObject(uint32_t id);
 void resetIds();
 void onWorkerAsync(std::function<void()> fn, bool requestPresentation = true);
+void renderDirectGlOverlay();
 void renderPendingFrame();
 void applyPendingEnvironment();
 void destroySlot(uint32_t id);

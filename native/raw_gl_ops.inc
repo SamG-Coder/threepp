@@ -1,12 +1,12 @@
 case 0: { glFlush(); break; } // flush
 case 1: { glFinish(); break; } // finish
-case 2: { glfwSwapBuffers(static_cast<GLFWwindow*>(tn::g.canvas->windowPtr()));tn::g.statsPresents.fetch_add(1); break; } // present
+case 2: { presentDrawingBuffer(); break; } // present
 case 3: { glActiveTexture(GLuint(a[0])); break; } // activeTexture
 case 4: { glAttachShader(GLuint(a[0]),GLuint(a[1])); break; } // attachShader
 case 5: { glBindAttribLocation(GLuint(a[0]),GLuint(a[1]),reinterpret_cast<const char*>(data)); break; } // bindAttribLocation
 case 6: { glBindBuffer(GLuint(a[0]),GLuint(a[1])); break; } // bindBuffer
 case 7: { glBindBufferBase(GLuint(a[0]),GLuint(a[1]),GLuint(a[2])); break; } // bindBufferBase
-case 8: { glBindFramebuffer(GLuint(a[0]),GLuint(a[1])); break; } // bindFramebuffer
+case 8: { glBindFramebuffer(GLenum(a[0]),a[1]?GLuint(a[1]):drawingFramebuffer); break; } // bindFramebuffer
 case 9: { glBindRenderbuffer(GLuint(a[0]),GLuint(a[1])); break; } // bindRenderbuffer
 case 10: { glBindTexture(GLuint(a[0]),GLuint(a[1])); break; } // bindTexture
 case 11: { glBindVertexArray(GLuint(a[0])); break; } // bindVertexArray
@@ -42,9 +42,9 @@ case 40: { glLineWidth(GLfloat(a[0])); break; } // lineWidth
 case 41: { glLinkProgram(GLuint(a[0])); break; } // linkProgram
 case 42: { glPixelStorei(GLuint(a[0]),GLint(a[1])); break; } // pixelStorei
 case 43: { glPolygonOffset(GLfloat(a[0]),GLfloat(a[1])); break; } // polygonOffset
-case 44: { glReadBuffer(GLuint(a[0])); break; } // readBuffer
-case 45: { glRenderbufferStorage(GLuint(a[0]),GLuint(a[1]),GLint(a[2]),GLint(a[3])); break; } // renderbufferStorage
-case 46: { glRenderbufferStorageMultisample(GLuint(a[0]),GLint(a[1]),GLuint(a[2]),GLint(a[3]),GLint(a[4])); break; } // renderbufferStorageMultisample
+case 44: { GLint f=0;glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&f);glReadBuffer(drawingFramebuffer&&GLuint(f)==drawingFramebuffer&&GLenum(a[0])==GL_BACK?GL_COLOR_ATTACHMENT0:GLenum(a[0])); break; } // readBuffer
+case 45: { glRenderbufferStorage(GLuint(a[0]),GLuint(a[1]),GLint(a[2]),GLint(a[3]));initializeDepthRenderbuffer(GLenum(a[1])); break; } // renderbufferStorage
+case 46: { glRenderbufferStorageMultisample(GLuint(a[0]),GLint(a[1]),GLuint(a[2]),GLint(a[3]),GLint(a[4]));initializeDepthRenderbuffer(GLenum(a[2])); break; } // renderbufferStorageMultisample
 case 47: { glScissor(GLint(a[0]),GLint(a[1]),GLint(a[2]),GLint(a[3])); break; } // scissor
 case 48: { glStencilFunc(GLuint(a[0]),GLint(a[1]),GLuint(a[2])); break; } // stencilFunc
 case 49: { glStencilFuncSeparate(GLuint(a[0]),GLuint(a[1]),GLint(a[2]),GLuint(a[3])); break; } // stencilFuncSeparate
@@ -95,7 +95,7 @@ case 90: { const GLenum p=GLenum(a[0]);switch(p){case GL_IMPLEMENTATION_COLOR_RE
  else{GLint v[16]{};glGetIntegerv(p,v);for(int i=0;i<n;i++)r.values[i]=v[i];}} break; } // getParameter
 case 91: { if(a[1]<0||a[1]>2147483647||(bytes&&size_t(a[1])>bytes))throw std::runtime_error("Invalid bufferData size");glBufferData(GLenum(a[0]),GLsizeiptr(a[1]),bytes?data:nullptr,GLenum(a[2])); break; } // bufferData
 case 92: { glBufferSubData(GLenum(a[0]),GLintptr(a[1]),GLsizeiptr(bytes),data); break; } // bufferSubData
-case 93: { glDrawBuffers(GLsizei(bytes/4),reinterpret_cast<const GLenum*>(data)); break; } // drawBuffers
+case 93: { GLint f=0;glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&f);if(drawingFramebuffer&&GLuint(f)==drawingFramebuffer&&bytes==4&&*reinterpret_cast<const GLenum*>(data)==GL_BACK){const GLenum attachment=GL_COLOR_ATTACHMENT0;glDrawBuffers(1,&attachment);}else glDrawBuffers(GLsizei(bytes/4),reinterpret_cast<const GLenum*>(data)); break; } // drawBuffers
 case 94: { glInvalidateFramebuffer(GLenum(a[0]),GLsizei(bytes/4),reinterpret_cast<const GLenum*>(data)); break; } // invalidateFramebuffer
 case 95: { glUniform1f(GLint(a[0]),GLfloat(a[1])); break; } // uniform1f
 case 96: { glUniform1fv(GLint(a[0]),GLsizei(bytes/4),reinterpret_cast<const GLfloat*>(data)); break; } // uniform1fv
@@ -135,3 +135,7 @@ case 129: { validatePixels(a[5],a[6],a[7],a[8],a[9],bytes,false);glTexSubImage3D
 case 130: { validateRead(a[2],a[3],a[4],a[5],bytes);glReadPixels(GLint(a[0]),GLint(a[1]),GLsizei(a[2]),GLsizei(a[3]),GLenum(a[4]),GLenum(a[5]),output); break; } // readPixels
 case 131: { glGetBufferSubData(GLenum(a[0]),GLintptr(a[1]),GLsizeiptr(bytes),output); break; } // getBufferSubData
 case 132: { r.kind=5;r.count=4;r.values[0]=tn::g.slots.size();r.values[1]=executedCommands;r.values[2]=executedBatches;r.values[3]=tn::g.drawScene.load(); break; } // getBridgeStats
+case 133: { const auto sync=glFenceSync(GLenum(a[0]),GLbitfield(a[1]));r.kind=1;if(sync){const auto id=nextRawSync++;rawSyncs.emplace(id,sync);r.values[0]=id;} break; } // fenceSync
+case 134: { r.kind=1;r.values[0]=glClientWaitSync(rawSync(a[0]),GLbitfield(a[1]),GLuint64(a[2])); break; } // clientWaitSync
+case 135: { glDeleteSync(rawSync(a[0]));rawSyncs.erase(uint32_t(a[0])); break; } // deleteSync
+case 136: { configureDrawingBuffer(GLint(a[0]),GLint(a[1])); break; } // configureDrawingBuffer

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -239,7 +239,7 @@ test("preserves the requested query string after a document redirect", async () 
 });
 
 test("records a minified production Three.js chunk in compatibility metadata", async () => {
-  const minified = `${"const a=class{constructor(){this.isWebGLRenderer=!0}};const b=new a;".repeat(40)}`;
+  const minified = `${"{const a=class{constructor(){this.isWebGLRenderer=!0}};const b=new a;}".repeat(40)}`;
   const server = createServer((request, response) => {
     if (request.url === "/") {
       response.writeHead(200, { "content-type": "text/html" });
@@ -270,6 +270,13 @@ test("records a minified production Three.js chunk in compatibility metadata", a
 
     const manifest = JSON.parse(await readFile(path.join(destination, "threebrowser.pull.json"), "utf8"));
     assert.equal(manifest.compatibility.minified, true);
+    assert.equal(manifest.renderer, "direct-gl", "URL imports must select the bundled renderer's native GL path");
+    await writeFile(path.join(destination, "threebrowser.pull.json"), JSON.stringify({...manifest, showFps: true}));
+    await execFileAsync(process.execPath, [puller, source, destination, "--force"]);
+    const refreshed = JSON.parse(await readFile(path.join(destination, "threebrowser.pull.json"), "utf8"));
+    assert.equal(refreshed.showFps, true, "reimport preserves the project's FPS overlay preference");
+    const bundle = await readFile(path.join(destination, "assets/index-CSHUrFCZ.mjs"), "utf8");
+    assert.match(bundle, /if\(globalThis\.__threeBrowserDirectGL\)return Original/);
     assert.ok(manifest.compatibility.minifySignals.includes("mangled-three-constructors"));
     assert.ok(manifest.compatibility.minifySignals.includes("content-hashed-filename"));
     assert.ok(manifest.findings.some(finding => /Minified JavaScript detected/.test(finding)));

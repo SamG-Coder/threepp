@@ -43,6 +43,12 @@ const existing = fs.readdirSync(destination).filter(name => name !== ".git");
 if (existing.length && !force) {
   throw new Error(`Destination is not empty: ${destination}\nUse a new folder or pass --force.`);
 }
+let previousHtmlMode, previousShowFps;
+if (force && fs.existsSync(path.join(destination, "threebrowser.pull.json"))) {
+  const previous = JSON.parse(fs.readFileSync(path.join(destination, "threebrowser.pull.json"), "utf8"));
+  if (previous.htmlMode === "experimental") previousHtmlMode = previous.htmlMode;
+  if (typeof previous.showFps === "boolean") previousShowFps = previous.showFps;
+}
 
 const maximumFiles = 2500;
 const maximumFileBytes = 64 * 1024 * 1024;
@@ -603,8 +609,13 @@ const uiMode = uiSignals.has("React UI") || uiSignals.has("scroll-driven UI") ||
   ? "dom-required"
   : visibleHtmlTags.size || uiSignals.size ? "html-overlay" : "canvas-only";
 const compatibilityNotes = [];
+// Keep a bundled WebGL renderer and its shader chunks on the same revision.
+// The generated relink wrappers retain the facade as an explicit fallback,
+// but normal URL imports use the native GL command boundary.
+const directGL = relinkedFiles.length > 0 && hasWebGlRenderer && !hasWebGpuRenderer;
 if (threeMode === "bundled") compatibilityNotes.push("Three.js is embedded in a production bundle and no safe native renderer binding was found.");
-if (threeMode === "relinked") compatibilityNotes.push("Semantic Three.js scene, camera, geometry, material, texture, light, mesh, and WebGLRenderer bindings were redirected to the native facade.");
+if (directGL) compatibilityNotes.push("Bundled Three.js is preserved and uses DirectGL through the native shared command buffer. The native scene facade is bypassed to keep renderer and shader revisions consistent.");
+else if (threeMode === "relinked") compatibilityNotes.push("Semantic Three.js scene, camera, geometry, material, texture, light, mesh, and WebGLRenderer bindings were redirected to the native facade.");
 if (usesWebGpuRenderer || importMapEntries.has("three/webgpu") || importMapEntries.has("three/tsl")) {
   compatibilityNotes.push("The bundled Three.js runtime was preserved as one version; WebGPU commands are redirected through the native navigator.gpu adapter.");
 }
@@ -628,6 +639,9 @@ const manifest = {
   exportOptions: { beautifyJavaScript },
   beautifiedFiles,
   entry: "site-entry.mjs",
+  ...(directGL ? { renderer: "direct-gl" } : {}),
+  ...(previousHtmlMode ? { htmlMode: previousHtmlMode } : {}),
+  ...(previousShowFps !== undefined ? { showFps: previousShowFps } : {}),
   requiresWebGPU: usesWebGpuRenderer || importMapEntries.has("three/webgpu") || importMapEntries.has("three/tsl"),
   html: rootRecord.localPath.replaceAll("\\", "/"),
   files: successful.map(record => ({

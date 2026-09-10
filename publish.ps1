@@ -1,5 +1,6 @@
 param(
-    [string]$Version = '0.03'
+    [string]$Version = '0.03',
+    [switch]$RuntimeOnly
 )
 
 # Builds one self-contained Windows x64 release containing both applications:
@@ -8,7 +9,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = $PSScriptRoot
 $publishRoot = Join-Path $repo 'publish'
-$packageName = "ThreeBrowser-$Version-win-x64"
+$packageName = if ($RuntimeOnly) { "ThreeRuntime-$Version-win-x64" } else { "ThreeBrowser-$Version-win-x64" }
 $packageRoot = Join-Path $publishRoot $packageName
 $browserOut = Join-Path $packageRoot 'ThreeBrowser'
 $runtimeOut = Join-Path $packageRoot 'ThreeBrowserRuntime'
@@ -44,10 +45,12 @@ if (Test-Path -LiteralPath $zipPath -PathType Leaf) {
 }
 New-Item -ItemType Directory -Path $browserOut, $runtimeOut | Out-Null
 
+if (-not $RuntimeOnly) {
 Write-Host 'Publishing ThreeBrowser (self-contained win-x64)'
 dotnet publish (Join-Path $repo 'host\ThreeBrowser\ThreeBrowser.csproj') `
     -c Release -r win-x64 --self-contained true -o $browserOut
 if ($LASTEXITCODE -ne 0) { throw 'ThreeBrowser publish failed.' }
+}
 
 Write-Host 'Publishing ThreeBrowserRuntime (self-contained win-x64)'
 dotnet publish (Join-Path $repo 'ThreeBrowserRuntime\ThreeBrowserRuntime.csproj') `
@@ -120,6 +123,16 @@ Both applications require 64-bit Windows. The launcher UI uses the Microsoft
 WebView2 Evergreen Runtime, included with Windows 11 and available separately
 for supported Windows versions.
 "@
+if ($RuntimeOnly) {
+    $readme = @"
+ThreeRuntime $Version - Windows x64
+
+Launch ThreeBrowserRuntime\ThreeBrowserRuntime.exe.
+Node.js and the .NET runtime are bundled. The launcher UI requires Microsoft
+WebView2 Evergreen Runtime, included with Windows 11.
+Native scene execution uses DirectGL or WebGPU; browser DOM parity is incomplete.
+"@
+}
 Set-Content -LiteralPath (Join-Path $packageRoot 'README.txt') -Value $readme -Encoding utf8
 
 $requiredFiles = @(
@@ -139,6 +152,7 @@ $requiredFiles = @(
     (Join-Path $packagedRuntimeBin 'vcruntime140_1.dll'),
     (Join-Path $packagedRuntimeBin 'runtime\launch.mjs')
 )
+if ($RuntimeOnly) { $requiredFiles = $requiredFiles | Where-Object { -not $_.StartsWith($browserOut + '\', [StringComparison]::OrdinalIgnoreCase) } }
 foreach ($required in $requiredFiles) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
         throw "Release dependency missing: $required"

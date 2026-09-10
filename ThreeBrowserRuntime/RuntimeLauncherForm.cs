@@ -208,6 +208,11 @@ internal sealed partial class RuntimeLauncherForm : Form
         };
         foreach (var argument in arguments) start.ArgumentList.Add(argument);
         _activeProcess = Process.Start(start) ?? throw new InvalidOperationException($"Could not start {fileName}.");
+        if (arguments.Count > 0 && string.Equals(arguments[0], _launcher, StringComparison.OrdinalIgnoreCase))
+        {
+            await InvokeUiAsync("runtimeStarted");
+            await StatusAsync("Native runtime running — loading and rendering continue in its window", "active");
+        }
         using var registration = cancellationToken.Register(() =>
         {
             try { if (!_activeProcess.HasExited) _activeProcess.Kill(entireProcessTree: true); }
@@ -230,7 +235,9 @@ internal sealed partial class RuntimeLauncherForm : Form
                 ? $"[omitted bundled source line — {line.Length:N0} characters]"
                 : line;
             capture?.Add(displayLine);
-            await AppendAsync(displayLine, displayLine.Contains("warning:", StringComparison.OrdinalIgnoreCase) ? "warning" : kind);
+            var warning = displayLine.Contains("warning:", StringComparison.OrdinalIgnoreCase)
+                || displayLine.Contains(": warning ", StringComparison.OrdinalIgnoreCase);
+            await AppendAsync(displayLine, warning ? "warning" : kind);
         }
     }
 
@@ -700,6 +707,7 @@ window.runtimeUi={
  beginSaved(name,path,exportable=true){setLibraryOpen(false);clearConsole();resetResultActions();setCurrentProjectReady(true,exportable!==false);$('project').textContent=path;open.disabled=false;$('terminal-title').textContent='RUNTIME CONSOLE';$('terminal-meta').textContent='LAUNCHING'},
  appendMany(items){lines.push(...items);if(lines.length>MAX_LINES)lines.splice(0,lines.length-MAX_LINES);render(true)},
  projectReady(){setCurrentProjectReady(true);open.disabled=false;$('terminal-meta').textContent='LAUNCHING'},
+ runtimeStarted(){$('terminal-meta').textContent='RUNNING';$('run-label').textContent='Running';},
  projectRemoved(){setCurrentProjectReady(false);open.disabled=true;$('project').textContent='A managed project folder will be created for this URL.'},
  bootstrapDialog(config){openBootstrap(config||{})},
  bootstrapAsset(kind,name,preview){setBootstrapPreview(String(kind||''),String(name||''),preview)},
