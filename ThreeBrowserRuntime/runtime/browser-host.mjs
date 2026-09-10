@@ -1011,28 +1011,6 @@ class CanvasElement extends Element {
     return new Blob([this.toBuffer()], { type: "image/png" });
   }
 }
-function encodedImageSize(bytes) {
-  if (bytes.length >= 10 && bytes.subarray(0, 3).toString() === "GIF") {
-    return { width: bytes.readUInt16LE(6), height: bytes.readUInt16LE(8) };
-  }
-  if (bytes.length >= 24 && bytes.readUInt32BE(0) === 0x89504e47 && bytes.subarray(1, 4).toString() === "PNG") {
-    return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
-  }
-  if (bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8) {
-    for (let offset = 2; offset + 9 < bytes.length;) {
-      if (bytes[offset] !== 0xff) { offset++; continue; }
-      const marker = bytes[offset + 1];
-      const length = bytes.readUInt16BE(offset + 2);
-      if (new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]).has(marker)) {
-        return { width: bytes.readUInt16BE(offset + 7), height: bytes.readUInt16BE(offset + 5) };
-      }
-      if (length < 2) break;
-      offset += length + 2;
-    }
-  }
-  return { width: 1, height: 1 };
-}
-
 class ImageElement extends Element {
   constructor() {
     super("img");
@@ -1050,6 +1028,8 @@ class ImageElement extends Element {
   set src(value) {
     this._src = String(value);
     this.complete = false;
+    this.data = undefined;
+    this.naturalWidth = this.naturalHeight = 0;
     const source = this._src;
     // Begin resolving immediately. Sites commonly revoke a blob URL directly
     // after assigning it to an image; browsers retain that already-started load.
@@ -1060,26 +1040,26 @@ class ImageElement extends Element {
         const response = await loadPromise;
         if (!response.ok) throw new Error(`Image ${source} responded with ${response.status}`);
         const bytes = Buffer.from(await response.arrayBuffer());
+        if (this._loadPromise !== loadPromise) return;
         const decoded = native.decodeImage(bytes);
-        const size = decoded || encodedImageSize(bytes);
-        this.naturalWidth = this.width = size.width;
-        this.naturalHeight = this.height = size.height;
-        this.data = decoded?.pixels;
+        if (!decoded?.pixels) throw new Error("Image response could not be decoded");
+        this.naturalWidth = this.width = decoded.width;
+        this.naturalHeight = this.height = decoded.height;
+        this.data = decoded.pixels;
         this.complete = true;
         if (process.env.THREEBROWSER_TRACE_RENDER) {
-          console.error("ThreeBrowser image loaded", source, `${size.width}x${size.height}`, decoded ? "decoded" : "metadata-only");
+          console.error("ThreeBrowser image loaded", source.slice(0, 200), `${decoded.width}x${decoded.height}`, "decoded");
         }
         const event = new Event("load");
         this.dispatchEvent(event);
-        this.onload?.(event);
       } catch (error) {
+        if (this._loadPromise !== loadPromise) return;
         this.complete = true;
         if (process.env.THREEBROWSER_TRACE_RENDER) {
-          console.error("ThreeBrowser image failed", source, error?.message || error);
+          console.error("ThreeBrowser image failed", source.slice(0, 200), error?.message || error);
         }
         const event = eventWith("error", { error, message: error.message });
         this.dispatchEvent(event);
-        this.onerror?.(event);
       }
     });
   }
@@ -3304,7 +3284,7 @@ function syncWindowSize() {
   if (currentCanvas) {
     currentCanvas.clientWidth = state.width;
     currentCanvas.clientHeight = state.height;
-    if (!directGLContext) {
+    if (!directGLContext && !webGpuEnabled) {
       currentCanvas.width = state.width;
       currentCanvas.height = state.height;
     }

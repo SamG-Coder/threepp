@@ -78,6 +78,7 @@ let runtimeStarted = false;
 let lastW = 0;
 let lastH = 0;
 let swapchainAcquired = false;
+let pendingCanvasPresentation = null;
 let overlayStyled = false;
 let origGetContext = null;
 let origOffscreenGetContext = null;
@@ -1813,6 +1814,8 @@ class GPUQueue {
     }
     for (const buffer of submittedBuffers) replayCommandBuffer(buffer);
     if (swapchainAcquired) {
+      pendingCanvasPresentation?._presentScaledCanvas();
+      pendingCanvasPresentation = null;
       cmd.present();
       swapchainAcquired = false;
     }
@@ -2246,7 +2249,7 @@ class GPUCanvasContext {
     const desc = {
       size: { width: w, height: h, depthOrArrayLayers: 1 },
       format: this._format,
-      usage: this._usage | 0x10,
+      usage: this._usage | 0x10 | (swapchain ? 0 : 0x04),
       mipLevelCount: 1,
       sampleCount: 1,
       dimension: "2d",
@@ -2266,12 +2269,21 @@ class GPUCanvasContext {
     styleHitCanvas(this.canvas);
     const { w, h } = canvasSize(this.canvas);
     const presented = this._isPresented();
-    if (presented) ensureStarted(w, h);
+    if (presented) {
+      const nativeWindow = typeof globalThis.__threeBrowserIsPresentedCanvas === "function";
+      ensureStarted(nativeWindow ? globalThis.innerWidth : w,
+        nativeWindow ? globalThis.innerHeight : h);
+    }
+    this._presentationPipeline = null;
+    this._presentationBinding = null;
     this._tex = this._createTexture(w, h, presented);
   }
   unconfigure() {
     this._configured = false;
+    if (this._tex && !this._tex._swapchain) this._tex.destroy();
     this._tex = null;
+    this._presentationBinding = null;
+    if (pendingCanvasPresentation === this) pendingCanvasPresentation = null;
   }
   getConfiguration() {
     if (!this._configured) return null;
@@ -2288,16 +2300,72 @@ class GPUCanvasContext {
   getCurrentTexture() {
     const { w, h } = canvasSize(this.canvas);
     const presented = this._isPresented();
+    // The standalone native window is the CSS display surface. Vulkan does
+    // not stretch a smaller canvas viewport to that surface automatically.
+    const nativeWindow = typeof globalThis.__threeBrowserIsPresentedCanvas === "function";
+    const displayW = nativeWindow ? Math.max(1, globalThis.innerWidth | 0) : w;
+    const displayH = nativeWindow ? Math.max(1, globalThis.innerHeight | 0) : h;
+    const scaled = presented && (displayW !== w || displayH !== h);
     if (presented) {
-      ensureStarted(w, h);
+      ensureStarted(displayW, displayH);
       swapchainAcquired = true;
+      pendingCanvasPresentation = scaled ? this : null;
     }
-    if (!this._tex || this._tex._swapchain !== presented ||
+    const swapchain = presented && !scaled;
+    if (!this._tex || this._tex._swapchain !== swapchain ||
         this._tex.width !== w || this._tex.height !== h) {
       if (this._tex && !this._tex._swapchain) this._tex.destroy();
-      this._tex = this._createTexture(w, h, presented);
+      this._tex = this._createTexture(w, h, swapchain);
+      this._presentationBinding = null;
     }
+    this._displayW = displayW;
+    this._displayH = displayH;
     return this._tex;
+  }
+  _presentScaledCanvas() {
+    const device = this._device;
+    if (!this._presentationPipeline) {
+      const module = device.createShaderModule({ code: `
+@group(0) @binding(0) var image: texture_2d<f32>;
+@group(0) @binding(1) var imageSampler: sampler;
+struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32> };
+@vertex fn vs(@builtin(vertex_index) i: u32) -> Vertex {
+  var p = array<vec2<f32>, 3>(vec2(-1., -1.), vec2(3., -1.), vec2(-1., 3.));
+  var v: Vertex;
+  v.position = vec4(p[i], 0., 1.);
+  v.uv = p[i] * vec2(.5, -.5) + vec2(.5);
+  return v;
+}
+@fragment fn fs(v: Vertex) -> @location(0) vec4<f32> {
+  return textureSample(image, imageSampler, v.uv);
+}` });
+      this._presentationPipeline = device.createRenderPipeline({
+        layout: "auto", vertex: { module, entryPoint: "vs" },
+        fragment: { module, entryPoint: "fs", targets: [{ format: this._format }] },
+        primitive: { topology: "triangle-list" },
+      });
+      this._presentationSampler = device.createSampler({ minFilter: "linear", magFilter: "linear" });
+    }
+    if (!this._presentationBinding) {
+      this._presentationBinding = device.createBindGroup({
+        layout: this._presentationPipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: this._tex.createView() },
+          { binding: 1, resource: this._presentationSampler },
+        ],
+      });
+    }
+    const encoder = device.createCommandEncoder();
+    const target = this._createTexture(this._displayW, this._displayH, true);
+    const pass = encoder.beginRenderPass({ colorAttachments: [{
+      view: target.createView(), loadOp: "clear", storeOp: "store",
+      clearValue: { r: 0, g: 0, b: 0, a: 1 },
+    }] });
+    pass.setPipeline(this._presentationPipeline);
+    pass.setBindGroup(0, this._presentationBinding);
+    pass.draw(3);
+    pass.end();
+    replayCommandBuffer(encoder.finish());
   }
 }
 
@@ -2332,6 +2400,8 @@ export function isInstalled() {
 }
 
 export function present() {
+  pendingCanvasPresentation?._presentScaledCanvas();
+  pendingCanvasPresentation = null;
   cmd.present();
   cmd.submitNow();
   swapchainAcquired = false;

@@ -791,6 +791,18 @@ test("Web Audio compressor and external ShaderMaterial subclasses follow browser
     assert.equal(entered, 11, 'pointer input reaches a newly replaced control');
     intro.remove();
     assert.equal(bridge.update(1500), false);
+
+    const brokenImage = new Image();
+    let imageLoads = 0, imageErrors = 0;
+    brokenImage.onload = () => imageLoads++;
+    brokenImage.onerror = () => imageErrors++;
+    brokenImage.src = 'data:text/html,<html>SPA fallback returned for missing texture</html>';
+    await assert.rejects(brokenImage.decode(), /could not be decoded/);
+    assert.equal(imageLoads, 0, 'HTML responses must not be reported as loaded images');
+    assert.equal(imageErrors, 1, 'onerror is dispatched once');
+    assert.equal(brokenImage.naturalWidth, 0);
+    assert.equal(brokenImage.data, undefined);
+    await assert.rejects(brokenImage.decode(), /could not be decoded/);
   } finally {
     host.stop();
   }

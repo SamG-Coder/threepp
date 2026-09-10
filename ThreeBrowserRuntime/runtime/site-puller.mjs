@@ -314,7 +314,10 @@ function inspectJavaScript(record, source) {
   const assetSource = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
   const assetStrings = /["']([^"'\\\r\n]+\.(?:m?js|css|wasm|json|glsl|vert|frag|comp|wgsl|spv|png|jpe?g|webp|gif|svg|hdr|exr|gltf|glb|bin|dat)(?:[?#][^"']*)?)["']/gi;
   for (const match of assetSource.matchAll(assetStrings)) {
-    collectReference(record, match[1], "asset", true, record.virtualSource !== undefined);
+    // Strings stored in asset tables still reach browser URL consumers such
+    // as TextureLoader. Import/new URL references collected above retain
+    // their explicit module-relative semantics in rewriteText.
+    collectReference(record, match[1], "asset", true, true);
   }
   // A common optimized-loader shape is `${base}assets/file.ext`. The base is
   // normally the document path; collecting the static suffix preserves the

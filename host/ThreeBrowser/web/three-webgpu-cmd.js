@@ -131,6 +131,20 @@ export const TEX_FORMAT = {
   "depth24plus-stencil8": 47,
   depth32float: 48,
   "depth32float-stencil8": 49,
+  "bc1-rgba-unorm": 50,
+  "bc1-rgba-unorm-srgb": 51,
+  "bc2-rgba-unorm": 52,
+  "bc2-rgba-unorm-srgb": 53,
+  "bc3-rgba-unorm": 54,
+  "bc3-rgba-unorm-srgb": 55,
+  "bc4-r-unorm": 56,
+  "bc4-r-snorm": 57,
+  "bc5-rg-unorm": 58,
+  "bc5-rg-snorm": 59,
+  "bc6h-rgb-ufloat": 60,
+  "bc6h-rgb-float": 61,
+  "bc7-rgba-unorm": 62,
+  "bc7-rgba-unorm-srgb": 63,
 };
 
 const VERTEX_FORMAT = {
@@ -280,7 +294,8 @@ export function formatNum(name) {
   if (name == null) return 0;
   if (typeof name === "number") return name >>> 0;
   const n = TEX_FORMAT[name];
-  return n == null ? 0 : n;
+  if (n == null) throw new TypeError(`Unsupported WebGPU texture format: ${name}`);
+  return n;
 }
 
 function bytesToB64(src) {

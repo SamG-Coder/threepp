@@ -11,6 +11,32 @@ import test from "node:test";
 const execFileAsync = promisify(execFile);
 const puller = fileURLToPath(new URL("./site-puller.mjs", import.meta.url));
 
+test("asset table URLs remain document-relative in external modules", async () => {
+  const routes = {
+    '/': ['text/html', '<script type="module" src="/assets/app.js"></script>'],
+    '/assets/app.js': ['text/javascript', 'export const textures={water:"/assets/textures/water.png",local:"./local.png"}; export const worker=new URL("./worker.js",import.meta.url);'],
+    '/assets/textures/water.png': ['image/png', 'water'],
+    '/local.png': ['image/png', 'local'],
+    '/assets/worker.js': ['text/javascript', 'export const value=1;'],
+  };
+  const server=createServer((request,response)=>{
+    const route=routes[request.url];response.writeHead(route?200:404,{'content-type':route?.[0]??'text/plain'});response.end(route?.[1]??'missing');
+  });
+  const destination=await mkdtemp(path.join(tmpdir(),'threebrowser-asset-table-'));
+  try {
+    await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+    await execFileAsync(process.execPath,[puller,`http://127.0.0.1:${server.address().port}/`,destination]);
+    const module=await import(pathToFileURL(path.join(destination,'assets/app.mjs')).href);
+    assert.equal(module.textures.water,'./assets/textures/water.png');
+    assert.equal(module.textures.local,'./local.png');
+    assert.equal(await readFile(path.resolve(destination,module.textures.water),'utf8'),'water');
+    assert.equal(module.worker.pathname.endsWith('/assets/worker.mjs'),true);
+  } finally {
+    await new Promise(resolve=>server.close(resolve));
+    await rm(destination,{recursive:true,force:true});
+  }
+});
+
 test("optional beautification preserves module behaviour and shader strings", async () => {
   const source = 'export const shader=`void main(){gl_FragColor=vec4(1.);}`;export function compute(x){return {value:x+2,pattern:/a+b/.source}};';
   const server = createServer((request,response) => {

@@ -4944,7 +4944,9 @@ void execOne(uint32_t op, Reader& r) {
                 (12ull * sizeof(float) + sizeof(uint32_t));
             if (!r.ok || version != 1u || id == 0u || instanceCount == 0u ||
                 instanceCount > kRayQueryMaximumInstanceGroupCapacity ||
-                expectedBytes != r.remaining()) {
+                // Command records are aligned to eight bytes. Odd instance
+                // counts carry four trailing padding bytes after the masks.
+                ((expectedBytes + 7ull) & ~7ull) != r.remaining()) {
                 setError("Unsupported or malformed RTX instance-group update");
                 return;
             }
